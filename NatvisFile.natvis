@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AutoVisualizer xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
+  <Type Name="Array&lt;*&gt;">
+    <DisplayString>{{ count={count} }}</DisplayString>
+    <Expand>
+      <Item Name="[count]" ExcludeView="simple">count</Item>
+      <Item Name="[capacity]" ExcludeView="simple">capacity</Item>
+      <ArrayItems>
+        <Size>count</Size>
+        <ValuePointer>storage</ValuePointer>
+      </ArrayItems>
+    </Expand>
+  </Type>
+
+  <Type Name="SmallArray&lt;*,*&gt;">
+    <DisplayString>{{ count={count} }}</DisplayString>
+    <Expand>
+      <Item Name="[count]" ExcludeView="simple">count</Item>
+      <Item Name="[capacity]" ExcludeView="simple">capacity</Item>
+      <ArrayItems>
+        <Size>count</Size>
+        <ValuePointer>storage ? storage : small</ValuePointer>
+      </ArrayItems>
+    </Expand>
+  </Type>
+
+  <Type Name="String">
+    <DisplayString>{characters,[length]sb}</DisplayString>
+  </Type>
+
+  <Type Name="String_Hasher">
+    <DisplayString>{characters.storage,[characters.count]sb}</DisplayString>
+  </Type>
+
+  <Type Name="Reg">
+    <DisplayString Condition="type == RegType::REGISTER">R{unumber}</DisplayString>
+    <DisplayString Condition="type == RegType::STATIC_ADROF &amp;&amp; number == 0">S:{decl->name}</DisplayString>
+    <DisplayString Condition="type == RegType::STATIC_ADROF">S:{decl->name}:{number}</DisplayString>
+    <DisplayString Condition="type == RegType::IMMEDIATE">{number}</DisplayString>
+    <DisplayString Condition="type == RegType::NONE">NONE</DisplayString>
+  </Type>
+
+  <Type Name="Ir">
+    <DisplayString Condition="(type == IrType::IF_Z || type == IrType::IF_NZ)">{type,en} {regs[0]} GOTO {jumpTarget}</DisplayString>
+    <DisplayString Condition="(type &gt;= IrType::IF_EQ &amp;&amp; type &lt;= IrType::IF_AND_NZ)">{type,en} {regs[0]} {regs[1]} GOTO {jumpTarget}</DisplayString>
+    <DisplayString Condition="type == IrType::GOTO">{type,en} {jumpTarget}</DisplayString>
+    <DisplayString Condition="type == IrType::CALL &amp;&amp; dest.type == RegType::NONE">{type,en} {callRegs.storage ? callRegs.storage : callRegs.small,[callRegs.size()]na}</DisplayString>
+    <DisplayString Condition="type == IrType::CALL &amp;&amp; dest.type != RegType::NONE">{type,en} {dest} &lt;- {callRegs.storage ? callRegs.storage : callRegs.small,[callRegs.size()]na}</DisplayString>
+    <DisplayString Condition="type != IrType::CALL &amp;&amp; dest.type == RegType::NONE &amp;&amp; regCount == 0">{type,en}</DisplayString>
+    <DisplayString Condition="type != IrType::CALL &amp;&amp; dest.type == RegType::NONE &amp;&amp; regCount == 1">{type,en} {regs[0]}</DisplayString>
+    <DisplayString Condition="type != IrType::CALL &amp;&amp; dest.type == RegType::NONE &amp;&amp; regCount == 2">{type,en} {regs[0]} {regs[1]}</DisplayString>
+    <DisplayString Condition="type != IrType::CALL &amp;&amp; dest.type != RegType::NONE &amp;&amp; regCount == 0">{type,en} {dest} &lt;- }</DisplayString>
+    <DisplayString Condition="type != IrType::CALL &amp;&amp; dest.type != RegType::NONE &amp;&amp; regCount == 1">{type,en} {dest} &lt;-  {regs[0]}</DisplayString>
+    <DisplayString Condition="type != IrType::CALL &amp;&amp; dest.type != RegType::NONE &amp;&amp; regCount == 2">{type,en} {dest} &lt;-  {regs[0]} {regs[1]}</DisplayString>
+  </Type>
+
+  <Type Name="DeclString">
+    <DisplayString>{name}</DisplayString>
+  </Type>
+</AutoVisualizer>

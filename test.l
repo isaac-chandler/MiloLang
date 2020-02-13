@@ -1,0 +1,37 @@
+string_ :: *u8
+
+argCount: s32
+args: *string_
+
+main :: (argc: s32, argv: *string_) -> s32 {
+	argCount = argc
+	args = argv
+
+	return 0
+}
+
+get_command_line_arguments :: (argc: *s32) -> *string_ {
+	<< s32 = argCount
+	return args
+}
+
+factorial :: (n: u64) -> u64 {
+	return 10000000 // Haha! you have resolved the wrong function
+}
+
+_main :: () {
+	// Put in a hack to make sure we can use a declaration recursively in functions
+	// @Solution I think the way we do this is to allow out of order declaration of constants in local scopes
+	factorial :: (n: u64) -> u64 {
+		if n <= 1
+			return 1
+		return n * factorial(n - 1)
+	}
+
+	// but we can't use it recursively elsewhere
+	// @Solution This should be a circular dependency error then
+	//error : u64 : error
+
+	argCount: s32 = --
+	args := get_command_line_arguments(*argCount)
+}
