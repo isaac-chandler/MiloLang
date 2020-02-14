@@ -13,7 +13,8 @@ enum class TypeFlavor : u8 {
 	BOOL, 
 	FUNCTION, 
 	TYPE, 
-	NULL_
+	NULL_, 
+	AUTO_CAST
 };
 
 #define TYPE_NUMBER_IS_SIGNED 0x2
@@ -52,10 +53,12 @@ extern Type TYPE_TYPE;
 
 extern Type TYPE_NULL;
 
+extern Type TYPE_AUTO_CAST;
+
 struct Expr;
 
 struct TypePointer : Type {
-	Expr *pointerTo; // When resolving is done this should be 
+	Type *pointerTo;
 };
 
 struct TypeFunction : Type {
@@ -107,6 +110,7 @@ struct Expr {
 };
 
 #define EXPR_FOR_BY_POINTER 0x1
+#define EXPR_CAST_IS_IMPLICIT 0x2
 
 
 struct ExprLiteral : Expr {
@@ -170,7 +174,7 @@ struct ExprFunction : Expr {
 	Block arguments;
 	Expr *returnType;
 
-	ExprBlock *body;
+	Expr *body;
 };
 
 struct ExprReturn : Expr {
@@ -204,7 +208,9 @@ struct ExprIf : Expr {
 #define DECLARATION_IS_UNINITIALIZED 0x2
 #define DECLARATION_IS_ITERATOR 0x4
 #define DECLARATION_IS_ITERATOR_INDEX 0x8
-#define DECLARATION_VALUE_TYPE_CHECK_COMPLETE 0x10
+#define DECLARATION_VALUE_IS_READY 0x10
+#define DECLARATION_TYPE_IS_READY 0x20
+
 
 struct Declaration {
 	CodeLocation start;

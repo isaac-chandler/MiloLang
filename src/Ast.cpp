@@ -25,3 +25,5 @@ Type TYPE_BOOL = { 1, 1, 0, TypeFlavor::BOOL };
 Type TYPE_TYPE = { 0, 0, 0, TypeFlavor::TYPE };
 
 Type TYPE_NULL = { 8, 8, TYPE_IS_INTERNAL, TypeFlavor::NULL_ };
+
+Type TYPE_AUTO_CAST = { 0, 0, TYPE_IS_INTERNAL, TypeFlavor::AUTO_CAST };

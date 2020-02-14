@@ -13,6 +13,8 @@
     <ClInclude Include="src\String.h" />
     <ClInclude Include="src\Parser.h" />
     <ClInclude Include="src\Ast.h" />
+    <ClInclude Include="src\Infer.h" />
+    <ClInclude Include="src\WorkQueue.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\CompilerMain.cpp" />
@@ -22,6 +24,7 @@
     <ClCompile Include="src\String.cpp" />
     <ClCompile Include="src\Parser.cpp" />
     <ClCompile Include="src\Ast.cpp" />
+    <ClCompile Include="src\Infer.cpp" />
   </ItemGroup>
   <ItemGroup>
     <Natvis Include="NatvisFile.natvis" />

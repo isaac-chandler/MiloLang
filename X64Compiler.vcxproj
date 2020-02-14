@@ -143,10 +143,12 @@
     <ClInclude Include="src\Ast.h" />
     <ClInclude Include="src\Basic.h" />
     <ClInclude Include="src\CompilerMain.h" />
+    <ClInclude Include="src\Infer.h" />
     <ClInclude Include="src\Lexer.h" />
     <ClInclude Include="src\Parser.h" />
     <ClInclude Include="src\String.h" />
     <ClInclude Include="src\UTF.h" />
+    <ClInclude Include="src\WorkQueue.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\Ast.cpp" />
@@ -156,6 +158,7 @@
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Profiling|x64'">Create</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="src\CompilerMain.cpp" />
+    <ClCompile Include="src\Infer.cpp" />
     <ClCompile Include="src\Lexer.cpp" />
     <ClCompile Include="src\Parser.cpp" />
     <ClCompile Include="src\String.cpp" />

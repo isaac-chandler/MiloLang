@@ -607,6 +607,8 @@ ExprLiteral *makeIntegerLiteral(CodeLocation &start, EndLocation &end, u64 value
 	return literal;
 }
 
+
+// @Incomplete allow the return type expression of a function to refer to the arguments
 Expr *parsePrimaryExpr(LexerFile *lexer) {
 	CodeLocation start = lexer->token.start;
 	EndLocation end = lexer->token.end;
