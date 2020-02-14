@@ -13,7 +13,6 @@ enum class TypeFlavor : u8 {
 	BOOL, 
 	FUNCTION, 
 	TYPE, 
-	NULL_, 
 	AUTO_CAST
 };
 
@@ -51,9 +50,9 @@ extern Type TYPE_BOOL;
 
 extern Type TYPE_TYPE;
 
-extern Type TYPE_NULL;
-
 extern Type TYPE_AUTO_CAST;
+
+extern TypePointer TYPE_VOID_POINTER;
 
 struct Expr;
 
@@ -90,7 +89,7 @@ enum class ExprFlavor : u8 {
 	BREAK, 
 	CONTINUE, 
 	RETURN, 
-	IF
+	IF, 
 
 };
 
@@ -233,20 +232,13 @@ inline bool typesAreSame(Type *a, Type *b) {
 		case TypeFlavor::BOOL:
 		case TypeFlavor::VOID:
 		case TypeFlavor::TYPE:
-		case TypeFlavor::NULL_:
 			return true;
 		case TypeFlavor::INTEGER:
 			return a->size == b->size && FLAGS_ARE_SAME(a->flags, b->flags, TYPE_NUMBER_IS_SIGNED);
 		case TypeFlavor::FLOAT:
 			return a->size == b->size;
 		case TypeFlavor::POINTER: {
-			auto pa = static_cast<TypePointer *>(a)->pointerTo;
-			auto pb = static_cast<TypePointer *>(b)->pointerTo;
-
-			assert(pa->flavor == ExprFlavor::TYPE_LITERAL); // The types should be resolved to a type literal at this point
-			assert(pb->flavor == ExprFlavor::TYPE_LITERAL); // The types should be resolved to a type literal at this point
-
-			return typesAreSame(static_cast<ExprLiteral *>(pa)->typeValue, static_cast<ExprLiteral *>(pb)->typeValue);
+			return typesAreSame(static_cast<TypePointer *>(a)->pointerTo, static_cast<TypePointer *>(b)->pointerTo);
 		}
 		case TypeFlavor::FUNCTION: {
 			auto fa = static_cast<TypeFunction *>(a);

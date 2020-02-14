@@ -914,7 +914,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		expr = makeIntegerLiteral(start, end, 1, &TYPE_BOOL);
 	}
 	else if (expectAndConsume(lexer, TokenT::NULL_)) {
-		expr = makeIntegerLiteral(start, end, 0, &TYPE_NULL);
+		expr = makeIntegerLiteral(start, end, 0, &TYPE_VOID_POINTER);
 	}
 	else if (lexer->token.type == TokenT::STRING_LITERAL) {
 		assert(false); // @Incomplete handle strings 
