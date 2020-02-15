@@ -255,18 +255,22 @@ Expr *parseStatement(LexerFile *lexer) {
 				}
 			}
 			else {
-				Declaration *it = makeIterator(loop->start, end, "it");
-				it->flags |= DECLARATION_IS_ITERATOR;
-				if (!addDeclarationToBlock(&loop->iteratorBlock, it)) {
-					assert(false); // Invalid code path, we should never fail to add something to an empty block
-				}
+				goto notDeclaration;
+			}
+		}
+		else {
+		notDeclaration:
+			Declaration *it = makeIterator(loop->start, end, "it");
+			it->flags |= DECLARATION_IS_ITERATOR;
+			if (!addDeclarationToBlock(&loop->iteratorBlock, it)) {
+				assert(false); // Invalid code path, we should never fail to add something to an empty block
+			}
 
 
-				Declaration *it_index = makeIterator(loop->start, end, "it_index");
-				it_index->flags |= DECLARATION_IS_ITERATOR_INDEX;
-				if (!addDeclarationToBlock(&loop->iteratorBlock, it_index)) {
-					assert(false); // Invalid code path, we should never fail to add this
-				}
+			Declaration *it_index = makeIterator(loop->start, end, "it_index");
+			it_index->flags |= DECLARATION_IS_ITERATOR_INDEX;
+			if (!addDeclarationToBlock(&loop->iteratorBlock, it_index)) {
+				assert(false); // Invalid code path, we should never fail to add this
 			}
 		}
 		
@@ -692,6 +696,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 				do {
 					Declaration *declaration = parseDeclaration(lexer);
+					declaration->flags |= DECLARATION_IS_ARGUMENT;
 
 					if (declaration->flags & DECLARATION_IS_CONSTANT) {
 						assert(false); // @ErrorMessage cannot have a constant default argument
@@ -1160,6 +1165,7 @@ Expr *parseUnaryExpr(LexerFile *lexer) {
 
 		if (expectAndConsume(lexer, ')')) {
 			expr->left = nullptr;
+			expr->type = &TYPE_AUTO_CAST;
 		}
 		else {
 			expr->left = parseExpr(lexer);
@@ -1375,7 +1381,7 @@ Declaration *parseDeclaration(LexerFile *lexer) {
 	return declaration;
 }
 
-void parseFile(u8 *filename) {
+LexerFile parseFile(u8 *filename) {
 	LexerFile lexer;
 
 	lexer.open(filename);
@@ -1407,5 +1413,5 @@ void parseFile(u8 *filename) {
 
 	inferQueue.add(makeStopSignal());
 
-	lexer.close();
+	return lexer;
 }

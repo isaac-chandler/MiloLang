@@ -47,6 +47,25 @@ struct SPMCQueue {
 };
 #endif
 
+struct WorkQueueAdd {
+	u64 &head;
+	u64 &tail;
+
+	WorkQueueAdd(u64 &head, u64 &tail) : head(head), tail(tail) {}
+
+	inline bool operator()() const { return tail + WORK_QUEUE_MAX_PENDING > head; }
+};
+
+struct WorkQueueTake {
+	u64 &head;
+	u64 &tail;
+
+	WorkQueueTake(u64 &head, u64 &tail) : head(head), tail(tail) {}
+
+	inline bool operator()() const { return tail < head; }
+};
+
+
 template <typename T> 
 class WorkQueue {
 public:
@@ -97,22 +116,4 @@ public:
 		head = 0;
 		tail = 0;
 	}
-};
-
-struct WorkQueueAdd {
-	u64 &head;
-	u64 &tail;
-
-	WorkQueueAdd(u64 &head, u64 &tail) : head(head), tail(tail) {}
-
-	inline bool operator()() const { return tail + WORK_QUEUE_MAX_PENDING > head; }
-};
-
-struct WorkQueueTake {
-	u64 &head;
-	u64 &tail;
-
-	WorkQueueTake(u64 &head, u64 &tail) : head(head), tail(tail) {}
-
-	inline bool operator()() const { return tail < head; }
 };

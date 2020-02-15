@@ -2,6 +2,8 @@
 
 #include "CompilerMain.h"
 #include "Parser.h"
+#include "Infer.h"
+#include "Lexer.h"
 
 int main(int argc, char *argv[]) {
 	if (argc != 2) {
@@ -20,9 +22,14 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 
-	parseFile(reinterpret_cast<u8 *>(argv[1]));
+	std::thread infer(runInfer);
+
+	LexerFile lexer = parseFile(reinterpret_cast<u8 *>(argv[1]));
+
+	infer.join();
 
 
+	lexer.close();
 
 #if PROFILE
 	{

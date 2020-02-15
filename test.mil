@@ -13,7 +13,7 @@ main :: (argc: s32, argv: *string_) -> s32 {
 }
 
 get_command_line_arguments :: (argc: *s32) -> *string_ {
-	<< s32 = argCount
+	<< argc = argCount
 	return args
 }
 
@@ -46,4 +46,12 @@ _main :: () {
 	args := get_command_line_arguments(*argCount)
 
 	factorial(cast() argCount)
+}
+
+factorial2 :: (n: u64) -> u64 {
+	total: u64 = 1
+	
+	for 2 .. n + 1 total *= it
+	
+	return total
 }

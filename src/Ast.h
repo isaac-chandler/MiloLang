@@ -17,7 +17,8 @@ enum class TypeFlavor : u8 {
 };
 
 #define TYPE_NUMBER_IS_SIGNED 0x2
-#define TYPE_IS_INTERNAL      0x4 // This means that this type should never be accessible to the user, i.e. the type of null, which is special to give it casting properties, but the program should never be able to reference it. This flag makes type_of(null) illegal, and x := null illegal
+#define TYPE_IS_INTERNAL      0x4 // This means that this type should never be accessible to the user, i.e. the type of null, which is special to give it casting properties, but the program should never be able to reference it.
+#define TYPE_IS_INTERNAL      0x4 // This means that this type should never be accessible to the user, i.e. the type of null, which is special to give it casting properties, but the program should never be able to reference it.
 
 struct Type {
 	u64 size;
@@ -52,13 +53,14 @@ extern Type TYPE_TYPE;
 
 extern Type TYPE_AUTO_CAST;
 
+struct TypePointer : Type {
+	Type *pointerTo;
+};
+
 extern TypePointer TYPE_VOID_POINTER;
 
 struct Expr;
 
-struct TypePointer : Type {
-	Type *pointerTo;
-};
 
 struct TypeFunction : Type {
 	Expr *returnType;
@@ -136,6 +138,8 @@ struct ExprUnaryOperator : Expr {
 	TokenT op;
 };
 
+struct Block;
+
 struct ExprIdentifier : Expr {
 	String name;
 	Declaration *declaration;
@@ -209,6 +213,7 @@ struct ExprIf : Expr {
 #define DECLARATION_IS_ITERATOR_INDEX 0x8
 #define DECLARATION_VALUE_IS_READY 0x10
 #define DECLARATION_TYPE_IS_READY 0x20
+#define DECLARATION_IS_ARGUMENT 0x40
 
 
 struct Declaration {
