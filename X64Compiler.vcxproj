@@ -135,7 +135,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <None Include="test.l" />
+    <None Include="test.mil" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\Array.h" />

@@ -36,15 +36,22 @@ static Declaration *resolveIdentifier(String name, bool *success) {
 	return nullptr;
 }
 
-// @Revisit: should we disallow local variables overwriting variables in parent local blocks
 bool addDeclarationToBlock(Block *block, Declaration *declaration) {
 	assert(block);
 	assert(declaration);
 
-	for (auto previous : block->declarations) {
-		if (previous->name == declaration->name) {
-			assert(false); // @ErrorMessage Cannot redeclare a variable within the same scope
-			return false;
+	for (auto check = block; check; check = check->parentBlock) {
+		for (auto previous : check->declarations) {
+			if (previous->name == declaration->name) {
+				if (check == block) {
+					assert(false); // @ErrorMessage Cannot redeclare a variable within the same scope
+					return false;
+				}
+				else {
+					assert(false); // @ErrorMessage Cannot redeclare a variable in an outer local block
+					return false;
+				}
+			}
 		}
 	}
 
@@ -1109,10 +1116,10 @@ Expr *makeUnaryOperator(LexerFile *lexer, CodeLocation &start, EndLocation &end,
 	expr->flavor = ExprFlavor::UNARY_OPERATOR;
 	expr->op = type;
 
-expr->value = parseUnaryExpr(lexer);
-if (!expr->value) {
-	return nullptr;
-}
+	expr->value = parseUnaryExpr(lexer);
+	if (!expr->value) {
+		return nullptr;
+	}
 
 return expr;
 }

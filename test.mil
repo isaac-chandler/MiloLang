@@ -7,6 +7,8 @@ main :: (argc: s32, argv: *string_) -> s32 {
 	argCount = argc
 	args = argv
 
+	_main()
+
 	return 0
 }
 
@@ -20,12 +22,20 @@ factorial :: (n: u64) -> u64 {
 }
 
 _main :: () {
-	// Put in a hack to make sure we can use a declaration recursively in functions
-	// @Solution I think the way we do this is to allow out of order declaration of constants in local scopes
+/* This should cause an error now
 	factorial :: (n: u64) -> u64 {
-		if n <= 1
-			return 1
-		return n * factorial(n - 1)
+		return << cast(*u64) null // Uh oh, you have resolved the wrong function
+	}
+*/
+
+	{
+		// Put in a hack to make sure we can use a declaration recursively in functions
+		// @Solution I think the way we do this is to allow out of order declaration of constants in local scopes
+		factorial :: (n: u64) -> u64 {
+			if n <= 1
+				return 1
+			return n * factorial(n - 1)
+		}
 	}
 
 	// but we can't use it recursively elsewhere
@@ -34,4 +44,6 @@ _main :: () {
 
 	argCount: s32 = --
 	args := get_command_line_arguments(*argCount)
+
+	factorial(cast() argCount)
 }
