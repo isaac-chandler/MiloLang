@@ -694,6 +694,8 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 			if (peek == TOKEN(':')) { // This is an argument declaration
 				Block argumentDeclarations;
 
+				bool hadDefaultArguments = false;
+
 				do {
 					Declaration *declaration = parseDeclaration(lexer);
 					declaration->flags |= DECLARATION_IS_ARGUMENT;
@@ -706,6 +708,10 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 					if (declaration->flags & DECLARATION_IS_UNINITIALIZED) {
 						assert(false); // @ErrorMessage cannot have an uninitialized default argument
 						return nullptr;
+					}
+
+					if (declaration->initialValue) {
+						hadDefaultArguments = 
 					}
 
 					if (!addDeclarationToBlock(&argumentDeclarations, declaration)) {

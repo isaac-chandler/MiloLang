@@ -15,6 +15,7 @@
     <ClInclude Include="src\Ast.h" />
     <ClInclude Include="src\Infer.h" />
     <ClInclude Include="src\WorkQueue.h" />
+    <ClInclude Include="src\IrGenerator.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\CompilerMain.cpp" />
@@ -25,6 +26,7 @@
     <ClCompile Include="src\Parser.cpp" />
     <ClCompile Include="src\Ast.cpp" />
     <ClCompile Include="src\Infer.cpp" />
+    <ClCompile Include="src\IrGenerator.cpp" />
   </ItemGroup>
   <ItemGroup>
     <Natvis Include="NatvisFile.natvis" />

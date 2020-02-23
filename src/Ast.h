@@ -16,7 +16,7 @@ enum class TypeFlavor : u8 {
 	AUTO_CAST
 };
 
-#define TYPE_NUMBER_IS_SIGNED 0x2
+#define TYPE_INTEGER_IS_SIGNED 0x2
 #define TYPE_IS_INTERNAL      0x4 // This means that this type should never be accessible to the user, i.e. the type of null, which is special to give it casting properties, but the program should never be able to reference it.
 #define TYPE_IS_INTERNAL      0x4 // This means that this type should never be accessible to the user, i.e. the type of null, which is special to give it casting properties, but the program should never be able to reference it.
 
@@ -224,6 +224,8 @@ struct Declaration {
 	Expr *initialValue;
 	Block *enclosingScope;
 
+	u64 irRegister;
+
 	u64 flags = 0;
 	
 };
@@ -239,7 +241,7 @@ inline bool typesAreSame(Type *a, Type *b) {
 		case TypeFlavor::TYPE:
 			return true;
 		case TypeFlavor::INTEGER:
-			return a->size == b->size && FLAGS_ARE_SAME(a->flags, b->flags, TYPE_NUMBER_IS_SIGNED);
+			return a->size == b->size && FLAGS_ARE_SAME(a->flags, b->flags, TYPE_INTEGER_IS_SIGNED);
 		case TypeFlavor::FLOAT:
 			return a->size == b->size;
 		case TypeFlavor::POINTER: {

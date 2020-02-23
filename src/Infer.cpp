@@ -333,7 +333,7 @@ bool solidifyOneLiteralDriver(Expr *left, Expr *right, bool *success) {
 	else if (left->type == &TYPE_SIGNED_INT_LITERAL) {
 		assert(right->type->flavor == TypeFlavor::INTEGER);
 
-		if (!(right->flags & TYPE_NUMBER_IS_SIGNED)) {
+		if (!(right->flags & TYPE_INTEGER_IS_SIGNED)) {
 			assert(false); // @ErrorMessage signed-unsigned mismatch
 			*success = false;
 		}
@@ -529,7 +529,7 @@ bool binaryOpForInteger(ExprBinaryOperator *binary) {
 		}
 	}
 	else {
-		if ((left->type->flags & TYPE_NUMBER_IS_SIGNED) == (right->type->flags & TYPE_NUMBER_IS_SIGNED)) {
+		if ((left->type->flags & TYPE_INTEGER_IS_SIGNED) == (right->type->flags & TYPE_INTEGER_IS_SIGNED)) {
 			if (left->type == &TYPE_UNSIGNED_INT_LITERAL || left->type == &TYPE_SIGNED_INT_LITERAL) {
 				if (!boundsCheckImplicitConversion(right->type, static_cast<ExprLiteral *>(left))) {
 					assert(false); // @ErrorMessage
@@ -552,7 +552,7 @@ bool binaryOpForInteger(ExprBinaryOperator *binary) {
 			}
 		}
 		else {
-			if ((left->type == &TYPE_UNSIGNED_INT_LITERAL) && (right->type->flags & TYPE_NUMBER_IS_SIGNED)) {
+			if ((left->type == &TYPE_UNSIGNED_INT_LITERAL) && (right->type->flags & TYPE_INTEGER_IS_SIGNED)) {
 				if (right->type == &TYPE_SIGNED_INT_LITERAL) {
 					right->type = &TYPE_S64;
 				}
@@ -564,7 +564,7 @@ bool binaryOpForInteger(ExprBinaryOperator *binary) {
 
 				left->type = right->type;
 			}
-			else if ((right->type == &TYPE_UNSIGNED_INT_LITERAL) && (left->type->flags & TYPE_NUMBER_IS_SIGNED)) {
+			else if ((right->type == &TYPE_UNSIGNED_INT_LITERAL) && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
 				if (left->type == &TYPE_SIGNED_INT_LITERAL) {
 					left->type = &TYPE_S64;
 				}
@@ -597,7 +597,7 @@ bool assignOpForInteger(ExprBinaryOperator *binary) {
 		}
 	}
 	else {
-		if ((left->type->flags & TYPE_NUMBER_IS_SIGNED) == (right->type->flags & TYPE_NUMBER_IS_SIGNED)) {
+		if ((left->type->flags & TYPE_INTEGER_IS_SIGNED) == (right->type->flags & TYPE_INTEGER_IS_SIGNED)) {
 			if (right->type == &TYPE_UNSIGNED_INT_LITERAL || right->type == &TYPE_SIGNED_INT_LITERAL) {
 				if (!boundsCheckImplicitConversion(left->type, static_cast<ExprLiteral *>(right))) {
 					assert(false); // @ErrorMessage
@@ -613,7 +613,7 @@ bool assignOpForInteger(ExprBinaryOperator *binary) {
 			}
 		}
 		else {
-			if ((right->type == &TYPE_UNSIGNED_INT_LITERAL) && (left->type->flags & TYPE_NUMBER_IS_SIGNED)) {
+			if ((right->type == &TYPE_UNSIGNED_INT_LITERAL) && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
 				if (!boundsCheckImplicitConversion(left->type, static_cast<ExprLiteral *>(right))) {
 					assert(false); // @ErrorMessage
 					return false;
@@ -894,6 +894,8 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 						}
 
 						expr->type = castTo;
+
+						break;
 					}
 					case TOKEN('['): {
 						if (left->type->flavor == TypeFlavor::POINTER) {
@@ -1578,7 +1580,7 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 							return false;
 						}
 
-						if ((loop->forBegin->type->flags & TYPE_NUMBER_IS_SIGNED) == (loop->forEnd->type->flags & TYPE_NUMBER_IS_SIGNED)) {
+						if ((loop->forBegin->type->flags & TYPE_INTEGER_IS_SIGNED) == (loop->forEnd->type->flags & TYPE_INTEGER_IS_SIGNED)) {
 							if (loop->forBegin->type == loop->forEnd->type) {
 								trySolidifyNumericLiteralToDefault(loop->forBegin);
 								trySolidifyNumericLiteralToDefault(loop->forEnd);
@@ -1754,7 +1756,7 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 									}
 								}
 								case TypeFlavor::INTEGER: {
-									if ((correct->flags & TYPE_NUMBER_IS_SIGNED) == (given->type->flags & TYPE_NUMBER_IS_SIGNED)) {
+									if ((correct->flags & TYPE_INTEGER_IS_SIGNED) == (given->type->flags & TYPE_INTEGER_IS_SIGNED)) {
 										if (given->type == &TYPE_UNSIGNED_INT_LITERAL || given->type == &TYPE_SIGNED_INT_LITERAL) {
 											if (!boundsCheckImplicitConversion(correct, static_cast<ExprLiteral *>(given))) {
 												assert(false); // @ErrorMessage
@@ -1770,7 +1772,7 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 										}
 									}
 									else {
-										if ((given->type == &TYPE_UNSIGNED_INT_LITERAL) && (correct->flags & TYPE_NUMBER_IS_SIGNED)) {
+										if ((given->type == &TYPE_UNSIGNED_INT_LITERAL) && (correct->flags & TYPE_INTEGER_IS_SIGNED)) {
 											if (!boundsCheckImplicitConversion(correct, static_cast<ExprLiteral *>(given))) {
 												assert(false); // @ErrorMessage
 												return false;
@@ -1943,7 +1945,7 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 								}
 							}
 							else if (type == &TYPE_SIGNED_INT_LITERAL) {
-								if (returnType->flags & TYPE_NUMBER_IS_SIGNED) {
+								if (returnType->flags & TYPE_INTEGER_IS_SIGNED) {
 									if (boundsCheckImplicitConversion(returnType, static_cast<ExprLiteral *>(return_->value))) {
 										type = returnType;
 									}
@@ -1958,7 +1960,7 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 								}
 							}
 							else {
-								if ((type->flags & TYPE_NUMBER_IS_SIGNED) == (returnType->flags & TYPE_NUMBER_IS_SIGNED)) {
+								if ((type->flags & TYPE_INTEGER_IS_SIGNED) == (returnType->flags & TYPE_INTEGER_IS_SIGNED)) {
 									if (type->size < returnType->size) {
 										insertImplicitCast(&return_->value, returnType);
 									}
@@ -2013,7 +2015,7 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 				switch (unary->op) {
 					case TOKEN('-'): {
 						if (value->type->flavor == TypeFlavor::INTEGER) {
-							if (value->type->flags & TYPE_NUMBER_IS_SIGNED) {
+							if (value->type->flags & TYPE_INTEGER_IS_SIGNED) {
 								if (value->type == &TYPE_SIGNED_INT_LITERAL) {
 									value->start = unary->start;
 									
@@ -2379,7 +2381,7 @@ void runInfer() {
 												}
 											}
 											case TypeFlavor::INTEGER: {
-												if ((correct->flags & TYPE_NUMBER_IS_SIGNED) == (given->type->flags & TYPE_NUMBER_IS_SIGNED)) {
+												if ((correct->flags & TYPE_INTEGER_IS_SIGNED) == (given->type->flags & TYPE_INTEGER_IS_SIGNED)) {
 													if (given->type == &TYPE_UNSIGNED_INT_LITERAL || given->type == &TYPE_SIGNED_INT_LITERAL) {
 														if (!boundsCheckImplicitConversion(correct, static_cast<ExprLiteral *>(given))) {
 															assert(false); // @ErrorMessage
@@ -2395,7 +2397,7 @@ void runInfer() {
 													}
 												}
 												else {
-													if ((given->type == &TYPE_UNSIGNED_INT_LITERAL) && (correct->flags & TYPE_NUMBER_IS_SIGNED)) {
+													if ((given->type == &TYPE_UNSIGNED_INT_LITERAL) && (correct->flags & TYPE_INTEGER_IS_SIGNED)) {
 														if (!boundsCheckImplicitConversion(correct, static_cast<ExprLiteral *>(given))) {
 															assert(false); // @ErrorMessage
 															goto error;
