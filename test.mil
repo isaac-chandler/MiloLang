@@ -21,6 +21,14 @@ factorial :: (n: u64) -> u64 {
 	return 10000000 // Haha! you have resolved the wrong function
 }
 
+test() :: {
+	a : *void
+	b : *void
+
+	for a .. b
+		factorial(it_index) // dummy code
+}
+
 _main :: () {
 /* This should cause an error now
 	factorial :: (n: u64) -> u64 {
@@ -39,7 +47,7 @@ _main :: () {
 	}
 
 	// but we can't use it recursively elsewhere
-	// @Solution This should be a circular dependency error then
+	// @Solution This should be a circular dependency error then for type
 	//error : u64 : error
 
 	argCount: s32 = --

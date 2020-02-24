@@ -2551,7 +2551,12 @@ void runInfer() {
 	}
 
 	if (inferJobs.count) { // We didn't complete type inference, check for undeclared identifiers or circular dependencies!
-		assert(false);
+		assert(false); // @ErrorMessage
+
+		// @Incomplete
+		// @Incomplete
+		// @Incomplete
+		// @Incomplete
 	}
 
 

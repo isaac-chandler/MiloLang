@@ -195,6 +195,8 @@ struct ExprLoop : Expr {
 	Expr *forEnd;
 
 	Expr *body;
+
+	u64 irPointer;
 };
 
 struct ExprBreakOrContinue : Expr {
