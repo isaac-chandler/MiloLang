@@ -1272,8 +1272,19 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 							return false;
 						}
 
-						if (left->type->flavor == right->type->flavor) {
-							switch (left->type->flavor) {
+						if (!right) { // @Incomplete this is only valid for non-composite types
+							ExprLiteral *zero = new ExprLiteral;
+							zero->flavor = ExprFlavor::INT_LITERAL;
+							zero->unsignedValue = 0;
+							zero->type = left->type;
+							zero->start = binary->start;
+							zero->end = binary->end;
+							
+							binary->right = zero;
+						}
+						else {
+							if (left->type->flavor == right->type->flavor) {
+								switch (left->type->flavor) {
 								case TypeFlavor::BOOL: {
 									break;
 								}
@@ -1325,18 +1336,19 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 								}
 								default:
 									assert(false);
-							}
-						}
-						else {
-							if (!assignOpForAutoCast(binary)) {
-								assert(false);
+								}
 							}
 							else {
-								assignOpForFloatAndIntLiteral(binary);
+								if (!assignOpForAutoCast(binary)) {
+									assert(false);
+								}
+								else {
+									assignOpForFloatAndIntLiteral(binary);
 
-								if (!typesAreSame(right->type, left->type)) {
-									assert(false); // @ErrorMessage
-									return false;
+									if (!typesAreSame(right->type, left->type)) {
+										assert(false); // @ErrorMessage
+										return false;
+									}
 								}
 							}
 						}
