@@ -21,7 +21,7 @@ factorial :: (n: u64) -> u64 {
 	return 10000000 // Haha! you have resolved the wrong function
 }
 
-test() :: {
+test :: () {
 	a : *void
 	b : *void
 

@@ -3,6 +3,7 @@
 #include "Array.h"
 #include "Parser.h"
 #include "Lexer.h"
+#include "IrGenerator.h"
 
 enum class InferType {
 	// FUNCTION_HEAD, 
@@ -83,7 +84,10 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 			if (binary->left) {
 				flatten(flattenTo, &binary->left);
 			}
-			flatten(flattenTo, &binary->right);
+
+			if (binary->right) {
+				flatten(flattenTo, &binary->right);
+			}
 
 			if (binary->op == TokenT::CAST && !binary->left) {
 				// Don't add auto-casts to the flattened list, there is nothing to infer
@@ -185,12 +189,14 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 	}
 }
 
-void addDeclaration(Declaration *declaration) {
+bool addDeclaration(Declaration *declaration) {
 	if (declaration->flags & (DECLARATION_IS_ITERATOR | DECLARATION_IS_ITERATOR_INDEX))
-		return;
+		return true;
 
 	if (!declaration->enclosingScope) {
-		addDeclarationToBlock(&globalBlock, declaration);
+		if (!addDeclarationToBlock(&globalBlock, declaration)) {
+			return false;
+		}
 	}
 
 	InferJob job;
@@ -206,6 +212,8 @@ void addDeclaration(Declaration *declaration) {
 	}
 
 	inferJobs.add(job);
+
+	return true;
 }
 
 Type *getDeclarationType(Declaration *declaration) {
@@ -229,6 +237,10 @@ void solidifyUnsignedLiteralToS64OrU64(Expr *expr) {
 		expr->type = &TYPE_S64;
 	}
 }
+
+
+
+// @Incomplete: should a n numeric literal 0 implicitly cast to a pointer, currently I think not as this would be a strange special case
 
 void trySolidifyNumericLiteralToDefault(Expr *expr) {
 	if (expr->type == &TYPE_UNSIGNED_INT_LITERAL) {
@@ -727,8 +739,8 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 
 		switch (expr->flavor) {
 			case ExprFlavor::IDENTIFIER: {
-				auto identifier = static_cast<ExprIdentifier *>(expr);
 
+				auto identifier = static_cast<ExprIdentifier *>(expr);
 				if (!identifier->declaration) {
 					for (; identifier->resolveFrom; identifier->resolveFrom = identifier->resolveFrom->parentBlock) {
 						if (!(identifier->resolveFrom->flags & BLOCK_IS_COMPLETE)) break;
@@ -860,7 +872,9 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 				auto &right = binary->right;
 
 				assert(left); // This is safe since even though auto-casts can have a left of null, they shouldn't be added to the flattened array
-				assert(right);
+
+
+				// assert(right); We can't do this since default initialization uses a assign operation with rhs of null
 
 				if (left->type->flavor == right->type->flavor && left->type->flavor == TypeFlavor::AUTO_CAST) {
 					assert(false); // @ErrorMessage cannot auto-cast both sides of a binary operator
@@ -873,7 +887,7 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 				}
 
 
-				if (right->type->flavor == TypeFlavor::VOID) {
+				if (right && right->type->flavor == TypeFlavor::VOID) {
 					assert(false); // @ErrorMessage
 					return false;
 				}
@@ -2247,6 +2261,7 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 			default:
 				assert(false);
 		}
+
 	}
 
 	return true;
@@ -2270,13 +2285,16 @@ void runInfer() {
 			inferJobs.add(body);
 		}
 		else if (declarations.count == 1) {
-			addDeclaration(declarations.data.declaration);
+			if (!addDeclaration(declarations.data.declaration)) {
+				goto error;
+			}
 		}
 		else {
 			inferJobs.reserve(inferJobs.count + declarations.count); // Make sure we don't do unnecessary allocations
 
 			for (u64 i = 0; i < declarations.count; i++)
-				addDeclaration(declarations.data.declarations[i]);
+				if (!addDeclaration(declarations.data.declarations[i]))
+					goto error;
 		}
 
 		bool madeProgress;
@@ -2294,10 +2312,13 @@ void runInfer() {
 							goto error;
 						}
 
-						if (job.valueFlattenedIndex == job.valueFlattened.count) {
-							inferJobs.unordered_remove(i--);
-						}
+						if (job.infer.function->type) {
+							if (job.valueFlattenedIndex == job.valueFlattened.count) {
+								inferJobs.unordered_remove(i--);
 
+								irGeneratorQueue.add(job.infer.function);
+							}
+						}
 						break;
 					}
 					case InferType::DECLARATION: {
@@ -2561,4 +2582,5 @@ void runInfer() {
 
 
 error:;
+	irGeneratorQueue.add(nullptr);
 }

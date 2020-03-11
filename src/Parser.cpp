@@ -711,7 +711,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 					}
 
 					if (declaration->initialValue) {
-						hadDefaultArguments = 
+						hadDefaultArguments = true;
 					}
 
 					if (!addDeclarationToBlock(&argumentDeclarations, declaration)) {
@@ -769,6 +769,11 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 						expr = function;
 					}
 					else {
+						if (hadDefaultArguments) {
+							assert(false); // @ErrorMessage function type definition cannot have a default argument
+							return nullptr;
+						}
+
 						TypeFunction *type = new TypeFunction;
 						type->flavor = TypeFlavor::FUNCTION;
 						type->size = 8;

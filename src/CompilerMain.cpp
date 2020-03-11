@@ -4,8 +4,10 @@
 #include "Parser.h"
 #include "Infer.h"
 #include "Lexer.h"
+#include "IrGenerator.h"
 
 int main(int argc, char *argv[]) {
+
 	if (argc != 2) {
 		std::cout << "Expected argument to be name of input file" << std::endl;
 	}
@@ -23,10 +25,12 @@ int main(int argc, char *argv[]) {
 	}
 
 	std::thread infer(runInfer);
+	std::thread irGenerator(runIrGenerator);
+	infer.detach();
 
 	LexerFile lexer = parseFile(reinterpret_cast<u8 *>(argv[1]));
 
-	infer.join();
+	irGenerator.join();
 
 
 	lexer.close();

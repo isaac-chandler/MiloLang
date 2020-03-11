@@ -9,6 +9,11 @@
 
 WorkQueue<ExprFunction *> irGeneratorQueue;
 
+
+u64 generateIr(struct IrState *state, Expr *expr, u64 dest);
+u64 generateIr(struct IrState *state, Expr *expr, u64 dest, bool forceDest);
+
+
 enum class IrOp : u8 {
 	ADD,
 	ADD_CONSTANT, 
@@ -1185,7 +1190,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 			return DEST_NONE;
 		}
 		case ExprFlavor::UNARY_OPERATOR: {
-			ExprUnaryOperator *unary = static_cast<ExprUnaryOperator *>(unary);
+			ExprUnaryOperator *unary = static_cast<ExprUnaryOperator *>(expr);
 
 			if (dest == DEST_NONE) {
 				generateIr(state, unary->value, DEST_NONE);
@@ -1378,6 +1383,45 @@ void runIrGenerator() {
 		generateIr(&state, function->body, DEST_NONE);
 
 		// @Incomplete submit for platform code gen/interpreting
+//
+//		for (u64 i = 0; i < state.ir.count; i++) {
+//			std::cout << i << ": ";
+//
+//			Ir &ir = state.ir[i];
+//
+//#define REG(reg) (reg ? "R" : "") << reg
+//
+//			switch (ir.op) {
+//			case IrOp::ADD: {
+//				std::cout << "add " << ir.opSize << REG(ir.dest) << " <- " << REG(ir.a) << ' ' << REG(ir.b) << '\n';
+//				break;
+//			}
+//			case IrOp::ADDRESS_OF_GLOBAL: {
+//				std::cout << "address_of_global " << REG(ir.dest) << " <- " << ir.declaration->name << " " << ir.declaration << '\n';
+//				break;
+//			}
+//
+//			case IrOp::ADDRESS_OF_LOCAL: {
+//				std::cout << "address_of_local " << REG(ir.dest) << " <- " << REG(ir.a) << '\n';
+//				break;
+//			}
+//			case IrOp::ADD_CONSTANT: {
+//				std::cout << "add " << ir.opSize << REG(ir.dest) << " <- " << REG(ir.a) << ' ' << ir.b << '\n';
+//				break;
+//			}
+//			case IrOp::AND: {
+//				std::cout << "and " << ir.opSize << REG(ir.dest) << " <- " << REG(ir.a) << ' ' << ir.b << '\n';
+//				break;
+//			}
+//
+//			case IrOp::CALL: {
+//
+//
+//				std::cout << "call " << ir.opSize ;
+//				break;
+//			}
+//			}
+//		}
 
 		state.allocator = BucketedArenaAllocator(1024);
 	}

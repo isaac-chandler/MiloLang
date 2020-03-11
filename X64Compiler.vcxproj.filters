@@ -16,6 +16,7 @@
     <ClInclude Include="src\Infer.h" />
     <ClInclude Include="src\WorkQueue.h" />
     <ClInclude Include="src\IrGenerator.h" />
+    <ClInclude Include="src\BucketedArenaAllocator.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\CompilerMain.cpp" />
@@ -27,6 +28,7 @@
     <ClCompile Include="src\Ast.cpp" />
     <ClCompile Include="src\Infer.cpp" />
     <ClCompile Include="src\IrGenerator.cpp" />
+    <ClCompile Include="src\BucketedArenaAllocator.cpp" />
   </ItemGroup>
   <ItemGroup>
     <Natvis Include="NatvisFile.natvis" />
