@@ -22,8 +22,8 @@ factorial :: (n: u64) -> u64 {
 }
 
 test :: () {
-	a : *void
-	b : *void
+	a : *u8
+	b : *u8
 
 	for a .. b
 		factorial(it_index) // dummy code

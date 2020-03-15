@@ -876,7 +876,7 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 
 				// assert(right); We can't do this since default initialization uses a assign operation with rhs of null
 
-				if (left->type->flavor == right->type->flavor && left->type->flavor == TypeFlavor::AUTO_CAST) {
+				if (right && left->type->flavor == right->type->flavor && left->type->flavor == TypeFlavor::AUTO_CAST) {
 					assert(false); // @ErrorMessage cannot auto-cast both sides of a binary operator
 					return false;
 				}
@@ -2208,11 +2208,15 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 							pointer->alignment = 8;
 							pointer->pointerTo = literal->typeValue;
 
-							literal->typeValue = pointer;
 
-							literal->start = unary->start;
+							ExprLiteral *newLiteral = new ExprLiteral;
+							*newLiteral = *literal;
 
-							*exprPointer = literal;
+							newLiteral->typeValue = pointer;
+
+							newLiteral->start = unary->start;
+
+							*exprPointer = newLiteral;
 						}
 						else if (value->flavor == ExprFlavor::BINARY_OPERATOR) {
 							auto binary = static_cast<ExprBinaryOperator *>(expr);
@@ -2316,7 +2320,7 @@ void runInfer() {
 
 			for (u64 i = 0; i < inferJobs.count; i++) {
 
-				auto job = inferJobs[i];
+				auto &job = inferJobs[i];
 
 				switch (job.type) {
 					case InferType::FUNCTION_BODY: {
@@ -2326,9 +2330,9 @@ void runInfer() {
 
 						if (job.infer.function->type) {
 							if (job.valueFlattenedIndex == job.valueFlattened.count) {
-								inferJobs.unordered_remove(i--);
-
 								irGeneratorQueue.add(job.infer.function);
+								
+								inferJobs.unordered_remove(i--);
 							}
 						}
 						break;
