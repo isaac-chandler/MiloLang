@@ -730,7 +730,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 
 						Ir &write = state->ir.add();
 						write.op = IrOp::WRITE;
-						write.a = dest;
+						write.a = leftReg;
 						write.b = rightReg;
 						write.opSize = right->type->size;
 
@@ -1357,6 +1357,8 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool forceDest) {
 			set.a = stored;
 			set.dest = dest;
 		}
+
+		return dest;
 	}
 	else {
 		return generateIr(state, expr, dest);

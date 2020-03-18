@@ -34,8 +34,15 @@
 
   <Type Name="Type">
     <DisplayString Condition="flavor == TypeFlavor::INTEGER &amp;&amp; size == 0">IntLiteral</DisplayString>
+    <DisplayString Condition="flavor == TypeFlavor::Float &amp;&amp; size == 0">FloatLiteral</DisplayString>
     <DisplayString Condition="flavor == TypeFlavor::INTEGER &amp;&amp; (flags &amp; 2)">s{size*8}</DisplayString>
     <DisplayString Condition="flavor == TypeFlavor::INTEGER &amp;&amp; !(flags &amp; 2)">u{size*8}</DisplayString>
+    <DisplayString Condition="flavor == TypeFlavor::FLOAT">f{size*8}</DisplayString>
     <DisplayString Condition="flavor == TypeFlavor::POINTER">*{*((TypePointer*)this)->pointerTo}</DisplayString>
+    <DisplayString Condition="flavor == TypeFlavor::VOID">void</DisplayString>
+    <DisplayString Condition="flavor == TypeFlavor::FUNCTION">*Function*</DisplayString>
+    <DisplayString Condition="flavor == TypeFlavor::AUTO_CAST">*AutoCast*</DisplayString>
+    <DisplayString Condition="flavor == TypeFlavor::TYPE">type</DisplayString>
+    <DisplayString Condition="flavor == TypeFlavor::BOOL">bool</DisplayString>
   </Type>
 </AutoVisualizer>

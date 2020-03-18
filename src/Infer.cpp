@@ -1718,7 +1718,7 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 				}
 
 				it_index->type = makeTypeLiteral(it_index->start, it_index->end, &TYPE_U64);
-				it->flags |= DECLARATION_TYPE_IS_READY;
+				it_index->flags |= DECLARATION_TYPE_IS_READY;
 
 				break;
 			}
