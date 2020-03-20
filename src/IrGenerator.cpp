@@ -6,6 +6,7 @@
 #include "Lexer.h"
 #include "Infer.h"
 #include "BucketedArenaAllocator.h"
+#include "CoffWriter.h"
 
 WorkQueue<ExprFunction *> irGeneratorQueue;
 
@@ -1384,6 +1385,8 @@ void runIrGenerator() {
 
 		generateIr(&state, function->body, DEST_NONE);
 
+		coffWriterQueue.add(function);
+
 		// @Incomplete submit for platform code gen/interpreting
 //
 //		for (u64 i = 0; i < state.ir.count; i++) {
@@ -1427,4 +1430,6 @@ void runIrGenerator() {
 
 		state.allocator = BucketedArenaAllocator(1024);
 	}
+
+	coffWriterQueue.add(nullptr);
 }

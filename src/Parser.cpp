@@ -1326,6 +1326,8 @@ Declaration *parseDeclaration(LexerFile *lexer) {
 			return nullptr;
 		}
 
+		declaration->initialValue->declaration = declaration;
+
 		declaration->end = lexer->previousTokenEnd;
 	}
 	else if (expectAndConsume(lexer, '=')) {
@@ -1341,6 +1343,8 @@ Declaration *parseDeclaration(LexerFile *lexer) {
 		if (!declaration->initialValue) {
 			return nullptr;
 		}
+
+		declaration->initialValue->declaration = declaration;
 
 		declaration->end = lexer->previousTokenEnd;
 	}
@@ -1364,6 +1368,8 @@ Declaration *parseDeclaration(LexerFile *lexer) {
 					return nullptr;
 				}
 
+				declaration->initialValue->declaration = declaration;
+
 				declaration->end = lexer->previousTokenEnd;
 			}
 		}
@@ -1380,6 +1386,8 @@ Declaration *parseDeclaration(LexerFile *lexer) {
 			if (!declaration->initialValue) {
 				return nullptr;
 			}
+
+			declaration->initialValue->declaration = declaration;
 
 			declaration->end = lexer->previousTokenEnd;
 		}

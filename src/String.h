@@ -18,6 +18,10 @@ struct String {
 
 	bool operator==(const String &other) const;
 
+	operator bool() const {
+		return length != 0;
+	}
+
 	inline void free() { std::free(characters); }
 };
 

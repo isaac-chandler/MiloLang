@@ -5,6 +5,7 @@
 #include "Infer.h"
 #include "Lexer.h"
 #include "IrGenerator.h"
+#include "CoffWriter.h"
 
 int main(int argc, char *argv[]) {
 
@@ -24,13 +25,18 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 
+	auto start = std::chrono::high_resolution_clock::now();
+
 	std::thread infer(runInfer);
 	std::thread irGenerator(runIrGenerator);
+	std::thread coffWriter(runCoffWriter);
 	infer.detach();
+	irGenerator.detach();
+
 
 	LexerFile lexer = parseFile(reinterpret_cast<u8 *>(argv[1]));
 
-	irGenerator.join();
+	coffWriter.join();
 
 
 	lexer.close();
@@ -72,6 +78,11 @@ int main(int argc, char *argv[]) {
 	}
 
 #endif
+
+	std::cout << "It took me " << (std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::duration<double>(
+		std::chrono::high_resolution_clock::now() - start)).count() / 1000.0) << "ms";
+
+
 
 #if BUILD_DEBUG
 	std::cin.get();

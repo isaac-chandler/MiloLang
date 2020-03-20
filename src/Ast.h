@@ -103,6 +103,8 @@ struct Expr {
 	EndLocation end;
 	u64 flags = 0;
 
+	Declaration *declaration = nullptr;
+
 	Type *type = nullptr;
 
 #if BUILD_DEBUG // So I don't have to cast it to view the actual expression type in the debugger
