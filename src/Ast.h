@@ -2,6 +2,99 @@
 
 #include "Basic.h"
 #include "String.h"
+#include "Array.h"
+#include "BucketedArenaAllocator.h"
+
+enum class IrOp : u8 {
+	ADD,
+	ADD_CONSTANT,
+	SUB,
+	MUL,
+	MUL_BY_CONSTANT,
+	DIV,
+	DIVIDE_BY_CONSTANT,
+	MOD,
+	AND,
+	OR,
+	XOR,
+	NOT,
+	SHIFT_LEFT,
+	SHIFT_RIGHT,
+	READ,
+	WRITE,
+	SET,
+	GOTO,
+	IF_Z_GOTO,
+	IF_NZ_GOTO,
+	LESS,
+	GREATER,
+	LESS_EQUAL,
+	GREATER_EQUAL,
+	NOT_EQUAL,
+	EQUAL,
+	ADDRESS_OF_GLOBAL,
+	ADDRESS_OF_LOCAL,
+	IMMEDIATE,
+	EXTEND,
+	FLOAT_TO_INT,
+	INT_TO_FLOAT,
+	RETURN,
+	CALL,
+	NEG,
+	NOOP,
+	FUNCTION
+};
+
+#define IR_SIGNED_OP 0x1
+#define IR_FLOAT_OP 0x2
+
+#define DEST_NONE UINT64_MAX
+
+struct FunctionCall {
+	u64 argCount;
+	u64 args[];
+};
+
+struct Ir {
+	u64 dest;
+
+	union {
+		u64 a;
+		struct Declaration *declaration;
+		struct ExprFunction *function;
+	};
+
+	union {
+		u64 b;
+		u64 destSize;
+		FunctionCall *arguments;
+	};
+
+	u64 flags = 0;
+
+	u8 opSize;
+
+	IrOp op;
+};
+
+struct Loop {
+	struct ExprLoop *loop;
+	u64 start;
+	Array<u64> endPatches;
+};
+
+struct IrState {
+	u64 nextRegister = 1;
+	Array<Ir> ir;
+
+	BucketedArenaAllocator allocator;
+
+	Array<Loop> loopStack;
+	u64 loopCount = 0;
+
+	IrState() : allocator(1024) {}
+};
+
 
 enum class TokenT : u8;
 
@@ -178,6 +271,7 @@ struct ExprBlock : Expr {
 struct ExprFunction : Expr {
 	Block arguments;
 	Expr *returnType;
+	IrState state;
 
 	Expr *body;
 };

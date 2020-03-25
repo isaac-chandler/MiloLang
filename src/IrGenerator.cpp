@@ -11,99 +11,8 @@
 WorkQueue<ExprFunction *> irGeneratorQueue;
 
 
-u64 generateIr(struct IrState *state, Expr *expr, u64 dest);
-u64 generateIr(struct IrState *state, Expr *expr, u64 dest, bool forceDest);
-
-
-enum class IrOp : u8 {
-	ADD,
-	ADD_CONSTANT, 
-	SUB,
-	MUL,
-	MUL_BY_CONSTANT, 
-	DIV,
-	DIVIDE_BY_CONSTANT, 
-	MOD,
-	AND,
-	OR,
-	XOR,
-	NOT,
-	SHIFT_LEFT,
-	SHIFT_RIGHT,
-	READ,
-	WRITE,
-	SET,
-	GOTO,
-	IF_Z_GOTO,
-	IF_NZ_GOTO,
-	LESS,
-	GREATER,
-	LESS_EQUAL,
-	GREATER_EQUAL,
-	NOT_EQUAL,
-	EQUAL,
-	ADDRESS_OF_GLOBAL,
-	ADDRESS_OF_LOCAL, 
-	IMMEDIATE,
-	EXTEND, 
-	FLOAT_TO_INT,
-	INT_TO_FLOAT, 
-	RETURN,
-	CALL,
-	NEG,
-	NOOP, 
-	FUNCTION
-};
-
-#define IR_SIGNED_OP 0x1
-#define IR_FLOAT_OP 0x2
-
-#define DEST_NONE UINT64_MAX
-
-struct FunctionCall {
-	u64 argCount;
-	u64 args[];
-};
-
-struct Ir {
-	u64 dest;
-
-	union {
-		u64 a;
-		Declaration *declaration;
-		ExprFunction *function;
-	};
-
-	union {
-		u64 b;
-		u64 destSize;
-		FunctionCall *arguments;
-	};
-
-	u64 flags = 0;
-
-	u8 opSize;
-
-	IrOp op;
-};
-
-struct Loop {
-	ExprLoop *loop;
-	u64 start;
-	Array<u64> endPatches;
-};
-
-struct IrState {
-	u64 nextRegister;
-	Array<Ir> ir;
-
-	BucketedArenaAllocator allocator;
-
-	Array<Loop> loopStack;
-	u64 loopCount;
-
-	IrState() : allocator(1024) {}
-};
+u64 generateIr(IrState *state, Expr *expr, u64 dest);
+u64 generateIr(IrState *state, Expr *expr, u64 dest, bool forceDest);
 
 void pushLoop(IrState *state, ExprLoop *loop) {
 	if (state->loopCount >= state->loopStack.count) {
@@ -1168,11 +1077,16 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 
 			u64 result = 0;
 
-			result = generateIr(state, return_->value, state->nextRegister++);
+			result = return_->value ? generateIr(state, return_->value, state->nextRegister++) : 0;
 
 			Ir &ir = state->ir.add();
 			ir.op = IrOp::RETURN;
 			ir.a = result;
+			ir.opSize = return_->value ? return_->value->type->size : 0;
+
+			if (return_->value && return_->value->type->flavor == TypeFlavor::FLOAT) {
+				ir.flags |= IR_FLOAT_OP;
+			}
 
 			return DEST_NONE;
 		}
@@ -1367,12 +1281,8 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool forceDest) {
 }
 
 void runIrGenerator() {
-	IrState state;
 
 	while (true) {
-		state.ir = Array<Ir>();
-		state.loopCount = 0;
-		state.nextRegister = 1;
 
 		ExprFunction *function = irGeneratorQueue.take();
 
@@ -1380,12 +1290,21 @@ void runIrGenerator() {
 			break;
 
 		for (u64 i = 0; i < function->arguments.declarations.count; i++) {
-			function->arguments.declarations[i]->irRegister = state.nextRegister++;
+			function->arguments.declarations[i]->irRegister = function->state.nextRegister++;
 		}
 
-		generateIr(&state, function->body, DEST_NONE);
+		generateIr(&function->state, function->body, DEST_NONE);
+
+		// @Incomplete check wether the function actually returns instead of just adding a void return
+		Ir &ret = function->state.ir.add();
+		ret.op = IrOp::RETURN;
+		ret.a = 0;
+		ret.opSize = 0;
+
 
 		coffWriterQueue.add(function);
+
+
 
 		// @Incomplete submit for platform code gen/interpreting
 //
@@ -1427,8 +1346,6 @@ void runIrGenerator() {
 //			}
 //			}
 //		}
-
-		state.allocator = BucketedArenaAllocator(1024);
 	}
 
 	coffWriterQueue.add(nullptr);
