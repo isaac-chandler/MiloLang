@@ -1,6 +1,7 @@
 #include "Basic.h"
 #include "CoffWriter.h"
 #include "BucketedArenaAllocator.h"
+#include "Infer.h"
 
 WorkQueue<ExprFunction *> coffWriterQueue;
 
@@ -164,11 +165,52 @@ void loadIntoIntRegister(BucketedArenaAllocator *code, ExprFunction *function, u
 		code->add4(static_cast<u32>(offset));
 	}
 	else {
-		code->add1(0x84 | (loadInto << 3));
+		code->add1(0x44 | (loadInto << 3));
 		code->add1(0x24);
 		code->add1(static_cast<u8>(offset));
 	}
 	
+}
+
+void storeFromIntRegister(BucketedArenaAllocator *code, ExprFunction *function, u8 size, u64 regNo, u8 storeFrom) {
+	u64 rex = 0x40;
+
+	if (size == 8) {
+		rex |= 8;
+	}
+
+	if (storeFrom >= 8) {
+		rex |= 4;
+		storeFrom -= 8;
+	}
+
+	if (size == 2) {
+		code->add1(0x66);
+	}
+
+	if (rex != 0x40) {
+		code->add1(rex);
+	}
+
+	if (size == 1) {
+		code->add1(0x88);
+	}
+	else {
+		code->add1(0x89);
+	}
+
+	u64 offset = getRegisterOffset(function, regNo);
+
+	if (offset >= 0x80) {
+		code->add1(0x84 | (storeFrom << 3));
+		code->add1(0x24);
+		code->add4(static_cast<u32>(offset));
+	}
+	else {
+		code->add1(0x44 | (storeFrom << 3));
+		code->add1(0x24);
+		code->add1(static_cast<u8>(offset));
+	}
 }
 
 void loadIntoFloatRegister(BucketedArenaAllocator *code, ExprFunction *function, u8 size, u8 loadInto, u64 regNo) {
@@ -201,11 +243,91 @@ void loadIntoFloatRegister(BucketedArenaAllocator *code, ExprFunction *function,
 		code->add4(static_cast<u32>(offset));
 	}
 	else {
-		code->add1(0x84 | (loadInto << 3));
+		code->add1(0x44 | (loadInto << 3));
 		code->add1(0x24);
 		code->add1(static_cast<u8>(offset));
 	}
 
+}
+
+void storeFromFloatRegister(BucketedArenaAllocator *code, ExprFunction *function, u8 size, u64 regNo, u8 storeFrom) {
+	if (size == 8) {
+		code->add1(0xF3);
+	}
+	else {
+		code->add1(0xF2);
+	}
+
+	u64 rex = 0x40;
+
+	if (storeFrom >= 8) {
+		rex |= 4;
+		storeFrom -= 8;
+	}
+
+	if (rex != 0x40) {
+		code->add1(rex);
+	}
+
+	code->add1(0x0F);
+	code->add1(0x11);
+
+	u64 offset = getRegisterOffset(function, regNo);
+
+	if (offset >= 0x80) {
+		code->add1(0x84 | (storeFrom << 3));
+		code->add1(0x24);
+		code->add4(static_cast<u32>(offset));
+	}
+	else {
+		code->add1(0x44 | (storeFrom << 3));
+		code->add1(0x24);
+		code->add1(static_cast<u8>(offset));
+	}
+
+}
+
+void storeImmediate(BucketedArenaAllocator *code, ExprFunction *function, u8 size, u64 regNo, u64 immediate) {
+	if (size == 2) {
+		code->add1(0x66);
+	}
+	else if (size == 8) {
+		code->add1(0x48);
+	}
+
+	if (size == 1) {
+		code->add1(0xC6);
+	}
+	else {
+		code->add1(0xC7);
+	}
+
+	u64 offset = getRegisterOffset(function, regNo);
+
+	if (offset == 0) {
+		code->add1(0x04);
+		code->add1(0x24);
+	}
+	else if (offset >= 0x80) {
+		code->add1(0x84);
+		code->add1(0x24);
+		code->add4(static_cast<u32>(offset));
+	}
+	else {
+		code->add1(0x44);
+		code->add1(0x24);
+		code->add1(static_cast<u8>(offset));
+	}
+
+	if (size == 1) {
+		code->add1(static_cast<u8>(immediate));
+	}
+	else if (size == 2) {
+		code->add2(static_cast<u16>(immediate));
+	}
+	else if (size == 4 || size == 8) {
+		code->add4(static_cast<u32>(immediate));
+	}
 }
 
 void runCoffWriter() {
@@ -221,6 +343,8 @@ void runCoffWriter() {
 
 		if (!function)
 			break;
+
+		u64 start = code.totalSize;
 
 		u64 argCount = function->arguments.declarations.count;
 
@@ -374,7 +498,16 @@ void runCoffWriter() {
 				
 				} break;
 				case IrOp::IMMEDIATE: {
-				
+					if (ir.opSize == 8 && static_cast<s64>(ir.a) != static_cast<s64>(static_cast<s32>(ir.a))) {
+						code.add1(0x48); // mov rax, ir.a
+						code.add1(0xB8);
+						code.add8(ir.a);
+
+						storeFromIntRegister(&code, function, 8, ir.dest, RAX);
+					}
+					else {
+						storeImmediate(&code, function, ir.opSize, ir.dest, ir.a);
+					}
 				} break;
 				case IrOp::EXTEND: {
 				
@@ -429,10 +562,13 @@ void runCoffWriter() {
 		if (function->declaration) {
 			Symbol symbol;
 			setSymbolName(&stringTable, &symbol.name, function->declaration->name);
-			symbol.value = code.totalSize;
+			symbol.value = start;
 			symbol.sectionNumber = 1;
 			symbol.type = 0x20;
-			if (function->declaration->name == "main") {
+
+			
+
+			if (function->declaration->enclosingScope == &globalBlock) {
 				symbol.storageClass = IMAGE_SYM_CLASS_EXTERNAL;
 			}
 			else {

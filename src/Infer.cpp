@@ -555,6 +555,8 @@ bool binaryOpForInteger(ExprBinaryOperator *binary) {
 					assert(false); // @ErrorMessage
 					return false;
 				}
+
+				right->type = left->type;
 			}
 			else if (left->type->size > right->type->size) {
 				insertImplicitCast(&right, left->type);

@@ -976,6 +976,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 
 			auto call = static_cast<ExprFunctionCall *>(expr);
 
+			if (call->function->flavor == ExprFlavor::FUNCTION) {
 			u64 function = generateIr(state, call->function, state->nextRegister++);
 
 			FunctionCall *argumentInfo = nullptr;
