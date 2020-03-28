@@ -81,7 +81,7 @@ void convertType(IrState *state, Type *destType, u64 dest, Type *srcType, u64 sr
 		}
 	}
 	else {
-		extend.op = IrOp::EXTEND;
+		extend.op = IrOp::SET;
 
 		if (destType->flags & srcType->flags & TYPE_INTEGER_IS_SIGNED) {
 			extend.flags |= IR_SIGNED_OP;
@@ -624,7 +624,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 						write.op = IrOp::WRITE;
 						write.a = dest;
 						write.b = rightReg;
-						write.opSize = 8;
+						write.opSize = left->type->size;
 
 						return rightReg;
 					}
@@ -642,7 +642,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 						write.op = IrOp::WRITE;
 						write.a = leftReg;
 						write.b = rightReg;
-						write.opSize = right->type->size;
+						write.opSize = left->type->size;
 
 						return rightReg;
 					}
@@ -667,7 +667,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 							write.op = IrOp::WRITE;
 							write.a = dest;
 							write.b = rightReg;
-							write.opSize = right->type->size;
+							write.opSize = left->type->size;
 
 							return rightReg;
 						}
@@ -976,7 +976,6 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 
 			auto call = static_cast<ExprFunctionCall *>(expr);
 
-			if (call->function->flavor == ExprFlavor::FUNCTION) {
 			u64 function = generateIr(state, call->function, state->nextRegister++);
 
 			FunctionCall *argumentInfo = nullptr;
@@ -1269,6 +1268,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool forceDest) {
 		if (stored != dest) {
 			Ir &set = state->ir.add();
 			set.op = IrOp::SET;
+			set.opSize = expr->type->size;
 			set.destSize = expr->type->size;
 			set.a = stored;
 			set.dest = dest;

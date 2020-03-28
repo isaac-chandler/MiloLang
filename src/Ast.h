@@ -35,7 +35,6 @@ enum class IrOp : u8 {
 	ADDRESS_OF_GLOBAL,
 	ADDRESS_OF_LOCAL,
 	IMMEDIATE,
-	EXTEND,
 	FLOAT_TO_INT,
 	INT_TO_FLOAT,
 	RETURN,
@@ -149,8 +148,6 @@ extern Type TYPE_AUTO_CAST;
 struct TypePointer : Type {
 	Type *pointerTo;
 };
-
-extern TypePointer TYPE_VOID_POINTER;
 
 struct Expr;
 

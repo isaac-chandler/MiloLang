@@ -25,6 +25,7 @@ struct BucketedArenaAllocator {
 	}
 
 	void *allocate(u64 size);
+	void *allocateUnaligned(u64 size);
 
 	inline void free() {
 		while (first) {
@@ -39,6 +40,22 @@ struct BucketedArenaAllocator {
 	u16 *add2(u16 value);
 	u32 *add4(u32 value);
 	u64 *add8(u64 value);
+	void add(void *value, u64 size);
 	void addNullTerminatedString(String string);
+};
+
+template<typename T, u64 bucketSize = 1024> 
+struct BucketArray {
+	BucketedArenaAllocator allocator;
+
+	BucketArray() : allocator(sizeof(T) *bucketSize) {}
+
+	void add(const T &value) {
+		allocator.add(&value, sizeof(value));
+	}
+
+	u64 count() const {
+		return allocator.totalSize / sizeof(T);
+	}
 };
 

@@ -1114,6 +1114,8 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 										return false;
 									}
 
+									expr->type = &TYPE_S64;
+
 									break;
 								}
 								case TypeFlavor::TYPE: {
@@ -1146,7 +1148,9 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 							}
 						}
 
-						expr->type = left->type;
+						if (!expr->type) { // it is already set to s64 for pointer subtraction
+							expr->type = left->type;
+						}
 
 						break;
 					}

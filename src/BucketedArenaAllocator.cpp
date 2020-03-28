@@ -34,6 +34,26 @@ void *BucketedArenaAllocator::allocate(u64 size) {
 	return result;
 }
 
+void *BucketedArenaAllocator::allocateUnaligned(u64 size) {
+	if (size > bucketSize) {
+		assert(false);
+		return nullptr;
+	}
+
+	totalSize += size;
+
+
+	if (current->remaining < size) {
+		expand(this);
+	}
+
+	char *result = current->memory;
+	current->remaining -= size;
+	current->memory += size;
+
+	return result;
+}
+
 void BucketedArenaAllocator::addNullTerminatedString(String string) {
 	totalSize += string.length;
 
@@ -51,6 +71,24 @@ void BucketedArenaAllocator::addNullTerminatedString(String string) {
 	current->remaining -= string.length;
 
 	add1(0);
+}
+
+void BucketedArenaAllocator::add(void *value, u64 size) {
+	u8 *bytes = static_cast<u8 *>(value);
+	totalSize += size;
+
+	while (current->remaining < size) {
+		memcpy(current->memory, bytes, current->remaining);
+		bytes += current->remaining;
+		size -= current->remaining;
+		current->memory += current->remaining;
+		current->remaining = 0;
+		expand(this);
+	}
+
+	memcpy(current->memory, bytes, size);
+	current->memory += size;
+	current->remaining -= size;
 }
 
 #define addN(name, type)											\
