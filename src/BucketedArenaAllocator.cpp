@@ -8,6 +8,12 @@ void expand(BucketedArenaAllocator *allocator) {
 	allocator->current = allocator->current->next;
 }
 
+void BucketedArenaAllocator::ensure(u64 size) {
+	if (size > current->remaining) {
+		expand(this);
+	}
+}
+
 void *BucketedArenaAllocator::allocate(u64 size) {
 	if (size > bucketSize) {
 		assert(false);
@@ -55,26 +61,12 @@ void *BucketedArenaAllocator::allocateUnaligned(u64 size) {
 }
 
 void BucketedArenaAllocator::addNullTerminatedString(String string) {
-	totalSize += string.length;
-
-	while (current->remaining < string.length) {
-		memcpy(current->memory, string.characters, current->remaining);
-		string.characters += current->remaining;
-		string.length -= current->remaining;
-		current->memory += current->remaining;
-		current->remaining = 0;
-		expand(this);
-	}
-
-	memcpy(current->memory, string.characters, string.length);
-	current->memory += string.length;
-	current->remaining -= string.length;
-
+	add(string.characters, string.length);
 	add1(0);
 }
 
-void BucketedArenaAllocator::add(void *value, u64 size) {
-	u8 *bytes = static_cast<u8 *>(value);
+void BucketedArenaAllocator::add(const void *value, u64 size) {
+	const u8 *bytes = static_cast<const u8 *>(value);
 	totalSize += size;
 
 	while (current->remaining < size) {
@@ -110,7 +102,7 @@ addN(add2, u16)
 addN(add4, u32)
 addN(add8, u64)
 
-ArenaAllocatorBucket *makeBucket(u32 size) {
+ArenaAllocatorBucket *makeBucket(u64 size) {
 	char *block = static_cast<char *>(malloc(size + sizeof(ArenaAllocatorBucket)));
 
 #if BUILD_DEBUG

@@ -9,7 +9,7 @@ struct ArenaAllocatorBucket {
 	u64 remaining;
 };
 
-ArenaAllocatorBucket *makeBucket(u32 size);
+ArenaAllocatorBucket *makeBucket(u64 size);
 
 struct BucketedArenaAllocator {
 	ArenaAllocatorBucket *first;
@@ -40,8 +40,9 @@ struct BucketedArenaAllocator {
 	u16 *add2(u16 value);
 	u32 *add4(u32 value);
 	u64 *add8(u64 value);
-	void add(void *value, u64 size);
+	void add(const void *value, u64 size);
 	void addNullTerminatedString(String string);
+	void ensure(u64 size);
 };
 
 template<typename T, u64 bucketSize = 1024> 
@@ -50,8 +51,13 @@ struct BucketArray {
 
 	BucketArray() : allocator(sizeof(T) *bucketSize) {}
 
-	void add(const T &value) {
+	T *add(const T &value) {
+		allocator.ensure(sizeof(value));
+
+		T *result = reinterpret_cast<T *>(allocator.current->memory);
 		allocator.add(&value, sizeof(value));
+
+		return result;
 	}
 
 	u64 count() const {

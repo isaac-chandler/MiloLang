@@ -49,9 +49,15 @@ enum class IrOp : u8 {
 
 #define DEST_NONE UINT64_MAX
 
+struct Argument {
+	u64 number;
+	struct Type *type;
+};
+
 struct FunctionCall {
+	struct Type *returnType;
 	u64 argCount;
-	u64 args[];
+	Argument args[];
 };
 
 struct Ir {
@@ -84,6 +90,7 @@ struct Loop {
 
 struct IrState {
 	u64 nextRegister = 1;
+	s64 maxCallRegisters = -1;
 	Array<Ir> ir;
 
 	BucketedArenaAllocator allocator;
@@ -149,6 +156,8 @@ struct TypePointer : Type {
 	Type *pointerTo;
 };
 
+extern TypePointer TYPE_VOID_POINTER;
+
 struct Expr;
 
 
@@ -204,6 +213,8 @@ struct Expr {
 
 #define EXPR_FOR_BY_POINTER 0x1
 #define EXPR_CAST_IS_IMPLICIT 0x2
+#define EXPR_FUNCTION_HAS_STORAGE 0x4
+#define EXPR_FUNCTION_IS_EXTERNAL 0x8
 
 
 struct ExprLiteral : Expr {
@@ -271,6 +282,9 @@ struct ExprFunction : Expr {
 	IrState state;
 
 	Expr *body;
+
+	union Symbol *symbol;
+	u32 physicalStorage;
 };
 
 struct ExprReturn : Expr {
@@ -309,6 +323,7 @@ struct ExprIf : Expr {
 #define DECLARATION_VALUE_IS_READY 0x10
 #define DECLARATION_TYPE_IS_READY 0x20
 #define DECLARATION_IS_ARGUMENT 0x40
+#define DECLARATION_HAS_STORAGE 0x80
 
 
 struct Declaration {
@@ -319,7 +334,8 @@ struct Declaration {
 	Expr *initialValue;
 	Block *enclosingScope;
 
-	u64 irRegister;
+	union Symbol *symbol;
+	u64 physicalStorage;
 
 	u64 flags = 0;
 	

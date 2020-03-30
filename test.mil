@@ -3,6 +3,15 @@ string_ :: *u8
 argCount: s32
 args: *string_
 
+STD_INPUT_HANDLE: u32: 0xFFFF_FFF6 // -10
+STD_OUTPUT_HANDLE: u32: 0xFFFF_FFF5 // -11
+STD_ERROR_HANDLE: u32: 0xFFFF_FFF4 // -12
+
+GetStdHandle :: (nStdHandle: u32) -> HANDLE #external
+
+HANDLE :: *void
+WriteConsoleA :: (hConsoleOutput: HANDLE, lpBuffer: *void, nNumberOfCharactersToWrite: u32, lpNumberOfCharactersWritten: *u32 = null, lpReserved: *void = null) -> bool #external
+
 main :: (argc: s32, argv: *string_) -> s32 {
 	argCount = argc
 	args = argv
@@ -54,6 +63,11 @@ _main :: () {
 	args := get_command_line_arguments(*argCount)
 
 	factorial(cast() argCount)
+
+	a: u8 = 'A'
+	
+	stdout := GetStdHandle(STD_OUTPUT_HANDLE)
+	WriteConsoleA(stdout, *a, 1, null, null)
 }
 
 factorial2 :: (n: u64) -> u64 {

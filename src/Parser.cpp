@@ -8,6 +8,17 @@
 
 Block *currentBlock = nullptr;
 
+
+Declaration *findDeclaration(Block *block, String name) {
+	for (auto declaration : block->declarations) {
+		if (declaration->name == name) {
+			return declaration;
+		}
+	}
+
+	return nullptr;
+}
+
 static Declaration *resolveIdentifier(String name, bool *success) {
 	Block *block;
 
@@ -15,8 +26,11 @@ static Declaration *resolveIdentifier(String name, bool *success) {
 
 	bool outsideOfFunction = false;
 
+
+
 	for (block = currentBlock; block; block = block->parentBlock) {
-		for (auto declaration : block->declarations) {
+		if (Declaration *declaration = findDeclaration(block, name)) {
+
 			if (declaration->name == name) {
 				if (outsideOfFunction && !(declaration->flags & DECLARATION_IS_CONSTANT)) {
 					*success = false;
@@ -100,6 +114,12 @@ static void pushBlock(Block *block) {
 	currentBlock = block;
 }
 
+static void queueBlock(Block *block) {
+	if (block->declarations.count) {
+		inferQueue.add(makeDeclarationPack(block->declarations.count, block->declarations.storage)); // Queue the entire block at once to avoid locking the mutex too much
+	}
+}
+
 static void popBlock(Block *block) { // This only takes the parameter to make sure we are always popping the block we think we are in debug
 	assert(currentBlock == block);
 
@@ -110,9 +130,7 @@ static void popBlock(Block *block) { // This only takes the parameter to make su
 	block->flags |= BLOCK_IS_COMPLETE;
 
 
-	if (block->declarations.count) {
-		inferQueue.add(makeDeclarationPack(block->declarations.count, block->declarations.storage)); // Queue the entire block at once to avoid locking the mutex too much
-	}
+	queueBlock(block);
 }
 
 static bool expectAndConsume(LexerFile *lexer, TokenT type) {
@@ -648,6 +666,27 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 				expr = function;
 			}
+			else if (lexer->token.type == TokenT::EXTERNAL) {
+				lexer->advance();
+
+				ExprFunction *function = new ExprFunction;
+				function->flavor = ExprFlavor::FUNCTION;
+				function->start = start;
+				function->end = lexer->previousTokenEnd;
+				function->arguments.flags |= BLOCK_IS_ARGUMENTS;
+				function->returnType = makeTypeLiteral(function->start, function->end, &TYPE_VOID);
+				
+
+				function->body = nullptr;
+				function->flags |= EXPR_FUNCTION_IS_EXTERNAL;
+
+				queueBlock(&function->arguments);
+
+				_ReadWriteBarrier();
+				inferQueue.add(makeDeclarationPack(function));
+
+				expr = function;
+			}
 			else if (expectAndConsume(lexer, TokenT::ARROW)) {
 				Expr *returnType = parseExpr(lexer);
 
@@ -663,6 +702,26 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 					function->body = parseBlock(lexer);
 
 					popBlock(&function->arguments);
+
+					_ReadWriteBarrier();
+					inferQueue.add(makeDeclarationPack(function));
+
+					expr = function;
+				}
+				else if (lexer->token.type == TokenT::EXTERNAL) { // This is a function value
+					lexer->advance();
+
+					ExprFunction *function = new ExprFunction;
+					function->flavor = ExprFlavor::FUNCTION;
+					function->start = start;
+					function->end = lexer->previousTokenEnd;
+					function->returnType = returnType;
+					function->arguments.flags |= BLOCK_IS_ARGUMENTS;
+
+					function->body = nullptr;
+					function->flags |= EXPR_FUNCTION_IS_EXTERNAL;
+
+					queueBlock(&function->arguments);
 
 					_ReadWriteBarrier();
 					inferQueue.add(makeDeclarationPack(function));
@@ -743,6 +802,28 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 					expr = function;
 				}
+				else if (lexer->token.type == TokenT::EXTERNAL) {
+					lexer->advance();
+
+					ExprFunction *function = new ExprFunction;
+					function->flavor = ExprFlavor::FUNCTION;
+					function->start = start;
+					function->end = lexer->previousTokenEnd;
+					function->arguments = argumentDeclarations;
+					function->arguments.flags |= BLOCK_IS_ARGUMENTS;
+					function->returnType = makeTypeLiteral(function->start, function->end, &TYPE_VOID);
+
+					function->body = nullptr;
+					function->flags |= EXPR_FUNCTION_IS_EXTERNAL;
+
+					queueBlock(&function->arguments);
+
+
+					_ReadWriteBarrier();
+					inferQueue.add(makeDeclarationPack(function));
+
+					expr = function;
+				}
 				else if (expectAndConsume(lexer, TokenT::ARROW)) {
 					Expr *returnType = parseExpr(lexer);
 					if (!returnType) {
@@ -762,6 +843,28 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 						function->body = parseBlock(lexer);
 
 						popBlock(&function->arguments);
+
+						_ReadWriteBarrier();
+						inferQueue.add(makeDeclarationPack(function));
+
+						expr = function;
+					}
+					else if (lexer->token.type == TokenT::EXTERNAL) {
+						lexer->advance();
+
+						ExprFunction *function = new ExprFunction;
+						function->flavor = ExprFlavor::FUNCTION;
+						function->start = start;
+						function->end = lexer->previousTokenEnd;
+						function->arguments = argumentDeclarations;
+						function->returnType = returnType;
+						function->arguments.flags |= BLOCK_IS_ARGUMENTS;
+
+						function->body = nullptr;
+						function->flags |= EXPR_FUNCTION_IS_EXTERNAL;
+
+						queueBlock(&function->arguments);
+
 
 						_ReadWriteBarrier();
 						inferQueue.add(makeDeclarationPack(function));

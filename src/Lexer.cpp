@@ -40,7 +40,7 @@ static const Keyword keywords[] = {
 	{"null", TokenT::NULL_}, 
 	{"size_of", TokenT::SIZE_OF},
 	{"type_of", TokenT::TYPE_OF},
-
+	{"#external", TokenT::EXTERNAL}
 };
 
 static u32 readCharacter(LexerFile *file, bool *endOfFile, bool silent = false) {
@@ -260,7 +260,7 @@ whitespace:
 		case '.':
 			goto dot;
 		default:
-			if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_') {
+			if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_' || c == '#') {
 				lexer->token.text.characters = lexer->undoLocation.locationInMemory;
 				lexer->token.text.hash = 0;
 				lexer->token.text.hash = updateHash(lexer->token.text.hash, static_cast<char>(c));
@@ -594,6 +594,12 @@ identifier:
 			if (keyword.name == lexer->token.text) {
 				return keyword.type;
 			}
+		}
+
+
+		
+		if (lexer->token.text.characters[0] == '#') {
+			return TokenT::INVALID;
 		}
 
 		return TokenT::IDENTIFIER;
@@ -945,7 +951,7 @@ whitespaceAlreadyRead:
 			token.start = location;
 			goto dot;
 		default:
-			if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_') {
+			if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_' || c == '#') {
 				token.start = location;
 				token.text.characters = undoLocation.locationInMemory;
 				token.text.hash = 0;
@@ -1493,6 +1499,12 @@ identifier:
 				token.type = keyword.type;
 				return;
 			}
+		}
+		
+		if (token.text.characters[0] == '#') {
+			assert(false); // @ErrorMessage invalid compiler directive
+			token.type = TokenT::INVALID;
+			return;
 		}
 
 		token.type = TokenT::IDENTIFIER;

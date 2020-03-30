@@ -90,7 +90,9 @@ enum class TokenT : u8 {
 
 	DOUBLE_DASH, 
 	DOUBLE_DOT, 
-	ARROW
+	ARROW, 
+
+	EXTERNAL
 };
 
 struct Token {

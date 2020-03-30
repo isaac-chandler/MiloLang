@@ -259,7 +259,7 @@ IrModifyWrite readForModifyWrite(IrState *state, Expr *left, Expr *right) {
 		}
 		else {
 			info.addressReg = 0;
-			info.leftReg = identifier->declaration->irRegister;
+			info.leftReg = identifier->declaration->physicalStorage;
 		}
 	}
 	else {
@@ -286,14 +286,12 @@ static void generateIncrement(IrState *state, ExprLoop *loop) {
 	auto it = loop->iteratorBlock.declarations[0];
 	auto it_index = loop->iteratorBlock.declarations[1];
 
-	Ir &one = state->ir.add();
-
 	Ir &index = state->ir.add();
 	index.op = IrOp::ADD_CONSTANT;
 	index.opSize = 8;
-	index.a = it_index->irRegister;
+	index.a = it_index->physicalStorage;
 	index.b = 1;
-	index.dest = it_index->irRegister;
+	index.dest = it_index->physicalStorage;
 
 	Ir &increment = state->ir.add();
 	increment.op = IrOp::ADD_CONSTANT;
@@ -308,7 +306,7 @@ static void generateIncrement(IrState *state, ExprLoop *loop) {
 
 		if (loop->flags & EXPR_FOR_BY_POINTER) {
 			Ir &read = state->ir.add();
-			read.dest = it->irRegister;
+			read.dest = it->physicalStorage;
 			read.opSize = 8;
 			read.destSize = pointer->pointerTo->size;
 			read.a = loop->irPointer;
@@ -672,9 +670,9 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 							return rightReg;
 						}
 						else {
-							u64 stored = generateIr(state, right, identifier->declaration->irRegister, true);
+							u64 stored = generateIr(state, right, identifier->declaration->physicalStorage, true);
 
-							assert(stored == identifier->declaration->irRegister);
+							assert(stored == identifier->declaration->physicalStorage);
 
 							return stored;
 						}
@@ -816,7 +814,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 
 			for (auto declaration : block->declarations.declarations) {
 				if (!(declaration->flags & DECLARATION_IS_CONSTANT)) {
-					declaration->irRegister = state->nextRegister++;
+					declaration->physicalStorage = state->nextRegister++;
 				}
 			}
 
@@ -870,6 +868,8 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 
 			auto literal = static_cast<ExprLiteral *>(expr);
 
+			assert(literal->type->size);
+
 			if (literal->unsignedValue == 0) {
 				return 0;
 			}
@@ -895,6 +895,12 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 				return 0;
 			}
 			else {
+				if (literal->type->size == 4) {
+					*reinterpret_cast<float *>(&literal->unsignedValue) = static_cast<float>(literal->floatValue);
+
+					literal->unsignedValue &= 0xFFFF'FFFFULL;
+				}
+
 				Ir &load = state->ir.add();
 				load.op = IrOp::IMMEDIATE;
 				load.dest = dest;
@@ -912,11 +918,11 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 			auto it = loop->iteratorBlock.declarations[0];
 			auto it_index = loop->iteratorBlock.declarations[1];
 
-			it->irRegister = state->nextRegister++;
-			it_index->irRegister = state->nextRegister++;
+			it->physicalStorage = state->nextRegister++;
+			it_index->physicalStorage = state->nextRegister++;
 
-			u64 itReg = it->irRegister;
-			u64 it_indexReg = it_index->irRegister;
+			u64 itReg = it->physicalStorage;
+			u64 it_indexReg = it_index->physicalStorage;
 
 			if (loop->forBegin->type->flavor == TypeFlavor::POINTER && !(loop->flags & EXPR_FOR_BY_POINTER)) {
 				loop->irPointer = state->nextRegister++;
@@ -966,7 +972,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 			Ir &address = state->ir.add();
 			address.dest = dest;
 			address.opSize = 8;
-			address.op = IrOp::ADDRESS_OF_GLOBAL;
+			address.op = IrOp::FUNCTION;
 			address.function = static_cast<ExprFunction *>(expr);
 			
 			return dest;
@@ -980,14 +986,21 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 
 			FunctionCall *argumentInfo = nullptr;
 
-			if (call->argumentCount) {
-				argumentInfo = static_cast<FunctionCall *>(state->allocator.allocate(sizeof(FunctionCall) + sizeof(u64) * call->argumentCount));
+			if (static_cast<s64>(call->argumentCount) > state->maxCallRegisters) {
+				state->maxCallRegisters = static_cast<s64>(call->argumentCount);
+			}
+
+			if (call->argumentCount || dest != DEST_NONE) {
+				argumentInfo = static_cast<FunctionCall *>(state->allocator.allocate(sizeof(FunctionCall) + sizeof(argumentInfo->args[0]) * call->argumentCount));
 				argumentInfo->argCount = call->argumentCount;
 			}
 
 			for (u64 i = 0; i < call->argumentCount; i++) {
-				argumentInfo->args[i] = generateIr(state, call->arguments[i], state->nextRegister++);
+				argumentInfo->args[i].number = generateIr(state, call->arguments[i], state->nextRegister++);
+				argumentInfo->args[i].type = call->arguments[i]->type;
 			}
+
+			argumentInfo->returnType = call->type;
 
 			Ir &ir = state->ir.add();
 			ir.op = IrOp::CALL;
@@ -1020,7 +1033,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 				return dest;
 			}
 			else {
-				return identifier->declaration->irRegister;
+				return identifier->declaration->physicalStorage;
 			}
 		}
 		case ExprFlavor::IF: {
@@ -1168,7 +1181,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 						}
 						else {
 							address.op = IrOp::ADDRESS_OF_LOCAL;
-							address.a = identifier->declaration->irRegister;
+							address.a = identifier->declaration->physicalStorage;
 						}
 
 						return dest;
@@ -1291,7 +1304,7 @@ void runIrGenerator() {
 			break;
 
 		for (u64 i = 0; i < function->arguments.declarations.count; i++) {
-			function->arguments.declarations[i]->irRegister = function->state.nextRegister++;
+			function->arguments.declarations[i]->physicalStorage = function->state.nextRegister++;
 		}
 
 		generateIr(&function->state, function->body, DEST_NONE);
@@ -1302,8 +1315,11 @@ void runIrGenerator() {
 		ret.a = 0;
 		ret.opSize = 0;
 
+		CoffJob job;
+		job.function = function;
+		job.isFunction = true;
 
-		coffWriterQueue.add(function);
+		coffWriterQueue.add(job);
 
 
 
@@ -1349,5 +1365,5 @@ void runIrGenerator() {
 //		}
 	}
 
-	coffWriterQueue.add(nullptr);
+	coffWriterQueue.add({ nullptr, true });
 }

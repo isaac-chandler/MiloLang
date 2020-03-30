@@ -4,6 +4,7 @@
 #include "Parser.h"
 #include "Lexer.h"
 #include "IrGenerator.h"
+#include "CoffWriter.h"
 
 enum class InferType {
 	// FUNCTION_HEAD, 
@@ -423,6 +424,7 @@ bool isValidCast(Type *to, Type *from) {
 void insertImplicitCast(Expr **castFrom, Type *castTo) {
 	ExprBinaryOperator *cast = new ExprBinaryOperator;
 	cast->flavor = ExprFlavor::BINARY_OPERATOR;
+	cast->op = TokenT::CAST;
 	cast->type = castTo;
 	cast->right = *castFrom;
 	cast->start = cast->right->start;
@@ -617,6 +619,8 @@ bool assignOpForInteger(ExprBinaryOperator *binary) {
 					assert(false); // @ErrorMessage
 					return false;
 				}
+
+				right->type = left->type;
 			}
 			else if (left->type->size > right->type->size) {
 				insertImplicitCast(&right, left->type);
@@ -747,29 +751,20 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 					for (; identifier->resolveFrom; identifier->resolveFrom = identifier->resolveFrom->parentBlock) {
 						if (!(identifier->resolveFrom->flags & BLOCK_IS_COMPLETE)) break;
 
-						for (auto declaration : identifier->resolveFrom->declarations) {
-							if (declaration->name == identifier->name) {
-								if (declaration->flags & DECLARATION_IS_CONSTANT) {
-									identifier->declaration = declaration;
-									break;
-								}
-								else {
-									assert(false); // @ErrorMessge Identifier cannot refer to a variable that was declared later in a block
-									return false;
-								}
-							}
-						}
-
-						if (identifier->declaration) break;
-					}
-
-					if (!identifier->resolveFrom && !identifier->declaration) { // If we have checked all the local scopes and the 
-						for (auto declaration : globalBlock.declarations) {
-							if (declaration->name == identifier->name) {
+						if (Declaration *declaration = findDeclaration(identifier->resolveFrom, identifier->name)) {
+							if (declaration->flags & DECLARATION_IS_CONSTANT) {
 								identifier->declaration = declaration;
 								break;
 							}
+							else {
+								assert(false); // @ErrorMessge Identifier cannot refer to a variable that was declared later in a block
+								return false;
+							}
 						}
+					}
+
+					if (!identifier->resolveFrom && !identifier->declaration) { // If we have checked all the local scopes and the 
+						identifier->declaration = findDeclaration(&globalBlock, identifier->name);
 					}
 				}
 
@@ -1794,6 +1789,8 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 												assert(false); // @ErrorMessage
 												return false;
 											}
+											
+											given->type = correct;
 										}
 										else if (correct->size > given->type->size) {
 											insertImplicitCast(&given, correct);
@@ -2302,8 +2299,9 @@ void runInfer() {
 			body.infer.function = declarations.data.function;
 			body.type = InferType::FUNCTION_BODY;
 
-			flatten(body.valueFlattened, &body.infer.function->body);
-
+			if (body.infer.function->body) {
+				flatten(body.valueFlattened, &body.infer.function->body);
+			}
 			inferJobs.add(body);
 		}
 		else if (declarations.count == 1) {
@@ -2335,10 +2333,30 @@ void runInfer() {
 						}
 
 						if (job.infer.function->type) {
-							if (job.valueFlattenedIndex == job.valueFlattened.count) {
-								irGeneratorQueue.add(job.infer.function);
-								
+							if (job.infer.function->flags & EXPR_FUNCTION_IS_EXTERNAL) {
+								assert(!job.infer.function->body);
+
+								if (!job.infer.declaration) {
+									assert(false); // @ErrorMessage an external function must be bound to a declaration
+									goto error;
+								}
+
+								CoffJob coff;
+								coff.isFunction = true;
+								coff.function = job.infer.function;
+
+								coffWriterQueue.add(coff);
+
 								inferJobs.unordered_remove(i--);
+							}
+							else {
+								assert(job.infer.function->body);
+
+								if (job.valueFlattenedIndex == job.valueFlattened.count) {
+									irGeneratorQueue.add(job.infer.function);
+
+									inferJobs.unordered_remove(i--);
+								}
 							}
 						}
 						break;
@@ -2430,6 +2448,8 @@ void runInfer() {
 															assert(false); // @ErrorMessage
 															goto error;
 														}
+
+														given->type = correct;
 													}
 													else if (correct->size > given->type->size) {
 														insertImplicitCast(&given, correct);
@@ -2513,9 +2533,14 @@ void runInfer() {
 
 								madeProgress = true;
 								inferJobs.unordered_remove(i--);
-								// @Incomplete: Queue to later compile stage
-
 								declaration->flags |= DECLARATION_VALUE_IS_READY;
+
+								if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
+									CoffJob job;
+									job.declaration = declaration;
+									job.isFunction = false;
+									coffWriterQueue.add(job);
+								}
 							}
 						}
 						else if (declaration->type) {
@@ -2555,9 +2580,16 @@ void runInfer() {
 
 								madeProgress = true;
 								inferJobs.unordered_remove(i--);
-								// @Incomplete: Queue to later compile stage
 
 								declaration->flags |= DECLARATION_VALUE_IS_READY;
+
+
+								if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
+									CoffJob job;
+									job.declaration = declaration;
+									job.isFunction = false;
+									coffWriterQueue.add(job);
+								}
 							}
 						}
 						else if (declaration->initialValue) {
@@ -2580,9 +2612,17 @@ void runInfer() {
 								madeProgress = true;
 
 								inferJobs.unordered_remove(i--);
-								// @Incomplete: Queue to later compile stage
+
 								declaration->flags |= DECLARATION_VALUE_IS_READY;
 								declaration->flags |= DECLARATION_TYPE_IS_READY;
+
+
+								if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
+									CoffJob job;
+									job.declaration = declaration;
+									job.isFunction = false;
+									coffWriterQueue.add(job);
+								}
 							}
 						}
 
