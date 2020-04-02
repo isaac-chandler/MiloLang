@@ -38,8 +38,31 @@ int main(int argc, char *argv[]) {
 
 	coffWriter.join();
 
-
 	lexer.close();
+
+#if BUILD_WINDOWS
+	char buffer[256];
+
+	strcpy_s(buffer, "link out.obj /entry:main /nologo /defaultlib:kernel32");
+
+	STARTUPINFOA startup = {};
+	startup.cb = sizeof(STARTUPINFOA);
+
+	PROCESS_INFORMATION info;
+
+
+	if (!CreateProcessA(NULL, buffer, NULL, NULL, false, 0, NULL, NULL, &startup, &info)) {
+		std::cout << "Failed to run linker command" << std::endl;
+	}
+
+	CloseHandle(info.hThread);
+
+	WaitForSingleObject(info.hProcess, INFINITE);
+	CloseHandle(info.hProcess);
+#else
+// @Platform
+#error "Non windows builds are not supported" 
+#endif
 
 #if PROFILE
 	{

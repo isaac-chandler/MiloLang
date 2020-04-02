@@ -54,6 +54,8 @@
 
 #define FLAGS_ARE_SAME(a, b, flags) (	(( (a)  ^  (b) ) & (flags) ) == 0	)
 
+#define AlignPO2(a, alignment) ((static_cast<u32>(a) + (static_cast<u32>(alignment) - 1)) & ~(static_cast<u32>(alignment) - 1))
+
 
 typedef uint8_t u8;
 typedef uint16_t u16;

@@ -1320,9 +1320,48 @@ Expr *parseUnaryExpr(LexerFile *lexer) {
 		return expr;
 	}
 
-	else if (lexer->token.type == TOKEN('[')) {
-		assert(false);
-		return nullptr; // @Incomplete array types
+	else if (expectAndConsume(lexer, '[')) {
+		ExprBinaryOperator *array = new ExprBinaryOperator;
+		array->flavor = ExprFlavor::BINARY_OPERATOR;
+		array->start = start;
+		array->op = TokenT::ARRAY_TYPE;
+		
+		if (expectAndConsume(lexer, TokenT::DOUBLE_DOT)) {
+			array->end = lexer->token.end;
+			array->left = nullptr;
+			array->flags |= EXPR_ARRAY_IS_DYNAMIC;
+
+			if (!expectAndConsume(lexer, ']')) {
+				assert(false); // @ErrorMessage
+				return nullptr;
+			}
+		}
+		else if (expectAndConsume(lexer, ']')) {
+			array->end = lexer->previousTokenEnd;
+			array->left = nullptr;
+		}
+		else {
+			array->left = parseExpr(lexer);
+			array->end = lexer->token.end;
+
+			if (!array->left) {
+				return nullptr;
+			}
+
+			if (!expectAndConsume(lexer, ']')) {
+				assert(false); // @ErrorMessage
+				return nullptr;
+			}
+		}
+
+		array->right = parseUnaryExpr(lexer);
+
+		if (!array->right) {
+			return nullptr;
+		}
+
+
+		return array;
 	}
 	else {
 		return parsePrimaryExpr(lexer);

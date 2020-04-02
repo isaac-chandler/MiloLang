@@ -92,7 +92,9 @@ enum class TokenT : u8 {
 	DOUBLE_DOT, 
 	ARROW, 
 
-	EXTERNAL
+	EXTERNAL, 
+	
+	ARRAY_TYPE
 };
 
 struct Token {

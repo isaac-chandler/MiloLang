@@ -420,9 +420,6 @@ void setConditionInt(BucketedArenaAllocator *code, ExprFunction *function, u64 s
 	setCondition(code, function, dest, condition);
 }
 
-
-#define AlignPO2(a, alignment) ((static_cast<u32>(a) + (static_cast<u32>(alignment) - 1)) & ~(static_cast<u32>(alignment) - 1))
-
 void setConditionFloat(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u64 dest, u64 a, u64 b, u8 condition) {
 	loadIntoFloatRegister(code, function, size, 0, a);
 	loadIntoFloatRegister(code, function, size, 1, b);

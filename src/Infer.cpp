@@ -394,6 +394,18 @@ bool isVoidPointer(Type *type) {
 
 bool isValidCast(Type *to, Type *from) {
 	if (to->flavor == from->flavor) {
+		if (to->flavor == TypeFlavor::ARRAY) {
+			if (to->flags & (TYPE_ARRAY_IS_FIXED | TYPE_ARRAY_IS_DYNAMIC)) {
+				return typesAreSame(to, from);
+			}
+			else {
+				auto toArray = static_cast<TypeArray *>(to);
+				auto fromArray = static_cast<TypeArray *>(from);
+
+				return typesAreSame(toArray->arrayOf, fromArray->arrayOf);
+			}
+		}
+
 		return true;
 	}
 
@@ -418,6 +430,10 @@ bool isValidCast(Type *to, Type *from) {
 	else if (from->flavor == TypeFlavor::STRING) {
 		// @StringFormat when strings change to be equivalent to [] u8, stop casting to *u8
 		return to->flavor == TypeFlavor::BOOL || (to->flavor == TypeFlavor::POINTER && static_cast<TypePointer *>(to)->pointerTo == &TYPE_U8) || isVoidPointer(to);
+	}
+	else if (from->flavor == TypeFlavor::ARRAY) {
+		// Casts between array types are handled above
+		return to->flavor == TypeFlavor::BOOL;
 	}
 	else {
 		assert(false); // @ErrorMessage
@@ -913,6 +929,13 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 						break;
 					}
 					case TOKEN('['): {
+						trySolidifyNumericLiteralToDefault(right);
+
+						if (right->type->flavor != TypeFlavor::INTEGER) {
+							assert(false); // @ErrorMessage array index must be an integer
+							return false;
+						}
+
 						if (left->type->flavor == TypeFlavor::POINTER) {
 							TypePointer *pointer = static_cast<TypePointer *>(left->type);
 
@@ -923,24 +946,17 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 
 							assert(!(pointer->pointerTo->flags & TYPE_IS_INTERNAL));
 
-							trySolidifyNumericLiteralToDefault(right);
-
-							if (right->type->flavor != TypeFlavor::INTEGER) {
-								assert(false); // @ErrorMessage array index must be an integer
-								return false;
-							}
-
 							expr->type = pointer->pointerTo;
 						}
 						else if (left->type->flavor == TypeFlavor::STRING) {
 							trySolidifyNumericLiteralToDefault(right);
 
-							if (right->type->flavor != TypeFlavor::INTEGER) {
-								assert(false); // @ErrorMessage array index must be an integer
-								return false;
-							}
-
 							expr->type = &TYPE_U8;
+						}
+						else if (left->type->flavor == TypeFlavor::ARRAY) {
+							trySolidifyNumericLiteralToDefault(right);
+
+							expr->type = static_cast<TypeArray *>(left->type)->arrayOf;
 						}
 						else {
 							assert(false); // @ErrorMessage can only index pointers
@@ -1000,6 +1016,10 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 
 									break;
 								}
+								case TypeFlavor::ARRAY: {
+									assert(false); // @ErrorMessage
+									return false;
+								}
 								case TypeFlavor::TYPE: {
 									// @Incomplete make this work
 									assert(false); // @ErrorMessage cannot compare types
@@ -1033,6 +1053,10 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 					case TOKEN('<'): {
 						if (left->type->flavor == right->type->flavor) {
 							switch (left->type->flavor) {
+								case TypeFlavor::ARRAY: {
+									assert(false); // @ErrorMessage
+									return false;
+								}
 								case TypeFlavor::BOOL: {
 									assert(false); // @ErrorMessage
 									return false;
@@ -1100,6 +1124,10 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 					case TOKEN('-'): {
 						if (left->type->flavor == right->type->flavor) {
 							switch (left->type->flavor) {
+								case TypeFlavor::ARRAY: {
+									assert(false); // @ErrorMessage
+									return false;
+								}
 								case TypeFlavor::BOOL: {
 									assert(false); // @ErrorMessage
 									return false;
@@ -1181,6 +1209,10 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 					case TokenT::SHIFT_RIGHT: {
 						if (left->type->flavor == right->type->flavor) {
 							switch (left->type->flavor) {
+								case TypeFlavor::ARRAY: {
+									assert(false); // @ErrorMessage
+									return false;
+								}
 								case TypeFlavor::BOOL: {
 									assert(false); // @ErrorMessage
 									return false;
@@ -1241,6 +1273,10 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 					case TOKEN('%'): {
 						if (left->type->flavor == right->type->flavor) {
 							switch (left->type->flavor) {
+								case TypeFlavor::ARRAY: {
+									assert(false); // @ErrorMessage
+									return false;
+								}
 								case TypeFlavor::BOOL: {
 									assert(false); // @ErrorMessage
 									return false;
@@ -1332,6 +1368,9 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 
 									binary->right = empty;
 
+								}
+								case TypeFlavor::ARRAY: {
+									//@Incomplete
 								}
 								case TypeFlavor::TYPE: {
 									assert(false); // @ErrorMessage there is no default value for type
@@ -1637,6 +1676,71 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 
 						break;
 					}
+					case TokenT::ARRAY_TYPE: {
+						if (right->type->flavor != TypeFlavor::TYPE) {
+							assert(false); // @ErrorMessage
+							return false;
+						}
+
+						if (right->flavor != ExprFlavor::TYPE_LITERAL) {
+							assert(false); // @ErrorMessage
+							return false;
+						}
+
+						auto type = static_cast<ExprLiteral *>(right);
+
+						if (type->typeValue == &TYPE_VOID) {
+							assert(false);
+							return false;
+						}
+
+						type->start = expr->start;
+
+						TypeArray *array = new TypeArray;
+						array->flavor = TypeFlavor::ARRAY;
+						array->arrayOf = type->typeValue;
+
+
+						if (left->type) {
+							if (left->type->flavor == TypeFlavor::INTEGER) {
+								assert(false); // @ErrorMessage
+								return false;
+							}
+
+							if (left->flavor != ExprFlavor::INT_LITERAL) {
+								assert(false); // @ErrorMessage
+								return false;
+							}
+
+							auto size = static_cast<ExprLiteral *>(left);
+
+							if ((left->type->flags & TYPE_INTEGER_IS_SIGNED) && size->signedValue < 0) {
+								assert(false); // @ErrorMessage
+								return false;
+							}
+
+							array->flags |= TYPE_ARRAY_IS_FIXED;
+							array->count = size->unsignedValue;
+							array->alignment = type->typeValue->alignment;
+							array->size = type->typeValue->size * size->unsignedValue;
+
+						}
+						else {
+							if (expr->flags & EXPR_ARRAY_IS_DYNAMIC) {
+								array->flags |= TYPE_ARRAY_IS_DYNAMIC;
+								array->size = 24;
+							}
+							else {
+								array->size = 16;
+							}
+
+							array->alignment = 8;
+							array->count = 0;
+						}
+
+						type->typeValue = array;
+						*exprPointer = type;
+					}
 					default:
 						assert(false);
 						return false;
@@ -1802,6 +1906,23 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 						}
 						else {
 							it->type = makeTypeLiteral(it->start, it->end, &TYPE_U8_POINTER);
+						}
+						it->flags |= DECLARATION_TYPE_IS_READY;
+					}
+					else if (loop->forBegin->type->flavor == TypeFlavor::ARRAY) {
+						auto array = static_cast<TypeArray *>(loop->forBegin->type);
+
+						if (loop->flags & EXPR_FOR_BY_POINTER) {
+							TypePointer *pointerType = new TypePointer;
+							pointerType->flavor = TypeFlavor::POINTER;
+							pointerType->size = 8;
+							pointerType->alignment = 8;
+							pointerType->pointerTo = array->arrayOf;
+
+							it->type = makeTypeLiteral(it->start, it->end, pointerType);
+						}
+						else {
+							it->type = makeTypeLiteral(it->start, it->end, array->arrayOf);
 						}
 						it->flags |= DECLARATION_TYPE_IS_READY;
 					}

@@ -116,12 +116,15 @@ enum class TypeFlavor : u8 {
 	FUNCTION, 
 	TYPE, 
 	AUTO_CAST, 
-	STRING
+	STRING, 
+	ARRAY
 };
 
 #define TYPE_INTEGER_IS_SIGNED 0x2
 #define TYPE_IS_INTERNAL      0x4 // This means that this type should never be accessible to the user, i.e. the type of null, which is special to give it casting properties, but the program should never be able to reference it.
 #define TYPE_IS_INTERNAL      0x4 // This means that this type should never be accessible to the user, i.e. the type of null, which is special to give it casting properties, but the program should never be able to reference it.
+#define TYPE_ARRAY_IS_FIXED 0x8
+#define TYPE_ARRAY_IS_DYNAMIC 0x10
 
 struct Type {
 	u64 size;
@@ -164,6 +167,11 @@ inline Type TYPE_STRING = { 8, 8, 0, TypeFlavor::STRING };
 
 struct TypePointer : Type {
 	Type *pointerTo;
+};
+
+struct TypeArray : Type {
+	Type *arrayOf;
+	u64 count;
 };
 
 inline TypePointer TYPE_VOID_POINTER = { 8, 8, 0, TypeFlavor::POINTER, &TYPE_VOID };
@@ -227,6 +235,7 @@ struct Expr {
 #define EXPR_CAST_IS_IMPLICIT 0x2
 #define EXPR_HAS_STORAGE 0x4
 #define EXPR_FUNCTION_IS_EXTERNAL 0x8
+#define EXPR_ARRAY_IS_DYNAMIC 0x10
 
 
 struct ExprLiteral : Expr {
@@ -403,6 +412,16 @@ inline bool typesAreSame(Type *a, Type *b) {
 			}
 
 			return true;
+		}
+		case TypeFlavor::ARRAY: {
+			auto ta = static_cast<TypeArray *>(a);
+			auto tb = static_cast<TypeArray *>(b);
+
+			if ((ta->flags ^ tb->flags) & (TYPE_ARRAY_IS_DYNAMIC | TYPE_ARRAY_IS_FIXED)) return false;
+
+			if ((ta->flags & TYPE_ARRAY_IS_FIXED) && ta->count != tb->count) return false;
+			
+			return typesAreSame(ta->arrayOf, tb->arrayOf);
 		}
 		default:
 			assert(false);

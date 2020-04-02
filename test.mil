@@ -1,3 +1,19 @@
+/*
+
+[]T :: struct {
+	buffer: *T
+	count: u64
+}
+
+[..]T :: struct {
+	buffer: *T
+	count: u64
+	capacity: u64
+}
+
+*/
+
+
 argCount: s32
 args: *string
 
