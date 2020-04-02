@@ -636,6 +636,16 @@ ExprLiteral *makeIntegerLiteral(CodeLocation &start, EndLocation &end, u64 value
 	return literal;
 }
 
+ExprStringLiteral *makeStringLiteral(CodeLocation &start, EndLocation &end, String text) {
+	ExprStringLiteral *literal = new ExprStringLiteral;
+	literal->start = start;
+	literal->end = end;
+	literal->string = text;
+	literal->type = &TYPE_STRING;
+	literal->flavor = ExprFlavor::STRING_LITERAL;
+	return literal;
+}
+
 
 // @Incomplete allow the return type expression of a function to refer to the arguments
 Expr *parsePrimaryExpr(LexerFile *lexer) {
@@ -757,6 +767,10 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 				do {
 					Declaration *declaration = parseDeclaration(lexer);
+					if (!declaration) {
+						return nullptr;
+					}
+
 					declaration->flags |= DECLARATION_IS_ARGUMENT;
 
 					if (declaration->flags & DECLARATION_IS_CONSTANT) {
@@ -783,7 +797,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 					return nullptr;
 				}
 
-				if (expectAndConsume(lexer, '{')) {
+				if (lexer->token.type == TOKEN('{')) {
 					ExprFunction *function = new ExprFunction;
 					function->flavor = ExprFlavor::FUNCTION;
 					function->start = start;
@@ -1043,7 +1057,9 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		expr = makeIntegerLiteral(start, end, 0, &TYPE_VOID_POINTER);
 	}
 	else if (lexer->token.type == TokenT::STRING_LITERAL) {
-		assert(false); // @Incomplete handle strings 
+		expr = makeStringLiteral(start, end, lexer->token.text);
+
+		lexer->advance();
 	}
 	else if (expectAndConsume(lexer, TokenT::SIZE_OF)) {
 		ExprUnaryOperator *unary = new ExprUnaryOperator;
@@ -1133,8 +1149,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		expr = makeTypeLiteral(start, end, &TYPE_F64);
 	}
 	else if (expectAndConsume(lexer, TokenT::STRING)) {
-		assert(false); // @Incomplete
-		return nullptr;
+		expr = makeTypeLiteral(start, end, &TYPE_STRING);
 	}
 	else if (expectAndConsume(lexer, TokenT::STRUCT)) {
 		assert(false); // @Incomplete
@@ -1513,6 +1528,11 @@ LexerFile parseFile(u8 *filename) {
 	while (true) {
 		if (lexer.token.type == TokenT::IDENTIFIER) {
 			Declaration *declaration = parseDeclaration(&lexer);
+			if (!declaration) {
+				assert(false);
+				break;
+			}
+
 			declaration->enclosingScope = nullptr;
 
 			assert(declaration); // @ErrorMessage

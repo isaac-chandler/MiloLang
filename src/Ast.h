@@ -41,7 +41,9 @@ enum class IrOp : u8 {
 	CALL,
 	NEG,
 	NOOP,
-	FUNCTION
+	FUNCTION, 
+	STRING, 
+	STRING_EQUAL
 };
 
 #define IR_SIGNED_OP 0x1
@@ -67,6 +69,7 @@ struct Ir {
 		u64 a;
 		struct Declaration *declaration;
 		struct ExprFunction *function;
+		struct ExprStringLiteral *string;
 	};
 
 	union {
@@ -112,7 +115,8 @@ enum class TypeFlavor : u8 {
 	BOOL, 
 	FUNCTION, 
 	TYPE, 
-	AUTO_CAST
+	AUTO_CAST, 
+	STRING
 };
 
 #define TYPE_INTEGER_IS_SIGNED 0x2
@@ -127,36 +131,44 @@ struct Type {
 
 };
 
-extern Type TYPE_S8;
-extern Type TYPE_S16;
-extern Type TYPE_S32;
-extern Type TYPE_S64;
 
-extern Type TYPE_U8;
-extern Type TYPE_U16;
-extern Type TYPE_U32;
-extern Type TYPE_U64;
 
-extern Type TYPE_SIGNED_INT_LITERAL;
-extern Type TYPE_UNSIGNED_INT_LITERAL;
+inline Type TYPE_S8 = { 1, 1, TYPE_INTEGER_IS_SIGNED, TypeFlavor::INTEGER };
+inline Type TYPE_S16 = { 2, 2, TYPE_INTEGER_IS_SIGNED, TypeFlavor::INTEGER };
+inline Type TYPE_S32 = { 4, 4, TYPE_INTEGER_IS_SIGNED, TypeFlavor::INTEGER };
+inline Type TYPE_S64 = { 8, 8, TYPE_INTEGER_IS_SIGNED, TypeFlavor::INTEGER };
 
-extern Type TYPE_F32;
-extern Type TYPE_F64;
+inline Type TYPE_U8 = { 1, 1, 0, TypeFlavor::INTEGER };
+inline Type TYPE_U16 = { 2, 2, 0, TypeFlavor::INTEGER };
+inline Type TYPE_U32 = { 4, 4, 0, TypeFlavor::INTEGER };
+inline Type TYPE_U64 = { 8, 8, 0, TypeFlavor::INTEGER };
 
-extern Type TYPE_FLOAT_LITERAL;
+inline Type TYPE_UNSIGNED_INT_LITERAL = { 0, 0, TYPE_IS_INTERNAL, TypeFlavor::INTEGER };
+inline Type TYPE_SIGNED_INT_LITERAL = { 0, 0, TYPE_INTEGER_IS_SIGNED | TYPE_IS_INTERNAL, TypeFlavor::INTEGER };
 
-extern Type TYPE_VOID;
-extern Type TYPE_BOOL;
+inline Type TYPE_F32 = { 4, 4, 0, TypeFlavor::FLOAT };
+inline Type TYPE_F64 = { 8, 8, 0, TypeFlavor::FLOAT };
 
-extern Type TYPE_TYPE;
+inline Type TYPE_FLOAT_LITERAL = { 0, 0, TYPE_IS_INTERNAL, TypeFlavor::FLOAT };
 
-extern Type TYPE_AUTO_CAST;
+inline Type TYPE_VOID = { 1, 1, 0, TypeFlavor::VOID }; // Give void size and alignment of 1, so *void math just adds raw memory
+inline Type TYPE_BOOL = { 1, 1, 0, TypeFlavor::BOOL };
+
+inline Type TYPE_TYPE = { 0, 0, 0, TypeFlavor::TYPE };
+
+inline Type TYPE_AUTO_CAST = { 0, 0, TYPE_IS_INTERNAL, TypeFlavor::AUTO_CAST };
+
+// @StringFormat make strings length based, currently they are the same as *u8
+inline Type TYPE_STRING = { 8, 8, 0, TypeFlavor::STRING };
+
 
 struct TypePointer : Type {
 	Type *pointerTo;
 };
 
-extern TypePointer TYPE_VOID_POINTER;
+inline TypePointer TYPE_VOID_POINTER = { 8, 8, 0, TypeFlavor::POINTER, &TYPE_VOID };
+inline TypePointer TYPE_U8_POINTER = { 8, 8, 0, TypeFlavor::POINTER, &TYPE_U8 };
+
 
 struct Expr;
 
@@ -213,7 +225,7 @@ struct Expr {
 
 #define EXPR_FOR_BY_POINTER 0x1
 #define EXPR_CAST_IS_IMPLICIT 0x2
-#define EXPR_FUNCTION_HAS_STORAGE 0x4
+#define EXPR_HAS_STORAGE 0x4
 #define EXPR_FUNCTION_IS_EXTERNAL 0x8
 
 
@@ -228,6 +240,9 @@ struct ExprLiteral : Expr {
 
 struct ExprStringLiteral : Expr {
 	String string;
+
+	union Symbol *symbol;
+	u32 physicalStorage;
 };
 
 struct ExprBinaryOperator : Expr {
@@ -350,6 +365,7 @@ inline bool typesAreSame(Type *a, Type *b) {
 		case TypeFlavor::BOOL:
 		case TypeFlavor::VOID:
 		case TypeFlavor::TYPE:
+		case TypeFlavor::STRING:
 			return true;
 		case TypeFlavor::INTEGER:
 			return a->size == b->size && FLAGS_ARE_SAME(a->flags, b->flags, TYPE_INTEGER_IS_SIGNED);

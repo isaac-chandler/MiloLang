@@ -1,7 +1,5 @@
-string_ :: *u8
-
 argCount: s32
-args: *string_
+args: *string
 
 STD_INPUT_HANDLE: u32: 0xFFFF_FFF6 // -10
 STD_OUTPUT_HANDLE: u32: 0xFFFF_FFF5 // -11
@@ -12,16 +10,32 @@ GetStdHandle :: (nStdHandle: u32) -> HANDLE #external
 HANDLE :: *void
 WriteConsoleA :: (hConsoleOutput: HANDLE, lpBuffer: *void, nNumberOfCharactersToWrite: u32, lpNumberOfCharactersWritten: *u32 = null, lpReserved: *void = null) -> bool #external
 
-main :: (argc: s32, argv: *string_) -> s32 {
+string_length :: (s: string) -> u64 {
+	len: u64 = 0
+	while s[len] len += 1
+
+	return len
+}
+
+print_string :: (s: string) {
+	WriteConsoleA(std_out, cast() s, cast() string_length(s), null, null)
+}
+
+
+std_out: HANDLE
+
+main :: (argc: s32, argv: *string) -> s32 {
 	argCount = argc
 	args = argv
+
+	std_out = GetStdHandle(STD_OUTPUT_HANDLE)
 
 	_main()
 
 	return 0
 }
 
-get_command_line_arguments :: (argc: *s32) -> *string_ {
+get_command_line_arguments :: (argc: *s32) -> *string {
 	<< argc = argCount
 	return args
 }
@@ -38,36 +52,10 @@ test :: () {
 		factorial(it_index) // dummy code
 }
 
+hello := "Hello World!\n"
+
 _main :: () {
-/* This should cause an error now
-	factorial :: (n: u64) -> u64 {
-		return << cast(*u64) null // Uh oh, you have resolved the wrong function
-	}
-*/
-
-	{
-		// Put in a hack to make sure we can use a declaration recursively in functions
-		// @Solution I think the way we do this is to allow out of order declaration of constants in local scopes
-		factorial :: (n: u64) -> u64 {
-			if n <= 1
-				return 1
-			return n * factorial(n - 1)
-		}
-	}
-
-	// but we can't use it recursively elsewhere
-	// @Solution This should be a circular dependency error then for type
-	//error : u64 : error
-
-	argCount: s32 = --
-	args := get_command_line_arguments(*argCount)
-
-	factorial(cast() argCount)
-
-	a: u8 = 'A'
-	
-	stdout := GetStdHandle(STD_OUTPUT_HANDLE)
-	WriteConsoleA(stdout, *a, 1, null, null)
+	print_string(hello);
 }
 
 factorial2 :: (n: u64) -> u64 {

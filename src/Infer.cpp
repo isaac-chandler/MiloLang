@@ -415,6 +415,10 @@ bool isValidCast(Type *to, Type *from) {
 	else if (from->flavor == TypeFlavor::POINTER) {
 		return to->flavor == TypeFlavor::BOOL || (to->flavor == TypeFlavor::INTEGER && to->size == 8);
 	}
+	else if (from->flavor == TypeFlavor::STRING) {
+		// @StringFormat when strings change to be equivalent to [] u8, stop casting to *u8
+		return to->flavor == TypeFlavor::BOOL || (to->flavor == TypeFlavor::POINTER && static_cast<TypePointer *>(to)->pointerTo == &TYPE_U8) || isVoidPointer(to);
+	}
 	else {
 		assert(false); // @ErrorMessage
 		return false;
@@ -871,7 +875,7 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 				assert(left); // This is safe since even though auto-casts can have a left of null, they shouldn't be added to the flattened array
 
 
-				// assert(right); We can't do this since default initialization uses a assign operation with rhs of null
+				assert(binary->op == TOKEN('=') || right);
 
 				if (right && left->type->flavor == right->type->flavor && left->type->flavor == TypeFlavor::AUTO_CAST) {
 					assert(false); // @ErrorMessage cannot auto-cast both sides of a binary operator
@@ -928,6 +932,16 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 
 							expr->type = pointer->pointerTo;
 						}
+						else if (left->type->flavor == TypeFlavor::STRING) {
+							trySolidifyNumericLiteralToDefault(right);
+
+							if (right->type->flavor != TypeFlavor::INTEGER) {
+								assert(false); // @ErrorMessage array index must be an integer
+								return false;
+							}
+
+							expr->type = &TYPE_U8;
+						}
 						else {
 							assert(false); // @ErrorMessage can only index pointers
 							return false;
@@ -939,6 +953,9 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 					case TokenT::NOT_EQUAL: {
 						if (left->type->flavor == right->type->flavor) {
 							switch (left->type->flavor) {
+								case TypeFlavor::STRING: {
+									break;
+								}
 								case TypeFlavor::BOOL: {
 									break;
 								}
@@ -1020,6 +1037,10 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 									assert(false); // @ErrorMessage
 									return false;
 								}
+								case TypeFlavor::STRING: {
+									assert(false); // @ErrorMessage
+									return false;
+								}
 								case TypeFlavor::FLOAT: {
 									if (!binaryOpForFloat(binary))
 										return false;
@@ -1080,6 +1101,10 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 						if (left->type->flavor == right->type->flavor) {
 							switch (left->type->flavor) {
 								case TypeFlavor::BOOL: {
+									assert(false); // @ErrorMessage
+									return false;
+								}
+								case TypeFlavor::STRING: {
 									assert(false); // @ErrorMessage
 									return false;
 								}
@@ -1160,6 +1185,10 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 									assert(false); // @ErrorMessage
 									return false;
 								}
+								case TypeFlavor::STRING: {
+									assert(false); // @ErrorMessage
+									return false;
+								}
 								case TypeFlavor::FLOAT: {
 									assert(false); // @ErrorMessage
 									return false;
@@ -1213,6 +1242,10 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 						if (left->type->flavor == right->type->flavor) {
 							switch (left->type->flavor) {
 								case TypeFlavor::BOOL: {
+									assert(false); // @ErrorMessage
+									return false;
+								}
+								case TypeFlavor::STRING: {
 									assert(false); // @ErrorMessage
 									return false;
 								}
@@ -1274,19 +1307,50 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 						}
 
 						if (!right) { // @Incomplete this is only valid for non-composite types
-							ExprLiteral *zero = new ExprLiteral;
-							zero->flavor = ExprFlavor::INT_LITERAL;
-							zero->unsignedValue = 0;
-							zero->type = left->type;
-							zero->start = binary->start;
-							zero->end = binary->end;
+							switch (left->type->flavor) {
+								case TypeFlavor::BOOL:
+								case TypeFlavor::FLOAT:
+								case TypeFlavor::FUNCTION:
+								case TypeFlavor::INTEGER:
+								case TypeFlavor::POINTER: {
+									ExprLiteral *zero = new ExprLiteral;
+									zero->flavor = left->type->flavor == TypeFlavor::FLOAT ? ExprFlavor::FLOAT_LITERAL : ExprFlavor::INT_LITERAL;
+									zero->unsignedValue = 0;
+									zero->type = left->type;
+									zero->start = binary->start;
+									zero->end = binary->end;
+
+									binary->right = zero;
+								} break;
+								case TypeFlavor::STRING: {
+									ExprStringLiteral *empty = new ExprStringLiteral;
+									empty->flavor = ExprFlavor::STRING_LITERAL;
+									empty->string = "";
+									empty->type = left->type;
+									empty->start = binary->start;
+									empty->end = binary->end;
+
+									binary->right = empty;
+
+								}
+								case TypeFlavor::TYPE: {
+									assert(false); // @ErrorMessage there is no default value for type
+									return false;
+								}
+								default: {
+									assert(false);
+									return false;
+								}
+							}
 							
-							binary->right = zero;
 						}
 						else {
 							if (left->type->flavor == right->type->flavor) {
 								switch (left->type->flavor) {
 								case TypeFlavor::BOOL: {
+									break;
+								}
+								case TypeFlavor::STRING: {
 									break;
 								}
 								case TypeFlavor::FLOAT: {
@@ -1361,6 +1425,10 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 						if (left->type->flavor == right->type->flavor) {
 							switch (left->type->flavor) {
 								case TypeFlavor::BOOL: {
+									assert(false); // @ErrorMessage
+									return false;
+								}
+								case TypeFlavor::STRING: {
 									assert(false); // @ErrorMessage
 									return false;
 								}
@@ -1454,6 +1522,10 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 									assert(false); // @ErrorMessage
 									return false;
 								}
+								case TypeFlavor::STRING: {
+									assert(false); // @ErrorMessage
+									return false;
+								}
 								case TypeFlavor::FLOAT: {
 									assert(false); // @ErrorMessage
 									return false;
@@ -1507,6 +1579,10 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 						if (left->type->flavor == right->type->flavor) {
 							switch (left->type->flavor) {
 								case TypeFlavor::BOOL: {
+									assert(false); // @ErrorMessage
+									return false;
+								}
+								case TypeFlavor::STRING: {
 									assert(false); // @ErrorMessage
 									return false;
 								}
@@ -1603,7 +1679,7 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 						}
 
 						if (loop->flags & EXPR_FOR_BY_POINTER) {
-							assert(false); //. @ErrorMessage
+							assert(false); // @ErrorMessage
 							return false;
 						}
 
@@ -1690,6 +1766,14 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 							it->flags |= DECLARATION_TYPE_IS_READY;
 						}
 					}
+					else if (loop->forBegin->type->flavor == TypeFlavor::STRING) {
+						assert(false); // @ErrorMessage
+						return false;
+					}
+					else {
+						assert(false); // @ErrorMessage
+						return false;
+					}
 				}
 				else {
 					if (loop->forBegin->type->flavor == TypeFlavor::INTEGER) {
@@ -1710,6 +1794,15 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 						loop->forBegin = zero;
 
 						it->type = makeTypeLiteral(it->start, it->end, loop->forEnd->type);
+						it->flags |= DECLARATION_TYPE_IS_READY;
+					}
+					else if (loop->forBegin->type->flavor == TypeFlavor::STRING) {
+						if (loop->flags & EXPR_FOR_BY_POINTER) {
+							it->type = makeTypeLiteral(it->start, it->end, &TYPE_U8);
+						}
+						else {
+							it->type = makeTypeLiteral(it->start, it->end, &TYPE_U8_POINTER);
+						}
 						it->flags |= DECLARATION_TYPE_IS_READY;
 					}
 					else {
@@ -1752,6 +1845,9 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 						if (correct->flavor == given->type->flavor) {
 							switch (correct->flavor) {
 								case TypeFlavor::BOOL: {
+									break;
+								}
+								case TypeFlavor::STRING: {
 									break;
 								}
 								case TypeFlavor::FLOAT: {
@@ -1927,6 +2023,14 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 					switch (returnType->flavor) {
 						case TypeFlavor::BOOL: {
 							if (type->flavor != TypeFlavor::BOOL) {
+								assert(false); // @ErrorMessage
+								return false;
+							}
+
+							break;
+						}
+						case TypeFlavor::STRING: {
+							if (type->flavor != TypeFlavor::STRING) {
 								assert(false); // @ErrorMessage
 								return false;
 							}
@@ -2413,6 +2517,9 @@ void runInfer() {
 											case TypeFlavor::BOOL: {
 												break;
 											}
+											case TypeFlavor::STRING: {
+												break;
+											}
 											case TypeFlavor::FLOAT: {
 												if (given->type == &TYPE_FLOAT_LITERAL) {
 													given->type = correct;
@@ -2545,37 +2652,45 @@ void runInfer() {
 						}
 						else if (declaration->type) {
 							if (job.typeFlattenedIndex == job.typeFlattened.count) {
-								if (!(declaration->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_ARGUMENT | DECLARATION_IS_ITERATOR_INDEX | DECLARATION_IS_ITERATOR))) {
+								if (!(declaration->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_ARGUMENT | DECLARATION_IS_ITERATOR_INDEX | DECLARATION_IS_ITERATOR)) && declaration->enclosingScope == &globalBlock /* Declarations in local scope will be initialized in inferFlattened for the assign op they generate */) {
 									auto type = static_cast<ExprLiteral *>(declaration->type)->typeValue;
-
-									ExprLiteral *literal = new ExprLiteral;
-									literal->start = declaration->start;
-									literal->end = declaration->end;
-									literal->type = type;
 
 									switch (type->flavor) {
 										case TypeFlavor::BOOL:
+										case TypeFlavor::FLOAT:
 										case TypeFlavor::FUNCTION:
 										case TypeFlavor::INTEGER:
 										case TypeFlavor::POINTER: {
-											literal->flavor = ExprFlavor::INT_LITERAL;
-											literal->unsignedValue = 0;
-											break;
-										}
-										case TypeFlavor::FLOAT: {
-											literal->flavor = ExprFlavor::FLOAT_LITERAL;
-											literal->floatValue = 0;
-											break;
-										}
-										case TypeFlavor::TYPE:
-											assert(false); // @ErrorMessage
-											goto error;
-										default:
-											assert(false); // Invalid code path, variable type should never be void or auto-cast
-											goto error;
-									}
+											ExprLiteral *zero = new ExprLiteral;
+											zero->flavor = type->flavor == TypeFlavor::FLOAT ? ExprFlavor::FLOAT_LITERAL : ExprFlavor::INT_LITERAL;
+											zero->unsignedValue = 0;
+											zero->type = type;
+											zero->start = declaration->start;
+											zero->end = declaration->end;
 
-									declaration->initialValue = literal;
+											declaration->initialValue = zero;
+										} break;
+										case TypeFlavor::STRING: {
+											ExprStringLiteral *empty = new ExprStringLiteral;
+											empty->flavor = ExprFlavor::STRING_LITERAL;
+											empty->string = "";
+											empty->type = type;
+
+											empty->start = declaration->start;
+											empty->end = declaration->end;
+
+											declaration->initialValue = empty;
+
+										}
+										case TypeFlavor::TYPE: {
+											assert(false); // @ErrorMessage there is no default value for type
+											goto error;
+										}
+										default: {
+											assert(false);
+											goto error;
+										}
+									}
 								}
 
 								madeProgress = true;

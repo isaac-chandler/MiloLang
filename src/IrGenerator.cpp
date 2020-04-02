@@ -57,7 +57,7 @@ bool binaryOpHasSideEffects(TokenT op) {
 	}
 }
 
-void convertType(IrState *state, Type *destType, u64 dest, Type *srcType, u64 src) {
+void convertNumericType(IrState *state, Type *destType, u64 dest, Type *srcType, u64 src) {
 	Ir &extend = state->ir.add();
 
 
@@ -170,8 +170,6 @@ IrModifyWrite readForModifyWrite(IrState *state, Expr *left, Expr *right) {
 
 		assert(binary->op == TOKEN('['));
 
-		auto pointer = static_cast<TypePointer *>(binary->left->type);
-
 		u64 leftReg = generateIr(state, binary->left, dest);
 
 		u64 temp = state->nextRegister++;
@@ -180,16 +178,16 @@ IrModifyWrite readForModifyWrite(IrState *state, Expr *left, Expr *right) {
 		assert(temp == rightReg);
 
 		if (binary->right->type->size != 8) {
-			convertType(state, (binary->right->type->flags & TYPE_INTEGER_IS_SIGNED) ? &TYPE_S64 : &TYPE_U64, temp, binary->right->type, temp);
+			convertNumericType(state, (binary->right->type->flags & TYPE_INTEGER_IS_SIGNED) ? &TYPE_S64 : &TYPE_U64, temp, binary->right->type, temp);
 		}
 
-		if (pointer->pointerTo->size != 1) {
+		if (binary->type->size != 1) {
 			Ir &mul = state->ir.add();
 
 			mul.op = IrOp::MUL_BY_CONSTANT;
 			mul.dest = temp;
 			mul.a = temp;
-			mul.b = pointer->pointerTo->size;
+			mul.b = binary->type->size;
 			mul.opSize = 8;
 
 			rightReg = temp;
@@ -207,7 +205,7 @@ IrModifyWrite readForModifyWrite(IrState *state, Expr *left, Expr *right) {
 		read.dest = temp;
 		read.a = dest;
 		add.opSize = 8;
-		add.destSize = left->type->size;
+		add.destSize = binary->type->size;
 
 		info.addressReg = dest;
 		info.leftReg = temp;
@@ -273,7 +271,7 @@ IrModifyWrite readForModifyWrite(IrState *state, Expr *left, Expr *right) {
 }
 
 void writeForModifyWrite(IrState *state, IrModifyWrite info, Expr *left) {
-	if (left->flavor != ExprFlavor::IDENTIFIER || static_cast<ExprIdentifier *>(left)->declaration->enclosingScope != &globalBlock) {
+	if (left->flavor != ExprFlavor::IDENTIFIER || static_cast<ExprIdentifier *>(left)->declaration->enclosingScope == &globalBlock) {
 		Ir &write = state->ir.add();
 		write.op = IrOp::WRITE;
 		write.opSize = left->type->size;
@@ -304,7 +302,7 @@ static void generateIncrement(IrState *state, ExprLoop *loop) {
 
 		increment.b = pointer->pointerTo->size;
 
-		if (loop->flags & EXPR_FOR_BY_POINTER) {
+		if (!(loop->flags & EXPR_FOR_BY_POINTER)) {
 			Ir &read = state->ir.add();
 			read.dest = it->physicalStorage;
 			read.opSize = 8;
@@ -353,21 +351,54 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 
 					switch(castTo->flavor) {
 						case TypeFlavor::BOOL: {
+							u64 src;
+							u64 size;
+							if (right->type->flavor == TypeFlavor::STRING) {
+								Ir &set = state->ir.add();
+
+								set.op = IrOp::SET;
+								set.dest = dest;
+								set.a = rightReg;
+								set.b = 0;
+								set.opSize = right->type->size;
+
+								u64 patch = state->ir.count;
+
+								Ir &branch = state->ir.add();
+								branch.op = IrOp::IF_Z_GOTO;
+								set.a = dest;
+								set.opSize = right->type->size;
+
+								Ir &read = state->ir.add();
+								read.op = IrOp::READ;
+								read.dest = rightReg;
+								read.a = rightReg;
+								read.destSize = 1;
+								read.opSize = 8;
+
+								src = dest;
+								size = 1;
+							}
+							else {
+								src = rightReg;
+								size = right->type->size;
+							}
+
 							Ir &ir = state->ir.add();
 
 							ir.op = IrOp::NOT_EQUAL;
 							ir.dest = dest;
-							ir.a = rightReg;
+							ir.a = src;
 							ir.b = 0;
-							ir.opSize = right->type->size;
-							
+							ir.opSize = size;
+
 							if (right->type->flavor == TypeFlavor::FLOAT)
 								ir.flags |= IR_FLOAT_OP;
-
-							break;
+							
+							return dest;
 						}
 						case TypeFlavor::FLOAT: {
-							convertType(state, castTo, dest, right->type, rightReg);
+							convertNumericType(state, castTo, dest, right->type, rightReg);
 
 							return dest;
 						}
@@ -379,7 +410,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 								return rightReg;
 							}
 
-							convertType(state, castTo, dest, right->type, rightReg);
+							convertNumericType(state, castTo, dest, right->type, rightReg);
 
 							return dest;
 						}
@@ -395,10 +426,6 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 					assert(false);
 				}
 				case TOKEN('['): {
-					assert(left->type->flavor == TypeFlavor::POINTER);
-
-					auto pointer = static_cast<TypePointer *>(left->type);
-
 					u64 leftReg = generateIr(state, left, dest);
 
 					u64 temp = state->nextRegister++;
@@ -406,17 +433,17 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 					u64 rightReg = generateIr(state, right, temp);
 
 					if (right->type->size != 8) {
-						convertType(state, (right->type->flags & TYPE_INTEGER_IS_SIGNED) ? &TYPE_S64 : &TYPE_U64, temp, right->type, rightReg);
+						convertNumericType(state, (right->type->flags & TYPE_INTEGER_IS_SIGNED) ? &TYPE_S64 : &TYPE_U64, temp, right->type, rightReg);
 						rightReg = temp;
 					}
 
-					if (pointer->pointerTo->size != 1) {
+					if (binary->type->size != 1) {
 						Ir &mul = state->ir.add();
 
 						mul.op = IrOp::MUL_BY_CONSTANT;
 						mul.dest = temp;
 						mul.a = rightReg;
-						mul.b = pointer->pointerTo->size;
+						mul.b = binary->type->size;
 						mul.opSize = 8;
 
 						rightReg = temp;
@@ -434,12 +461,53 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 					read.a = dest;
 					read.dest = dest;
 					read.opSize = 8;
-					read.destSize = pointer->pointerTo->size;
+					read.destSize = binary->type->size;
 
 					return dest;
 				}
 				case TokenT::EQUAL:
-				case TokenT::NOT_EQUAL:
+				case TokenT::NOT_EQUAL: {
+					if (left->type->flavor == TypeFlavor::STRING) {
+						u64 leftReg = generateIr(state, left, dest);
+
+						u64 temp = state->nextRegister++;
+
+						u64 rightReg = generateIr(state, right, temp);
+
+						Ir &ir = state->ir.add();
+
+						ir.op = IrOp::STRING_EQUAL;
+						ir.dest = dest;
+						ir.a = leftReg;
+						ir.b = rightReg;
+						ir.opSize = right->type->size;
+					}
+					else {
+						u64 leftReg = generateIr(state, left, dest);
+
+						u64 temp = state->nextRegister++;
+
+						u64 rightReg = generateIr(state, right, temp);
+
+						Ir &ir = state->ir.add();
+
+						ir.op = getIrOpForCompare(binary->op);
+						ir.dest = dest;
+						ir.a = leftReg;
+						ir.b = rightReg;
+						ir.opSize = right->type->size;
+
+						if (left->type->flags & TYPE_INTEGER_IS_SIGNED) {
+							assert(right->type->flags & TYPE_INTEGER_IS_SIGNED);
+
+							ir.flags |= IR_SIGNED_OP;
+						}
+						else if (right->type->flavor == TypeFlavor::FLOAT)
+							ir.flags |= IR_FLOAT_OP;
+					}
+
+					return dest;
+				}
 				case TokenT::GREATER_EQUAL:
 				case TokenT::LESS_EQUAL:
 				case TOKEN('>'):
@@ -479,29 +547,50 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 
 						u64 rightReg = generateIr(state, right, temp);
 
-						if (right->type->size != 8) {
-							convertType(state, (right->type->flags & TYPE_INTEGER_IS_SIGNED) ? &TYPE_S64 : &TYPE_U64, temp, right->type, rightReg);
-							rightReg = temp;
+						if (right->type->flavor == TypeFlavor::POINTER) {
+							assert(binary->op == TOKEN('-'));
+							Ir &sub = state->ir.add();
+							sub.op = IrOp::SUB;
+							sub.dest = dest;
+							sub.a = leftReg;
+							sub.b = rightReg;
+							sub.opSize = 8;
+
+							Ir &div = state->ir.add();
+							div.op = IrOp::DIVIDE_BY_CONSTANT;
+							div.dest = dest;
+							div.a = dest;
+							div.b = pointer->pointerTo->size;
+							div.opSize = 8;
+							div.flags |= IR_SIGNED_OP;
 						}
+						else {
+							
 
-						if (pointer->pointerTo->size != 1) {
-							Ir &mul = state->ir.add();
+							if (right->type->size != 8) {
+								convertNumericType(state, (right->type->flags & TYPE_INTEGER_IS_SIGNED) ? &TYPE_S64 : &TYPE_U64, temp, right->type, rightReg);
+								rightReg = temp;
+							}
 
-							mul.op = IrOp::MUL_BY_CONSTANT;
-							mul.dest = temp;
-							mul.a = rightReg;
-							mul.b = pointer->pointerTo->size;
-							mul.opSize = 8;
+							if (pointer->pointerTo->size != 1) {
+								Ir &mul = state->ir.add();
 
-							rightReg = temp;
+								mul.op = IrOp::MUL_BY_CONSTANT;
+								mul.dest = temp;
+								mul.a = rightReg;
+								mul.b = pointer->pointerTo->size;
+								mul.opSize = 8;
+
+								rightReg = temp;
+							}
+
+							Ir &add = state->ir.add();
+							add.op = binary->op == TOKEN('+') ? IrOp::ADD : IrOp::SUB;
+							add.dest = dest;
+							add.a = leftReg;
+							add.b = rightReg;
+							add.opSize = 8;
 						}
-
-						Ir &add = state->ir.add();
-						add.op = binary->op == TOKEN('+') ? IrOp::ADD : IrOp::SUB;
-						add.dest = dest;
-						add.a = leftReg;
-						add.b = rightReg;
-						add.opSize = 8;
 					}
 					else {
 						u64 leftReg = generateIr(state, left, dest);
@@ -585,25 +674,23 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 						
 						assert(binary->op == TOKEN('['));
 
-						auto pointer = static_cast<TypePointer *>(binary->left->type);
-
 						u64 leftReg = generateIr(state, binary->left, dest);
 
 						u64 temp = state->nextRegister++;
 						u64 rightReg = generateIr(state, binary->right, temp);
 
 						if (binary->right->type->size != 8) {
-							convertType(state, (binary->right->type->flags & TYPE_INTEGER_IS_SIGNED) ? &TYPE_S64 : &TYPE_U64, temp, binary->right->type, rightReg);
+							convertNumericType(state, (binary->right->type->flags & TYPE_INTEGER_IS_SIGNED) ? &TYPE_S64 : &TYPE_U64, temp, binary->right->type, rightReg);
 							rightReg = temp;
 						}
 
-						if (pointer->pointerTo->size != 1) {
+						if (binary->type->size != 1) {
 							Ir &mul = state->ir.add();
 
 							mul.op = IrOp::MUL_BY_CONSTANT;
 							mul.dest = temp;
 							mul.a = rightReg;
-							mul.b = pointer->pointerTo->size;
+							mul.b = binary->type->size;
 							mul.opSize = 8;
 
 							rightReg = temp;
@@ -622,7 +709,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 						write.op = IrOp::WRITE;
 						write.a = dest;
 						write.b = rightReg;
-						write.opSize = left->type->size;
+						write.opSize = binary->type->size;
 
 						return rightReg;
 					}
@@ -696,7 +783,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 						u64 temp = state->nextRegister++;
 
 						if (right->type->size != 8) {
-							convertType(state, (right->type->flags & TYPE_INTEGER_IS_SIGNED) ? &TYPE_S64 : &TYPE_U64, temp, right->type, info.rightReg);
+							convertNumericType(state, (right->type->flags & TYPE_INTEGER_IS_SIGNED) ? &TYPE_S64 : &TYPE_U64, temp, right->type, info.rightReg);
 							info.rightReg = temp;
 						}
 
@@ -713,7 +800,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 						}
 
 						Ir &add = state->ir.add();
-						add.op = binary->op == TOKEN('+') ? IrOp::ADD : IrOp::SUB;
+						add.op = binary->op == TokenT::PLUS_EQUALS ? IrOp::ADD : IrOp::SUB;
 						add.dest = info.leftReg;
 						add.a = info.leftReg;
 						add.b = info.rightReg;
@@ -722,7 +809,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 					else {
 						Ir &ir = state->ir.add();
 
-						ir.op = binary->op == TOKEN('+') ? IrOp::ADD : IrOp::SUB;
+						ir.op = binary->op == TokenT::PLUS_EQUALS ? IrOp::ADD : IrOp::SUB;
 						ir.dest = info.leftReg;
 						ir.a = info.leftReg;
 						ir.b = info.rightReg;
@@ -924,7 +1011,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 			u64 itReg = it->physicalStorage;
 			u64 it_indexReg = it_index->physicalStorage;
 
-			if (loop->forBegin->type->flavor == TypeFlavor::POINTER && !(loop->flags & EXPR_FOR_BY_POINTER)) {
+			if ((loop->forBegin->type->flavor == TypeFlavor::POINTER || loop->forBegin->type->flavor == TypeFlavor::STRING) && !(loop->flags & EXPR_FOR_BY_POINTER)) {
 				loop->irPointer = state->nextRegister++;
 			}
 			else {
@@ -934,18 +1021,33 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 
 			generateIr(state, loop->forBegin, loop->irPointer, true);
 
-			u64 irEnd = generateIr(state, loop->forEnd, state->nextRegister++);
-
 			pushLoop(state, loop);
+
+			u64 irEnd;
+
+			if (loop->forBegin->type->flavor != TypeFlavor::STRING) {
+				irEnd = generateIr(state, loop->forEnd, state->nextRegister++);
+			}
 
 			u64 compareDest = state->nextRegister++;
 
 			Ir &compare = state->ir.add();
-			compare.op = IrOp::LESS;
-			compare.a = loop->irPointer;
-			compare.b = irEnd;
-			compare.dest = compareDest;
-			compare.opSize = loop->forBegin->type->size;
+
+			if (loop->forBegin->type->flavor == TypeFlavor::STRING) {
+				// @StringFormat
+				compare.op = IrOp::READ;
+				compare.a = loop->irPointer;
+				compare.opSize = 8;
+				compare.dest = compareDest;
+				compare.opSize = 1;
+			}
+			else {
+				compare.op = IrOp::LESS;
+				compare.a = loop->irPointer;
+				compare.b = irEnd;
+				compare.dest = compareDest;
+				compare.opSize = loop->forBegin->type->size;
+			}
 
 			if (loop->forBegin->type->flags & TYPE_INTEGER_IS_SIGNED)
 				compare.flags |= IR_SIGNED_OP;
@@ -962,6 +1064,10 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 
 			generateIncrement(state, loop);
 
+			Ir &jump = state->ir.add();
+			jump.op = IrOp::GOTO;
+			jump.b = state->loopStack[state->loopCount - 1].start;
+
 			popLoop(state);
 			
 			return DEST_NONE;
@@ -975,6 +1081,17 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 			address.op = IrOp::FUNCTION;
 			address.function = static_cast<ExprFunction *>(expr);
 			
+			return dest;
+		}
+		case ExprFlavor::STRING_LITERAL: {
+			if (dest == DEST_NONE) return dest;
+
+			Ir &address = state->ir.add();
+			address.dest = dest;
+			address.opSize = 8;
+			address.op = IrOp::STRING;
+			address.string = static_cast<ExprStringLiteral *>(expr);
+
 			return dest;
 		}
 		case ExprFlavor::FUNCTION_CALL: {
@@ -1103,11 +1220,6 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 
 			return DEST_NONE;
 		}
-		case ExprFlavor::STRING_LITERAL: {
-			// @Incomplete
-			assert(false);
-			return DEST_NONE;
-		}
 		case ExprFlavor::STRUCT_ACCESS: {
 			// @Incomplete
 			assert(false);
@@ -1132,8 +1244,6 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 
 						assert(binary->op == TOKEN('['));
 
-						auto pointer = static_cast<TypePointer *>(binary->left->type);
-
 						u64 leftReg = generateIr(state, binary->left, dest);
 
 						u64 temp = state->nextRegister++;
@@ -1142,16 +1252,16 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 						assert(temp == rightReg);
 
 						if (binary->right->type->size != 8) {
-							convertType(state, (binary->right->type->flags & TYPE_INTEGER_IS_SIGNED) ? &TYPE_S64 : &TYPE_U64, temp, binary->right->type, temp);
+							convertNumericType(state, (binary->right->type->flags & TYPE_INTEGER_IS_SIGNED) ? &TYPE_S64 : &TYPE_U64, temp, binary->right->type, temp);
 						}
 
-						if (pointer->pointerTo->size != 1) {
+						if (binary->type->size != 1) {
 							Ir &mul = state->ir.add();
 
 							mul.op = IrOp::MUL_BY_CONSTANT;
 							mul.dest = temp;
 							mul.a = temp;
-							mul.b = pointer->pointerTo->size;
+							mul.b = binary->type->size;
 							mul.opSize = 8;
 						}
 
@@ -1264,6 +1374,8 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest) {
 			Ir &jump = state->ir.add();
 			jump.op = IrOp::GOTO;
 			jump.b = state->loopStack[state->loopCount - 1].start;
+
+			popLoop(state);
 
 			return DEST_NONE;
 		}

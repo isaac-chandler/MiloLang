@@ -13,6 +13,7 @@ struct String {
 
 	String() : hash(0), length(0), characters(0) {};
 	String(const char *cString);
+	String(char *characters, u64 length, u32 hash) : length(length), characters(characters), hash(hash) {};
 	String(const char *begin, const char *end);
 
 

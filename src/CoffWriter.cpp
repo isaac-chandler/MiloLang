@@ -34,6 +34,27 @@ void setSymbolName(BucketedArenaAllocator *stringTable, SymbolName *header, Stri
 	}
 }
 
+void setSymbolName(BucketedArenaAllocator *stringTable, SymbolName *header, u64 value) {
+	char buffer[17] = { '@' };
+
+	u64 characters = 0;
+
+
+	for (u64 shift = value ;;) {
+		++characters;
+
+		shift >>= 4;
+		if (!shift) break;
+	}
+
+	for (u64 i = 0; i < characters; i++) {
+		buffer[characters - i] = "0123456789ABCDEF"[value & 0xF];
+		value >>= 4;
+	}
+
+	setSymbolName(stringTable, header, { buffer, characters + 1, 0 });
+}
+
 #pragma pack(push, 1)
 struct FileHeader {
 	u16 machine;
@@ -457,8 +478,8 @@ void loadImmediateIntoRAX(BucketedArenaAllocator *code, u64 immediate) {
 Block externalsBlock;
 
 u32 createSymbolForFunction(BucketArray<Symbol> *symbols, ExprFunction *function) {
-	if (!(function->flags & EXPR_FUNCTION_HAS_STORAGE)) {
-		function->flags |= EXPR_FUNCTION_HAS_STORAGE;
+	if (!(function->flags & EXPR_HAS_STORAGE)) {
+		function->flags |= EXPR_HAS_STORAGE;
 
 		if (function->flags & EXPR_FUNCTION_IS_EXTERNAL) {
 			if (Declaration *declaration = findDeclaration(&externalsBlock, function->declaration->name)) {
@@ -475,6 +496,47 @@ u32 createSymbolForFunction(BucketArray<Symbol> *symbols, ExprFunction *function
 
 	return function->physicalStorage;
 }
+
+u32 createSymbolForString(s64 * emptyStringSymbolIndex, BucketArray<Symbol> *symbols, BucketedArenaAllocator *stringTable, BucketedArenaAllocator *rdata, ExprStringLiteral *string) {
+	if (string->string.length == 0) {
+		if (*emptyStringSymbolIndex == -1) {
+			*emptyStringSymbolIndex = symbols->count();
+
+			Symbol emptyString;
+			setSymbolName(stringTable, &emptyString.name, "@emptyString");
+			emptyString.value = static_cast<u32>(rdata->totalSize);
+			emptyString.sectionNumber = RDATA_SECTION_NUMBER;
+			emptyString.type = 0;
+			emptyString.storageClass = IMAGE_SYM_CLASS_STATIC;
+			emptyString.numberOfAuxSymbols = 0;
+
+			symbols->add(emptyString);
+
+			rdata->add1(0);
+		}
+
+		return static_cast<u32>(*emptyStringSymbolIndex);
+	}
+
+	if (!(string->flags & EXPR_HAS_STORAGE)) {
+		string->flags |= EXPR_HAS_STORAGE;
+
+		string->physicalStorage = static_cast<u32>(symbols->count());
+		string->symbol = reinterpret_cast<Symbol *>(symbols->allocator.allocateUnaligned(sizeof(Symbol)));
+
+		setSymbolName(stringTable, &string->symbol->name, symbols->count());
+		string->symbol->storageClass = IMAGE_SYM_CLASS_STATIC;
+		string->symbol->value = static_cast<u32>(rdata->totalSize);
+		string->symbol->sectionNumber = RDATA_SECTION_NUMBER;
+		string->symbol->type = 0;
+		string->symbol->numberOfAuxSymbols = 0;
+
+		rdata->addNullTerminatedString(string->string);
+	}
+
+	return string->physicalStorage;
+}
+
 
 u32 createSymbolForDeclaration(BucketArray<Symbol> *symbols, Declaration *declaration) {
 	if (!(declaration->flags & DECLARATION_HAS_STORAGE)) {
@@ -505,6 +567,7 @@ void runCoffWriter() {
 
 	s64 f32ToU64ConstantSymbolIndex = -1;
 	s64 f64ToU64ConstantSymbolIndex = -1;
+	s64 emptyStringSymbolIndex = -1;
 
 	u64 alignmentPadding = 0;
 
@@ -555,24 +618,9 @@ void runCoffWriter() {
 					}
 				}
 				else {
-					symbol->name.zeroes = 0;
-					symbol->name.namePointer = 4 + static_cast<u32>(stringTable.totalSize);
-
-					char *memory = static_cast<char *>(stringTable.allocateUnaligned(22));
-
-					memcpy(memory, "@func", 5);
-
-					memory += 5;
-
-					u64 value = reinterpret_cast<u64>(function);
-
-					for (u64 i = 0; i < 16; i++) {
-						memory[15 - i] = "0123456789ABCDEF"[value & 0xF];
-						value >>= 4;
-					}
-
-					memory[16] = 0;
 					symbol->storageClass = IMAGE_SYM_CLASS_STATIC;
+
+					setSymbolName(&stringTable, &symbol->name, symbols.count());
 				}
 
 				symbol->value = static_cast<u32>(code.totalSize);
@@ -711,22 +759,32 @@ void runCoffWriter() {
 						}
 					} break;
 					case IrOp::ADD_CONSTANT: {
-						assert(ir.opSize == 8);
-
 						if (ir.a == 0) {
-							storeImmediate(&code, function, 8, ir.dest, ir.b);
+							storeImmediate(&code, function, ir.opSize, ir.dest, ir.b);
 						}
 						else if (ir.b == 0) {
-							writeSet(&code, function, 8, ir.dest, ir.a);
+							writeSet(&code, function, ir.opSize, ir.dest, ir.a);
 						}
 						else {
 							loadImmediateIntoRAX(&code, ir.b);
 
-							code.add1(0x48);
-							code.add1(0x03);
+							if (ir.opSize == 8) {
+								code.add1(0x48);
+							}
+							else if (ir.opSize == 2) {
+								code.add1(0x48);
+							}
+
+							if (ir.opSize == 1) {
+								code.add1(0x02);
+							}
+							else {
+								code.add1(0x03);
+							}
+
 							writeRSPRegisterByte(&code, function, RAX, ir.a);
 
-							storeFromIntRegister(&code, function, 8, ir.dest, RAX);
+							storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
 						}
 					} break;
 					case IrOp::SUB: {
@@ -1751,7 +1809,7 @@ void runCoffWriter() {
 									code.add1(0xF3);
 								}
 
-								code.add1(0x2a);
+								code.add1(0x2A);
 								code.add1(0xC0);
 
 								if (ir.destSize == 8) {
@@ -1931,6 +1989,62 @@ void runCoffWriter() {
 
 						storeFromIntRegister(&code, function, 8, ir.dest, RAX);
 					} break;
+					case IrOp::STRING: {
+						code.add1(0x48);
+						code.add1(0x8D);
+						code.add1(0x05);
+
+						codeRelocations.add4(code.totalSize);
+						codeRelocations.add4(createSymbolForString(&emptyStringSymbolIndex, &symbols, &stringTable, &rdata, ir.string));
+						codeRelocations.add2(IMAGE_REL_AMD64_REL32);
+
+						code.add4(0);
+
+						storeFromIntRegister(&code, function, 8, ir.dest, RAX);
+					} break;
+					case IrOp::STRING_EQUAL: {
+
+						loadIntoIntRegister(&code, function, 8, RAX, ir.a);
+						loadIntoIntRegister(&code, function, 8, RCX, ir.b);
+
+						code.add1(0x48); // sub rcx, rax
+						code.add1(0x29);
+						code.add1(0xC1);
+
+						// early out if pointers are the same
+						code.add1(0x74); // je .set
+						code.add1(0x0E);
+
+						// .loop
+						code.add1(0x8A); // mov dl, byte ptr[rax]
+						code.add1(0x10);
+
+						code.add1(0x3A);  // cmp dl, byte ptr[rax+rcx*1]
+						code.add1(0x14);
+						code.add1(0x08);
+
+						code.add1(0x70 | C_NE); // jne .set
+						code.add1(0x07);
+
+
+						code.add1(0x48); // inc rax
+						code.add1(0xFF);
+						code.add1(0xC0);
+
+						code.add1(0x84); // test dl, dl
+						code.add1(0xD2);
+
+						code.add1(0x70 | C_NE); // jne .loop
+						code.add1(0xF2);
+
+						// .set
+						code.add1(0x0F);
+						code.add1(0x94);
+						writeRSPRegisterByte(&code, function, RAX, ir.dest);
+					} break;
+					default: {
+						assert(false);
+					}
 				}
 			}
 
@@ -1974,12 +2088,21 @@ void runCoffWriter() {
 
 				assert(declaration->initialValue->flavor == ExprFlavor::FLOAT_LITERAL ||
 					declaration->initialValue->flavor == ExprFlavor::INT_LITERAL ||
-					declaration->initialValue->flavor == ExprFlavor::FUNCTION);
+					declaration->initialValue->flavor == ExprFlavor::FUNCTION ||
+					declaration->initialValue->flavor == ExprFlavor::STRING_LITERAL);
 
 				if (declaration->initialValue->flavor == ExprFlavor::FUNCTION) {
 					assert(type->size == 8);
 					dataRelocations.add4(data.totalSize);
 					dataRelocations.add4(createSymbolForFunction(&symbols, static_cast<ExprFunction *>(declaration->initialValue)));
+					dataRelocations.add2(IMAGE_REL_AMD64_ADDR64);
+
+					data.add8(0);
+				}
+				else if (declaration->initialValue->flavor == ExprFlavor::STRING_LITERAL) {
+					assert(type->size == 8);
+					dataRelocations.add4(data.totalSize);
+					dataRelocations.add4(createSymbolForString(&emptyStringSymbolIndex, &symbols, &stringTable, &rdata, static_cast<ExprStringLiteral *>(declaration->initialValue)));
 					dataRelocations.add2(IMAGE_REL_AMD64_ADDR64);
 
 					data.add8(0);
@@ -2054,6 +2177,8 @@ void runCoffWriter() {
 
 				if (section.relocations) {
 					section.header->pointerToRelocations = AlignPO2(sectionPointer, 4);
+					assert(section.relocations->totalSize / sizeof(Relocation) < UINT16_MAX);
+
 					section.header->numberOfRelocations = section.relocations->totalSize / sizeof(Relocation);
 					sectionPointer += AlignPO2(section.relocations->totalSize, 4);
 				}

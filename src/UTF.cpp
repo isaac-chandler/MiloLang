@@ -125,7 +125,7 @@ void appendUtf32ToUtf8(Array<u8> &string, u32 c) {
 		if (c <= utf8Max[i]) {
 			string.add(static_cast<u8>((c >> (6 * i)) | utf8Byte[i]));
 
-			for (u32 j = i - 1; j >= 0; j++) {
+			for (s32 j = i - 1; j >= 0; j--) {
 				string.add(static_cast<u8>(
 					((c >> (6 * j)) & ~UTF8_TRAILING_BYTE_MASK) | UTF8_TRAILING_BYTE
 					));
