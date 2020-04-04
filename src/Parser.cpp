@@ -80,19 +80,15 @@ static bool addDeclarationToCurrentBlock(Declaration *declaration) {
 }
 
 struct BinaryOperator {
-	TokenT tokens[4];
+	TokenT tokens[5];
 	bool rightAssociative;
 };
 
 static BinaryOperator binaryOpPrecedences[] = {
-	{{TokenT::LOGIC_OR}},
-	{{TokenT::LOGIC_AND}},
-	{{TOKEN('|')}}, // @Improvement: Change operator precedence away from C++, make bitwise operators higher precedence than equality? 
-	{{TOKEN('^')}},
-	{{TOKEN('&')}},
-	{{TokenT::EQUAL}},
+	{{TokenT::LOGIC_OR, TokenT::LOGIC_AND}}, 
+	{{TokenT::EQUAL, TokenT::NOT_EQUAL}},
 	{{TOKEN('>'), TokenT::LESS_EQUAL, TOKEN('<'), TokenT::GREATER_EQUAL}},
-	{{TokenT::SHIFT_LEFT, TokenT::SHIFT_RIGHT}},
+	{{TokenT::SHIFT_LEFT, TokenT::SHIFT_RIGHT, TOKEN('|'), TOKEN('^'), TOKEN('&')}},
 	{{TOKEN('+'), TOKEN('-')}},
 	{{TOKEN('*'), TOKEN('/'), TOKEN('%')}},
 };
@@ -1054,7 +1050,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		expr = makeIntegerLiteral(start, end, 1, &TYPE_BOOL);
 	}
 	else if (expectAndConsume(lexer, TokenT::NULL_)) {
-		expr = makeIntegerLiteral(start, end, 0, &TYPE_VOID_POINTER);
+		expr = makeIntegerLiteral(start, end, 0, getPointerTo(&TYPE_VOID));
 	}
 	else if (lexer->token.type == TokenT::STRING_LITERAL) {
 		expr = makeStringLiteral(start, end, lexer->token.text);

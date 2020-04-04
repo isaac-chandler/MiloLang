@@ -49,6 +49,11 @@ enum class IrOp : u8 {
 #define IR_SIGNED_OP 0x1
 #define IR_FLOAT_OP 0x2
 
+
+inline bool isStandardSize(u64 size) {
+	return size == 1 || size == 2 || size == 4 || size == 8;
+}
+
 #define DEST_NONE UINT64_MAX
 
 struct Argument {
@@ -93,7 +98,8 @@ struct Loop {
 
 struct IrState {
 	u64 nextRegister = 1;
-	s64 maxCallRegisters = -1;
+	u64 callAuxStorage = 0;
+	u64 parameterSpace = 0;
 	Array<Ir> ir;
 
 	BucketedArenaAllocator allocator;
@@ -132,9 +138,10 @@ struct Type {
 	u64 flags = 0;
 	TypeFlavor flavor;
 
+	TypePointer *pointerPrototype = nullptr;
+	TypeArray *arrayPrototype = nullptr;
+	TypeArray *dynamicArrayPrototype = nullptr;
 };
-
-
 
 inline Type TYPE_S8 = { 1, 1, TYPE_INTEGER_IS_SIGNED, TypeFlavor::INTEGER };
 inline Type TYPE_S16 = { 2, 2, TYPE_INTEGER_IS_SIGNED, TypeFlavor::INTEGER };
@@ -174,8 +181,46 @@ struct TypeArray : Type {
 	u64 count;
 };
 
-inline TypePointer TYPE_VOID_POINTER = { 8, 8, 0, TypeFlavor::POINTER, &TYPE_VOID };
-inline TypePointer TYPE_U8_POINTER = { 8, 8, 0, TypeFlavor::POINTER, &TYPE_U8 };
+inline TypePointer *getPointerTo(Type *type) {
+	if (!type->pointerPrototype) {
+		type->pointerPrototype = new TypePointer;
+
+		type->pointerPrototype->size = 8;
+		type->pointerPrototype->alignment = 8;
+		type->pointerPrototype->flavor = TypeFlavor::POINTER;
+		type->pointerPrototype->pointerTo = type;
+	}
+
+	return type->pointerPrototype;
+}
+
+inline TypeArray *getArrayOf(Type *type) {
+	if (!type->arrayPrototype) {
+		type->arrayPrototype = new TypeArray;
+
+		type->arrayPrototype->size = 16;
+		type->arrayPrototype->alignment = 8;
+		type->arrayPrototype->flavor = TypeFlavor::ARRAY;
+		type->arrayPrototype->arrayOf = type;
+		type->arrayPrototype->count = 0;
+	}
+
+	return type->arrayPrototype;
+}
+
+inline TypeArray *getDynamicArrayOf(Type *type) {
+	if (!type->dynamicArrayPrototype) {
+		type->dynamicArrayPrototype = new TypeArray;
+
+		type->dynamicArrayPrototype->size = 24;
+		type->dynamicArrayPrototype->alignment = 8;
+		type->dynamicArrayPrototype->flavor = TypeFlavor::ARRAY;
+		type->dynamicArrayPrototype->arrayOf = type;
+		type->dynamicArrayPrototype->count = 0;
+	}
+
+	return type->dynamicArrayPrototype;
+}
 
 
 struct Expr;
@@ -194,6 +239,7 @@ enum class ExprFlavor : u8 {
 	FLOAT_LITERAL, 
 	STRING_LITERAL,
 	TYPE_LITERAL,
+	ARRAY, 
 	IDENTIFIER, 
 
 	UNARY_OPERATOR, 
@@ -252,6 +298,11 @@ struct ExprStringLiteral : Expr {
 
 	union Symbol *symbol;
 	u32 physicalStorage;
+};
+
+struct ExprArray : Expr {
+	Expr **storage;
+	u64 count;
 };
 
 struct ExprBinaryOperator : Expr {

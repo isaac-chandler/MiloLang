@@ -753,8 +753,293 @@ bool isAssignable(Expr *expr) {
 		(expr->flavor == ExprFlavor::BINARY_OPERATOR && static_cast<ExprBinaryOperator *>(expr)->op == TOKEN('['));
 }
 
+bool isLiteral(Expr *expr);
+
+bool arrayIsLiteral(ExprArray *array) {
+	for (u64 i = 0; i < array->count; i++) {
+		if (!isLiteral(array->storage[i])) {
+			return false;
+		}
+	}
+	
+	return true;
+}
+
 bool isLiteral(Expr *expr) {
-	return expr->flavor == ExprFlavor::INT_LITERAL || expr->flavor == ExprFlavor::FLOAT_LITERAL || expr->flavor == ExprFlavor::TYPE_LITERAL || expr->flavor == ExprFlavor::STRING_LITERAL || expr->flavor == ExprFlavor::FUNCTION;
+	return expr->flavor == ExprFlavor::INT_LITERAL || expr->flavor == ExprFlavor::FLOAT_LITERAL || expr->flavor == ExprFlavor::TYPE_LITERAL || expr->flavor == ExprFlavor::STRING_LITERAL || expr->flavor == ExprFlavor::FUNCTION || (expr->flavor == ExprFlavor::ARRAY && arrayIsLiteral(static_cast<ExprArray *>(expr)));
+}
+
+
+bool hasDefaultValue(Type *type) {
+	switch (type->flavor) {
+		case TypeFlavor::BOOL:
+		case TypeFlavor::FLOAT:
+		case TypeFlavor::FUNCTION:
+		case TypeFlavor::INTEGER:
+		case TypeFlavor::POINTER:
+		case TypeFlavor::STRING: {
+			return true;
+		}
+		case TypeFlavor::ARRAY: {
+			if (type->flags & TYPE_ARRAY_IS_FIXED) {
+				return hasDefaultValue(static_cast<TypeArray *>(type)->arrayOf);
+			}
+			else {
+				return true;
+			}
+		}
+		default: {
+			return false;
+		}
+	}
+}
+
+bool defaultValueIsZero(Type *type) {
+	switch (type->flavor) {
+		case TypeFlavor::BOOL:
+		case TypeFlavor::FLOAT:
+		case TypeFlavor::FUNCTION:
+		case TypeFlavor::INTEGER:
+		case TypeFlavor::POINTER: {
+			return true;
+		}
+		case TypeFlavor::STRING: {
+			return false;
+		}
+		case TypeFlavor::ARRAY: {
+			if (type->flags & TYPE_ARRAY_IS_FIXED) {
+				return defaultValueIsZero(static_cast<TypeArray *>(type)->arrayOf);
+			}
+			else {
+				return true;
+			}
+		}
+		default: {
+			return false;
+		}
+	}
+}
+
+Expr *createDefaultValue(Type *type) {
+	switch (type->flavor) {
+		case TypeFlavor::BOOL:
+		case TypeFlavor::FLOAT:
+		case TypeFlavor::FUNCTION:
+		case TypeFlavor::INTEGER:
+		case TypeFlavor::POINTER: {
+			ExprLiteral *zero = new ExprLiteral;
+			zero->flavor = type->flavor == TypeFlavor::FLOAT ? ExprFlavor::FLOAT_LITERAL : ExprFlavor::INT_LITERAL;
+			zero->unsignedValue = 0;
+			zero->type = type;
+
+			return zero;
+		} break;
+		case TypeFlavor::STRING: {
+			ExprStringLiteral *empty = new ExprStringLiteral;
+			empty->flavor = ExprFlavor::STRING_LITERAL;
+			empty->string = "";
+			empty->type = type;
+
+			return empty;
+
+		}
+		case TypeFlavor::ARRAY: {
+			ExprArray *defaults = new ExprArray;
+			defaults->flavor = ExprFlavor::ARRAY;
+			defaults->type = type;
+
+			
+			if (type->flags & TYPE_ARRAY_IS_FIXED) {
+				auto array = static_cast<TypeArray *>(type);
+				defaults->count = array->count;
+
+				if (defaultValueIsZero(array->arrayOf)) {
+					defaults->storage = nullptr;
+				}
+				else {
+					defaults->storage = new Expr * [array->count];
+
+					Expr *value = createDefaultValue(array->arrayOf);
+
+					for (u64 i = 0; i < array->count; i++) {
+						defaults->storage[i] = value;
+					}
+				}
+			}
+			else {
+				defaults->storage = nullptr;
+				defaults->count = 0;
+			}
+
+			return defaults;
+		}
+		case TypeFlavor::TYPE: {
+			assert(false); // @ErrorMessage there is no default value for type
+			return nullptr;
+		}
+		default: {
+			assert(false);
+			return nullptr;
+		}
+	}
+}
+
+bool assignOp(Type *correct, Expr *&given) {
+	if (correct != given->type) {
+		if (correct->flavor == given->type->flavor) {
+			switch (correct->flavor) {
+				case TypeFlavor::ARRAY: {
+					if (!typesAreSame(correct, given->type)) {
+						if (given->flags & (TYPE_ARRAY_IS_DYNAMIC | TYPE_ARRAY_IS_FIXED)) {
+							if (!(correct->flags & (TYPE_ARRAY_IS_DYNAMIC | TYPE_ARRAY_IS_FIXED))) { // We are converting from [N]T or [..]T to []T
+								if (typesAreSame(static_cast<TypeArray *>(given->type)->arrayOf, static_cast<TypeArray *>(correct)->arrayOf)) {
+									insertImplicitCast(&given, correct);
+								}
+								else {
+									assert(false);
+									return false; // @ErrorMessage
+								}
+							}
+							else {
+								assert(false);
+								return false; // @ErrorMessage
+							}
+						}
+						else {
+							assert(false);
+							return false; // @ErrorMessage
+						}
+					}
+					break;
+				}
+				case TypeFlavor::BOOL: {
+					break;
+				}
+				case TypeFlavor::STRING: {
+					break;
+				}
+				case TypeFlavor::FLOAT: {
+					if (given->type == &TYPE_FLOAT_LITERAL) {
+						given->type = correct;
+						given->type = correct;
+					}
+					else if (given->type->size < correct->size) {
+						insertImplicitCast(&given, correct);
+					}
+					else {
+						// @Incomplete should we allow this conversion in some cases, this code was originally taken
+						// from == and != where float conversion definitely shouldn't be allowed, since that's alredy
+						// bad enough without the compiler converting types behind your back
+						assert(false); // @ErrorMessage cannot implicitly convert f32 and f64
+						return false;
+					}
+					break;
+				}
+				case TypeFlavor::FUNCTION: {
+					if (!typesAreSame(correct, given->type)) {
+						if (isVoidPointer(correct)) {
+							insertImplicitCast(&given, correct);
+						}
+						else if (isVoidPointer(given->type)) {
+							insertImplicitCast(&given, correct);
+						}
+						else {
+							assert(false); // @ErrorMessage
+							return false;
+						}
+					}
+				}
+				case TypeFlavor::INTEGER: {
+					if ((correct->flags & TYPE_INTEGER_IS_SIGNED) == (given->type->flags & TYPE_INTEGER_IS_SIGNED)) {
+						if (given->type == &TYPE_UNSIGNED_INT_LITERAL || given->type == &TYPE_SIGNED_INT_LITERAL) {
+							if (!boundsCheckImplicitConversion(correct, static_cast<ExprLiteral *>(given))) {
+								assert(false); // @ErrorMessage
+								return false;
+							}
+
+							given->type = correct;
+						}
+						else if (correct->size > given->type->size) {
+							insertImplicitCast(&given, correct);
+						}
+						else if (given->type->size < correct->size) {
+							assert(false); // @ErrorMessage
+							return false;
+						}
+					}
+					else {
+						if ((given->type == &TYPE_UNSIGNED_INT_LITERAL) && (correct->flags & TYPE_INTEGER_IS_SIGNED)) {
+							if (!boundsCheckImplicitConversion(correct, static_cast<ExprLiteral *>(given))) {
+								assert(false); // @ErrorMessage
+								return false;
+							}
+
+							given->type = correct;
+						}
+						else {
+							assert(false); // @ErrorMessage signed-unsigned mismatch
+							return false;
+						}
+					}
+
+					break;
+				}
+				case TypeFlavor::POINTER: {
+					if (!typesAreSame(given->type, correct)) {
+						if (isVoidPointer(correct)) {
+							insertImplicitCast(&given, correct);
+						}
+						else if (isVoidPointer(given->type)) {
+							insertImplicitCast(&given, correct);
+						}
+						else {
+							assert(false); // @ErrorMessage
+							return false;
+						}
+					}
+
+					break;
+				}
+				case TypeFlavor::TYPE: {
+					// @Incomplete make this work
+					assert(false); // @ErrorMessage cannot compare types
+					return false;
+				}
+				default:
+					assert(false);
+			}
+		}
+		else {
+			if (given->type->flavor == TypeFlavor::AUTO_CAST) {
+				if (!tryAutoCast(given, correct)) {
+					return false;
+				}
+			}
+			else {
+				if (correct->flavor == TypeFlavor::FLOAT && given->type == &TYPE_UNSIGNED_INT_LITERAL) {
+					auto literal = static_cast<ExprLiteral *>(given);
+
+					literal->flavor = ExprFlavor::FLOAT_LITERAL;
+					literal->floatValue = static_cast<double>(literal->unsignedValue);
+					literal->type = correct;
+				}
+				else if (correct->flavor == TypeFlavor::FLOAT && given->type == &TYPE_SIGNED_INT_LITERAL) {
+					auto literal = static_cast<ExprLiteral *>(given);
+
+					literal->flavor = ExprFlavor::FLOAT_LITERAL;
+					literal->floatValue = static_cast<double>(literal->unsignedValue);
+					literal->type = correct;
+				}
+
+				if (!typesAreSame(correct, given->type)) {
+					assert(false); // @ErrorMessage
+					return false;
+				}
+			}
+		}
+	}
+
+	return true;
 }
 
 
@@ -888,17 +1173,17 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 				auto &left = binary->left;
 				auto &right = binary->right;
 
-				assert(left); // This is safe since even though auto-casts can have a left of null, they shouldn't be added to the flattened array
+				assert(binary->op == TokenT::ARRAY_TYPE || left); // This is safe since even though auto-casts can have a left of null, they shouldn't be added to the flattened array
 
 
 				assert(binary->op == TOKEN('=') || right);
 
-				if (right && left->type->flavor == right->type->flavor && left->type->flavor == TypeFlavor::AUTO_CAST) {
+				if (left && right && left->type->flavor == right->type->flavor && left->type->flavor == TypeFlavor::AUTO_CAST) {
 					assert(false); // @ErrorMessage cannot auto-cast both sides of a binary operator
 					return false;
 				}
 
-				if (left->type->flavor == TypeFlavor::VOID) {
+				if (left && left->type->flavor == TypeFlavor::VOID) {
 					assert(false); // @ErrorMessage
 					return false;
 				}
@@ -921,6 +1206,7 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 						Type *castTo = static_cast<ExprLiteral *>(left)->typeValue;
 
 						if (!isValidCast(castTo, right->type)) {
+							assert(false); // @ErrorMessage
 							return false;
 						}
 
@@ -976,8 +1262,10 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 									break;
 								}
 								case TypeFlavor::FLOAT: {
-									if (!binaryOpForFloat(binary)) 
+									if (!binaryOpForFloat(binary)) {
+										assert(false);
 										return false;
+									}
 									break;
 								}
 								case TypeFlavor::FUNCTION: {
@@ -1342,119 +1630,24 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 							return false;
 						}
 
-						if (!right) { // @Incomplete this is only valid for non-composite types
-							switch (left->type->flavor) {
-								case TypeFlavor::BOOL:
-								case TypeFlavor::FLOAT:
-								case TypeFlavor::FUNCTION:
-								case TypeFlavor::INTEGER:
-								case TypeFlavor::POINTER: {
-									ExprLiteral *zero = new ExprLiteral;
-									zero->flavor = left->type->flavor == TypeFlavor::FLOAT ? ExprFlavor::FLOAT_LITERAL : ExprFlavor::INT_LITERAL;
-									zero->unsignedValue = 0;
-									zero->type = left->type;
-									zero->start = binary->start;
-									zero->end = binary->end;
-
-									binary->right = zero;
-								} break;
-								case TypeFlavor::STRING: {
-									ExprStringLiteral *empty = new ExprStringLiteral;
-									empty->flavor = ExprFlavor::STRING_LITERAL;
-									empty->string = "";
-									empty->type = left->type;
-									empty->start = binary->start;
-									empty->end = binary->end;
-
-									binary->right = empty;
-
-								}
-								case TypeFlavor::ARRAY: {
-									//@Incomplete
-								}
-								case TypeFlavor::TYPE: {
-									assert(false); // @ErrorMessage there is no default value for type
-									return false;
-								}
-								default: {
-									assert(false);
-									return false;
-								}
-							}
+						if (!right) {
+							binary->right = createDefaultValue(binary->left->type);
 							
+							if (!binary->right) {
+								return false;
+							}
+
+							binary->right->start = binary->left->start;
+							binary->right->end = binary->left->end;
+
+							assert(typesAreSame(binary->left->type, binary->right->type));
 						}
 						else {
-							if (left->type->flavor == right->type->flavor) {
-								switch (left->type->flavor) {
-								case TypeFlavor::BOOL: {
-									break;
-								}
-								case TypeFlavor::STRING: {
-									break;
-								}
-								case TypeFlavor::FLOAT: {
-									if (!assignOpForFloat(binary))
-										return false;
-									break;
-								}
-								case TypeFlavor::FUNCTION: {
-									if (!typesAreSame(left->type, right->type)) {
-										if (isVoidPointer(left->type)) {
-											insertImplicitCast(&right, left->type);
-										}
-										else if (isVoidPointer(right->type)) {
-											insertImplicitCast(&right, left->type);
-										}
-										else {
-											assert(false); // @ErrorMessage
-											return false;
-										}
-									}
-								}
-								case TypeFlavor::INTEGER: {
-									if (!assignOpForInteger(binary))
-										return false;
-
-									break;
-								}
-								case TypeFlavor::POINTER: {
-									if (!typesAreSame(left->type, right->type)) {
-										if (isVoidPointer(left->type)) {
-											insertImplicitCast(&right, left->type);
-										}
-										else if (isVoidPointer(right->type)) {
-											insertImplicitCast(&right, left->type);
-										}
-										else {
-											assert(false); // @ErrorMessage
-											return false;
-										}
-									}
-
-									break;
-								}
-								case TypeFlavor::TYPE: {
-									// @Incomplete make this work
-									assert(false); // @ErrorMessage cannot compare types
-									return false;
-								}
-								default:
-									assert(false);
-								}
+							if (!assignOp(left->type, binary->right)) {
+								return false;
 							}
-							else {
-								if (!assignOpForAutoCast(binary)) {
-									assert(false);
-								}
-								else {
-									assignOpForFloatAndIntLiteral(binary);
 
-									if (!typesAreSame(right->type, left->type)) {
-										assert(false); // @ErrorMessage
-										return false;
-									}
-								}
-							}
+							assert(typesAreSame(binary->left->type, binary->right->type));
 						}
 
 						break;
@@ -1463,6 +1656,10 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 					case TokenT::MINUS_EQUALS: {
 						if (left->type->flavor == right->type->flavor) {
 							switch (left->type->flavor) {
+								case TypeFlavor::ARRAY: {
+									assert(false); // @ErrorMessage
+									return false;
+								}
 								case TypeFlavor::BOOL: {
 									assert(false); // @ErrorMessage
 									return false;
@@ -1557,6 +1754,10 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 					case TokenT::SHIFT_RIGHT_EQUALS: {
 						if (left->type->flavor == right->type->flavor) {
 							switch (left->type->flavor) {
+								case TypeFlavor::ARRAY: {
+									assert(false); // @ErrorMessage
+									return false;
+								}
 								case TypeFlavor::BOOL: {
 									assert(false); // @ErrorMessage
 									return false;
@@ -1617,6 +1818,10 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 					case TokenT::MOD_EQUALS: {
 						if (left->type->flavor == right->type->flavor) {
 							switch (left->type->flavor) {
+								case TypeFlavor::ARRAY: {
+									assert(false); // @ErrorMessage
+									return false;
+								}
 								case TypeFlavor::BOOL: {
 									assert(false); // @ErrorMessage
 									return false;
@@ -1690,19 +1895,21 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 						auto type = static_cast<ExprLiteral *>(right);
 
 						if (type->typeValue == &TYPE_VOID) {
-							assert(false);
+							assert(false); //  @ErrorMessage
 							return false;
 						}
 
 						type->start = expr->start;
 
-						TypeArray *array = new TypeArray;
-						array->flavor = TypeFlavor::ARRAY;
-						array->arrayOf = type->typeValue;
+						TypeArray *array;
 
 
-						if (left->type) {
-							if (left->type->flavor == TypeFlavor::INTEGER) {
+						if (left) {
+							array = new TypeArray;
+							array->flavor = TypeFlavor::ARRAY;
+							array->arrayOf = type->typeValue;
+
+							if (left->type->flavor != TypeFlavor::INTEGER) {
 								assert(false); // @ErrorMessage
 								return false;
 							}
@@ -1713,6 +1920,11 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 							}
 
 							auto size = static_cast<ExprLiteral *>(left);
+
+							if (size->unsignedValue == 0) {
+								assert(false); // @ErrorMessage
+								return false;
+							}
 
 							if ((left->type->flags & TYPE_INTEGER_IS_SIGNED) && size->signedValue < 0) {
 								assert(false); // @ErrorMessage
@@ -1727,19 +1939,17 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 						}
 						else {
 							if (expr->flags & EXPR_ARRAY_IS_DYNAMIC) {
-								array->flags |= TYPE_ARRAY_IS_DYNAMIC;
-								array->size = 24;
+								array = getDynamicArrayOf(type->typeValue);
 							}
 							else {
-								array->size = 16;
+								array = getArrayOf(type->typeValue);
 							}
-
-							array->alignment = 8;
-							array->count = 0;
 						}
 
 						type->typeValue = array;
 						*exprPointer = type;
+
+						break;
 					}
 					default:
 						assert(false);
@@ -1905,7 +2115,7 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 							it->type = makeTypeLiteral(it->start, it->end, &TYPE_U8);
 						}
 						else {
-							it->type = makeTypeLiteral(it->start, it->end, &TYPE_U8_POINTER);
+							it->type = makeTypeLiteral(it->start, it->end, getPointerTo(&TYPE_U8));
 						}
 						it->flags |= DECLARATION_TYPE_IS_READY;
 					}
@@ -1913,11 +2123,7 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 						auto array = static_cast<TypeArray *>(loop->forBegin->type);
 
 						if (loop->flags & EXPR_FOR_BY_POINTER) {
-							TypePointer *pointerType = new TypePointer;
-							pointerType->flavor = TypeFlavor::POINTER;
-							pointerType->size = 8;
-							pointerType->alignment = 8;
-							pointerType->pointerTo = array->arrayOf;
+							auto pointerType = getPointerTo(array->arrayOf);
 
 							it->type = makeTypeLiteral(it->start, it->end, pointerType);
 						}
@@ -1960,133 +2166,9 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 					assert(function->argumentTypes[i]->flavor == ExprFlavor::TYPE_LITERAL);
 
 					Type *correct = static_cast<ExprLiteral *>(function->argumentTypes[i])->typeValue;
-					auto &given = call->arguments[i];
 
-					if (correct != given->type) {
-						if (correct->flavor == given->type->flavor) {
-							switch (correct->flavor) {
-								case TypeFlavor::BOOL: {
-									break;
-								}
-								case TypeFlavor::STRING: {
-									break;
-								}
-								case TypeFlavor::FLOAT: {
-									if (given->type == &TYPE_FLOAT_LITERAL) {
-										given->type = correct;
-										given->type = correct;
-									}
-									else {
-										// @Incomplete should we allow this conversion in some cases, this code was originally taken
-										// from == and != where float conversion definitely shouldn't be allowed, since that's alredy
-										// bad enough without the compiler converting types behind your back
-										assert(false); // @ErrorMessage cannot implicitly convert f32 and f64
-										return false;
-									}
-									break;
-								}
-								case TypeFlavor::FUNCTION: {
-									if (!typesAreSame(correct, given->type)) {
-										if (isVoidPointer(correct)) {
-											insertImplicitCast(&given, correct);
-										}
-										else if (isVoidPointer(given->type)) {
-											insertImplicitCast(&given, correct);
-										}
-										else {
-											assert(false); // @ErrorMessage
-											return false;
-										}
-									}
-								}
-								case TypeFlavor::INTEGER: {
-									if ((correct->flags & TYPE_INTEGER_IS_SIGNED) == (given->type->flags & TYPE_INTEGER_IS_SIGNED)) {
-										if (given->type == &TYPE_UNSIGNED_INT_LITERAL || given->type == &TYPE_SIGNED_INT_LITERAL) {
-											if (!boundsCheckImplicitConversion(correct, static_cast<ExprLiteral *>(given))) {
-												assert(false); // @ErrorMessage
-												return false;
-											}
-											
-											given->type = correct;
-										}
-										else if (correct->size > given->type->size) {
-											insertImplicitCast(&given, correct);
-										}
-										else if (given->type->size < correct->size) {
-											assert(false); // @ErrorMessage
-											return false;
-										}
-									}
-									else {
-										if ((given->type == &TYPE_UNSIGNED_INT_LITERAL) && (correct->flags & TYPE_INTEGER_IS_SIGNED)) {
-											if (!boundsCheckImplicitConversion(correct, static_cast<ExprLiteral *>(given))) {
-												assert(false); // @ErrorMessage
-												return false;
-											}
-
-											given->type = correct;
-										}
-										else {
-											assert(false); // @ErrorMessage signed-unsigned mismatch
-											return false;
-										}
-									}
-
-									break;
-								}
-								case TypeFlavor::POINTER: {
-									if (!typesAreSame(given->type, correct)) {
-										if (isVoidPointer(correct)) {
-											insertImplicitCast(&given, correct);
-										}
-										else if (isVoidPointer(given->type)) {
-											insertImplicitCast(&given, correct);
-										}
-										else {
-											assert(false); // @ErrorMessage
-											return false;
-										}
-									}
-
-									break;
-								}
-								case TypeFlavor::TYPE: {
-									// @Incomplete make this work
-									assert(false); // @ErrorMessage cannot compare types
-									return false;
-								}
-								default:
-									assert(false);
-							}
-						}
-						else {
-							if (given->type->flavor == TypeFlavor::AUTO_CAST) {
-								if (!tryAutoCast(given, correct)) {
-									return false;
-								}
-							}
-							else {
-								if (correct->flavor == TypeFlavor::FLOAT && given->type == &TYPE_UNSIGNED_INT_LITERAL) {
-									auto literal = static_cast<ExprLiteral *>(given);
-
-									literal->flavor = ExprFlavor::FLOAT_LITERAL;
-									literal->floatValue = static_cast<double>(literal->unsignedValue);
-									literal->type = correct;
-								}
-								else if (correct->flavor == TypeFlavor::FLOAT && given->type == &TYPE_SIGNED_INT_LITERAL) {
-									auto literal = static_cast<ExprLiteral *>(given);
-
-									literal->flavor = ExprFlavor::FLOAT_LITERAL;
-									literal->floatValue = static_cast<double>(literal->unsignedValue);
-									literal->type = correct;
-								}
-
-								if (!typesAreSame(correct, given->type)) {
-									assert(false); // @ErrorMessage
-									return false;
-								}
-							}
-						}
+					if (!assignOp(correct, call->arguments[i])) {
+						return false;
 					}
 				}
 
@@ -2139,126 +2221,107 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 						}
 					}
 
-					Type *&type = return_->value->type;
-
-					switch (returnType->flavor) {
-						case TypeFlavor::BOOL: {
-							if (type->flavor != TypeFlavor::BOOL) {
-								assert(false); // @ErrorMessage
-								return false;
-							}
-
-							break;
-						}
-						case TypeFlavor::STRING: {
-							if (type->flavor != TypeFlavor::STRING) {
-								assert(false); // @ErrorMessage
-								return false;
-							}
-
-							break;
-						}
-						case TypeFlavor::FLOAT: {
-							if (type == &TYPE_FLOAT_LITERAL) {
-								type = returnType;
-							}
-							else if (type == &TYPE_UNSIGNED_INT_LITERAL) {
-								auto literal = static_cast<ExprLiteral *>(return_->value);
-
-								literal->floatValue = static_cast<double>(literal->unsignedValue);
-								literal->flavor = ExprFlavor::FLOAT_LITERAL;
-							}
-							else if (type == &TYPE_SIGNED_INT_LITERAL) {
-								auto literal = static_cast<ExprLiteral *>(return_->value);
-
-								literal->floatValue = static_cast<double>(literal->signedValue);
-								literal->flavor = ExprFlavor::FLOAT_LITERAL;
-							}
-							break;
-						}
-						case TypeFlavor::FUNCTION: {
-							if (!typesAreSame(returnType, type)) {
-								if (!isVoidPointer(type)) {
-									assert(false); // @ErrorMessage
-									return false;
-								}
-
-								insertImplicitCast(&return_->value, returnType);
-							}
-							
-							break;
-						}
-						case TypeFlavor::INTEGER: {
-							if (type == &TYPE_UNSIGNED_INT_LITERAL) {
-								if (boundsCheckImplicitConversion(returnType, static_cast<ExprLiteral *>(return_->value))) {
-									type = returnType;
-								}
-								else {
-									assert(false); // @ErrorMessage
-									return false;
-								}
-							}
-							else if (type == &TYPE_SIGNED_INT_LITERAL) {
-								if (returnType->flags & TYPE_INTEGER_IS_SIGNED) {
-									if (boundsCheckImplicitConversion(returnType, static_cast<ExprLiteral *>(return_->value))) {
-										type = returnType;
-									}
-									else {
-										assert(false); // @ErrorMessage
-										return false;
-									}
-								}
-								else {
-									assert(false); // @ErrorMessage
-									return false;
-								}
-							}
-							else {
-								if ((type->flags & TYPE_INTEGER_IS_SIGNED) == (returnType->flags & TYPE_INTEGER_IS_SIGNED)) {
-									if (type->size < returnType->size) {
-										insertImplicitCast(&return_->value, returnType);
-									}
-									else if (type->size != returnType->size) {
-										assert(false); // @ErrorMessage
-									}
-								}
-								else {
-									assert(false); // @ErrorMessage
-									return false;
-								}
-							}
-
-							break;
-						}
-						case TypeFlavor::POINTER: {
-							if (!typesAreSame(returnType, type)) {
-								if (isVoidPointer(type)) {
-									insertImplicitCast(&return_->value, returnType);
-								}
-								else if (isVoidPointer(returnType) && (type->flavor == TypeFlavor::POINTER || type->flavor == TypeFlavor::FUNCTION)) {
-									insertImplicitCast(&return_->value, returnType);
-								}
-								else {
-									assert(false); // @ErrorMessage
-									return false;
-								}
-							}
-							
-							break;
-						}
-						case TypeFlavor::TYPE: {
-							assert(false); // @ErrorMessage cannot return types
-							return false;
-						}
-						default:
-							assert(false);
+					if (!assignOp(returnType, return_->value)) {
+						return false;
 					}
 				}
 
 				break;
 			}
 			case ExprFlavor::STRUCT_ACCESS: {
-				assert(false); // @Incomplete
+				auto access = static_cast<ExprStructAccess *>(expr);
+
+				if (access->left->type->flavor == TypeFlavor::ARRAY) {
+					auto array = static_cast<TypeArray *>(access->left->type);
+
+					if (access->name == "count") {
+						if (access->left->type->flags & TYPE_ARRAY_IS_FIXED) {
+							ExprLiteral *literal = new ExprLiteral;
+							literal->flavor = ExprFlavor::INT_LITERAL;
+							literal->start = access->start;
+							literal->end = access->end;
+							literal->type = &TYPE_U64;
+							literal->unsignedValue = array->count;
+
+							*exprPointer = literal;
+						}
+						else {
+							expr->type = TypeFlavor::
+						}
+					}
+					else if (access->name == "data") {
+						assert(false); // @ErrorMessage
+						return false;
+					}
+					else if (access->name == "capacity") {
+						assert(false); // @ErrorMessage
+						return false;
+					}
+					else {
+						assert(false); // @ErrorMessage
+						return false;
+					}
+
+					if (access->left->type->flags & TYPE_ARRAY_IS_FIXED) {
+
+					}
+					else if (access->left->type->flags & TYPE_ARRAY_IS_DYNAMIC) {
+
+					}
+					else {
+
+					}
+				}
+				else if (access->left->type->flavor == TypeFlavor::TYPE) {
+					if (access->left->flavor != ExprFlavor::TYPE_LITERAL) {
+						assert(false); // @ErrorMessage
+						return false;
+					}
+
+					auto type = static_cast<ExprLiteral *>(access->left)->typeValue;
+
+					if (type->flavor == TypeFlavor::ARRAY) {
+						auto array = static_cast<TypeArray *>(type);
+
+						if (type->flags & TYPE_ARRAY_IS_FIXED) {
+							if (access->name == "count") {
+								ExprLiteral *literal = new ExprLiteral;
+								literal->flavor = ExprFlavor::INT_LITERAL;
+								literal->start = access->start;
+								literal->end = access->end;
+								literal->type = &TYPE_U64;
+								literal->unsignedValue = array->count;
+
+								*exprPointer = literal;
+							}
+							else if (access->name == "data") {
+								assert(false); // @ErrorMessage
+								return false;
+							}
+							else if (access->name == "capacity") {
+								assert(false); // @ErrorMessage
+								return false;
+							}
+							else {
+								assert(false); // @ErrorMessage
+								return false;
+							}
+						}
+						else {
+							assert(false); // @ErrorMessage
+							return false;
+						}
+					}
+					else {
+						assert(false); // @ErrorMessage
+						return false;
+					}
+				}
+				else {
+					assert(false); // @ErrorMessage
+					return false;
+				}
+
 				break;
 			}
 			case ExprFlavor::UNARY_OPERATOR: {
@@ -2430,31 +2493,19 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 						if (value->flavor == ExprFlavor::TYPE_LITERAL) {
 							auto literal = static_cast<ExprLiteral *>(value);
 
-							auto pointer = new TypePointer;
-							pointer->flavor = TypeFlavor::POINTER;
-							pointer->size = 8;
-							pointer->alignment = 8;
-							pointer->pointerTo = literal->typeValue;
+							auto pointer = getPointerTo(literal->typeValue);
 
+							literal->typeValue = pointer;
 
-							ExprLiteral *newLiteral = new ExprLiteral;
-							*newLiteral = *literal;
+							literal->start = unary->start;
 
-							newLiteral->typeValue = pointer;
-
-							newLiteral->start = unary->start;
-
-							*exprPointer = newLiteral;
+							*exprPointer = literal;
 						}
 						else if (value->flavor == ExprFlavor::BINARY_OPERATOR) {
 							auto binary = static_cast<ExprBinaryOperator *>(expr);
 
 							if (binary->op == TOKEN('[')) {
-								auto pointer = new TypePointer;
-								pointer->flavor = TypeFlavor::POINTER;
-								pointer->size = 8;
-								pointer->alignment = 8;
-								pointer->pointerTo = value->type;
+								auto pointer = getPointerTo(value->type);
 
 								unary->type = pointer;
 							}
@@ -2468,11 +2519,7 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 							return false;
 						}
 						else if (value->flavor == ExprFlavor::IDENTIFIER) {
-							auto pointer = new TypePointer;
-							pointer->flavor = TypeFlavor::POINTER;
-							pointer->size = 8;
-							pointer->alignment = 8;
-							pointer->pointerTo = value->type;
+							auto pointer = getPointerTo(value->type);
 
 							unary->type = pointer;
 						}
@@ -2532,14 +2579,17 @@ void runInfer() {
 		else if (declarations.count == 1) {
 			if (!addDeclaration(declarations.data.declaration)) {
 				goto error;
+				assert(false);
 			}
 		}
 		else {
 			inferJobs.reserve(inferJobs.count + declarations.count); // Make sure we don't do unnecessary allocations
 
 			for (u64 i = 0; i < declarations.count; i++)
-				if (!addDeclaration(declarations.data.declarations[i]))
+				if (!addDeclaration(declarations.data.declarations[i])) {
+					assert(false);
 					goto error;
+				}
 		}
 
 		bool madeProgress;
@@ -2554,6 +2604,7 @@ void runInfer() {
 				switch (job.type) {
 					case InferType::FUNCTION_BODY: {
 						if (!inferFlattened(job.valueFlattened, &job.valueFlattenedIndex)) {
+							assert(false);
 							goto error;
 						}
 
@@ -2591,12 +2642,14 @@ void runInfer() {
 
 						if (declaration->type) {
 							if (!inferFlattened(job.typeFlattened, &job.typeFlattenedIndex)) {
+								assert(false);
 								goto error;
 							}
 						}
 
 						if (declaration->initialValue) {
 							if (!inferFlattened(job.valueFlattened, &job.valueFlattenedIndex)) {
+								assert(false);
 								goto error;
 							}
 						}
@@ -2629,134 +2682,10 @@ void runInfer() {
 								assert(declaration->initialValue->type);
 
 								Type *correct = static_cast<ExprLiteral *>(declaration->type)->typeValue;
-								Expr *given = declaration->initialValue;
-
-								// @Paste from inferTypes(FUNCTION_CALL)
-								if (correct != given->type) {
-									if (correct->flavor == given->type->flavor) {
-										switch (correct->flavor) {
-											case TypeFlavor::BOOL: {
-												break;
-											}
-											case TypeFlavor::STRING: {
-												break;
-											}
-											case TypeFlavor::FLOAT: {
-												if (given->type == &TYPE_FLOAT_LITERAL) {
-													given->type = correct;
-													given->type = correct;
-												}
-												else {
-													// @Incomplete should we allow this conversion in some cases, this code was originally taken
-													// from == and != where float conversion definitely shouldn't be allowed, since that's alredy
-													// bad enough without the compiler converting types behind your back
-													assert(false); // @ErrorMessage cannot implicitly convert f32 and f64
-													goto error;
-												}
-												break;
-											}
-											case TypeFlavor::FUNCTION: {
-												if (!typesAreSame(correct, given->type)) {
-													if (isVoidPointer(correct)) {
-														insertImplicitCast(&given, correct);
-													}
-													else if (isVoidPointer(given->type)) {
-														insertImplicitCast(&given, correct);
-													}
-													else {
-														assert(false); // @ErrorMessage
-														goto error;
-													}
-												}
-											}
-											case TypeFlavor::INTEGER: {
-												if ((correct->flags & TYPE_INTEGER_IS_SIGNED) == (given->type->flags & TYPE_INTEGER_IS_SIGNED)) {
-													if (given->type == &TYPE_UNSIGNED_INT_LITERAL || given->type == &TYPE_SIGNED_INT_LITERAL) {
-														if (!boundsCheckImplicitConversion(correct, static_cast<ExprLiteral *>(given))) {
-															assert(false); // @ErrorMessage
-															goto error;
-														}
-
-														given->type = correct;
-													}
-													else if (correct->size > given->type->size) {
-														insertImplicitCast(&given, correct);
-													}
-													else if (given->type->size < correct->size) {
-														assert(false); // @ErrorMessage
-														goto error;
-													}
-												}
-												else {
-													if ((given->type == &TYPE_UNSIGNED_INT_LITERAL) && (correct->flags & TYPE_INTEGER_IS_SIGNED)) {
-														if (!boundsCheckImplicitConversion(correct, static_cast<ExprLiteral *>(given))) {
-															assert(false); // @ErrorMessage
-															goto error;
-														}
-
-														given->type = correct;
-													}
-													else {
-														assert(false); // @ErrorMessage signed-unsigned mismatch
-														goto error;
-													}
-												}
-
-												break;
-											}
-											case TypeFlavor::POINTER: {
-												if (!typesAreSame(given->type, correct)) {
-													if (isVoidPointer(correct)) {
-														insertImplicitCast(&given, correct);
-													}
-													else if (isVoidPointer(given->type)) {
-														insertImplicitCast(&given, correct);
-													}
-													else {
-														assert(false); // @ErrorMessage
-														goto error;
-													}
-												}
-
-												break;
-											}
-											case TypeFlavor::TYPE: {
-												// @Incomplete make this work
-												assert(false); // @ErrorMessage cannot compare types
-												goto error;
-											}
-											default:
-												assert(false);
-										}
-									}
-									else {
-										if (given->type->flavor == TypeFlavor::AUTO_CAST) {
-											if (!tryAutoCast(given, correct)) {
-												goto error;
-											}
-										}
-										else {
-											if (correct->flavor == TypeFlavor::FLOAT && given->type == &TYPE_UNSIGNED_INT_LITERAL) {
-												auto literal = static_cast<ExprLiteral *>(given);
-
-												literal->flavor = ExprFlavor::FLOAT_LITERAL;
-												literal->floatValue = static_cast<double>(literal->unsignedValue);
-												literal->type = correct;
-											}
-											else if (correct->flavor == TypeFlavor::FLOAT && given->type == &TYPE_SIGNED_INT_LITERAL) {
-												auto literal = static_cast<ExprLiteral *>(given);
-
-												literal->flavor = ExprFlavor::FLOAT_LITERAL;
-												literal->floatValue = static_cast<double>(literal->unsignedValue);
-												literal->type = correct;
-											}
-
-											if (!typesAreSame(correct, given->type)) {
-												assert(false); // @ErrorMessage
-												goto error;
-											}
-										}
-									}
+								
+								if (!assignOp(correct, declaration->initialValue)) {
+									assert(false);
+									goto error;
 								}
 
 								madeProgress = true;
@@ -2776,42 +2705,15 @@ void runInfer() {
 								if (!(declaration->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_ARGUMENT | DECLARATION_IS_ITERATOR_INDEX | DECLARATION_IS_ITERATOR)) && declaration->enclosingScope == &globalBlock /* Declarations in local scope will be initialized in inferFlattened for the assign op they generate */) {
 									auto type = static_cast<ExprLiteral *>(declaration->type)->typeValue;
 
-									switch (type->flavor) {
-										case TypeFlavor::BOOL:
-										case TypeFlavor::FLOAT:
-										case TypeFlavor::FUNCTION:
-										case TypeFlavor::INTEGER:
-										case TypeFlavor::POINTER: {
-											ExprLiteral *zero = new ExprLiteral;
-											zero->flavor = type->flavor == TypeFlavor::FLOAT ? ExprFlavor::FLOAT_LITERAL : ExprFlavor::INT_LITERAL;
-											zero->unsignedValue = 0;
-											zero->type = type;
-											zero->start = declaration->start;
-											zero->end = declaration->end;
+									declaration->initialValue = createDefaultValue(type);
 
-											declaration->initialValue = zero;
-										} break;
-										case TypeFlavor::STRING: {
-											ExprStringLiteral *empty = new ExprStringLiteral;
-											empty->flavor = ExprFlavor::STRING_LITERAL;
-											empty->string = "";
-											empty->type = type;
-
-											empty->start = declaration->start;
-											empty->end = declaration->end;
-
-											declaration->initialValue = empty;
-
-										}
-										case TypeFlavor::TYPE: {
-											assert(false); // @ErrorMessage there is no default value for type
-											goto error;
-										}
-										default: {
-											assert(false);
-											goto error;
-										}
+									if (!declaration->initialValue) {
+										assert(false);
+										goto error;
 									}
+
+									declaration->initialValue->start = declaration->start;
+									declaration->initialValue->end = declaration->end;
 								}
 
 								madeProgress = true;

@@ -49,3 +49,7 @@ inline DeclarationPack makeStopSignal() {
 extern WorkQueue<DeclarationPack> inferQueue;
 
 void runInfer();
+
+inline Expr *getDefaultValueForType(Type *type) {
+
+}

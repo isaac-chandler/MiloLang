@@ -43,7 +43,7 @@ int main(int argc, char *argv[]) {
 #if BUILD_WINDOWS
 	char buffer[256];
 
-	strcpy_s(buffer, "link out.obj /entry:main /nologo /defaultlib:kernel32");
+	strcpy_s(buffer, "link out.obj /entry:main /nologo /defaultlib:kernel32 /debug");
 
 	STARTUPINFOA startup = {};
 	startup.cb = sizeof(STARTUPINFOA);

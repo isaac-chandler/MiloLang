@@ -14,8 +14,7 @@
 */
 
 
-argCount: s32
-args: *string
+args: []string
 
 STD_INPUT_HANDLE: u32: 0xFFFF_FFF6 // -10
 STD_OUTPUT_HANDLE: u32: 0xFFFF_FFF5 // -11
@@ -25,6 +24,52 @@ GetStdHandle :: (nStdHandle: u32) -> HANDLE #external
 
 HANDLE :: *void
 WriteConsoleA :: (hConsoleOutput: HANDLE, lpBuffer: *void, nNumberOfCharactersToWrite: u32, lpNumberOfCharactersWritten: *u32 = null, lpReserved: *void = null) -> bool #external
+
+process_heap: HANDLE
+
+
+GetCommandLineA :: () -> string #external
+GetProcessHeap :: () -> HANDLE #external
+
+HeapAlloc :: (hHeap: HANDLE, dwFlags: u32, dwBytes: u64) -> *void #external
+HeapReAlloc :: (hHeap: HANDLE, dwFlags: u32, lpMem: *void, dwBytes: u64) -> *void #external
+HeapFree :: (hHeap: HANDLE, dwFlags: u32, lpMem: *void) -> bool #external
+
+allocate :: (size: u64) -> *void {
+	return HeapAlloc(process_heap, 0, size)
+}
+
+reallocate :: (block: *void, size: u64) -> *void {
+	if size == 0 {
+		deallocate(block)
+		return null
+	} else if block == null
+		return allocate(size)
+	else
+		return HeapReAlloc(process_heap, 0, size)
+}
+
+deallocate :: (block *void) {
+	HeapFree(process_heap, 0, block)
+}
+
+min :: (a: u64, b: u64) -> u64 {
+	if a < b 
+		return a
+	else 
+		return b
+}
+
+max :: (a: u64, b: u64) -> u64 {
+	if a > b 
+		return a
+	else 
+		return b
+}
+
+add_string :: (array: *[..] string, string value) {
+	
+}
 
 string_length :: (s: string) -> u64 {
 	len: u64 = 0
@@ -41,8 +86,10 @@ print_string :: (s: string) {
 std_out: HANDLE
 
 main :: (argc: s32, argv: *string) -> s32 {
-	argCount = argc
-	args = argv
+	argsPtr := cast(*u64) *args
+
+	argsPtr[0] = cast(u64) argv
+	argsPtr[1] = cast(u64) argc
 
 	std_out = GetStdHandle(STD_OUTPUT_HANDLE)
 
@@ -51,8 +98,7 @@ main :: (argc: s32, argv: *string) -> s32 {
 	return 0
 }
 
-get_command_line_arguments :: (argc: *s32) -> *string {
-	<< argc = argCount
+get_command_line_arguments :: () -> []string {
 	return args
 }
 
@@ -68,10 +114,24 @@ test :: () {
 		factorial(it_index) // dummy code
 }
 
-hello := "Hello World!\n"
+get_strings :: () -> [2] string {
+	a : [2] string
+
+	a[0] = "Test1"
+	a[1] = "Test2"
+
+	return a
+}
 
 _main :: () {
-	print_string(hello);
+	
+
+	for get_command_line_arguments() {
+		if it_index {
+			print_string(it)
+			print_string(" ")
+		}
+	}
 }
 
 factorial2 :: (n: u64) -> u64 {

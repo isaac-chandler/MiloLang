@@ -128,36 +128,17 @@ void writeAllocator(FILE *out, BucketedArenaAllocator allocator) {
 u64 getRegisterOffset(ExprFunction *function, u64 regNo) {
 	assert(regNo != 0);
 
-	u64 argCount = function->arguments.declarations.count;
-
-	u64 callSpace = 0;
-
-	if (function->state.maxCallRegisters > 4) {
-		callSpace = static_cast<u64>(function->state.maxCallRegisters);
-	}
-	else if (function->state.maxCallRegisters >= 0) {
-		callSpace = 4;
+	if (regNo > function->state.parameterSpace) {
+		return (regNo - function->state.parameterSpace - 1 + function->state.callAuxStorage) * 8 + 16;
 	}
 
-	if (regNo > argCount) {
-		return (regNo + callSpace - argCount - 1) * 8;
-	}
-
-	u64 registerCount = function->state.nextRegister + callSpace - argCount - 1;
+	u64 registerCount = function->state.nextRegister - function->state.parameterSpace - 1 + function->state.callAuxStorage;
 
 	u64 spaceToAllocate = (registerCount >> 1) * 16 + 8;
 
-	return spaceToAllocate + regNo * 8;
+	return spaceToAllocate + regNo * 8 + 16;
 }
 
-// eax 01
-// ecx 09
-// edx 11
-// ebx 19
-// esp 21
-// ebp 29
-// esi 31
-// edi 39
 
 #define RAX 0
 #define RCX 1
@@ -214,9 +195,7 @@ u64 getRegisterOffset(ExprFunction *function, u64 regNo) {
 #define C_G 0xF
 #define C_NLE 0xF
 
-void writeRSPRegisterByte(BucketedArenaAllocator *code, ExprFunction *function, u8 physicalRegister, u64 stackRegister) {
-	u64 offset = getRegisterOffset(function, stackRegister);
-
+void writeRSPOffsetByte(BucketedArenaAllocator *code, u8 physicalRegister, u64 offset) {
 	if (offset >= 0x80) {
 		code->add1(0x84 | (physicalRegister << 3));
 		code->add1(0x24);
@@ -231,6 +210,10 @@ void writeRSPRegisterByte(BucketedArenaAllocator *code, ExprFunction *function, 
 		code->add1(0x04 | (physicalRegister << 3));
 		code->add1(0x24);
 	}
+}
+
+void writeRSPRegisterByte(BucketedArenaAllocator *code, ExprFunction *function, u8 physicalRegister, u64 stackRegister, u64 addition = 0) {
+	writeRSPOffsetByte(code, physicalRegister, getRegisterOffset(function, stackRegister) + addition);
 }
 
 void loadIntoIntRegister(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u8 loadInto, u64 regNo) {
@@ -355,6 +338,8 @@ void storeFromFloatRegister(BucketedArenaAllocator *code, ExprFunction *function
 }
 
 void storeImmediate(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u64 regNo, u64 immediate) {
+	assert(size);
+
 	if (size == 8 && static_cast<s64>(immediate) != static_cast<s64>(static_cast<s32>(immediate))) {
 		code->add1(0x48); // mov rax, ir.a
 		code->add1(0xB8);
@@ -435,13 +420,115 @@ void setConditionFloat(BucketedArenaAllocator *code, ExprFunction *function, u64
 	setCondition(code, function, dest, condition);
 }
 
-void writeSet(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u64 dest, u64 src) {
-	if (src == 0) {
-		storeImmediate(code, function, size, dest, 0);
+void loadImmediateIntoRAX(BucketedArenaAllocator *code, u64 immediate) {
+	if (static_cast<s64>(immediate) != static_cast<s64>(static_cast<s32>(immediate))) {
+		code->add1(0x48);
+		code->add1(0xB8);
+		code->add8(immediate);
 	}
 	else {
-		loadIntoIntRegister(code, function, size, RAX, src);
-		storeFromIntRegister(code, function, size, dest, RAX);
+		code->add1(0x48);
+		code->add1(0xC7);
+		code->add1(0xC0);
+		code->add4(static_cast<u32>(immediate));
+	}
+}
+
+
+void loadImmediateIntoIntRegister(BucketedArenaAllocator *code, u8 loadInto, u64 immediate) {
+	if (loadInto == RAX) {
+		loadImmediateIntoRAX(code, immediate);
+	}
+	else {
+		if (immediate <= 0x7FFF'FFFF) {
+			if (loadInto >= 8) {
+				code->add1(0x41);
+				loadInto -= 8;
+			}
+
+			code->add1(0xB8 | loadInto);
+			code->add4(static_cast<u32>(immediate));
+		}
+		else {
+			loadImmediateIntoRAX(code, immediate);
+
+			if (loadInto >= 8) {
+				code->add1(0x49);
+				loadInto -= 8;
+			}
+			else {
+				code->add1(0x48);
+			}
+
+			code->add1(0x89);
+			code->add1(0xC0 | loadInto);
+		}
+	}
+}
+
+void writeSet(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u64 dest, u64 src) {
+	if (src == 0) {
+		if (isStandardSize) {
+			storeImmediate(code, function, size, dest, 0);
+		}
+		else {
+			code->add1(0x48);
+			code->add1(0x8D);
+			writeRSPRegisterByte(code, function, RDI, dest);
+
+			u64 count = size;
+
+			if (size % 8 == 0) {
+				count = size / 8;
+			}
+
+			loadImmediateIntoIntRegister(code, RCX, count);
+
+			code->add1(0x31); // xor eax, eax
+			code->add1(0xC0);
+
+			code->add1(0xF3);
+			code->add1(0x48);
+
+			if (size % 8 == 0) {
+				code->add1(0xAB);
+			}
+			else {
+				code->add1(0xAA);
+			}
+		}
+	}
+	else {
+		if (isStandardSize(size)) {
+			loadIntoIntRegister(code, function, size, RAX, src);
+			storeFromIntRegister(code, function, size, dest, RAX);
+		}
+		else {
+			code->add1(0x48);
+			code->add1(0x8D);
+			writeRSPRegisterByte(code, function, RSI, src);
+
+			code->add1(0x48);
+			code->add1(0x8D);
+			writeRSPRegisterByte(code, function, RDI, dest);
+
+			u64 count = size;
+
+			if (size % 8 == 0) {
+				loadImmediateIntoIntRegister(code, RCX, size / 8);
+
+				code->add1(0xF3); // rep movsq
+				code->add1(0x48);
+				code->add1(0xA5);
+			}
+			else {
+				loadImmediateIntoIntRegister(code, RCX, size);
+
+				code->add1(0xF3); // rep movsb
+				code->add1(0x48);
+				code->add1(0xA4);
+			}
+		}
 	}
 }
 
@@ -457,21 +544,6 @@ u32 *addRelocationToUnkownSymbol(BucketedArenaAllocator *allocator, u32 virtualA
 
 	return value;
 }
-
-void loadImmediateIntoRAX(BucketedArenaAllocator *code, u64 immediate) {
-	if (static_cast<s64>(immediate) != static_cast<s64>(static_cast<s32>(immediate))) {
-		code->add1(0x48);
-		code->add1(0xB8);
-		code->add8(immediate);
-	}
-	else {
-		code->add1(0x48);
-		code->add1(0xC7);
-		code->add1(0xC0);
-		code->add4(static_cast<u32>(immediate));
-	}
-}
-
 Block externalsBlock;
 
 u32 createSymbolForFunction(BucketArray<Symbol> *symbols, ExprFunction *function) {
@@ -504,7 +576,7 @@ u32 createSymbolForString(s64 * emptyStringSymbolIndex, BucketArray<Symbol> *sym
 			emptyString.value = static_cast<u32>(rdata->totalSize);
 			emptyString.sectionNumber = RDATA_SECTION_NUMBER;
 			emptyString.type = 0;
-			emptyString.storageClass = IMAGE_SYM_CLASS_STATIC;
+			emptyString.storageClass = IMAGE_SYM_CLASS_EXTERNAL;
 			emptyString.numberOfAuxSymbols = 0;
 
 			symbols->add(emptyString);
@@ -550,6 +622,73 @@ struct JumpPatch {
 	s32 *location;
 	u64 rip;
 };
+
+void writeValue(BucketedArenaAllocator *data, BucketedArenaAllocator *dataRelocations, BucketArray<Symbol> *symbols, BucketedArenaAllocator *stringTable, Expr *value, s64 *emptyStringSymbolIndex, BucketedArenaAllocator *rdata) {
+	auto type = value->type;
+
+	data->allocateUnaligned(AlignPO2(data->totalSize, type->alignment) - data->totalSize);
+
+	assert(value->flavor == ExprFlavor::FLOAT_LITERAL ||
+		value->flavor == ExprFlavor::INT_LITERAL ||
+		value->flavor == ExprFlavor::FUNCTION ||
+		value->flavor == ExprFlavor::STRING_LITERAL ||
+		value->flavor == ExprFlavor::ARRAY);
+
+	if (value->flavor == ExprFlavor::FUNCTION) {
+		assert(type->size == 8);
+		dataRelocations->add4(data->totalSize);
+		dataRelocations->add4(createSymbolForFunction(symbols, static_cast<ExprFunction *>(value)));
+		dataRelocations->add2(IMAGE_REL_AMD64_ADDR64);
+
+		data->add8(0);
+	}
+	else if (value->flavor == ExprFlavor::STRING_LITERAL) {
+		assert(type->size == 8);
+		dataRelocations->add4(data->totalSize);
+		dataRelocations->add4(createSymbolForString(emptyStringSymbolIndex, symbols, stringTable, rdata, static_cast<ExprStringLiteral *>(value)));
+		dataRelocations->add2(IMAGE_REL_AMD64_ADDR64);
+
+		data->add8(0);
+	}
+	else if (value->flavor == ExprFlavor::ARRAY) {
+		auto array = static_cast<ExprArray *>(value);
+
+		if (value->type->flags & TYPE_ARRAY_IS_FIXED) {
+			for (u64 i = 0; i < array->count; i++) {
+				writeValue(data, dataRelocations, symbols, stringTable, array->storage[i], emptyStringSymbolIndex, rdata);
+			}
+		}
+		else {
+			assert(array->count == 0);
+
+			data->add8(0);
+			data->add8(0);
+			
+			if (value->type->flags & TYPE_ARRAY_IS_DYNAMIC) {
+				data->add8(0);
+			}
+		}
+	}
+	else if (value->flavor == ExprFlavor::FLOAT_LITERAL) {
+		if (value->type->size == 4) {
+			float num = static_cast<float>(static_cast<ExprLiteral *>(value)->floatValue);
+
+			data->add4(*reinterpret_cast<u32 *>(&num));
+		}
+		else if (value->type->size == 8) {
+			data->add8(static_cast<ExprLiteral *>(value)->floatValue);
+		}
+		else {
+			assert(false);
+		}
+	}
+	else if (value->flavor == ExprFlavor::INT_LITERAL) {
+		data->add(&static_cast<ExprLiteral *>(value)->unsignedValue, type->size);
+	}
+	else {
+		assert(false);
+	}
+}
 
 void runCoffWriter() {
 	BucketedArenaAllocator code(4096);
@@ -628,24 +767,28 @@ void runCoffWriter() {
 				symbol->numberOfAuxSymbols = 0;
 			}
 
-			u64 argCount = function->arguments.declarations.count;
-
-			u64 callSpace = 0;
-
-			if (function->state.maxCallRegisters > 4) {
-				callSpace = static_cast<u64>(function->state.maxCallRegisters);
-			}
-			else if (function->state.maxCallRegisters >= 0) {
-				callSpace = 4;
-			}
-
-			u64 registerCount = function->state.nextRegister + callSpace - argCount - 1;
+			u64 registerCount = function->state.nextRegister - function->state.parameterSpace - 1 + function->state.callAuxStorage;
 
 			u64 spaceToAllocate = (registerCount >> 1) * 16 + 8;
 
+			u64 paramOffset;
+
+			if (!isStandardSize(static_cast<ExprLiteral *>(function->returnType)->typeValue->size)) {
+				paramOffset = 1;
+
+				code.add1(0x48); // mov qword ptr[rsp + 8], rcx
+				code.add1(0x89);
+				code.add1(0x4C);
+				code.add1(0x24);
+				code.add1(0x08);
+			}
+			else {
+				paramOffset = 0;
+			}
+
 			constexpr u8 intRegisters[4] = { 0x4C, 0x54, 0x44, 0x4C };
 
-			for (u32 i = 0; i < (argCount > 4 ? 4 : argCount); i++) {
+			for (u32 i = 0; i < my_min(4 - paramOffset, function->arguments.declarations.count); i++) {
 				auto type = static_cast<ExprLiteral *>(function->arguments.declarations[i]->type)->typeValue;
 
 				if (type->flavor == TypeFlavor::FLOAT) {
@@ -658,19 +801,19 @@ void runCoffWriter() {
 
 					code.add1(0x0F);
 					code.add1(0x11);
-					code.add1(0x44 | (static_cast<u8>(i) << 3));
+					code.add1(0x44 | (static_cast<u8>(i + paramOffset) << 3));
 				}
 				else {
 					if (type->size == 2) {
 						code.add1(0x66);
 					}
 
-					if (type->size == 8 || i >= 2) {
-						u8 rex = 0x40;
+					u8 rex = 0x40;
 
-						if (type->size == 8) rex |= 0x08;
-						if (i >= 2) rex |= 0x04;
+					if (i >= 2) rex |= 0x04;
+					if (type->size == 8 || !isStandardSize(type->size)) rex |= 0x08;
 
+					if (rex != 0x40) {
 						code.add1(rex);
 					}
 
@@ -681,12 +824,15 @@ void runCoffWriter() {
 						code.add1(0x89);
 					}
 
-					code.add1(intRegisters[i]);
+					code.add1(intRegisters[i + paramOffset]);
 				}
 
 				code.add1(0x24);
-				code.add1((static_cast<u8>(i) + 1) * 8);
+				code.add1((static_cast<u8>(i + paramOffset) + 1) * 8);
 			}
+
+			code.add1(0x56); // push rsi
+			code.add1(0x57); // push rdi
 
 			// sub rsp, spaceToAllocate
 			if (spaceToAllocate < 0x80) {
@@ -700,6 +846,33 @@ void runCoffWriter() {
 				code.add1(0x81);
 				code.add1(0xEC);
 				code.add4(static_cast<u32>(spaceToAllocate));
+			}
+
+			for (u64 i = 0; i < function->arguments.declarations.count; i++) {
+				auto type = static_cast<ExprLiteral *>(function->arguments.declarations[i]->type)->typeValue;
+
+				if (!isStandardSize(type->size)) {
+					loadIntoIntRegister(&code, function, 8, RSI, i + 1 + paramOffset);
+
+					code.add1(0x48);
+					code.add1(0x8D);
+					writeRSPRegisterByte(&code, function, RDI, function->arguments.declarations[i]->physicalStorage);
+
+					if (type->size % 8 == 0) {
+						loadImmediateIntoIntRegister(&code, RCX, type->size / 8);
+
+						code.add1(0xF3); //  rep movsq
+						code.add1(0x48);
+						code.add1(0xA5);
+					}
+					else {
+						loadImmediateIntoIntRegister(&code, RCX, type->size);
+
+						code.add1(0xF3); //  rep movsb
+						code.add1(0x48);
+						code.add1(0xA4);
+					}
+				}
 			}
 
 			for (u64 index = 0; index < function->state.ir.count; index++) {
@@ -1228,42 +1401,124 @@ void runCoffWriter() {
 					case IrOp::READ: {
 						assert(ir.opSize == 8);
 
-						loadIntoIntRegister(&code, function, 8, RAX, ir.a);
+						if (isStandardSize(ir.destSize)) {
+							loadIntoIntRegister(&code, function, 8, RAX, ir.a);
 
-						if (ir.destSize == 8) {
-							code.add1(0x48);
-						}
-						else if (ir.destSize == 2) {
-							code.add1(0x66);
-						}
+							if (ir.destSize == 8) {
+								code.add1(0x48);
+							}
+							else if (ir.destSize == 2) {
+								code.add1(0x66);
+							}
 
-						if (ir.destSize == 1) {
-							code.add1(0x8A);
+							if (ir.destSize == 1) {
+								code.add1(0x8A);
+							}
+							else {
+								code.add1(0x8B);
+							}
+
+							code.add1(0x00);
+
+							storeFromIntRegister(&code, function, ir.destSize, ir.dest, RAX);
 						}
 						else {
-							code.add1(0x8B);
+
+							loadIntoIntRegister(&code, function, 8, RSI, ir.a);
+
+							code.add1(0x48);
+							code.add1(0x8D);
+							writeRSPRegisterByte(&code, function, RDI, ir.dest);
+
+							if (ir.destSize % 8 == 0) {
+								loadImmediateIntoIntRegister(&code, RCX, ir.destSize / 8);
+
+								code.add1(0xF3); // rep movsq
+								code.add1(0x48);
+								code.add1(0xA5);
+							}
+							else {
+								loadImmediateIntoIntRegister(&code, RCX, ir.destSize);
+
+								code.add1(0xF3); // rep movsb
+								code.add1(0x48);
+								code.add1(0xA4);
+							}
 						}
-
-						code.add1(0x00);
-
-						storeFromIntRegister(&code, function, ir.destSize, ir.dest, RAX);
 					} break;
 					case IrOp::WRITE: {
-						loadIntoIntRegister(&code, function, 8, RAX, ir.a);
-						loadIntoIntRegister(&code, function, ir.opSize, RCX, ir.b);
+						if (isStandardSize(ir.opSize)) {
+							loadIntoIntRegister(&code, function, 8, RAX, ir.a);
+							loadIntoIntRegister(&code, function, ir.opSize, RCX, ir.b);
 
-						if (ir.opSize == 1) {
-							code.add1(0x88);
+							if (ir.opSize == 2) {
+								code.add1(0x66);
+							}
+							else if (ir.opSize == 8) {
+								code.add1(0x48);
+							}
+
+							if (ir.opSize == 1) {
+								code.add1(0x88);
+							}
+							else {
+								code.add1(0x89);
+							}
+
+							code.add1(0x08);
 						}
 						else {
-							code.add1(0x89);
-						}
+							if (ir.b == 0) {
+								loadIntoIntRegister(&code, function, 8, RDI, ir.a);
 
-						code.add1(0x08);
+								if (ir.opSize % 8 == 0) {
+									loadImmediateIntoIntRegister(&code, RCX, ir.opSize / 8);
+
+									code.add1(0x31); // xor eax, eax
+									code.add1(0xC0);
+
+									code.add1(0xF3); // rep stosq
+									code.add1(0x48);
+									code.add1(0xAB);
+								}
+								else {
+									loadImmediateIntoIntRegister(&code, RCX, ir.opSize);
+
+									code.add1(0x30); // xor al, al
+									code.add1(0xC0);
+
+									code.add1(0xF3); // rep stosb
+									code.add1(0x48);
+									code.add1(0xAA);
+								}
+							}
+							else {
+								code.add1(0x48);
+								code.add1(0x8D);
+								writeRSPRegisterByte(&code, function, RSI, ir.b);
+
+								loadIntoIntRegister(&code, function, 8, RDI, ir.a);
+
+								if (ir.opSize % 8 == 0) {
+									loadImmediateIntoIntRegister(&code, RCX, ir.opSize / 8);
+
+									code.add1(0xF3); // rep movsq
+									code.add1(0x48);
+									code.add1(0xA5);
+								}
+								else {
+									loadImmediateIntoIntRegister(&code, RCX, ir.opSize);
+
+									code.add1(0xF3); // rep movsb
+									code.add1(0x48);
+									code.add1(0xA4);
+								}
+							}
+						}
 					} break;
 					case IrOp::SET: {
 						if (ir.opSize == ir.destSize || ir.a == 0) {
-							writeSet(&code, function, ir.destSize, ir.dest, ir.a);
+							writeSet(&code, function, ir.opSize, ir.dest, ir.a);
 						}
 						else {
 							if (ir.flags & IR_FLOAT_OP) {
@@ -1499,7 +1754,7 @@ void runCoffWriter() {
 						code.add1(0x48);
 						code.add1(0x8D);
 
-						writeRSPRegisterByte(&code, function, RAX, ir.a);
+						writeRSPRegisterByte(&code, function, RAX, ir.a, ir.b);
 						storeFromIntRegister(&code, function, 8, ir.dest, RAX);
 					} break;
 					case IrOp::IMMEDIATE: {
@@ -1866,14 +2121,67 @@ void runCoffWriter() {
 						}
 					} break;
 					case IrOp::RETURN: {
-						if (ir.a) {
-							if (ir.flags & IR_FLOAT_OP) {
-								loadIntoFloatRegister(&code, function, ir.opSize, 0, ir.a);
+						if (ir.opSize) {
+							if (isStandardSize(ir.opSize)) {
+								if (ir.flags & IR_FLOAT_OP) {
+									loadIntoFloatRegister(&code, function, ir.opSize, 0, ir.a);
+								}
+								else {
+									loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
+								}
 							}
 							else {
-								loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
+								loadIntoIntRegister(&code, function, 8, RDI, 1);
+
+								if (ir.a == 0) {
+									if (ir.opSize % 8 == 0) {
+										loadImmediateIntoIntRegister(&code, RCX, ir.opSize / 8);
+
+										code.add1(0x31); // xor eax, eax
+										code.add1(0xC0);
+
+										code.add1(0xF3); // rep stosq
+										code.add1(0x48);
+										code.add1(0xAB);
+									}
+									else {
+										loadImmediateIntoIntRegister(&code, RCX, ir.opSize);
+
+										code.add1(0x30); // xor al, al
+										code.add1(0xC0);
+
+										code.add1(0xF3); // rep stosb
+										code.add1(0x48);
+										code.add1(0xAA);
+									}
+								}
+								else {
+									code.add1(0x48);
+									code.add1(0x8D);
+									writeRSPRegisterByte(&code, function, RSI, ir.a);
+
+									if (ir.opSize % 8 == 0) {
+										loadImmediateIntoIntRegister(&code, RCX, ir.opSize / 8);
+
+										code.add1(0xF3); // rep movsq
+										code.add1(0x48);
+										code.add1(0xA5);
+									}
+									else {
+										loadImmediateIntoIntRegister(&code, RCX, ir.opSize);
+
+										code.add1(0xF3); // rep movsb
+										code.add1(0x48);
+										code.add1(0xA4);
+									}
+								}
+
+								loadIntoIntRegister(&code, function, 8, RAX, 1);
 							}
 						}
+
+						code.add1(0x5F); // pop rdi
+						code.add1(0x5E); // pop rsi
 
 						// add rsp, spaceToAllocate
 						if (spaceToAllocate < 0x80) {
@@ -1892,38 +2200,152 @@ void runCoffWriter() {
 						code.add1(0xC3);
 					} break;
 					case IrOp::CALL: {
-						constexpr int intRegisters[4] = { RCX, RDX, 8, 9 };
+						u64 parameterOffset;
 
-						for (u8 i = 0; i < (ir.arguments->argCount > 4 ? 4 : ir.arguments->argCount); i++) {
-							auto type = ir.arguments->args[i].type;
+						if (!isStandardSize(ir.arguments->returnType->size)) {
+							parameterOffset = 1;
+						}
+						else {
+							parameterOffset = 0;
+						}
 
-							if (type->flavor == TypeFlavor::FLOAT) {
-								loadIntoFloatRegister(&code, function, type->size, i, ir.arguments->args[i].number);
-							}
-							else {
-								loadIntoIntRegister(&code, function, type->size, intRegisters[i], ir.arguments->args[i].number);
+						u64 parameterSpace = my_min(4, ir.arguments->argCount + parameterOffset);
+
+						for (u64 i = 0; i < ir.arguments->argCount; i++) {
+							u64 size = ir.arguments->args[i].type->size;
+							u64 reg = ir.arguments->args[i].number;
+
+							if (!isStandardSize(size)) {
+								if (parameterSpace & 1) {
+									++parameterSpace; // Align to 16 bytes
+								}
+
+								code.add1(0x48);
+								code.add1(0x8D);
+								writeRSPOffsetByte(&code, RDI, parameterSpace * 8);
+
+								if (reg == 0) {
+									if (size % 8 == 0) {
+										loadImmediateIntoIntRegister(&code, RCX, size / 8);
+
+										code.add1(0x31); // xor eax, eax
+										code.add1(0xC0);
+
+										code.add1(0xF3); // rep stosq
+										code.add1(0x48);
+										code.add1(0xAB);
+									}
+									else {
+										loadImmediateIntoIntRegister(&code, RCX, size);
+
+										code.add1(0x30); // xor al, al
+										code.add1(0xC0);
+
+										code.add1(0xF3); // rep stosb
+										code.add1(0x48);
+										code.add1(0xAA);
+									}
+								}
+								else {
+									code.add1(0x48);
+									code.add1(0x8D);
+									writeRSPRegisterByte(&code, function, RSI, reg);
+
+									if (size % 8 == 0) {
+										loadImmediateIntoIntRegister(&code, RCX, size / 8);
+
+										code.add1(0xF3); // rep movsq
+										code.add1(0x48);
+										code.add1(0xA5);
+									}
+									else {
+										loadImmediateIntoIntRegister(&code, RCX, size);
+
+										code.add1(0xF3); // rep movsb
+										code.add1(0x48);
+										code.add1(0xA4);
+									}
+								}
+
+								parameterSpace += (size + 7) / 8;
 							}
 						}
 
-						for (u32 i = 4; i < ir.arguments->argCount; i++) {
-							loadIntoIntRegister(&code, function, ir.arguments->args[i].type->size, RAX, ir.arguments->args[i].number);
+						parameterSpace = my_min(4, ir.arguments->argCount + parameterOffset);
+
+						constexpr int intRegisters[4] = { RCX, RDX, 8, 9 };
+
+						for (u8 i = 0; i < my_min(4 - parameterOffset, ir.arguments->argCount); i++) {
+							auto type = ir.arguments->args[i].type;
+
+							if (type->flavor == TypeFlavor::FLOAT) {
+								loadIntoFloatRegister(&code, function, type->size, i + parameterOffset, ir.arguments->args[i].number);
+							}
+							else {
+								if (isStandardSize(type->size)) {
+									loadIntoIntRegister(&code, function, type->size, intRegisters[i + parameterOffset], ir.arguments->args[i].number);
+								}
+								else {
+									if (parameterSpace & 1) {
+										++parameterSpace; // Align to 16 bytes
+									}
+
+									code.add1(0x48);
+									code.add1(0x8D);
+									writeRSPOffsetByte(&code, intRegisters[i + 1], parameterSpace * 8);
+
+									u64 size = ir.arguments->args[i].type->size;
+									parameterSpace += (size + 7) / 8;
+								}
+							}
+						}
+
+						for (u32 i = 4 - parameterOffset; i < ir.arguments->argCount; i++) {
+							u64 size = ir.arguments->args[i].type->size;
+
+							if (isStandardSize(size)) {
+								loadIntoIntRegister(&code, function, ir.arguments->args[i].type->size, RAX, ir.arguments->args[i].number);
+							}
+							else {
+								if (parameterSpace & 1) {
+									++parameterSpace; // Align to 16 bytes
+								}
+
+								code.add1(0x48);
+								code.add1(0x8D);
+								writeRSPOffsetByte(&code, RAX, parameterSpace * 8);
+
+								parameterSpace += (size + 7) / 8;
+							}
 
 							code.add1(0x48);
 							code.add1(0x89);
-							code.add1(0x84);
-							code.add1(0x24);
-							code.add4(4 * i);
+							writeRSPOffsetByte(&code, RAX, (i + parameterOffset) * 8);
+						}
+						
+						if (!isStandardSize(ir.arguments->returnType->size)) {
+							code.add1(0x48);
+							code.add1(0x8D);
+
+							if (ir.dest) {
+								writeRSPRegisterByte(&code, function, RCX, ir.dest);
+							}
+							else {
+								writeRSPOffsetByte(&code, RCX, parameterSpace * 8);
+							}
 						}
 
 						code.add1(0xFF);
 						writeRSPRegisterByte(&code, function, 2, ir.a);
 
 						if (ir.dest != 0) {
-							if (ir.arguments->returnType->flavor == TypeFlavor::FLOAT) {
-								storeFromFloatRegister(&code, function, ir.arguments->returnType->size, ir.dest, 0);
-							}
-							else {
-								storeFromIntRegister(&code, function, ir.arguments->returnType->size, ir.dest, RAX);
+							if (isStandardSize(ir.arguments->returnType->size)) {
+								if (ir.arguments->returnType->flavor == TypeFlavor::FLOAT) {
+									storeFromFloatRegister(&code, function, ir.arguments->returnType->size, ir.dest, 0);
+								}
+								else {
+									storeFromIntRegister(&code, function, ir.arguments->returnType->size, ir.dest, RAX);
+								}
 							}
 						}
 					} break;
@@ -2083,30 +2505,7 @@ void runCoffWriter() {
 				symbol->value = data.totalSize;
 				symbol->sectionNumber = DATA_SECTION_NUMBER;
 
-				assert(declaration->initialValue->flavor == ExprFlavor::FLOAT_LITERAL ||
-					declaration->initialValue->flavor == ExprFlavor::INT_LITERAL ||
-					declaration->initialValue->flavor == ExprFlavor::FUNCTION ||
-					declaration->initialValue->flavor == ExprFlavor::STRING_LITERAL);
-
-				if (declaration->initialValue->flavor == ExprFlavor::FUNCTION) {
-					assert(type->size == 8);
-					dataRelocations.add4(data.totalSize);
-					dataRelocations.add4(createSymbolForFunction(&symbols, static_cast<ExprFunction *>(declaration->initialValue)));
-					dataRelocations.add2(IMAGE_REL_AMD64_ADDR64);
-
-					data.add8(0);
-				}
-				else if (declaration->initialValue->flavor == ExprFlavor::STRING_LITERAL) {
-					assert(type->size == 8);
-					dataRelocations.add4(data.totalSize);
-					dataRelocations.add4(createSymbolForString(&emptyStringSymbolIndex, &symbols, &stringTable, &rdata, static_cast<ExprStringLiteral *>(declaration->initialValue)));
-					dataRelocations.add2(IMAGE_REL_AMD64_ADDR64);
-
-					data.add8(0);
-				}
-				else {
-					data.add(&static_cast<ExprLiteral *>(declaration->initialValue)->unsignedValue, type->size);
-				}
+				writeValue(&data, &dataRelocations, &symbols, &stringTable, declaration->initialValue, &emptyStringSymbolIndex, &rdata);
 			}
 
 			symbol->numberOfAuxSymbols = 0;
