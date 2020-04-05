@@ -138,9 +138,9 @@ struct Type {
 	u64 flags = 0;
 	TypeFlavor flavor;
 
-	TypePointer *pointerPrototype = nullptr;
-	TypeArray *arrayPrototype = nullptr;
-	TypeArray *dynamicArrayPrototype = nullptr;
+	struct TypePointer *pointerPrototype = nullptr;
+	struct TypeArray *arrayPrototype = nullptr;
+	struct TypeArray *dynamicArrayPrototype = nullptr;
 };
 
 inline Type TYPE_S8 = { 1, 1, TYPE_INTEGER_IS_SIGNED, TypeFlavor::INTEGER };
@@ -217,6 +217,7 @@ inline TypeArray *getDynamicArrayOf(Type *type) {
 		type->dynamicArrayPrototype->flavor = TypeFlavor::ARRAY;
 		type->dynamicArrayPrototype->arrayOf = type;
 		type->dynamicArrayPrototype->count = 0;
+		type->dynamicArrayPrototype->flags = TYPE_ARRAY_IS_DYNAMIC;
 	}
 
 	return type->dynamicArrayPrototype;

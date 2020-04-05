@@ -338,7 +338,7 @@ void storeFromFloatRegister(BucketedArenaAllocator *code, ExprFunction *function
 }
 
 void storeImmediate(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u64 regNo, u64 immediate) {
-	assert(size);
+	assert(isStandardSize(size));
 
 	if (size == 8 && static_cast<s64>(immediate) != static_cast<s64>(static_cast<s32>(immediate))) {
 		code->add1(0x48); // mov rax, ir.a
@@ -468,7 +468,7 @@ void loadImmediateIntoIntRegister(BucketedArenaAllocator *code, u8 loadInto, u64
 
 void writeSet(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u64 dest, u64 src) {
 	if (src == 0) {
-		if (isStandardSize) {
+		if (isStandardSize(size)) {
 			storeImmediate(code, function, size, dest, 0);
 		}
 		else {

@@ -100,7 +100,7 @@ IrOp getIrOpForCompare(TokenT op) {
 		case TokenT::NOT_EQUAL:
 			return IrOp::NOT_EQUAL;
 		case TokenT::GREATER_EQUAL:
-			return IrOp::GREATER;
+			return IrOp::GREATER_EQUAL;
 		case TokenT::LESS_EQUAL:
 			return IrOp::LESS_EQUAL;
 		case TOKEN('>'):
@@ -173,7 +173,58 @@ u64 loadAddressOf(IrState *state, Expr *expr, u64 dest) {
 		dest = generateIr(state, unary->value, dest);
 	}
 	else if (expr->flavor == ExprFlavor::STRUCT_ACCESS) {
-		assert(false); // @Incomplete
+		auto access = static_cast<ExprStructAccess *>(expr);
+
+		auto type = access->left->type;
+
+		if (type->flavor == TypeFlavor::POINTER) {
+			type = static_cast<TypePointer *>(type)->pointerTo;
+		}
+
+		u64 offset;
+
+		if (type->flavor == TypeFlavor::ARRAY) {
+			assert(!(type->flags & TYPE_ARRAY_IS_FIXED));
+
+			if (access->name == "data") {
+				offset = 0;
+			}
+			else if (access->name == "count") {
+				offset = 8;
+			}
+			else if (access->name == "capacity") {
+				offset = 16;
+			}
+			else {
+				assert(false);
+			}
+		}
+		else {
+			assert(false); // @Incomplete
+		}
+
+		u64 store;
+		
+		if (access->left->type->flavor == TypeFlavor::POINTER) {
+			store = generateIr(state, access->left, dest);
+		}
+		else {
+			store = loadAddressOf(state, access->left, dest);
+		}
+
+		if (offset == 0) {
+			return store;
+		}
+		else {
+			Ir &add = state->ir.add();
+			add.op = IrOp::ADD_CONSTANT;
+			add.dest = dest;
+			add.a = store;
+			add.b = offset;
+			add.opSize = 8;
+
+			return dest;
+		}
 	}
 	else if (expr->flavor == ExprFlavor::IDENTIFIER) {
 		auto identifier = static_cast<ExprIdentifier *>(expr);
@@ -266,42 +317,7 @@ IrModifyWrite readForModifyWrite(IrState *state, Expr *left, Expr *right) {
 
 	u64 dest;
 
-	if (left->flavor == ExprFlavor::BINARY_OPERATOR) {
-		dest = loadAddressForArrayDereference(state, left, state->nextRegister++);
-
-		Ir &read = state->ir.add();
-		read.op = IrOp::READ;
-		read.dest = state->nextRegister++;
-		read.a = dest;
-		read.opSize = 8;
-		read.destSize = left->type->size;
-
-		info.addressReg = dest;
-		info.leftReg = read.dest;
-	}
-	else if (left->flavor == ExprFlavor::UNARY_OPERATOR) {
-		auto unary = static_cast<ExprUnaryOperator *>(left);
-		dest = state->nextRegister++;
-
-		assert(unary->op == TokenT::SHIFT_LEFT);
-
-		u64 leftReg = generateIr(state, unary->value, dest);
-
-		Ir &read = state->ir.add();
-		read.op = IrOp::READ;
-		read.dest = state->nextRegister++;
-		read.a = dest;
-		read.opSize = 8;
-		read.destSize = left->type->size;
-
-		info.addressReg = dest;
-		info.leftReg = read.dest;
-	}
-	else if (left->flavor == ExprFlavor::STRUCT_ACCESS) {
-		assert(false); // @Incomplete
-		return {};
-	}
-	else if (left->flavor == ExprFlavor::IDENTIFIER) {
+	if (left->flavor == ExprFlavor::IDENTIFIER) {
 		auto identifier = static_cast<ExprIdentifier *>(left);
 
 		if (identifier->declaration->enclosingScope == &globalBlock) {
@@ -330,8 +346,17 @@ IrModifyWrite readForModifyWrite(IrState *state, Expr *left, Expr *right) {
 		}
 	}
 	else {
-		assert(false);
-		return {};
+		dest = loadAddressOf(state, left, state->nextRegister++);
+
+		Ir &read = state->ir.add();
+		read.op = IrOp::READ;
+		read.dest = allocateSpaceForType(state, left->type);
+		read.a = dest;
+		read.opSize = 8;
+		read.destSize = left->type->size;
+
+		info.addressReg = dest;
+		info.leftReg = read.dest;
 	}
 
 	info.rightReg = generateIr(state, right, state->nextRegister++);
@@ -515,9 +540,13 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 						}
 						case TypeFlavor::ARRAY: {
 							if (right->type->flags & TYPE_ARRAY_IS_DYNAMIC) {
+								assert(!(left->type->flags & TYPE_ARRAY_IS_FIXED));
 								return rightReg;
 							}
 							else {
+								assert(right->type->flags & TYPE_ARRAY_IS_FIXED);
+								assert(!(left->type->flags & TYPE_ARRAY_IS_DYNAMIC));
+
 								Ir &buffer = state->ir.add();
 								buffer.op = IrOp::ADDRESS_OF_LOCAL;
 								buffer.dest = dest;
@@ -531,7 +560,20 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 								count.opSize = 8;
 							}
 						}
-						case TypeFlavor::POINTER:
+						case TypeFlavor::POINTER: {
+							if (right->type->flavor == TypeFlavor::ARRAY && (right->type->flags & TYPE_ARRAY_IS_FIXED)) {
+								Ir &buffer = state->ir.add();
+								buffer.op = IrOp::ADDRESS_OF_LOCAL;
+								buffer.dest = dest;
+								buffer.a = rightReg;
+								buffer.b = 0;
+
+								return dest;
+							}
+							else {
+								return rightReg;
+							}
+						}
 						case TypeFlavor::FUNCTION:
 							return rightReg; // These casts should be a nop
 						case TypeFlavor::TYPE:
@@ -757,42 +799,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				case TOKEN('='): {
 					assert(dest == DEST_NONE);
 
-					if (left->flavor == ExprFlavor::BINARY_OPERATOR) {
-						dest = loadAddressForArrayDereference(state, left, state->nextRegister++);
-
-
-						u64 rightReg = generateIr(state, right, state->nextRegister++);
-
-						Ir &write = state->ir.add();
-						write.op = IrOp::WRITE;
-						write.a = dest;
-						write.b = rightReg;
-						write.opSize = left->type->size;
-
-						return rightReg;
-					}
-					else if (left->flavor == ExprFlavor::UNARY_OPERATOR) {
-						auto unary = static_cast<ExprUnaryOperator *>(left);
-						dest = state->nextRegister++;
-
-						assert(unary->op == TokenT::SHIFT_LEFT);
-
-						u64 leftReg = generateIr(state, unary->value, dest);
-
-						u64 rightReg = generateIr(state, right, state->nextRegister++);
-
-						Ir &write = state->ir.add();
-						write.op = IrOp::WRITE;
-						write.a = leftReg;
-						write.b = rightReg;
-						write.opSize = left->type->size;
-
-						return rightReg;
-					}
-					else if (left->flavor == ExprFlavor::STRUCT_ACCESS) {
-						assert(false); // @Incomplete
-					}
-					else if (left->flavor == ExprFlavor::IDENTIFIER) {
+					if (left->flavor == ExprFlavor::IDENTIFIER) {
 						auto identifier = static_cast<ExprIdentifier *>(left);
 
 						if (identifier->declaration->enclosingScope == &globalBlock) {
@@ -823,7 +830,18 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 						}
 					}
 					else {
-						assert(false);
+						dest = loadAddressOf(state, left, state->nextRegister++);
+
+
+						u64 rightReg = generateIr(state, right, state->nextRegister++);
+
+						Ir &write = state->ir.add();
+						write.op = IrOp::WRITE;
+						write.a = dest;
+						write.b = rightReg;
+						write.opSize = left->type->size;
+
+						return rightReg;
 					}
 
 					
@@ -1392,9 +1410,18 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			return DEST_NONE;
 		}
 		case ExprFlavor::STRUCT_ACCESS: {
-			// @Incomplete
-			assert(false);
-			return DEST_NONE;
+			if (dest == DEST_NONE) return dest;
+
+			u64 stored = loadAddressOf(state, expr, dest);
+
+			Ir &read = state->ir.add();
+			read.op = IrOp::READ;
+			read.dest = dest;
+			read.a = stored;
+			read.opSize = 8;
+			read.destSize = expr->type->size;
+
+			return dest;
 		}
 		case ExprFlavor::TYPE_LITERAL: {
 			assert(false); // @ErrorMessage
@@ -1410,32 +1437,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 			switch (unary->op) {
 				case TOKEN('*'): {
-					if (unary->value->flavor == ExprFlavor::BINARY_OPERATOR) {
-						return loadAddressForArrayDereference(state, unary->value, dest);
-					}
-					else if (unary->value->flavor == ExprFlavor::STRUCT_ACCESS) {
-						assert(false); // @Incomplete
-						return DEST_NONE;
-					}
-					else if (unary->value->flavor == ExprFlavor::IDENTIFIER) {
-						auto identifier = static_cast<ExprIdentifier *>(unary->value);
-
-						Ir &address = state->ir.add();
-						address.dest = dest;
-						address.opSize = 8;
-
-						if (identifier->declaration->enclosingScope == &globalBlock) {
-							address.op = IrOp::ADDRESS_OF_GLOBAL;
-							address.declaration = identifier->declaration;
-						}
-						else {
-							address.op = IrOp::ADDRESS_OF_LOCAL;
-							address.a = identifier->declaration->physicalStorage;
-							address.b = 0;
-						}
-
-						return dest;
-					}
+					return loadAddressOf(state, unary->value, dest);
 				}
 				case TOKEN('-'): {
 					u64 toNegate = generateIr(state, unary->value, dest);

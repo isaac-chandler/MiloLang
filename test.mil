@@ -40,16 +40,13 @@ allocate :: (size: u64) -> *void {
 }
 
 reallocate :: (block: *void, size: u64) -> *void {
-	if size == 0 {
-		deallocate(block)
-		return null
-	} else if block == null
+	if block == null
 		return allocate(size)
 	else
-		return HeapReAlloc(process_heap, 0, size)
+		return HeapReAlloc(process_heap, 0, block, size)
 }
 
-deallocate :: (block *void) {
+deallocate :: (block: *void) {
 	HeapFree(process_heap, 0, block)
 }
 
@@ -67,8 +64,15 @@ max :: (a: u64, b: u64) -> u64 {
 		return b
 }
 
-add_string :: (array: *[..] string, string value) {
+add_string :: (array: *[..] string, value: string) {
+	if (array.count >= array.capacity) {
+		array.capacity = max(array.count * 2, 4)
+		
+		array.data = reallocate(array.data, array.capacity * size_of(type_of(value)))
+	}
 	
+	array.data[array.count] = value
+	array.count += 1
 }
 
 string_length :: (s: string) -> u64 {
@@ -85,12 +89,81 @@ print_string :: (s: string) {
 
 std_out: HANDLE
 
-main :: (argc: s32, argv: *string) -> s32 {
-	argsPtr := cast(*u64) *args
+copy_string :: (s: string) -> string {
+	memory: *u8 = allocate(string_length(s) + 1)
+	
+	buf := memory
+	
+	while << s {
+		<< memory = << s
+		memory += 1
+		s += 1
+	}
+	
+	<< memory = 0
+	
+	return cast() buf
+}
 
-	argsPtr[0] = cast(u64) argv
-	argsPtr[1] = cast(u64) argc
+parse_command_line :: (cmd: string) -> [] string {
+	line := cast(*u8) copy_string(cmd)
 
+	args: [..]string
+	
+	
+	s := cast(*u8) cmd
+	
+	if ! <<s
+		return args
+	
+	if << cmd == '"' {
+		s += 1
+		line += 1
+		
+		add_string(*args, cast() line)
+		
+		while << s {
+			if << s == '"'
+				break
+			
+			line += 1
+			s += 1
+		}
+	} else {
+		add_string(*args, cast() line)
+		
+		while << s {
+			if << s == ' ' || << s == '\t'
+				break
+			
+			line += 1
+			s += 1
+		}
+	}
+	
+	<< line = 0
+	
+	line += 1
+	s += 1
+	
+	while << s == ' ' || << s == '\t' {
+		s += 1
+		line += 1
+	}
+	
+	if ! <<s
+		return args
+		
+	add_string(*args, cast() line)
+	
+	return args
+}
+
+main :: () -> s32 {
+	args.data = argv
+	args.count = cast(u64) argc
+
+	process_heap = GetProcessHeap()
 	std_out = GetStdHandle(STD_OUTPUT_HANDLE)
 
 	_main()
@@ -114,23 +187,21 @@ test :: () {
 		factorial(it_index) // dummy code
 }
 
-get_strings :: () -> [2] string {
-	a : [2] string
+get_strings :: () -> [] string {
+	a: [..] string
 
-	a[0] = "Test1"
-	a[1] = "Test2"
+	add_string(*a, "Test1")
+	add_string(*a, "Test2")
 
 	return a
 }
 
 _main :: () {
-	
-
-	for get_command_line_arguments() {
-		if it_index {
+	for get_strings() {
+		//if it_index {
 			print_string(it)
 			print_string(" ")
-		}
+		//}
 	}
 }
 

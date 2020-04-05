@@ -386,9 +386,7 @@ bool solidifyOneLiteral(ExprBinaryOperator *binary) {
 }
 
 bool isVoidPointer(Type *type) {
-	if (type->flavor != TypeFlavor::POINTER) return false;
-
-	return static_cast<TypePointer *>(type)->pointerTo == &TYPE_VOID;
+	return type == getPointerTo(&TYPE_VOID);
 }
 
 
@@ -433,7 +431,8 @@ bool isValidCast(Type *to, Type *from) {
 	}
 	else if (from->flavor == TypeFlavor::ARRAY) {
 		// Casts between array types are handled above
-		return to->flavor == TypeFlavor::BOOL;
+		return to->flavor == TypeFlavor::BOOL || (to->flavor == TypeFlavor::POINTER && 
+			(typesAreSame(static_cast<TypePointer *>(to)->pointerTo, static_cast<TypeArray *>(from)->arrayOf) || isVoidPointer(to)));
 	}
 	else {
 		assert(false); // @ErrorMessage
@@ -748,7 +747,7 @@ void assignOpForFloatAndIntLiteral(ExprBinaryOperator *binary) {
 
 bool isAssignable(Expr *expr) {
 	return expr->flavor == ExprFlavor::IDENTIFIER ||
-		expr->flavor == ExprFlavor::STRUCT_ACCESS || 
+		(expr->flavor == ExprFlavor::STRUCT_ACCESS && !(static_cast<ExprStructAccess *>(expr)->left->type->flags & TYPE_ARRAY_IS_FIXED)) || 
 		(expr->flavor == ExprFlavor::UNARY_OPERATOR && static_cast<ExprUnaryOperator *>(expr)->op == TokenT::SHIFT_LEFT) ||
 		(expr->flavor == ExprFlavor::BINARY_OPERATOR && static_cast<ExprBinaryOperator *>(expr)->op == TOKEN('['));
 }
@@ -890,7 +889,7 @@ bool assignOp(Type *correct, Expr *&given) {
 			switch (correct->flavor) {
 				case TypeFlavor::ARRAY: {
 					if (!typesAreSame(correct, given->type)) {
-						if (given->flags & (TYPE_ARRAY_IS_DYNAMIC | TYPE_ARRAY_IS_FIXED)) {
+						if (given->type->flags & (TYPE_ARRAY_IS_DYNAMIC | TYPE_ARRAY_IS_FIXED)) {
 							if (!(correct->flags & (TYPE_ARRAY_IS_DYNAMIC | TYPE_ARRAY_IS_FIXED))) { // We are converting from [N]T or [..]T to []T
 								if (typesAreSame(static_cast<TypeArray *>(given->type)->arrayOf, static_cast<TypeArray *>(correct)->arrayOf)) {
 									insertImplicitCast(&given, correct);
@@ -2235,7 +2234,7 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 					auto array = static_cast<TypeArray *>(access->left->type);
 
 					if (access->name == "count") {
-						if (access->left->type->flags & TYPE_ARRAY_IS_FIXED) {
+						if (array->flags & TYPE_ARRAY_IS_FIXED) {
 							ExprLiteral *literal = new ExprLiteral;
 							literal->flavor = ExprFlavor::INT_LITERAL;
 							literal->start = access->start;
@@ -2246,30 +2245,79 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 							*exprPointer = literal;
 						}
 						else {
-							expr->type = TypeFlavor::
+							expr->type = &TYPE_U64;
 						}
 					}
 					else if (access->name == "data") {
-						assert(false); // @ErrorMessage
-						return false;
+						if (array->flags & TYPE_ARRAY_IS_FIXED) {
+							*exprPointer = access->left;
+							insertImplicitCast(exprPointer, getPointerTo(array->arrayOf));
+						}
+						else {
+							expr->type = getPointerTo(array->arrayOf);
+						}
 					}
 					else if (access->name == "capacity") {
-						assert(false); // @ErrorMessage
-						return false;
+						if (array->flags & TYPE_ARRAY_IS_DYNAMIC) {
+							expr->type = &TYPE_U64;
+						}
+						else {
+							assert(false); // @ErrorMessage
+							return false;
+						}
 					}
 					else {
 						assert(false); // @ErrorMessage
 						return false;
 					}
+				}
+				else if (access->left->type->flavor == TypeFlavor::POINTER) {
+					auto type = static_cast<TypePointer *>(access->left->type)->pointerTo;
 
-					if (access->left->type->flags & TYPE_ARRAY_IS_FIXED) {
+					if (type->flavor == TypeFlavor::ARRAY) {
+						auto array = static_cast<TypeArray *>(type);
 
-					}
-					else if (access->left->type->flags & TYPE_ARRAY_IS_DYNAMIC) {
+						if (access->name == "count") {
+							if (array->flags & TYPE_ARRAY_IS_FIXED) {
+								ExprLiteral *literal = new ExprLiteral;
+								literal->flavor = ExprFlavor::INT_LITERAL;
+								literal->start = access->start;
+								literal->end = access->end;
+								literal->type = &TYPE_U64;
+								literal->unsignedValue = array->count;
 
+								*exprPointer = literal;
+							}
+							else {
+								expr->type = &TYPE_U64;
+							}
+						}
+						else if (access->name == "data") {
+							if (array->flags & TYPE_ARRAY_IS_FIXED) {
+								*exprPointer = access->left;
+								insertImplicitCast(exprPointer, getPointerTo(array->arrayOf));
+							}
+							else {
+								expr->type = getPointerTo(array->arrayOf);
+							}
+						}
+						else if (access->name == "capacity") {
+							if (array->flags & TYPE_ARRAY_IS_DYNAMIC) {
+								expr->type = &TYPE_U64;
+							}
+							else {
+								assert(false); // @ErrorMessage
+								return false;
+							}
+						}
+						else {
+							assert(false); // @ErrorMessage
+							return false;
+						}
 					}
 					else {
-
+						assert(false); // @ErrorMessage
+						return false;
 					}
 				}
 				else if (access->left->type->flavor == TypeFlavor::TYPE) {
@@ -2447,6 +2495,7 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 						auto literal = new ExprLiteral;
 						literal->flavor = ExprFlavor::INT_LITERAL;
 						literal->unsignedValue = type->typeValue->size;
+						literal->type = &TYPE_UNSIGNED_INT_LITERAL;
 						literal->start = unary->start;
 						literal->end = unary->end;
 						
