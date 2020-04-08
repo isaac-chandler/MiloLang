@@ -3,6 +3,7 @@
 #include "BucketedArenaAllocator.h"
 #include "Infer.h"
 #include "Parser.h"
+#include "CompilerMain.h"
 
 WorkQueue<CoffJob> coffWriterQueue;
 
@@ -117,11 +118,12 @@ struct Relocation {
 };
 #pragma pack(pop)
 
-void writeAllocator(FILE *out, BucketedArenaAllocator allocator) {
+void writeAllocator(HANDLE out, BucketedArenaAllocator allocator) {
 	for (auto bucket = allocator.first; bucket; bucket = bucket->next) {
 		u64 count = (allocator.bucketSize - bucket->remaining);
 
-		fwrite(bucket->memory - count, count, 1, out);
+		DWORD written;
+		WriteFile(out, bucket->memory - count, count, &written, 0);
 	}
 }
 
@@ -551,11 +553,11 @@ u32 createSymbolForFunction(BucketArray<Symbol> *symbols, ExprFunction *function
 		function->flags |= EXPR_HAS_STORAGE;
 
 		if (function->flags & EXPR_FUNCTION_IS_EXTERNAL) {
-			if (Declaration *declaration = findDeclaration(&externalsBlock, function->declaration->name)) {
+			if (Declaration *declaration = findDeclaration(&externalsBlock, function->valueOfDeclaration->name)) {
 				return static_cast<ExprFunction *>(declaration->initialValue)->physicalStorage;
 			}
 			else {
-				externalsBlock.declarations.add(function->declaration);
+				externalsBlock.declarations.add(function->valueOfDeclaration);
 			}
 		}
 
@@ -691,6 +693,8 @@ void writeValue(BucketedArenaAllocator *data, BucketedArenaAllocator *dataReloca
 }
 
 void runCoffWriter() {
+	PROFILE_FUNC();
+
 	BucketedArenaAllocator code(4096);
 	BucketedArenaAllocator codeRelocations(4096);
 	BucketedArenaAllocator data(4096);
@@ -721,10 +725,10 @@ void runCoffWriter() {
 			createSymbolForFunction(&symbols, function);
 
 			if (function->flags & EXPR_FUNCTION_IS_EXTERNAL) {
-				assert(function->declaration);
+				assert(function->valueOfDeclaration);
 				auto symbol = function->symbol;
 
-				setSymbolName(&stringTable, &symbol->name, function->declaration->name);
+				setSymbolName(&stringTable, &symbol->name, function->valueOfDeclaration->name);
 
 				symbol->storageClass = IMAGE_SYM_CLASS_EXTERNAL;
 				symbol->value = 0;
@@ -743,10 +747,10 @@ void runCoffWriter() {
 			{
 				auto symbol = function->symbol;
 
-				if (function->declaration) {
-					setSymbolName(&stringTable, &symbol->name, function->declaration->name);
+				if (function->valueOfDeclaration) {
+					setSymbolName(&stringTable, &symbol->name, function->valueOfDeclaration->name);
 
-					if (function->declaration->enclosingScope == &globalBlock) {
+					if (function->valueOfDeclaration->enclosingScope == &globalBlock) {
 						symbol->storageClass = IMAGE_SYM_CLASS_EXTERNAL;
 					}
 					else {
@@ -2595,41 +2599,49 @@ void runCoffWriter() {
 			section.header->numberOfLinenumbers = 0;
 		}
 	}
-	FILE *out = fopen("out.obj", "wb");
 
-	fwrite(&header, sizeof(header), 1, out);
+	if (!hadError) {
+		HANDLE out = CreateFileA("out.obj", GENERIC_WRITE, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
 
-	for (auto section : sections) {
-		fwrite(section.header, sizeof(SectionHeader), 1, out);
-	}
+		DWORD written;
+		WriteFile(out, &header, sizeof(header), &written, 0);
 
-
-	assert(ftell(out) == header.pointerToSymbolTable);
-	writeAllocator(out, symbols.allocator);
-
-	fwrite(&stringTableSize, sizeof(stringTableSize), 1, out);
-	writeAllocator(out, stringTable);
-
-	fwrite(&alignmentPadding, AlignPO2(prefixSize, 4) - prefixSize, 1, out);
-
-	for (u64 i = 0; i < sections.count; i++) {
-		auto section = sections[i];
-
-		if (section.data) {
-			assert(section.header->pointerToRawData == ftell(out));
-			writeAllocator(out, *section.data);
-
-			fwrite(&alignmentPadding, AlignPO2(section.data->totalSize, 4) - section.data->totalSize, 1, out);
+		for (auto section : sections) {
+			WriteFile(out, section.header, sizeof(*section.header), &written, 0);
 		}
 
-		if (section.relocations) {
-			assert(section.header->pointerToRelocations == ftell(out));
 
-			writeAllocator(out, *section.relocations);
+		//assert(ftell(out) == header.pointerToSymbolTable);
+		writeAllocator(out, symbols.allocator);
 
-			fwrite(&alignmentPadding, AlignPO2(section.relocations->totalSize, 4) - section.relocations->totalSize, 1, out);
+		WriteFile(out, &stringTableSize, sizeof(stringTableSize), &written, 0);
+		writeAllocator(out, stringTable);
+
+		WriteFile(out, &alignmentPadding, AlignPO2(prefixSize, 4) - prefixSize, &written, 0);
+
+		for (u64 i = 0; i < sections.count; i++) {
+			auto section = sections[i];
+
+			if (section.data) {
+				//assert(section.header->pointerToRawData == ftell(out));
+				writeAllocator(out, *section.data);
+
+				WriteFile(out, &alignmentPadding, AlignPO2(section.data->totalSize, 4) - section.data->totalSize, &written, 0);
+			}
+
+			if (section.relocations) {
+				//assert(section.header->pointerToRelocations == ftell(out));
+
+				writeAllocator(out, *section.relocations);
+
+				WriteFile(out, &alignmentPadding, AlignPO2(section.relocations->totalSize, 4) - section.relocations->totalSize, &written, 0);
+			}
+		}
+
+		{
+			PROFILE_ZONE("fclose");
+
+			CloseHandle(out);
 		}
 	}
-
-	fclose(out);
 }

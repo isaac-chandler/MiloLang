@@ -3,62 +3,200 @@
 #include "CompilerMain.h"
 #include "Parser.h"
 #include "Infer.h"
-#include "Lexer.h"
 #include "IrGenerator.h"
 #include "CoffWriter.h"
+#include <stdarg.h>
+#include "ArraySet.h"
+#include "UTF.h"
+#include "Lexer.h"
+#include <cinttypes>
+
+static ArraySet<FileInfo> files;
+
+bool loadNewFile(String file) {
+	// Open the file here and keep it open until we parse it to avoid race condition
+	HANDLE handle = createFileUtf8(file, GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN); // @Platform
+
+	if (handle == INVALID_HANDLE_VALUE) {
+		reportError("Error: failed to open file: %.*s", file.length, file.characters);
+		return false;
+	}
+
+	BY_HANDLE_FILE_INFORMATION fileInfo;
+
+	if (!GetFileInformationByHandle(handle, &fileInfo)) {
+		reportError("Error: failed to read file information for file: %.*s", file.length, file.characters);
+		return false; 
+	}
+
+	if (fileInfo.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) { // Are there any other attributes we should check for?
+		reportError("Error: %.*s is a directory, you can only compile files", file.length, file.characters);
+		return false;
+	}
+
+	FileInfo info;
+	info.path = file;
+	info.handle = handle;
+	info.volumeSerialNumber = fileInfo.dwVolumeSerialNumber;
+	info.fileIndex = (static_cast<u64>(fileInfo.nFileIndexHigh) << 32ULL) | static_cast<u64>(fileInfo.nFileIndexLow);
+	info.fileUid = files.size();
+
+	if (!files.add(info)) {
+		CloseHandle(handle);
+	}
+
+
+	return true;
+}
+
+FileInfo *getFileInfoByUid(u32 fileUid) {
+	FileInfo *info = &files[fileUid];
+
+	assert(info->fileUid == fileUid);
+
+	return info;
+}
+
+void printErrorLocation(CodeLocation *location) {
+	String filename = getFileInfoByUid(location->fileUid)->path;
+
+	printf("%.*s:%" PRIu32 ",%" PRIu32 " ", static_cast<u32>(filename.length), filename.characters, location->line, location->column);
+
+}
+
+void reportError(const char *format, ...) {
+	hadError = true;
+
+	va_list args;
+	va_start(args, format);
+
+	vprintf(format, args);
+
+	va_end(args);
+
+}
+
+void reportError(Expr *location, const char *format, ...) {
+	printErrorLocation(&location->start);
+
+	va_list args;
+	va_start(args, format);
+
+	reportError(format, args);
+	puts("\n");
+
+	va_end(args);
+}
+
+
+void reportError(Declaration *location, const char *format, ...) {
+	printErrorLocation(&location->start);
+
+	va_list args;
+	va_start(args, format);
+
+	reportError(format, args);
+	puts("\n");
+
+	va_end(args);
+}
+
+void reportError(Token *location, const char *format, ...) {
+	printErrorLocation(&location->start);
+
+	va_list args;
+	va_start(args, format);
+
+	reportError(format, args);
+	puts("\n");
+
+	va_end(args);
+}
+
+void reportExpectedError(Token *location, const char *format, ...) {
+	printErrorLocation(&location->start);
+
+	va_list args;
+	va_start(args, format);
+
+	reportError(format, args);
+	String token = getTokenString(location);
+	printf(" but got %.*s", static_cast<u32>(token.length), token.characters);
+	puts("\n");
+
+	va_end(args);
+}
 
 int main(int argc, char *argv[]) {
+#if PROFILE
+	u64 startTime;
+	QueryPerformanceCounter(reinterpret_cast<LARGE_INTEGER *>(&startTime));
+#endif
 
 	if (argc != 2) {
-		std::cout << "Expected argument to be name of input file" << std::endl;
+		reportError("Error: Expected name of input file");
+		reportError("Usage: %s <file>", argv[0]);
 	}
 
 	char *input = argv[1];
 
-	if (!PathFileExistsA(input)) {
-		std::cout << input << " doesn't exist" << std::endl;
-		return 1;
-	}
-
-	if (PathIsDirectoryA(input)) {
-		std::cout << input << " is a directory" << std::endl;
-		return 1;
-	}
-
 	auto start = std::chrono::high_resolution_clock::now();
 
-	std::thread infer(runInfer);
-	std::thread irGenerator(runIrGenerator);
-	std::thread coffWriter(runCoffWriter);
-	infer.detach();
-	irGenerator.detach();
+	if (!hadError && loadNewFile(String(input))) {
+		std::thread infer(runInfer);
+		std::thread irGenerator(runIrGenerator);
+		std::thread coffWriter(runCoffWriter);
+
+		SetThreadDescription(infer.native_handle(), L"Infer");
+		SetThreadDescription(irGenerator.native_handle(), L"Ir Generator");
+		SetThreadDescription(coffWriter.native_handle(), L"Coff Writer");
+
+		infer.detach();
+		irGenerator.detach();
+
+		{
+			u64 i;
+			for (i = 0; i < files.size(); i++) {
+				parseFile(getFileInfoByUid(i));
+
+				if (hadError) {
+					break;
+				}
+			}
+
+			inferQueue.add(makeStopSignal());
+
+			for (++i; i < files.size(); i++) { // Just for the 5% of times microsoft fails to close handles when a process terminates
+				CloseHandle(files[i].handle);
+			}
+		}
+		coffWriter.join();
 
 
-	LexerFile lexer = parseFile(reinterpret_cast<u8 *>(argv[1]));
-
-	coffWriter.join();
-
-	lexer.close();
-
-#if BUILD_WINDOWS
-	char buffer[256];
-
-	strcpy_s(buffer, "link out.obj /entry:main /nologo /defaultlib:kernel32 /debug");
-
-	STARTUPINFOA startup = {};
-	startup.cb = sizeof(STARTUPINFOA);
-
-	PROCESS_INFORMATION info;
-
-
-	if (!CreateProcessA(NULL, buffer, NULL, NULL, false, 0, NULL, NULL, &startup, &info)) {
-		std::cout << "Failed to run linker command" << std::endl;
+	std::cout << "It took me " << (std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::duration<double>(
+		std::chrono::high_resolution_clock::now() - start)).count() / 1000.0) << "ms";
 	}
 
-	CloseHandle(info.hThread);
+#if BUILD_WINDOWS
+	if (!hadError) {
+		char buffer[256];
 
-	WaitForSingleObject(info.hProcess, INFINITE);
-	CloseHandle(info.hProcess);
+		strcpy_s(buffer, "link out.obj /entry:main /nologo /defaultlib:kernel32 /debug");
+
+		STARTUPINFOA startup = {};
+		startup.cb = sizeof(STARTUPINFOA);
+
+		PROCESS_INFORMATION info;
+
+		if (!CreateProcessA(NULL, buffer, NULL, NULL, false, 0, NULL, NULL, &startup, &info)) {
+			std::cout << "Failed to run linker command" << std::endl;
+		}
+
+		CloseHandle(info.hThread);
+
+		WaitForSingleObject(info.hProcess, INFINITE);
+		CloseHandle(info.hProcess);
+	}
 #else
 // @Platform
 #error "Non windows builds are not supported" 
@@ -101,9 +239,6 @@ int main(int argc, char *argv[]) {
 	}
 
 #endif
-
-	std::cout << "It took me " << (std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::duration<double>(
-		std::chrono::high_resolution_clock::now() - start)).count() / 1000.0) << "ms";
 
 
 

@@ -2,6 +2,7 @@
 
 #include "Basic.h"
 #include "String.h"
+#include "CompilerMain.h"
 
 #define LITERAL_IS_DECIMAL 0x1
 #define LITERAL_IS_HEX 0x2
@@ -12,6 +13,8 @@
 #define LITERAL_IS_CHARACTER 0x8
 
 #define TOKEN(x) (static_cast<TokenT>(x))
+
+String getTokenString(Token *token);
 
 // Call it TokenT instead of TokenType since Windows.h defines TokenType, @Sigh
 enum class TokenT : u8 {
@@ -115,9 +118,8 @@ struct Token {
 };
 
 struct LexerFile {
-	HANDLE file;
-	HANDLE fileMap;
-	void *mapping;
+	char *text;
+
 	u64 bytesRemaining;
 	Array<u8> stringBuilder;
 
@@ -131,6 +133,5 @@ struct LexerFile {
 	void peekTokenTypes(u64 count, TokenT *buffer);
 	void advance();
 
-	void open(u8 *file);
-	void close();
+	bool open(FileInfo *file);
 };

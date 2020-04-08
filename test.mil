@@ -14,6 +14,22 @@
 */
 
 
+copy_string :: (s: string) -> string {
+	
+	memory: *u8 = allocate(string_length(s) + 1)
+	
+	buf := memory
+	
+	for s {
+		<< memory = it
+		memory += 1
+	}
+	
+	<< memory = 0
+	
+	return cast() buf
+}
+
 args: []string
 
 STD_INPUT_HANDLE: u32: 0xFFFF_FFF6 // -10
@@ -89,22 +105,6 @@ print_string :: (s: string) {
 
 std_out: HANDLE
 
-copy_string :: (s: string) -> string {
-	memory: *u8 = allocate(string_length(s) + 1)
-	
-	buf := memory
-	
-	while << s {
-		<< memory = << s
-		memory += 1
-		s += 1
-	}
-	
-	<< memory = 0
-	
-	return cast() buf
-}
-
 parse_command_line :: (cmd: string) -> [] string {
 	line := cast(*u8) copy_string(cmd)
 
@@ -116,7 +116,7 @@ parse_command_line :: (cmd: string) -> [] string {
 	if ! <<s
 		return args
 	
-	if << cmd == '"' {
+	if << s == '"' {
 		s += 1
 		line += 1
 		
@@ -124,7 +124,7 @@ parse_command_line :: (cmd: string) -> [] string {
 		
 		while << s {
 			if << s == '"'
-				break
+				break;
 			
 			line += 1
 			s += 1
@@ -134,7 +134,7 @@ parse_command_line :: (cmd: string) -> [] string {
 		
 		while << s {
 			if << s == ' ' || << s == '\t'
-				break
+				break;
 			
 			line += 1
 			s += 1
@@ -156,12 +156,14 @@ parse_command_line :: (cmd: string) -> [] string {
 		
 	add_string(*args, cast() line)
 	
+	// @Incomplete
+	
 	return args
 }
 
 main :: () -> s32 {
-	args.data = argv
-	args.count = cast(u64) argc
+	//args.data = argv
+	//args.count = cast(u64) argc
 
 	process_heap = GetProcessHeap()
 	std_out = GetStdHandle(STD_OUTPUT_HANDLE)

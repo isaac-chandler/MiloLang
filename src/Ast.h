@@ -269,7 +269,7 @@ struct Expr {
 	EndLocation end;
 	u64 flags = 0;
 
-	Declaration *declaration = nullptr;
+	Declaration *valueOfDeclaration = nullptr;
 
 	Type *type = nullptr;
 

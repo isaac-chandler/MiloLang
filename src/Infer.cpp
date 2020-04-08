@@ -27,6 +27,8 @@ struct InferJob {
 
 	Array<Expr **> valueFlattened;
 	u64 valueFlattenedIndex = 0;
+
+	InferJob() : valueFlattened(20) {}
 };
 
 WorkQueue<DeclarationPack> inferQueue;
@@ -35,6 +37,7 @@ static Array<InferJob> inferJobs;
 
 
 void flatten(Array<Expr **> &flattenTo, Expr **expr) {
+	//PROFILE_FUNC();
 	switch ((*expr)->flavor) {
 		case ExprFlavor::IDENTIFIER: {
 			flattenTo.add(expr);
@@ -423,11 +426,11 @@ bool isValidCast(Type *to, Type *from) {
 		return to->flavor == TypeFlavor::BOOL || to->flavor == TypeFlavor::FLOAT || (from->size == 8 && (to->flavor == TypeFlavor::FUNCTION || to->flavor == TypeFlavor::POINTER));
 	}
 	else if (from->flavor == TypeFlavor::POINTER) {
-		return to->flavor == TypeFlavor::BOOL || (to->flavor == TypeFlavor::INTEGER && to->size == 8);
+		return to->flavor == TypeFlavor::BOOL || (to->flavor == TypeFlavor::INTEGER && to->size == 8) || (from == getPointerTo(&TYPE_U8) && to->flavor == TypeFlavor::STRING);
 	}
 	else if (from->flavor == TypeFlavor::STRING) {
 		// @StringFormat when strings change to be equivalent to [] u8, stop casting to *u8
-		return to->flavor == TypeFlavor::BOOL || (to->flavor == TypeFlavor::POINTER && static_cast<TypePointer *>(to)->pointerTo == &TYPE_U8) || isVoidPointer(to);
+		return to->flavor == TypeFlavor::BOOL || to == getPointerTo(&TYPE_U8) || isVoidPointer(to);
 	}
 	else if (from->flavor == TypeFlavor::ARRAY) {
 		// Casts between array types are handled above
@@ -1043,6 +1046,7 @@ bool assignOp(Type *correct, Expr *&given) {
 
 
 bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
+	PROFILE_FUNC();
 	for (; *index < flattened.count; ++ *index) {
 		auto exprPointer = flattened[*index];
 		auto expr = *exprPointer;
@@ -2111,10 +2115,10 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 					}
 					else if (loop->forBegin->type->flavor == TypeFlavor::STRING) {
 						if (loop->flags & EXPR_FOR_BY_POINTER) {
-							it->type = makeTypeLiteral(it->start, it->end, &TYPE_U8);
+							it->type = makeTypeLiteral(it->start, it->end, getPointerTo(&TYPE_U8));
 						}
 						else {
-							it->type = makeTypeLiteral(it->start, it->end, getPointerTo(&TYPE_U8));
+							it->type = makeTypeLiteral(it->start, it->end, &TYPE_U8);
 						}
 						it->flags |= DECLARATION_TYPE_IS_READY;
 					}
@@ -2216,6 +2220,7 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 
 					if (return_->value->type == &TYPE_AUTO_CAST) {
 						if (!tryAutoCast(return_->value, returnType)) {
+							assert(false); // @ErrorMessage
 							return false;
 						}
 					}
@@ -2608,6 +2613,7 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 }
 
 void runInfer() {
+	PROFILE_FUNC();
 	bool exit = false;
 
 	while (!exit) {
@@ -2703,7 +2709,7 @@ void runInfer() {
 							}
 						}
 
-						if (declaration->type && job.typeFlattenedIndex == job.typeFlattened.count) {
+						if (!(declaration->flags & DECLARATION_TYPE_IS_READY) && declaration->type && job.typeFlattenedIndex == job.typeFlattened.count) {
 							if (declaration->type->flavor != ExprFlavor::TYPE_LITERAL) {
 								assert(false); // @ErrorMessage could not evaluate type of declaration
 								goto error;

@@ -2,6 +2,7 @@
 
 #include "Basic.h"
 #include "Array.h"
+#include "String.h"
 
 #define UNICODE_MAX   0x10FFFF
 #define UTF8_CAPACITY 0x1FFFFF
@@ -89,13 +90,16 @@ inline __forceinline u32 utf32Build(const u8 *characters, u8 count) {
 
 
 u8 *isInvalidUtf8(u8 *string);
+u8 *isInvalidUtf8(String string);
 
 u32 *utf8ToUtf32(u8 *string);
 
 u64 utf8Len(u8 *string);
 
 u32 getSingleUtf32FromUtf8(u8 *string, u8 **newString);
+u32 getSingleUtf32FromUtf8(String string, String *newString);
 
 void appendUtf32ToUtf8(Array<u8> &string, u32 c);
 
 HANDLE createFileUtf8(u8 *filename, DWORD desiredAccess, DWORD shareMode, DWORD creationDisposition, DWORD flags);
+HANDLE createFileUtf8(String filename, DWORD desiredAccess, DWORD shareMode, DWORD creationDisposition, DWORD flags);

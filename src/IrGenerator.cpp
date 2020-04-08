@@ -575,6 +575,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 							}
 						}
 						case TypeFlavor::FUNCTION:
+						case TypeFlavor::STRING:
 							return rightReg; // These casts should be a nop
 						case TypeFlavor::TYPE:
 						case TypeFlavor::VOID:
@@ -1170,7 +1171,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				read.a = loop->irPointer;
 				read.opSize = 8;
 				read.dest = compareDest;
-				read.opSize = 1;
+				read.destSize = 1;
 			}
 			else if (loop->forBegin->type->flavor == TypeFlavor::ARRAY) {
 				if (loop->forBegin->type->flags & TYPE_ARRAY_IS_FIXED) {
@@ -1571,6 +1572,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 		}
 		default:
 			assert(false);
+			return DEST_NONE;
 	}
 }
 
@@ -1627,7 +1629,7 @@ void runIrGenerator() {
 
 		generateIr(&function->state, function->body, DEST_NONE);
 
-		// @Incomplete check wether the function actually returns instead of just adding a void return
+		// @Incomplete @ErrorMessage check wether the function actually returns instead of just adding a void return
 		Ir &ret = function->state.ir.add();
 		ret.op = IrOp::RETURN;
 		ret.a = 0;

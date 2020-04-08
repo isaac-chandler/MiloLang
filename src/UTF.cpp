@@ -48,6 +48,55 @@ u8 *isInvalidUtf8(u8 *string) {
 	return nullptr;
 }
 
+u8 *isInvalidUtf8(String string) {
+	while (string.length) {
+		u8 count = utf8ByteCount(string);
+
+		if (string.length < count) {
+			return reinterpret_cast<u8 *>(string.characters + string.length);
+		}
+
+#define TRAILING_ERROR(i) if ((string.characters[i] & UTF8_TRAILING_BYTE_MASK) != UTF8_TRAILING_BYTE) return reinterpret_cast<u8 *>(&string.characters[i]);
+
+		if (count == 1) {
+		}
+		else if (count == 2) {
+			TRAILING_ERROR(1);
+
+			if ((string.characters[0] & 0b000'1111'0) == 0) reinterpret_cast<u8 *>(&string.characters[0]); // The encoding is overlong if the 4msb are 0
+		}
+		else if (count == 3) {
+			TRAILING_ERROR(1);
+			TRAILING_ERROR(2);
+
+
+			u32 utf32 = utf32Build(reinterpret_cast<u8 *>(string.characters), 3);
+
+			if (utf32 < utf8Min[3 - 1]) return reinterpret_cast<u8 *>(&string.characters[0]); // The encoding is overlong if it is smaller than the utf8 3-byte min (could be encoded in fewer bytes)
+			if (IS_UTF16_RESERVED(utf32)) return reinterpret_cast<u8 *>(&string.characters[0]); // This is not valid unicded, as it breaks UTF-16
+		}
+		else if (count == 4) {
+			TRAILING_ERROR(1);
+			TRAILING_ERROR(2);
+			TRAILING_ERROR(3);
+
+			u32 utf32 = utf32Build(reinterpret_cast<u8 *>(string.characters), 4);
+
+			if (!UTF8_IN_RANGE(utf32, 4)) reinterpret_cast<u8 *>(&string.characters[0]); // Out of Unicode range
+		}
+		else {
+			return reinterpret_cast<u8 *>(&string.characters[0]);
+		}
+
+		string.characters += count;
+		string.length -= count;
+	}
+
+#undef TRAILING_ERROR
+
+	return nullptr;
+}
+
 u32 getSingleUtf32FromUtf8(u8 *string, u8 **newString) {
 	u8 *dummy = 0;
 
@@ -57,6 +106,18 @@ u32 getSingleUtf32FromUtf8(u8 *string, u8 **newString) {
 
 	*newString = string + count;
 	return utf32Build(string, count);
+}
+
+u32 getSingleUtf32FromUtf8(String string, String *newString) {
+	String dummy;
+
+	newString = newString ? newString : &dummy;
+
+	u8 count = utf8ByteCount(*string.characters);
+
+	newString->characters = string.characters + count;
+	newString->length -= count;
+	return utf32Build(reinterpret_cast<u8 *>(string.characters), count);
 }
 
 u64 utf8Len(u8 *string) {
@@ -83,6 +144,22 @@ static u64 utf8LenForUtf16(u8 *string) {
 		len += count == 4;
 		++len;
 		string += count;
+	}
+
+	return len;
+}
+
+static u64 utf8LenForUtf16(String string) {
+	assert(!isInvalidUtf8(string));
+
+	u64 len = 0;
+
+	while (string.length) {
+		u8 count = utf8ByteCount(string);
+		len += count == 4;
+		++len;
+		string.characters += count;
+		string.length -= count;
 	}
 
 	return len;
@@ -161,6 +238,69 @@ HANDLE createFileUtf8(u8 *filename, DWORD desiredAccess, DWORD shareMode, DWORD 
 			utf16[7] = '\\';
 
 			filename += 2;
+
+			for (u64 i = 0; i + 2 < len;) {
+				i += writeUtf16(&utf16[i + 8], getSingleUtf32FromUtf8(filename, &filename));
+			}
+
+			utf16[len + 6] = 0;
+		}
+		else {
+			utf16 = new u16[len + 5]; // Make space to prepend \\?\ so we can support long path lengths on Windows
+
+			utf16[0] = '\\';
+			utf16[1] = '\\';
+			utf16[2] = '?';
+			utf16[3] = '\\';
+
+			for (u64 i = 0; i < len;) {
+				i += writeUtf16(&utf16[i + 4], getSingleUtf32FromUtf8(filename, &filename));
+			}
+
+
+			utf16[len + 4] = 0;
+		}
+	}
+	else {
+		utf16 = new u16[len + 1];
+
+		for (u64 i = 0; i < len;) {
+			i += writeUtf16(&utf16[i], getSingleUtf32FromUtf8(filename, &filename));
+		}
+
+		utf16[len] = 0;
+	}
+
+
+	HANDLE handle = CreateFileW(reinterpret_cast<wchar_t *>(utf16), desiredAccess, shareMode, 0, creationDisposition, flags, 0);
+
+	delete[] utf16;
+
+	return handle;
+}
+
+HANDLE createFileUtf8(String filename, DWORD desiredAccess, DWORD shareMode, DWORD creationDisposition, DWORD flags) {
+	static_assert(sizeof(wchar_t) == sizeof(u16), "wchar_t should be UTF16");
+
+	u64 len = utf8LenForUtf16(filename);
+
+	u16 *utf16;
+	if (len >= MAX_PATH) {
+		if (len >= 2 && filename.characters[0] == '\\' && filename.characters[1] == '\\') { // If we have a windows UNC path, prepend \\?\UNC\ and remove the leading \\ 
+			utf16 = new u16[len + 7]; // Make space to prepend \\?\ so we can support long path lengths on Windows
+
+
+			utf16[0] = '\\';
+			utf16[1] = '\\';
+			utf16[2] = '?';
+			utf16[3] = '\\';
+			utf16[4] = 'U';
+			utf16[5] = 'N';
+			utf16[6] = 'C';
+			utf16[7] = '\\';
+
+			filename.characters += 2;
+			filename.length -= 2;
 
 			for (u64 i = 0; i + 2 < len;) {
 				i += writeUtf16(&utf16[i + 8], getSingleUtf32FromUtf8(filename, &filename));

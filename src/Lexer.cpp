@@ -43,15 +43,17 @@ static const Keyword keywords[] = {
 	{"#external", TokenT::EXTERNAL}
 };
 
+String getTokenString(Token *token) {
+	return String(getFileInfoByUid(token->start.fileUid)->data + token->start.locationInMemory, token->end.locationInMemory - token->start.locationInMemory, 0);
+}
+
 static u32 readCharacter(LexerFile *file, bool *endOfFile, bool silent = false) {
 	file->undoLocation = file->location;
 
 	if (file->bytesRemaining) {
-		auto &chars = file->location.locationInMemory;
-
 		*endOfFile = false;
 
-		u8 count = utf8ByteCount(*chars);
+		u8 count = utf8ByteCount(file->text[file->location.locationInMemory]);
 		if (!count) { // @ErrorMessage invalid UTF8
 			assert(silent);
 			return 0;
@@ -64,7 +66,7 @@ static u32 readCharacter(LexerFile *file, bool *endOfFile, bool silent = false) 
 
 		file->bytesRemaining -= count;
 
-		u32 utf32 = utf32Build(reinterpret_cast<u8 *>(chars), count);
+		u32 utf32 = utf32Build(reinterpret_cast<u8 *>(file->text + file->location.locationInMemory), count);
 
 		if (!UTF8_IN_RANGE(utf32, count)) { // @ErrorMessage invalid utf8
 			assert(silent);
@@ -76,7 +78,7 @@ static u32 readCharacter(LexerFile *file, bool *endOfFile, bool silent = false) 
 			return 0;
 		}
 
-		chars += count;
+		file->location.locationInMemory += count;
 
 		file->location.column++;
 		return utf32;
@@ -113,6 +115,7 @@ static s64 getDigitForBase(u32 c, u64 base) {
 }
 
 static TokenT advanceTokenType(LexerFile *lexer) {
+	PROFILE_FUNC();
 	bool endOfFile;
 	u32 c;
 
@@ -261,7 +264,7 @@ whitespace:
 			goto dot;
 		default:
 			if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_' || c == '#') {
-				lexer->token.text.characters = lexer->undoLocation.locationInMemory;
+				lexer->token.text.characters = lexer->text + lexer->undoLocation.locationInMemory;
 				lexer->token.text.hash = 0;
 				lexer->token.text.hash = updateHash(lexer->token.text.hash, static_cast<char>(c));
 				lexer->token.text.length = 1;
@@ -307,6 +310,7 @@ charEscape:
 	c = readCharacter(lexer, &endOfFile, true);
 
 	if (c == '\\') {
+		c = readCharacter(lexer, &endOfFile, true);
 		goto charLiteralEnd;
 	}
 	else if (c == '\'') {
@@ -322,27 +326,35 @@ charEscape:
 		}
 	}
 	else if (c == '"') {
+		c = readCharacter(lexer, &endOfFile, true);
 		goto charLiteralEnd;
 	}
 	else if (c == 't') {
+		c = readCharacter(lexer, &endOfFile, true);
 		goto charLiteralEnd;
 	}
 	else if (c == 'r') {
+		c = readCharacter(lexer, &endOfFile, true);
 		goto charLiteralEnd;
 	}
 	else if (c == 'n') {
+		c = readCharacter(lexer, &endOfFile, true);
 		goto charLiteralEnd;
 	}
 	else if (c == 'e') {
+		c = readCharacter(lexer, &endOfFile, true);
 		goto charLiteralEnd;
 	}
 	else if (c == 'b') {
+		c = readCharacter(lexer, &endOfFile, true);
 		goto charLiteralEnd;
 	}
 	else if (c == 'f') {
+		c = readCharacter(lexer, &endOfFile, true);
 		goto charLiteralEnd;
 	}
 	else if (c == 'v') {
+		c = readCharacter(lexer, &endOfFile, true);
 		goto charLiteralEnd;
 	}
 	else if (c == 'x') {
@@ -739,6 +751,7 @@ void LexerFile::peekTokenTypes(u64 count, TokenT *buffer) {
 }
 
 void LexerFile::advance() {
+	PROFILE_FUNC();
 	bool endOfFile;
 	u32 c;
 
@@ -953,7 +966,7 @@ whitespaceAlreadyRead:
 		default:
 			if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_' || c == '#') {
 				token.start = location;
-				token.text.characters = undoLocation.locationInMemory;
+				token.text.characters = text + undoLocation.locationInMemory;
 				token.text.hash = 0;
 				token.text.hash = updateHash(token.text.hash, static_cast<char>(c));
 				token.text.length = 1;
@@ -1043,34 +1056,42 @@ charEscape:
 	}
 	else if (c == '"') {
 		token.unsignedValue = '"';
+		c = readCharacter(this, &endOfFile);
 		goto charLiteralEnd;
 	}
 	else if (c == 't') {
 		token.unsignedValue = '\t';
+		c = readCharacter(this, &endOfFile);
 		goto charLiteralEnd;
 	}
 	else if (c == 'r') {
 		token.unsignedValue = '\r';
+		c = readCharacter(this, &endOfFile);
 		goto charLiteralEnd;
 	}
 	else if (c == 'n') {
 		token.unsignedValue = '\n';
+		c = readCharacter(this, &endOfFile);
 		goto charLiteralEnd;
 	}
 	else if (c == 'e') {
 		token.unsignedValue = '\x1b';
+		c = readCharacter(this, &endOfFile);
 		goto charLiteralEnd;
 	}
 	else if (c == 'b') {
 		token.unsignedValue = '\b';
+		c = readCharacter(this, &endOfFile);
 		goto charLiteralEnd;
 	}
 	else if (c == 'f') {
 		token.unsignedValue = '\f';
+		c = readCharacter(this, &endOfFile);
 		goto charLiteralEnd;
 	}
 	else if (c == 'v') {
 		token.unsignedValue = '\v';
+		c = readCharacter(this, &endOfFile);
 		goto charLiteralEnd;
 	}
 	else if (c == 'x') {
@@ -1649,32 +1670,35 @@ exponent:
 	assert(false);
 }
 
-void LexerFile::open(u8 *filename) {
-
-	file = createFileUtf8(filename, GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN);
-
-	assert(file != INVALID_HANDLE_VALUE); // @ErrorMessage
-	
-	fileMap = CreateFileMappingA(file, 0, PAGE_READONLY, 0, 0, 0);
-
-	// Error returns NULL here not INVALID_HANDLE_VALUE because Windows
-	assert(fileMap != NULL); // @ErrorMessage
-
-	mapping = MapViewOfFile(fileMap, FILE_MAP_READ, 0, 0, 0);
-	location.locationInMemory = static_cast<char *>(mapping);
-	location.line = 1;
-	location.column = 0;
-
-	// @Incomplete: set fileUid
+bool LexerFile::open(FileInfo *file) {
+	assert(file->handle != INVALID_HANDLE_VALUE);
 
 	LARGE_INTEGER size;
 
-	GetFileSizeEx(file, &size);
-	bytesRemaining = size.QuadPart;
-}
+	GetFileSizeEx(file->handle, &size);
 
-void LexerFile::close() {
-	UnmapViewOfFile(mapping);
-	CloseHandle(fileMap);
-	CloseHandle(file);
+	assert(size.QuadPart <= UINT32_MAX); // We read the entire file at once and read file only supports DWORD
+
+	text = static_cast<char *>(malloc(size.QuadPart));
+	file->data = text;
+	
+	DWORD bytesRead = 0;
+
+	if (!ReadFile(file->handle, text, size.LowPart, &bytesRead, nullptr)) {
+		CloseHandle(file->handle);
+		reportError("Error: failed to read file: %.*s", file->path.length, file->path.characters);
+		return false;
+	}
+	CloseHandle(file->handle);
+
+	assert(bytesRead == size.LowPart);
+
+	location.line = 1;
+	location.column = 0;
+	location.locationInMemory = 0;
+	location.fileUid = file->fileUid;
+	bytesRemaining = size.QuadPart;
+
+
+	return true;
 }

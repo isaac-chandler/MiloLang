@@ -36,12 +36,16 @@ public:
 		return array.end();
 	}
 
-	const T &operator[](u64 index) {
+	const T &operator[](u64 index) const {
+		return array[index];
+	}
+
+	T &operator[](u64 index) {
 		return array[index];
 	}
 
 	const u32 size() const {
-		return array.size();
+		return array.count;
 	}
 
 	void resize(u32 size) {

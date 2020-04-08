@@ -48,19 +48,19 @@ struct SPMCQueue {
 #endif
 
 struct WorkQueueAdd {
-	u64 &head;
-	u64 &tail;
+	volatile u64 &head;
+	volatile u64 &tail;
 
-	WorkQueueAdd(u64 &head, u64 &tail) : head(head), tail(tail) {}
+	WorkQueueAdd(volatile u64 &head, volatile u64 &tail) : head(head), tail(tail) {}
 
 	inline bool operator()() const { return tail + WORK_QUEUE_MAX_PENDING > head; }
 };
 
 struct WorkQueueTake {
-	u64 &head;
-	u64 &tail;
+	volatile u64 &head;
+	volatile u64 &tail;
 
-	WorkQueueTake(u64 &head, u64 &tail) : head(head), tail(tail) {}
+	WorkQueueTake(volatile u64 &head, volatile u64 &tail) : head(head), tail(tail) {}
 
 	inline bool operator()() const { return tail < head; }
 };
@@ -70,8 +70,8 @@ template <typename T>
 class WorkQueue {
 public:
 	T jobs[WORK_QUEUE_MAX_PENDING];
-	u64 head = 0;
-	u64 tail = 0;
+	volatile u64 head = 0;
+	volatile u64 tail = 0;
 
 	std::mutex mutex;
 

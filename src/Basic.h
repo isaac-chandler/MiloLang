@@ -34,9 +34,9 @@
 #define CONCAT2(x, y) x##y
 #define CONCAT(x, y) CONCAT2(x, y)
 #define PROFILE_FUNC()                 Timer CONCAT(timer,__LINE__)(__FUNCTION__)
-#define PROFILE_FUNC_DATA(data)        Timer CONCAT(timer,__LINE__)(__FUNCTION__, data)
+#define PROFILE_FUNC_DATA(data)        Timer CONCAT(timer,__LINE__)(__FUNCTION__, (char *)(data))
 #define PROFILE_ZONE(name)             Timer CONCAT(timer,__LINE__)(name)
-#define PROFILE_ZONE_DATA(name, data)  Timer CONCAT(timer,__LINE__)(name, data)
+#define PROFILE_ZONE_DATA(name, data)  Timer CONCAT(timer,__LINE__)(name, (char*)(data))
 #define PROFILE_START(name)			   startProfile(name)
 #define PROFILE_START_DATA(name, data) startProfile(name, data)
 #define PROFILE_END()                  endProfile()
@@ -70,7 +70,7 @@ typedef int64_t s64;
 #define CAST_FROM_SUBSTRUCT(castTo, subStruct, castFrom) (	reinterpret_cast<castTo *>(reinterpret_cast<u8 *>(castFrom) - offsetof(castTo, subStruct)) + ((decltype(castFrom)) 0 - (decltype(&((castTo *) 0)->subStruct)) 0)	)
 
 struct EndLocation {
-	char *locationInMemory;
+	u32 locationInMemory;
 	u32 line;
 	u32 column;
 };
@@ -107,7 +107,7 @@ struct Timer {
 		profiles[write].threadId = *reinterpret_cast<s32 *>(reinterpret_cast<u8 *>(__readgsqword(0x30)) + 0x48);
 	}
 
-	Timer(const char *name, const char *data) {
+	Timer(const char *name, char *data) {
 		u32 write = profileIndex++;
 
 		profiles[write].name = name;
@@ -138,7 +138,7 @@ inline void startProfile(const char *name) {
 	profiles[write].threadId = *reinterpret_cast<s32 *>(reinterpret_cast<u8 *>(__readgsqword(0x30)) + 0x48);
 }
 
-inline void startProfile(const char *name, const char *data) {
+inline void startProfile(const char *name, char *data) {
 	u32 write = profileIndex++;
 
 	profiles[write].name = name;
