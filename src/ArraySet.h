@@ -44,7 +44,7 @@ public:
 		return array[index];
 	}
 
-	const u32 size() const {
+	const u64 size() const {
 		return array.count;
 	}
 

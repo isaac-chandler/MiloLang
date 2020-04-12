@@ -3,17 +3,18 @@
 #include "Basic.h"
 #include "Array.h"
 
+#define STRING_PRINTF(val) static_cast<u32>((val).length), (val).characters
+
 struct String;
 
 
 struct String {
 	u64 length;
 	char *characters;
-	u32 hash;
 
-	String() : hash(0), length(0), characters(0) {};
+	String() : length(0), characters(0) {};
 	String(const char *cString);
-	String(char *characters, u64 length, u32 hash) : length(length), characters(characters), hash(hash) {};
+	String(char *characters, u64 length) : length(length), characters(characters) {};
 	String(const char *begin, const char *end);
 
 
@@ -25,16 +26,6 @@ struct String {
 
 	inline void free() { std::free(characters); }
 };
-
-inline u32 updateHash(u32 hash, char c) {
-	hash = (hash << 4) + c;
-	u32 high = hash & 0xF000'0000;
-
-	hash ^= high >> 24;
-	hash &= 0x0FFF'FFFF;
-
-	return hash;
-}
 
 inline char *copyString(const char *s) {
 	size_t len = strlen(s);
@@ -60,7 +51,6 @@ inline char *toCString(const String &s) {
 inline String copyString(const String &s) {
 	String result;
 	result.length = s.length;
-	result.hash = s.hash;
 	result.characters = static_cast<char *>(malloc(s.length));
 
 	memcpy(result.characters, s.characters, s.length);

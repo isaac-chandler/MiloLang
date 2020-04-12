@@ -2,35 +2,44 @@
 #include "String.h"
 
 String::String(const char *cString) {
+	length = strlen(cString);
+	
 	const char *s = cString;
-
-	hash = 0;
-	length = 0;
-	while (*s) {
-		hash = updateHash(hash, *s);
-		length++;
-		s++;
-	}
-
 	characters = static_cast<char *>(malloc(length));
 	memcpy(characters, cString, length);
 }
 
 String::String(const char *begin, const char *end) {
 	assert(end >= begin);
-	hash = 0;
 	length = (u32)(end - begin);
 
 	characters = static_cast<char *>(malloc(length));
 
 	for (u32 i = 0; i < length; i++) {
 		characters[i] = begin[i];
-		hash = updateHash(hash, begin[i]);
 	}
 }
 
 bool String::operator==(const String &other) const {
-	return length == other.length && hash == other.hash && !memcmp(characters, other.characters, length);
+	if (length != other.length) return false;
+
+	char *a = characters;
+	char *b = other.characters;
+
+	for (u64 i = 0; i < other.length / sizeof(u64); i++) {
+		if (*reinterpret_cast<u64 *>(a) != *reinterpret_cast<u64 *>(b))
+			false;
+
+		a += sizeof(u64);
+		b += sizeof(u64);
+	}
+
+	while (a < characters + length) {
+		if (*a != *b)
+			return false;
+	}
+
+	return true;
 }
 
 std::ostream &operator<<(std::ostream &out, const String &str) {

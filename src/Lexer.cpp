@@ -43,8 +43,71 @@ static const Keyword keywords[] = {
 	{"#external", TokenT::EXTERNAL}
 };
 
+/*
+struct BigInt {
+	SmallArray<u32, 8> numbers;
+
+
+	bool getU64(u64 *value);
+	double getDouble();
+};
+*/
+
+void BigInt::zero() {
+	numbers.clear();
+	numbers.add(0);
+}
+
+void BigInt::multiplyAdd(u32 multiplyBy, u32 add) {
+	u64 carry = add;
+
+	for (u32 i = 0; i < numbers.count; i++) {
+		u64 value = numbers[i] * multiplyBy + carry;
+		carry = value >> 32ULL;
+		numbers[i] = static_cast<u32>(value);
+	}
+
+	if (carry) {
+		numbers.add(static_cast<u32>(carry));
+	}
+}
+
+
+bool BigInt::getU64(u64 *value) {
+	if (numbers.count == 1) {
+		*value = numbers[0];
+		return true;
+	}
+	else if (numbers.count == 2) {
+		*value = (static_cast<u64>(numbers[1])) << 32ULL | static_cast<u64>(numbers[0]);
+		return true;
+	}
+	else {
+		assert(numbers.count);
+
+#if BUILD_DEBUG
+		assert(numbers[numbers.count] - 1 != 0);
+#endif
+		return false;
+	}
+}
+
+double BigInt::getDouble() {
+	double value = 0;
+
+	double multiply = 1;
+
+	// @Efficiency, we could just look at the 53 most significant bits, but how often do we have giant float literals
+	for (u64 i = 0; i < numbers.count; i++) {
+		value += numbers[i] * multiply;
+		multiply *= 0x1.P+32;
+	}
+
+	return value;
+}
+
 String getTokenString(Token *token) {
-	return String(getFileInfoByUid(token->start.fileUid)->data + token->start.locationInMemory, token->end.locationInMemory - token->start.locationInMemory, 0);
+	return String(getFileInfoByUid(token->start.fileUid)->data + token->start.locationInMemory, token->end.locationInMemory - token->start.locationInMemory);
 }
 
 static u32 readCharacter(LexerFile *file, bool *endOfFile, bool silent = false) {
@@ -54,13 +117,11 @@ static u32 readCharacter(LexerFile *file, bool *endOfFile, bool silent = false) 
 		*endOfFile = false;
 
 		u8 count = utf8ByteCount(file->text[file->location.locationInMemory]);
-		if (!count) { // @ErrorMessage invalid UTF8
-			assert(silent);
+		if (!count) {
 			return 0;
 		}
 
-		if (file->bytesRemaining < count) { // @ErrorMessage invalid utf8
-			assert(silent);
+		if (file->bytesRemaining < count) {
 			return 0;
 		}
 
@@ -68,13 +129,15 @@ static u32 readCharacter(LexerFile *file, bool *endOfFile, bool silent = false) 
 
 		u32 utf32 = utf32Build(reinterpret_cast<u8 *>(file->text + file->location.locationInMemory), count);
 
-		if (!UTF8_IN_RANGE(utf32, count)) { // @ErrorMessage invalid utf8
-			assert(silent);
+		if (!UTF8_IN_RANGE(utf32, count)) {
+			if (!silent) {
+				reportError(&file->location, "Error: Invalid UTF8 character");
+			}
+
 			return 0;
 		}
 
-		if (IS_UTF16_RESERVED(utf32)) { // @ErrorMessage invalid Unicode codepoint: breaks utf-16
-			assert(silent);
+		if (IS_UTF16_RESERVED(utf32)) {
 			return 0;
 		}
 
@@ -265,8 +328,6 @@ whitespace:
 		default:
 			if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_' || c == '#') {
 				lexer->token.text.characters = lexer->text + lexer->undoLocation.locationInMemory;
-				lexer->token.text.hash = 0;
-				lexer->token.text.hash = updateHash(lexer->token.text.hash, static_cast<char>(c));
 				lexer->token.text.length = 1;
 				goto identifier;
 			}
@@ -292,7 +353,7 @@ whitespace:
 	if (c == '\\') {
 		goto charEscape;
 	}
-	else if (c < ' ' && c != '\t') {
+	else if (c < ' ') {
 		return TokenT::INVALID;
 	}
 
@@ -412,7 +473,7 @@ stringLiteralRead:
 	else if (c == '\\') {
 		goto stringEscape;
 	}
-	else if (c < ' ' && c != '\t') {
+	else if (c < ' ') {
 		return TokenT::INVALID;
 	}
 	else {
@@ -595,7 +656,6 @@ identifier:
 
 	if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_') {
 		++lexer->token.text.length;
-		lexer->token.text.hash = updateHash(lexer->token.text.hash, static_cast<char>(c));
 		goto identifier;
 	}
 	else {
@@ -772,6 +832,8 @@ void LexerFile::advance() {
 	s64 digit;
 
 	previousTokenEnd = token.end;
+
+	bigInt.zero();
 
 whitespace:
 	c = readCharacter(this, &endOfFile);
@@ -967,14 +1029,12 @@ whitespaceAlreadyRead:
 			if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_' || c == '#') {
 				token.start = location;
 				token.text.characters = text + undoLocation.locationInMemory;
-				token.text.hash = 0;
-				token.text.hash = updateHash(token.text.hash, static_cast<char>(c));
 				token.text.length = 1;
 				goto identifier;
 			}
 			else if (c >= '1' && c <= '9') {
 				token.start = location;
-				token.unsignedValue = c - '0';
+				bigInt.multiplyAdd(10, c - '0');
 				token.flags |= LITERAL_IS_DECIMAL;
 				base = 10;
 				goto integerLiteral;
@@ -982,7 +1042,9 @@ whitespaceAlreadyRead:
 			else {
 				token.start = location;
 				token.end = location;
-				token.type = TokenT::INVALID; // @ErrorMessage
+				token.type = TokenT::INVALID;
+
+				reportError(&location, "Error: Invalid character"); // Don't try to print the character in case its invalid UTF8 or a control character
 				return;
 			}
 
@@ -995,17 +1057,19 @@ charLiteral:
 	c = readCharacter(this, &endOfFile);
 
 	if (endOfFile) {
-		token.end = location; // @ErrorMessage incomplete character literal
+		token.end = location;
 		token.type = TokenT::INVALID;
+		reportError(&location, "Error: Expected a ' to close character literal but hit the end of the file");
 		return;
 	}
 
 	if (c == '\\') {
 		goto charEscape;
 	}
-	else if (c < ' ' && c != '\t') {
-		token.end = location; // @ErrorMessage invalid character inside of character literal, use an escape
+	else if (c < ' ') {
+		token.end = location;
 		token.type = TokenT::INVALID;
+		reportError(&location, "Error: Expected a ' to close character literal but hit the end of the file");
 		return;
 	}
 	else {
@@ -1022,8 +1086,9 @@ charLiteralEnd:
 		return;
 	}
 	else {
-		token.end = location; // @ErrorMessage incomplete character literal
+		token.end = location;
 		token.type = TokenT::INVALID;
+		reportError(&location, "Error: Expected a ' to close character, character literals may only be 1 character long");
 		return;
 	}
 
@@ -1114,8 +1179,9 @@ charEscape:
 		goto charHexEscape;
 	}
 	else {
-		token.end = location; // @ErrorMessage invalid character escape
+		token.end = location;
 		token.type = TokenT::INVALID;
+		reportError(&location, "Error: Invalid escape in character literal");
 		return;
 	}
 
@@ -1129,7 +1195,8 @@ charHexEscape:
 	}
 	else {
 		token.end = location;
-		token.type = TokenT::INVALID; // @ErrorMessage invalid hex escape
+		token.type = TokenT::INVALID;
+		reportError(&location, "Error: Invalid hex digit in escape");
 		return;
 	}
 
@@ -1139,20 +1206,29 @@ charNumericEscape:
 	digit = getDigitForBase(c, base);
 
 	if (digit >= 0) {
-		token.unsignedValue *= base; // @ErrorMessage catch overflow here
+		if (token.unsignedValue > UINT64_MAX / base) {
+			token.end = location;
+			token.type = TokenT::INVALID;
+			reportError(&location, "Error: Character escape value is too large");
+			return;
+		}
+
+		token.unsignedValue *= base;
 		token.unsignedValue += digit;
 	}
 	else if (c == '\\') {
 		if (token.unsignedValue > escapeMaxValue) {
 			token.end = location;
-			token.type = TokenT::INVALID; // @ErrorMessage escape too large
+			token.type = TokenT::INVALID;
+			reportError(&location, "Error: Character escape value is too large");
 			return;
 		}
 
 		if (escapeIsUnicode) {
 			if (IS_UTF16_RESERVED(token.unsignedValue)) {
 				token.end = location;
-				token.type = TokenT::INVALID; // @ErrorMessage invalid unicode
+				token.type = TokenT::INVALID;
+				reportError(&location, "Error: Character escape value is invalid unicode");
 				return;
 			}
 		}
@@ -1163,14 +1239,16 @@ charNumericEscape:
 	else {
 		if (token.unsignedValue > escapeMaxValue) {
 			token.end = location;
-			token.type = TokenT::INVALID; // @ErrorMessage escape too large
+			token.type = TokenT::INVALID;
+			reportError(&location, "Error: Character escape value is too large");
 			return;
 		}
 
 		if (escapeIsUnicode) {
 			if (IS_UTF16_RESERVED(token.unsignedValue)) {
 				token.end = location;
-				token.type = TokenT::INVALID; // @ErrorMessage invalid unicode
+				token.type = TokenT::INVALID;
+				reportError(&location, "Error: Character escape value is invalid unicode");
 				return;
 			}
 		}
@@ -1182,8 +1260,9 @@ stringLiteral:
 
 stringLiteralRead:
 	if (endOfFile) {
-		token.end = location; // @ErrorMessage incomplete string literal
+		token.end = location;
 		token.type = TokenT::INVALID;
+		reportError(&location, "Error: File ended before string literal");
 		return;
 	}
 	else if (c == '"') {
@@ -1195,9 +1274,10 @@ stringLiteralRead:
 	else if (c == '\\') {
 		goto stringEscape;
 	}
-	else if (c < ' ' && c != '\t') {
-		token.end = location; // @ErrorMessage invalid character inside of string literal, use an escape
+	else if (c < ' ') {
+		token.end = location;
 		token.type = TokenT::INVALID;
+		reportError(&location, "Error: Invalid character in string literal");
 		return;
 	}
 	else {
@@ -1282,7 +1362,8 @@ stringHexEscape:
 	}
 	else {
 		token.end = location;
-		token.type = TokenT::INVALID; // @ErrorMessage invalid hex escape
+		token.type = TokenT::INVALID;
+		reportError(&location, "Error: Invalid hex digit in string escape");
 		return;
 	}
 
@@ -1292,20 +1373,29 @@ stringNumericEscape:
 	digit = getDigitForBase(c, base);
 
 	if (digit >= 0) {
-		token.unsignedValue *= base; // @ErrorMessage catch overflow here
+		if (token.unsignedValue > UINT64_MAX / base) {
+			token.end = location;
+			token.type = TokenT::INVALID;
+			reportError(&location, "Error: String escape value is too large");
+			return;
+		}
+
+		token.unsignedValue *= base;
 		token.unsignedValue += digit;
 	}
 	else if (c == '\\') {
 		if (token.unsignedValue > escapeMaxValue) {
 			token.end = location;
-			token.type = TokenT::INVALID; // @ErrorMessage escape too large
+			token.type = TokenT::INVALID;
+			reportError(&location, "Error: String escape value is too large");
 			return;
 		}
 
 		if (escapeIsUnicode) {
 			if (IS_UTF16_RESERVED(token.unsignedValue)) {
 				token.end = location;
-				token.type = TokenT::INVALID; // @ErrorMessage invalid unicode
+				token.type = TokenT::INVALID;
+				reportError(&location, "Error: String escape value is too large");
 				return;
 			}
 
@@ -1319,14 +1409,16 @@ stringNumericEscape:
 	else {
 		if (token.unsignedValue > escapeMaxValue) {
 			token.end = location;
-			token.type = TokenT::INVALID; // @ErrorMessage escape too large
+			token.type = TokenT::INVALID;
+			reportError(&location, "Error: String escape value is too large");
 			return;
 		}
 
 		if (escapeIsUnicode) {
 			if (IS_UTF16_RESERVED(token.unsignedValue)) {
 				token.end = location;
-				token.type = TokenT::INVALID; // @ErrorMessage invalid unicode
+				token.type = TokenT::INVALID;
+				reportError(&location, "Error: String escape value is too large");
 				return;
 			}
 
@@ -1342,7 +1434,7 @@ zero:
 	c = readCharacter(this, &endOfFile);
 
 	if (c >= '0' && c <= '9') {
-		token.unsignedValue = c - '0';
+		bigInt.multiplyAdd(10, c - '0');
 
 		base = 10;
 		token.flags |= LITERAL_IS_DECIMAL;
@@ -1506,7 +1598,6 @@ identifier:
 
 	if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_') {
 		++token.text.length;
-		token.text.hash = updateHash(token.text.hash, static_cast<char>(c));
 		goto identifier;
 	}
 	else {
@@ -1523,8 +1614,9 @@ identifier:
 		}
 		
 		if (token.text.characters[0] == '#') {
-			assert(false); // @ErrorMessage invalid compiler directive
+			assert(false);
 			token.type = TokenT::INVALID;
+			reportError(&location, "Error: Invalid compiler directive '%.*s", STRING_PRINTF(token.text));
 			return;
 		}
 
@@ -1538,8 +1630,7 @@ integerLiteral:
 	digit = getDigitForBase(c, base);
 
 	if (digit >= 0) {
-		token.unsignedValue *= base;
-		token.unsignedValue += static_cast<u64>(digit); // @ErrorMessage bounds check
+		bigInt.multiplyAdd(base, digit);
 		goto integerLiteral;
 	}
 	else if (c == '.') {
@@ -1561,6 +1652,12 @@ integerLiteral:
 		undoReadChar(this, c);
 		token.end = location;
 		token.type = TokenT::INT_LITERAL;
+
+		if (!bigInt.getU64(&token.unsignedValue)) {
+			token.type = TokenT::INVALID;
+			reportError(&location, "Error: integer literal too large, the maximum value is %" PRIu64, UINT64_MAX);
+		}
+
 		return;
 	}
 
@@ -1571,8 +1668,7 @@ decimalPoint:
 	digit = getDigitForBase(c, base);
 
 	if (digit >= 0) {
-		token.unsignedValue *= base;
-		token.unsignedValue += static_cast<u64>(digit); // @ErrorMessage bounds check
+		bigInt.multiplyAdd(base, digit);
 		++digitsAfterDecimal;
 		goto decimalPoint;
 	}
@@ -1591,8 +1687,8 @@ decimalPoint:
 	else {
 		undoReadChar(this, c);
 		token.end = location;
-		token.type = TokenT::FLOAT_LITERAL;
-		token.floatValue = token.unsignedValue *          // @Improvement, do this calculation in such a way that we get the maximum possible precision for float literals
+		token.type = TokenT::FLOAT_LITERAL; // @Incomplete: bounds check float literals
+		token.floatValue = bigInt.getDouble() *          // @Improvement, do this calculation in such a way that we get the maximum possible precision for float literals
 			pow(static_cast<double>(base), -digitsAfterDecimal);
 		return;
 	}
@@ -1605,7 +1701,7 @@ exponentSign:
 	if (digit >= 0) {
 		exponentIsNegative = false;
 		exponent *= exponentBase;
-		exponent += static_cast<u64>(digit); // @ErrorMessage bounds check
+		exponent += static_cast<u64>(digit);
 		goto exponent;
 	}
 	else if (c == '_') {
@@ -1621,7 +1717,8 @@ exponentSign:
 	}
 	else {
 		token.end = undoLocation;
-		token.type = TokenT::INVALID; // @ErrorMessage there must be an exponent
+		token.type = TokenT::INVALID;
+		reportError(&location, "Error: Expected float literal exponent");
 		return;
 	}
 
@@ -1632,7 +1729,8 @@ exponentDigit:
 
 	if (digit >= 0) {
 		exponent *= exponentBase;
-		exponent += static_cast<u64>(digit); // @ErrorMessage bounds check
+		exponent += static_cast<u64>(digit);
+
 		goto exponent;
 	}
 	else if (c == '_') {
@@ -1640,7 +1738,8 @@ exponentDigit:
 	}
 	else {
 		token.end = undoLocation;
-		token.type = TokenT::INVALID;// @ErrorMessage there must be an exponent
+		token.type = TokenT::INVALID;
+		reportError(&location, "Error: Expected float literal exponent");
 		return;
 	}
 
@@ -1651,7 +1750,27 @@ exponent:
 
 	if (digit >= 0) {
 		exponent *= exponentBase;
-		exponent += static_cast<u64>(digit); // @ErrorMessage bounds check
+		exponent += static_cast<u64>(digit);
+
+
+		if (exponentIsNegative) {
+			if (exponent > 1074) {
+				token.end = location;
+				token.type = TokenT::INVALID;
+				reportError(&location, "Error: Expected float literal exponent to small, the minimum is -1074");
+				return;
+			}
+		}
+		else {
+
+			if (exponent > 1023) {
+				token.end = location;
+				token.type = TokenT::INVALID;
+				reportError(&location, "Error: Expected float literal exponent to large, the minimum is 1023");
+				return;
+			}
+		}
+
 		goto exponent;
 	}
 	else if (c == '_') {
@@ -1660,8 +1779,8 @@ exponent:
 	else {
 		undoReadChar(this, c);
 		token.end = location;
-		token.type = TokenT::FLOAT_LITERAL;
-		token.floatValue = token.unsignedValue *          // @Improvement, do this calculation in such a way that we get the maximum possible precision for float literals
+		token.type = TokenT::FLOAT_LITERAL; // @Incomplete: bounds check float literals
+		token.floatValue = bigInt.getDouble() *          // @Improvement, do this calculation in such a way that we get the maximum possible precision for float literals
 			pow(static_cast<double>(base), -digitsAfterDecimal) * 
 			pow(static_cast<double>(exponentBase), exponentIsNegative ? -exponent : exponent);
 		return;
@@ -1686,7 +1805,7 @@ bool LexerFile::open(FileInfo *file) {
 
 	if (!ReadFile(file->handle, text, size.LowPart, &bytesRead, nullptr)) {
 		CloseHandle(file->handle);
-		reportError("Error: failed to read file: %.*s", file->path.length, file->path.characters);
+		reportError("Error: failed to read file: %.*s", STRING_PRINTF(file->path));
 		return false;
 	}
 	CloseHandle(file->handle);

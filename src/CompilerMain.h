@@ -23,8 +23,16 @@ struct FileInfo { // @Platform
 bool loadNewFile(String file);
 FileInfo *getFileInfoByUid(u32 fileUid);
 
-void reportError(struct Expr *location, const char *format, ...);
-void reportError(struct Declaration *location, const char *format, ...);
-void reportError(struct Token *location, const char *format, ...);
-void reportExpectedError(struct Token *location, const char *format, ...);
-void reportError(const char *format, ...);
+#ifdef BUILD_WINDOWS
+#define CHECK_PRINTF _Printf_format_string_
+#else
+// @Incomplete: other compilers have versions of this
+#define CHECK_PRINTF
+#endif
+
+void reportError(struct Expr *location, CHECK_PRINTF const char *format, ...);
+void reportError(struct Declaration *location, CHECK_PRINTF const char *format, ...);
+void reportError(struct Token *location, CHECK_PRINTF const char *format, ...);
+void reportError(struct CodeLocation *location, CHECK_PRINTF const char *format, ...);
+void reportExpectedError(struct Token *location, CHECK_PRINTF const char *format, ...);
+void reportError(CHECK_PRINTF const char *format, ...);

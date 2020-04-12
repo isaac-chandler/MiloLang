@@ -14,11 +14,9 @@
 #include <stdlib.h>
 #include <mutex>
 #include <immintrin.h>
-#include <Shlwapi.h>
 #include <string_view>
-
-
-#include <charconv>
+#include <cinttypes>
+#include <stdarg.h>
 
 
 #undef small

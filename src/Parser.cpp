@@ -20,17 +20,8 @@ BucketedArenaAllocator parserArena(1024 * 1024);
 Block *currentBlock = nullptr;
 
 
-Declaration *findDeclaration(Block *block, String name) {
-	for (auto declaration : block->declarations) {
-		if (declaration->name == name) {
-			return declaration;
-		}
-	}
-
-	return nullptr;
-}
-
-static Declaration *resolveIdentifier(String name, bool *success) {
+// @Incomplete: this should probably be moved to type inference
+static Declaration *resolveIdentifier(Token *location, String name, bool *success) {
 	Block *block;
 
 	*success = true;
@@ -40,12 +31,13 @@ static Declaration *resolveIdentifier(String name, bool *success) {
 
 
 	for (block = currentBlock; block; block = block->parentBlock) {
-		if (Declaration *declaration = findDeclaration(block, name)) {
+		u64 index;
+		if (Declaration *declaration = findDeclaration(block, name, &index)) {
 
 			if (declaration->name == name) {
 				if (outsideOfFunction && !(declaration->flags & DECLARATION_IS_CONSTANT)) {
 					*success = false;
-					assert(false); // @ErrorMessage only constants in outer functions can be accessed
+					reportError(location, "Error: Cannot use a variable '%.*s from outer function, capture is not supported", STRING_PRINTF(name));
 					return nullptr;
 				}
 
@@ -53,7 +45,7 @@ static Declaration *resolveIdentifier(String name, bool *success) {
 			}
 		}
 
-		if (block->flags & BLOCK_IS_ARGUMENTS) { // If the block we were resolving is is function arguments, we can only resolve globals or constants in outer blocks
+		if (block->flags & BLOCK_IS_ARGUMENTS) { // If the block we were resolving is function arguments, we can only resolve globals or constants in outer blocks
 			outsideOfFunction = true;
 		}
 	}
@@ -65,18 +57,10 @@ bool addDeclarationToBlock(Block *block, Declaration *declaration) {
 	assert(block);
 	assert(declaration);
 
-	for (auto check = block; check; check = check->parentBlock) {
-		for (auto previous : check->declarations) {
-			if (previous->name == declaration->name) {
-				if (check == block) {
-					assert(false); // @ErrorMessage Cannot redeclare a variable within the same scope
-					return false;
-				}
-				else {
-					assert(false); // @ErrorMessage Cannot redeclare a variable in an outer local block
-					return false;
-				}
-			}
+	for (auto previous : block->declarations) {
+		if (previous->name == declaration->name) {
+			reportError(declaration, "Error: Cannot redeclare variable '%.*s' within the same scope", STRING_PRINTF(declaration->name));
+			reportError(previous, "<- Here is the location it was declared");
 		}
 	}
 
@@ -98,8 +82,9 @@ struct BinaryOperator {
 static BinaryOperator binaryOpPrecedences[] = {
 	{{TokenT::LOGIC_OR, TokenT::LOGIC_AND}}, 
 	{{TokenT::EQUAL, TokenT::NOT_EQUAL}},
+	{{TOKEN('|'), TOKEN('^'), TOKEN('&')}}, 
 	{{TOKEN('>'), TokenT::LESS_EQUAL, TOKEN('<'), TokenT::GREATER_EQUAL}},
-	{{TokenT::SHIFT_LEFT, TokenT::SHIFT_RIGHT, TOKEN('|'), TOKEN('^'), TOKEN('&')}},
+	{{TokenT::SHIFT_LEFT, TokenT::SHIFT_RIGHT}},
 	{{TOKEN('+'), TOKEN('-')}},
 	{{TOKEN('*'), TOKEN('/'), TOKEN('%')}},
 };
@@ -117,6 +102,12 @@ static u64 getTokenPrecedence(TokenT token) {
 }
 
 static void pushBlock(Block *block) {
+	if (currentBlock) {
+		block->indexInParent = currentBlock->declarations.count;
+	}
+	else {
+		block->indexInParent = 0;
+	}
 	block->parentBlock = currentBlock;
 	currentBlock = block;
 }
@@ -172,6 +163,7 @@ ExprLiteral *makeTypeLiteral(CodeLocation &start, EndLocation &end, Type *type) 
 	return literal;
 }
 
+
 ExprIdentifier *makeIdentifier(CodeLocation &start, EndLocation &end, Declaration *declaration) {
 	ExprIdentifier *identifier = PARSER_NEW(ExprIdentifier);
 	identifier->flavor = ExprFlavor::IDENTIFIER;
@@ -180,9 +172,11 @@ ExprIdentifier *makeIdentifier(CodeLocation &start, EndLocation &end, Declaratio
 	identifier->declaration = declaration;
 	identifier->name = declaration->name;
 	identifier->resolveFrom = nullptr;
+	identifier->indexInBlock = 0;
 	
 	return identifier;
 }
+
 
 ExprBinaryOperator *makeBinaryOperator(CodeLocation &start, EndLocation &end, TokenT op, Expr *left) {
 	ExprBinaryOperator *expr = PARSER_NEW(ExprBinaryOperator);
@@ -212,6 +206,7 @@ Expr *parseStatement(LexerFile *lexer) {
 		ExprLoop *loop = PARSER_NEW(ExprLoop);
 		loop->flavor = ExprFlavor::FOR;
 		loop->start = lexer->token.start;
+		loop->iteratorBlock.flags |= BLOCK_IS_LOOP;
 
 		EndLocation end = lexer->token.end;
 
@@ -240,7 +235,6 @@ Expr *parseStatement(LexerFile *lexer) {
 				it->flags |= DECLARATION_IS_ITERATOR_INDEX;
 
 				if (!addDeclarationToBlock(&loop->iteratorBlock, it_index)) {
-					assert(false); // @ErrorMessage
 					return nullptr;
 				}
 
@@ -260,7 +254,7 @@ Expr *parseStatement(LexerFile *lexer) {
 				lexer->advance();
 
 				if (lexer->token.type != TokenT::IDENTIFIER) {
-					assert(false); // @ErrorMessage
+					reportExpectedError(&lexer->token, "Error: Expected index variable name after ,");
 					return nullptr;
 				}
 
@@ -268,14 +262,13 @@ Expr *parseStatement(LexerFile *lexer) {
 				it->flags |= DECLARATION_IS_ITERATOR_INDEX;
 
 				if (!addDeclarationToBlock(&loop->iteratorBlock, it_index)) {
-					assert(false); // @ErrorMessage
 					return nullptr;
 				}
 
 				lexer->advance();
 
 				if (!expectAndConsume(lexer, ':')) {
-					assert(false); // @ErrorMessage
+					reportExpectedError(&lexer->token, "Error: Expected a ':' after index variable name");
 					return nullptr;
 				}
 			}
@@ -339,6 +332,7 @@ Expr *parseStatement(LexerFile *lexer) {
 		ExprLoop *loop = PARSER_NEW(ExprLoop);
 		loop->flavor = ExprFlavor::WHILE;
 		loop->start = lexer->token.start;
+		loop->iteratorBlock.flags |= BLOCK_IS_LOOP;
 
 		EndLocation end = lexer->token.end;
 
@@ -360,14 +354,6 @@ Expr *parseStatement(LexerFile *lexer) {
 				assert(lexer->token.type == TOKEN(':'));
 
 				lexer->advance();
-			}
-		}
-		else {
-			Declaration *it = makeIterator(loop->start, end, ""); // @Hack :AnonymousWhileLoopIterator
-			it->flags |= DECLARATION_IS_ITERATOR;
-
-			if (!addDeclarationToBlock(&loop->iteratorBlock, it)) {
-				assert(false); // Invalid code path, we should never fail to add something to an empty block
 			}
 		}
 
@@ -444,53 +430,38 @@ Expr *parseStatement(LexerFile *lexer) {
 		lexer->advance();
 
 		if (lexer->token.type == TokenT::IDENTIFIER) {
-			bool success;
-			Declaration *iterator = resolveIdentifier(lexer->token.text, &success);
+			auto identifier = PARSER_NEW(ExprIdentifier);
+			identifier->start = lexer->token.start;
+			identifier->end = lexer->token.end;
+			identifier->name = lexer->token.text;
+			identifier->flavor = ExprFlavor::IDENTIFIER;
+			identifier->resolveFrom = currentBlock;
+			identifier->flags |= EXPR_IDENTIFIER_IS_BREAK_OR_CONTINUE_LABEL;
 
-			if (!success)
-				return nullptr;
-
-			if (!iterator) {
-				assert(false); // @ErrorMessage
-				return nullptr;
+			if (currentBlock) {
+				identifier->indexInBlock = currentBlock->declarations.count;
 			}
 
-			if (!(iterator->flags & DECLARATION_IS_ITERATOR)) {
-				assert(false); // @ErrorMessage
-				return nullptr;
-			}
-
-			continue_->refersTo = CAST_FROM_SUBSTRUCT(ExprLoop, iteratorBlock, iterator->enclosingScope);
-
-			assert(continue_->refersTo->flavor == ExprFlavor::FOR || continue_->refersTo->flavor == ExprFlavor::WHILE);
+			continue_->label = identifier;
 
 			continue_->end = lexer->token.end;
 
 			lexer->advance();
 			return continue_;
 		}
-		else {
+		else { // @Cleanup: Currently unlabelled break is resolved during parse but labelled break is resolved far away in type inference, should this change?
+			continue_->label = nullptr;
 			continue_->end = lexer->previousTokenEnd;
 
 			// Don't pass through arguments blocks since we can't break from an inner function to an outer one
 			for (Block *block = currentBlock; block && !(block->flags & BLOCK_IS_ARGUMENTS); block = block->parentBlock) {
-
-				// @Hack :AnonymousWhileLoopIterator
-				// @Hack :AnonymousWhileLoopIterator
-				// @Hack :AnonymousWhileLoopIterator
-				// @Hack :AnonymousWhileLoopIterator
-				// @Hack :AnonymousWhileLoopIterator
-				// @Hack :AnonymousWhileLoopIterator
-				// To find the loop for break/continue we search through scopes until we find a scope that has its first variable as a loop iterator
-				//   - This means that the loop iterator needs to be the first variable in the scope - problematic if we switch to a hash table
-				//   - We have to insert an anonymous iterator into for loops declared with no label - a declaration with name ""
-				if (block->declarations.count && (block->declarations[0]->flags & DECLARATION_IS_ITERATOR)) {
+				if (block->flags & BLOCK_IS_LOOP) {
 					continue_->refersTo = CAST_FROM_SUBSTRUCT(ExprLoop, iteratorBlock, block);
 					return continue_;
 				}
 			}
 
-			assert(false); // @ErrorMessage cannot have a break/continue statement outside a loop
+			reportError(continue_, "Error: Cannot have a %s outside of a loop", continue_->flavor == ExprFlavor::BREAK ? "break" : "continue");
 			return nullptr;
 		}
 	}
@@ -558,7 +529,7 @@ Expr *parseStatement(LexerFile *lexer) {
 		MODIFY_ASSIGN(TokenT::OR_EQUALS)
 		else {
 			if (expr->flavor != ExprFlavor::FUNCTION_CALL) {
-				assert(false); // @ErrorMessage Expression has no side effects
+				reportError(expr, "Error: Can only have an assignment or function call expression at statement level");
 				return nullptr;
 			}
 
@@ -576,7 +547,7 @@ ExprBlock *parseBlock(LexerFile *lexer) {
 	pushBlock(&block->declarations);
 
 	if (!expectAndConsume(lexer, '{')) {
-		assert(false); // @ErrorMessage
+		reportError(&lexer->token, "Error: Expected '{' at the start of a block");
 		return nullptr;
 	}
 
@@ -598,7 +569,6 @@ ExprBlock *parseBlock(LexerFile *lexer) {
 					return nullptr;
 
 				if (!addDeclarationToCurrentBlock(declaration)) {
-					assert(false); // @ErrorMessage
 					return nullptr;
 				}
 
@@ -697,7 +667,8 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 				function->body = nullptr;
 				function->flags |= EXPR_FUNCTION_IS_EXTERNAL;
 
-				queueBlock(&function->arguments);
+				pushBlock(&function->arguments); // @Cleanup: These functions deal with properly setting up the blocks parent and queueing the block for infer even if we don't need to 
+				popBlock(&function->arguments);
 
 				_ReadWriteBarrier();
 				inferQueue.add(makeDeclarationPack(function));
@@ -738,7 +709,8 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 					function->body = nullptr;
 					function->flags |= EXPR_FUNCTION_IS_EXTERNAL;
 
-					queueBlock(&function->arguments);
+					pushBlock(&function->arguments);
+					popBlock(&function->arguments);
 
 					_ReadWriteBarrier();
 					inferQueue.add(makeDeclarationPack(function));
@@ -750,6 +722,8 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 					type->flavor = TypeFlavor::FUNCTION;
 					type->size = 8;
 					type->alignment = 8;
+					type->name.characters = 0;
+					type->name.length = 0;
 					type->argumentCount = 0;
 					type->argumentTypes = nullptr;
 					type->returnType = returnType;
@@ -768,7 +742,12 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 			lexer->peekTokenTypes(1, &peek);
 			
 			if (peek == TOKEN(':')) { // This is an argument declaration
-				Block argumentDeclarations;
+				ExprFunction *function = PARSER_NEW(ExprFunction);
+				function->flavor = ExprFlavor::FUNCTION;
+				function->start = start;
+				function->arguments.flags |= BLOCK_IS_ARGUMENTS;
+
+				pushBlock(&function->arguments);
 
 				do {
 					Declaration *declaration = parseDeclaration(lexer);
@@ -788,7 +767,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 						return nullptr;
 					}
 
-					if (!addDeclarationToBlock(&argumentDeclarations, declaration)) {
+					if (!addDeclarationToBlock(&function->arguments, declaration)) {
 						return nullptr;
 					}
 				} while (expectAndConsume(lexer, ','));
@@ -799,14 +778,8 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 				}
 
 				if (lexer->token.type == TOKEN('{')) {
-					ExprFunction *function = PARSER_NEW(ExprFunction);
-					function->flavor = ExprFlavor::FUNCTION;
-					function->start = start;
 					function->end = lexer->previousTokenEnd;
-					function->arguments = argumentDeclarations;
-					function->arguments.flags |= BLOCK_IS_ARGUMENTS;
 					function->returnType = makeTypeLiteral(function->start, function->end, &TYPE_VOID);
-					pushBlock(&function->arguments);
 
 					function->body = parseBlock(lexer);
 
@@ -821,17 +794,13 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 					lexer->advance();
 
 					ExprFunction *function = PARSER_NEW(ExprFunction);
-					function->flavor = ExprFlavor::FUNCTION;
-					function->start = start;
 					function->end = lexer->previousTokenEnd;
-					function->arguments = argumentDeclarations;
-					function->arguments.flags |= BLOCK_IS_ARGUMENTS;
 					function->returnType = makeTypeLiteral(function->start, function->end, &TYPE_VOID);
 
 					function->body = nullptr;
 					function->flags |= EXPR_FUNCTION_IS_EXTERNAL;
 
-					queueBlock(&function->arguments);
+					popBlock(&function->arguments);
 
 
 					_ReadWriteBarrier();
@@ -847,13 +816,8 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 					if (lexer->token.type == TOKEN('{')) {
 						ExprFunction *function = PARSER_NEW(ExprFunction);
-						function->flavor = ExprFlavor::FUNCTION;
-						function->start = start;
 						function->end = lexer->previousTokenEnd;
-						function->arguments = argumentDeclarations;
 						function->returnType = returnType;
-						function->arguments.flags |= BLOCK_IS_ARGUMENTS;
-						pushBlock(&function->arguments);
 
 						function->body = parseBlock(lexer);
 
@@ -868,17 +832,13 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 						lexer->advance();
 
 						ExprFunction *function = PARSER_NEW(ExprFunction);
-						function->flavor = ExprFlavor::FUNCTION;
-						function->start = start;
 						function->end = lexer->previousTokenEnd;
-						function->arguments = argumentDeclarations;
 						function->returnType = returnType;
-						function->arguments.flags |= BLOCK_IS_ARGUMENTS;
 
 						function->body = nullptr;
 						function->flags |= EXPR_FUNCTION_IS_EXTERNAL;
 
-						queueBlock(&function->arguments);
+						popBlock(&function->arguments);
 
 
 						_ReadWriteBarrier();
@@ -887,16 +847,20 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 						expr = function;
 					}
 					else {
+						popBlock(&function->arguments);
+
 						TypeFunction *type = PARSER_NEW(TypeFunction);
 						type->flavor = TypeFlavor::FUNCTION;
 						type->size = 8;
 						type->alignment = 8;
-						type->argumentCount = argumentDeclarations.declarations.count;
+						type->name.characters = 0;
+						type->name.length = 0;
+						type->argumentCount = function->arguments.declarations.count;
 						type->argumentTypes = PARSER_NEW_ARRAY(Expr *, type->argumentCount);
 						type->returnType = returnType;
 
-						for (u64 i = 0; i < argumentDeclarations.declarations.count; i++) {
-							auto declaration = argumentDeclarations.declarations[i];
+						for (u64 i = 0; i < function->arguments.declarations.count; i++) {
+							auto declaration = function->arguments.declarations[i];
 
 							if (declaration->initialValue) {
 								reportError(declaration, "Error: A function prototype cannot have a default value");
@@ -907,7 +871,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 							type->argumentTypes[i] = declaration->type;
 						}
 
-						argumentDeclarations.declarations.free();
+						function->arguments.declarations.free();
 
 						expr = makeTypeLiteral(start, lexer->previousTokenEnd, type);
 					}
@@ -943,6 +907,8 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 					type->returnType = returnType;
 					type->size = 8;
 					type->alignment = 8;
+					type->name.characters = 0;
+					type->name.length = 0;
 					type->argumentCount = 1;
 
 					type->argumentTypes = PARSER_NEW_ARRAY(Expr *, 1){ expr };
@@ -984,6 +950,8 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 				type->returnType = returnType;
 				type->size = 8;
 				type->alignment = 8;
+				type->name.characters = 0;
+				type->name.length = 0;
 				type->argumentCount = arguments.count;
 				type->argumentTypes = arguments.storage;
 
@@ -1004,7 +972,14 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		identifier->end = end;
 		identifier->name = lexer->token.text;
 		identifier->flavor = ExprFlavor::IDENTIFIER;
-		identifier->declaration = resolveIdentifier(identifier->name, &success); // This may fail to find the identifier which may mean that it is an identifier not yet declared in global scope or an error
+		identifier->resolveFrom = currentBlock;
+
+		if (currentBlock) {
+			identifier->indexInBlock = currentBlock->declarations.count;
+		}
+
+		/*
+		identifier->declaration = resolveIdentifier(&lexer->token, identifier->name, &success); // This may fail to find the identifier which may mean that it is an identifier not yet declared in global scope or an error
 
 		if (!success)
 			return nullptr;
@@ -1012,7 +987,6 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		if (!identifier->declaration) {
 			identifier->resolveFrom = currentBlock;
 		}
-
 		if (identifier->declaration && (identifier->declaration->flags & DECLARATION_IS_ITERATOR)) {
 			ExprLoop *loop = CAST_FROM_SUBSTRUCT(ExprLoop, iteratorBlock, identifier->declaration->enclosingScope);
 
@@ -1021,6 +995,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 				return nullptr;
 			}
 		}
+		*/
 
 		lexer->advance();
 

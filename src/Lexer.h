@@ -117,11 +117,22 @@ struct Token {
 	Token() {}
 };
 
+struct BigInt {
+	SmallArray<u32, 8> numbers;
+
+	void zero();
+	void multiplyAdd(u32 multiplyBy, u32 add);
+
+	bool getU64(u64 *value);
+	double getDouble();
+};
+
 struct LexerFile {
 	char *text;
 
 	u64 bytesRemaining;
 	Array<u8> stringBuilder;
+	BigInt bigInt;
 
 	CodeLocation location;
 	

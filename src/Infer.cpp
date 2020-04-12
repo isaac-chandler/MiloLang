@@ -7,7 +7,6 @@
 #include "CoffWriter.h"
 
 enum class InferType {
-	// FUNCTION_HEAD, 
 	FUNCTION_BODY, 
 	DECLARATION
 };
@@ -79,9 +78,19 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 		case ExprFlavor::STRING_LITERAL:
 		case ExprFlavor::FLOAT_LITERAL:
 		case ExprFlavor::INT_LITERAL:
-		case ExprFlavor::BREAK:
-		case ExprFlavor::CONTINUE:
 			break;
+		case ExprFlavor::BREAK:
+		case ExprFlavor::CONTINUE: {
+			auto continue_ = static_cast<ExprBreakOrContinue *>(*expr);
+
+			if (continue_->label) {
+				flatten(flattenTo, &continue_->label);
+			}
+
+			if (!continue_->refersTo) {
+				flattenTo.add(expr);
+			}
+		}
 		case ExprFlavor::BINARY_OPERATOR: {
 			ExprBinaryOperator *binary = static_cast<ExprBinaryOperator *>(*expr);
 
@@ -261,31 +270,73 @@ void trySolidifyNumericLiteralToDefault(Expr *expr) {
 }
 
 // @Incomplete more specific handling so we can print the bounds that were violated
-bool boundsCheckImplicitConversion(Type *convertTo, ExprLiteral *convertFrom) {
+bool boundsCheckImplicitConversion(Expr *location, Type *convertTo, ExprLiteral *convertFrom) {
 	if (convertFrom->type == &TYPE_UNSIGNED_INT_LITERAL) {
 		if (convertTo == &TYPE_U64) {
 			return true;
 		}
 		else if (convertTo == &TYPE_U32) {
-			return convertFrom->unsignedValue <= static_cast<u64>(std::numeric_limits<u32>::max());
+			if (convertFrom->unsignedValue > UINT32_MAX) {
+				reportError(location, "Error: Integer literal too large for u32 (max: %" PRIu32 ", given: %" PRIu64 ")", UINT32_MAX, convertFrom->unsignedValue);
+
+				return false;
+			}
+
+			return true;
 		}
 		else if (convertTo == &TYPE_U16) {
-			return convertFrom->unsignedValue <= static_cast<u64>(std::numeric_limits<u16>::max());
+			if (convertFrom->unsignedValue > UINT16_MAX) {
+				reportError(location, "Error: Integer literal too large for u16 (max: %" PRIu16 ", given: %" PRIu64 ")", UINT16_MAX, convertFrom->unsignedValue);
+
+				return false;
+			}
+
+			return true;
 		}
 		else if (convertTo == &TYPE_U8) {
-			return convertFrom->unsignedValue <= static_cast<u64>(std::numeric_limits<u8>::max());
+			if (convertFrom->unsignedValue > UINT8_MAX) {
+				reportError(location, "Error: Integer literal too large for u8 (max: %" PRIu8 ", given: %" PRIu64 ")", UINT16_MAX, convertFrom->unsignedValue);
+
+				return false;
+			}
+
+			return true;
 		}
 		else if (convertTo == &TYPE_S64) {
-			return convertFrom->unsignedValue <= static_cast<u64>(std::numeric_limits<s64>::max());
+			if (convertFrom->unsignedValue > static_cast<u64>(INT64_MAX)) {
+				reportError(location, "Error: Integer literal too large for s64 (max: %" PRIi64 ", given: %" PRIu64 ")", INT64_MAX, convertFrom->unsignedValue);
+
+				return false;
+			}
+
+			return true;
 		}
 		else if (convertTo == &TYPE_S32) {
-			return convertFrom->unsignedValue <= static_cast<u64>(std::numeric_limits<s32>::max());
+			if (convertFrom->unsignedValue > static_cast<u64>(INT32_MAX)) {
+				reportError(location, "Error: Integer literal too large for s32 (max: %" PRIi32 ", given: %" PRIu64 ")", INT32_MAX, convertFrom->unsignedValue);
+
+				return false;
+			}
+
+			return true;
 		}
 		else if (convertTo == &TYPE_S16) {
-			return convertFrom->unsignedValue <= static_cast<u64>(std::numeric_limits<s16>::max());
+			if (convertFrom->unsignedValue > static_cast<u64>(INT16_MAX)) {
+				reportError(location, "Error: Integer literal too large for s16 (max: %" PRIi16 ", given: %" PRIu64 ")", INT16_MAX, convertFrom->unsignedValue);
+
+				return false;
+			}
+
+			return true;
 		}
 		else if (convertTo == &TYPE_S8) {
-			return convertFrom->unsignedValue <= static_cast<u64>(std::numeric_limits<s8>::max());
+			if (convertFrom->unsignedValue > static_cast<u64>(INT8_MAX)) {
+				reportError(location, "Error: Integer literal too large for s8 (max: %" PRIi8 ", given: %" PRIu64 ")", INT8_MAX, convertFrom->unsignedValue);
+
+				return false;
+			}
+
+			return true;
 		}
 		else {
 			assert(false);
@@ -299,16 +350,46 @@ bool boundsCheckImplicitConversion(Type *convertTo, ExprLiteral *convertFrom) {
 			return true;
 		}
 		else if (convertTo == &TYPE_S32) {
-			return convertFrom->signedValue <= static_cast<s64>(std::numeric_limits<s32>::max()) && 
-				convertFrom->signedValue >= static_cast<s64>(std::numeric_limits<s32>::min());
+			if (convertFrom->signedValue > INT32_MAX) {
+				reportError(location, "Error: Integer literal too large for s32 (max: %" PRIi32 ", given: %" PRIi64 ")", INT32_MAX, convertFrom->signedValue);
+
+				return false;
+			}
+			else if (convertFrom->signedValue < INT32_MIN) {
+				reportError(location, "Error: Integer literal too small for s32 (min: %" PRIi32 ", given: %" PRIi64 ")", INT32_MIN, convertFrom->signedValue);
+
+				return false;
+			}
+
+			return true;
 		}
 		else if (convertTo == &TYPE_S16) {
-			return convertFrom->signedValue <= static_cast<s64>(std::numeric_limits<s16>::max()) &&
-				convertFrom->signedValue >= static_cast<s64>(std::numeric_limits<s16>::min());
+			if (convertFrom->signedValue > INT16_MAX) {
+				reportError(location, "Error: Integer literal too large for s16 (max: %" PRIi16 ", given: %" PRIi64 ")", INT16_MAX, convertFrom->signedValue);
+
+				return false;
+			}
+			else if (convertFrom->signedValue < INT16_MIN) {
+				reportError(location, "Error: Integer literal too small for s16 (min: %" PRIi16 ", given: %" PRIi64 ")", INT16_MIN, convertFrom->signedValue);
+
+				return false;
+			}
+
+			return true;
 		}
 		else if (convertTo == &TYPE_S8) {
-			return convertFrom->signedValue <= static_cast<s64>(std::numeric_limits<s8>::max()) &&
-				convertFrom->signedValue >= static_cast<s64>(std::numeric_limits<s8>::min());
+			if (convertFrom->signedValue > INT8_MAX) {
+				reportError(location, "Error: Integer literal too large for s8 (max: %" PRIi8 ", given: %" PRIi64 ")", INT8_MAX, convertFrom->signedValue);
+
+				return false;
+			}
+			else if (convertFrom->signedValue < INT16_MIN) {
+				reportError(location, "Error: Integer literal too small for s8 (min: %" PRIi8 ", given: %" PRIi64 ")", INT8_MIN, convertFrom->signedValue);
+
+				return false;
+			}
+
+			return true;
 		}
 		else {
 			assert(false);
@@ -317,9 +398,10 @@ bool boundsCheckImplicitConversion(Type *convertTo, ExprLiteral *convertFrom) {
 	}
 }
 
-bool solidifyOneLiteralDriver(Expr *left, Expr *right, bool *success) {
-	assert(left->type != right->type);
-	*success = true;
+
+bool solidifyOneLiteral(ExprBinaryOperator *binary) {
+	auto left = binary->left;
+	auto right = binary->right;
 
 	if (left->type == &TYPE_FLOAT_LITERAL) {
 		assert(right->type->flavor == TypeFlavor::FLOAT);
@@ -330,9 +412,8 @@ bool solidifyOneLiteralDriver(Expr *left, Expr *right, bool *success) {
 		assert(right->type->flavor == TypeFlavor::INTEGER || right->type->flavor == TypeFlavor::FLOAT);
 
 		if (right->type->flavor == TypeFlavor::INTEGER) {
-			if (!boundsCheckImplicitConversion(right->type, static_cast<ExprLiteral *>(left))) {
-				assert(false); // @ErrorMessage cannot implicitly cast, value out of range
-				*success = false;
+			if (!boundsCheckImplicitConversion(binary, right->type, static_cast<ExprLiteral *>(left))) {
+				return false;
 			}
 		}
 		else {
@@ -350,14 +431,13 @@ bool solidifyOneLiteralDriver(Expr *left, Expr *right, bool *success) {
 		assert(right->type->flavor == TypeFlavor::INTEGER);
 
 		if (!(right->flags & TYPE_INTEGER_IS_SIGNED)) {
-			assert(false); // @ErrorMessage signed-unsigned mismatch
-			*success = false;
+			reportError(binary, "Error: Signed-unsigned mismatch, cannot convert s64 to %.*s", STRING_PRINTF(right->type->name));
+			return false;
 		}
 
 		if (right->type->flavor == TypeFlavor::INTEGER) {
-			if (!boundsCheckImplicitConversion(right->type, static_cast<ExprLiteral *>(left))) {
-				assert(false); // @ErrorMessage cannot implicitly cast, value out of range
-				*success = false;
+			if (!boundsCheckImplicitConversion(binary, right->type, static_cast<ExprLiteral *>(left))) {
+				return false;
 			}
 		}
 		else {
@@ -371,21 +451,56 @@ bool solidifyOneLiteralDriver(Expr *left, Expr *right, bool *success) {
 
 		left->type = right->type;
 	}
-	else {
-		return false;
+	else if (right->type == &TYPE_FLOAT_LITERAL) {
+		assert(left->type->flavor == TypeFlavor::FLOAT);
+
+		right->type = left->type;
+	}
+	else if (right->type == &TYPE_UNSIGNED_INT_LITERAL) {
+		assert(left->type->flavor == TypeFlavor::INTEGER || left->type->flavor == TypeFlavor::FLOAT);
+
+		if (left->type->flavor == TypeFlavor::INTEGER) {
+			if (!boundsCheckImplicitConversion(binary, left->type, static_cast<ExprLiteral *>(right))) {
+				return false;
+			}
+		}
+		else {
+			assert(left->type->flavor == TypeFlavor::FLOAT);
+
+			auto literal = static_cast<ExprLiteral *>(right);
+
+			literal->flavor = ExprFlavor::FLOAT_LITERAL;
+			literal->floatValue = static_cast<double>(literal->unsignedValue);
+		}
+
+		right->type = left->type;
+	}
+	else if (right->type == &TYPE_SIGNED_INT_LITERAL) {
+		assert(left->type->flavor == TypeFlavor::INTEGER);
+
+		if (!(left->flags & TYPE_INTEGER_IS_SIGNED)) {
+			reportError(binary, "Error: Signed-unsigned mismatch, cannot convert %.*s to s64", STRING_PRINTF(left->type->name));
+			return false;
+		}
+
+		if (left->type->flavor == TypeFlavor::INTEGER) {
+			if (!boundsCheckImplicitConversion(binary, left->type, static_cast<ExprLiteral *>(right))) {
+				return false;
+			}
+		}
+		else {
+			assert(left->type->flavor == TypeFlavor::FLOAT);
+
+			auto literal = static_cast<ExprLiteral *>(right);
+
+			literal->flavor = ExprFlavor::FLOAT_LITERAL;
+			literal->floatValue = static_cast<double>(literal->signedValue);
+		}
+
+		right->type = left->type;
 	}
 
 	return true;
-}
-
-
-bool solidifyOneLiteral(ExprBinaryOperator *binary) {
-	bool success;
-
-	if (solidifyOneLiteralDriver(binary->left, binary->right, &success)) return success;
-	if (solidifyOneLiteralDriver(binary->right, binary->left , &success)) return success;
-
-	return false;
 }
 
 bool isVoidPointer(Type *type) {
@@ -394,7 +509,13 @@ bool isVoidPointer(Type *type) {
 
 
 bool isValidCast(Type *to, Type *from) {
+	
+
 	if (to->flavor == from->flavor) {
+		if (from->flavor == TypeFlavor::AUTO_CAST || from->flavor == TypeFlavor::TYPE || from->flavor == TypeFlavor::VOID) {
+			return false;
+		}
+
 		if (to->flavor == TypeFlavor::ARRAY) {
 			if (to->flags & (TYPE_ARRAY_IS_FIXED | TYPE_ARRAY_IS_DYNAMIC)) {
 				return typesAreSame(to, from);
@@ -438,7 +559,7 @@ bool isValidCast(Type *to, Type *from) {
 			(typesAreSame(static_cast<TypePointer *>(to)->pointerTo, static_cast<TypeArray *>(from)->arrayOf) || isVoidPointer(to)));
 	}
 	else {
-		assert(false); // @ErrorMessage
+		assert(false); // Invalid code path
 		return false;
 	}
 }
@@ -471,27 +592,6 @@ bool tryAutoCast(Expr *castExpr, Type *castTo) {
 
 	trySolidifyNumericLiteralToDefault(autoCast->right);
 
-	if (castTo->flavor == TypeFlavor::VOID) {
-		assert(false); // @ErrorMessage
-		return false;
-	}
-
-	if (castFrom->flavor == TypeFlavor::AUTO_CAST) {
-		assert(false); // @ErrorMessage
-		return false;
-	}
-
-	if (castFrom->flavor == TypeFlavor::TYPE) {
-		assert(false); // @ErrorMessage
-		return false;
-	}
-
-
-	if (castTo->flavor == TypeFlavor::TYPE) {
-		assert(false); // @ErrorMessage
-		return false;
-	}
-
 
 	assert(!(castTo->flags & TYPE_IS_INTERNAL));
 
@@ -521,7 +621,7 @@ bool binaryOpForFloat(ExprBinaryOperator *binary) {
 			// @Incomplete should we allow this conversion in some cases, this code was originally taken
 			// from == and != where float conversion definitely shouldn't be allowed, since that's alredy
 			// bad enough without the compiler converting types behind your back
-			assert(false); // @ErrorMessage cannot implicitly convert f32 and f64
+			reportError(binary, "Error: Cannot convert between %.*s and %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
 			return false;
 		}
 	}
@@ -546,7 +646,7 @@ bool assignOpForFloat(ExprBinaryOperator *binary) {
 			// @Incomplete should we allow this conversion in some cases, this code was originally taken
 			// from == and != where float conversion definitely shouldn't be allowed, since that's alredy
 			// bad enough without the compiler converting types behind your back
-			assert(false); // @ErrorMessage cannot implicitly convert f32 and f64
+			reportError(binary, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(right->type->name), STRING_PRINTF(left->type->name));
 			return false;
 		}
 	}
@@ -567,16 +667,14 @@ bool binaryOpForInteger(ExprBinaryOperator *binary) {
 	else {
 		if ((left->type->flags & TYPE_INTEGER_IS_SIGNED) == (right->type->flags & TYPE_INTEGER_IS_SIGNED)) {
 			if (left->type == &TYPE_UNSIGNED_INT_LITERAL || left->type == &TYPE_SIGNED_INT_LITERAL) {
-				if (!boundsCheckImplicitConversion(right->type, static_cast<ExprLiteral *>(left))) {
-					assert(false); // @ErrorMessage
+				if (!boundsCheckImplicitConversion(binary, right->type, static_cast<ExprLiteral *>(left))) {
 					return false;
 				}
 
 				left->type = right->type;
 			}
 			else if (right->type == &TYPE_UNSIGNED_INT_LITERAL || right->type == &TYPE_SIGNED_INT_LITERAL) {
-				if (!boundsCheckImplicitConversion(left->type, static_cast<ExprLiteral *>(right))) {
-					assert(false); // @ErrorMessage
+				if (!boundsCheckImplicitConversion(binary, left->type, static_cast<ExprLiteral *>(right))) {
 					return false;
 				}
 
@@ -595,8 +693,7 @@ bool binaryOpForInteger(ExprBinaryOperator *binary) {
 					right->type = &TYPE_S64;
 				}
 
-				if (!boundsCheckImplicitConversion(right->type, static_cast<ExprLiteral *>(left))) {
-					assert(false); // @ErrorMessage
+				if (!boundsCheckImplicitConversion(binary, right->type, static_cast<ExprLiteral *>(left))) {
 					return false;
 				}
 
@@ -607,15 +704,14 @@ bool binaryOpForInteger(ExprBinaryOperator *binary) {
 					left->type = &TYPE_S64;
 				}
 
-				if (!boundsCheckImplicitConversion(left->type, static_cast<ExprLiteral *>(right))) {
-					assert(false); // @ErrorMessage
+				if (!boundsCheckImplicitConversion(binary, left->type, static_cast<ExprLiteral *>(right))) {
 					return false;
 				}
 
 				right->type = left->type;
 			}
 			else {
-				assert(false); // @ErrorMessage signed-unsigned mismatch
+				reportError(binary, "Error: Signed-unsigned mismatch, cannot convert between %.*s and %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
 				return false;
 			}
 		}
@@ -637,8 +733,7 @@ bool assignOpForInteger(ExprBinaryOperator *binary) {
 	else {
 		if ((left->type->flags & TYPE_INTEGER_IS_SIGNED) == (right->type->flags & TYPE_INTEGER_IS_SIGNED)) {
 			if (right->type == &TYPE_UNSIGNED_INT_LITERAL || right->type == &TYPE_SIGNED_INT_LITERAL) {
-				if (!boundsCheckImplicitConversion(left->type, static_cast<ExprLiteral *>(right))) {
-					assert(false); // @ErrorMessage
+				if (!boundsCheckImplicitConversion(binary, left->type, static_cast<ExprLiteral *>(right))) {
 					return false;
 				}
 
@@ -648,21 +743,20 @@ bool assignOpForInteger(ExprBinaryOperator *binary) {
 				insertImplicitCast(&right, left->type);
 			}
 			else if (right->type->size < left->type->size) {
-				assert(false); // @ErrorMessage
+				reportError(binary, "Error: Cannot convert %.*s to %.*s, information could be lost", STRING_PRINTF(right->type->name), STRING_PRINTF(left->type->name));
 				return false;
 			}
 		}
 		else {
 			if ((right->type == &TYPE_UNSIGNED_INT_LITERAL) && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
-				if (!boundsCheckImplicitConversion(left->type, static_cast<ExprLiteral *>(right))) {
-					assert(false); // @ErrorMessage
+				if (!boundsCheckImplicitConversion(binary, left->type, static_cast<ExprLiteral *>(right))) {
 					return false;
 				}
 
 				right->type = left->type;
 			}
 			else {
-				assert(false); // @ErrorMessage signed-unsigned mismatch
+				reportError(binary, "Error: Signed-unsigned mismatch, cannot convert %.*s to %.*s", STRING_PRINTF(right->type->name), STRING_PRINTF(left->type->name));
 				return false;
 			}
 		}
@@ -679,6 +773,7 @@ bool binaryOpForAutoCast(ExprBinaryOperator *binary) {
 		trySolidifyNumericLiteralToDefault(right);
 
 		if (!tryAutoCast(left, right->type)) {
+			reportError(binary, "Error: Cannot cast from %.*s to %.*s", STRING_PRINTF(static_cast<ExprBinaryOperator *>(left)->right->type->name), STRING_PRINTF(right->type->name));
 			return false;
 		}
 
@@ -688,6 +783,7 @@ bool binaryOpForAutoCast(ExprBinaryOperator *binary) {
 		trySolidifyNumericLiteralToDefault(left);
 
 		if (!tryAutoCast(right, left->type)) {
+			reportError(binary, "Error: Cannot cast from %.*s to %.*s", STRING_PRINTF(static_cast<ExprBinaryOperator *>(right)->right->type->name), STRING_PRINTF(left->type->name));
 			return false;
 		}
 
@@ -701,17 +797,14 @@ bool assignOpForAutoCast(ExprBinaryOperator *binary) {
 	auto &left = binary->left;
 	auto &right = binary->right;
 
-	if (left->type->flavor == TypeFlavor::AUTO_CAST) {
-		assert(false); // @ErrorMessage
+	assert(right->type->flavor == TypeFlavor::AUTO_CAST);
+
+	if (!tryAutoCast(right, left->type)) {
+		reportError(binary, "Error: Cannot cast from %.*s to %.*s", STRING_PRINTF(static_cast<ExprBinaryOperator *>(right)->right->type->name), STRING_PRINTF(left->type->name));
 		return false;
 	}
-	else if (right->type->flavor == TypeFlavor::AUTO_CAST) {
-		if (!tryAutoCast(right, left->type)) {
-			return false;
-		}
 
-		return true;
-	}
+	return true;
 
 	return true;
 }
@@ -822,7 +915,7 @@ bool defaultValueIsZero(Type *type) {
 	}
 }
 
-Expr *createDefaultValue(Type *type) {
+Expr *createDefaultValue(Declaration *location, Type *type) {
 	switch (type->flavor) {
 		case TypeFlavor::BOOL:
 		case TypeFlavor::FLOAT:
@@ -861,7 +954,7 @@ Expr *createDefaultValue(Type *type) {
 				else {
 					defaults->storage = new Expr * [array->count];
 
-					Expr *value = createDefaultValue(array->arrayOf);
+					Expr *value = createDefaultValue(location, array->arrayOf);
 
 					for (u64 i = 0; i < array->count; i++) {
 						defaults->storage[i] = value;
@@ -876,7 +969,7 @@ Expr *createDefaultValue(Type *type) {
 			return defaults;
 		}
 		case TypeFlavor::TYPE: {
-			assert(false); // @ErrorMessage there is no default value for type
+			reportError(location, "Error: There is no default value for type");
 			return nullptr;
 		}
 		default: {
@@ -886,7 +979,7 @@ Expr *createDefaultValue(Type *type) {
 	}
 }
 
-bool assignOp(Type *correct, Expr *&given) {
+bool assignOp(Expr *location, Type *correct, Expr *&given) {
 	if (correct != given->type) {
 		if (correct->flavor == given->type->flavor) {
 			switch (correct->flavor) {
@@ -898,18 +991,18 @@ bool assignOp(Type *correct, Expr *&given) {
 									insertImplicitCast(&given, correct);
 								}
 								else {
-									assert(false);
-									return false; // @ErrorMessage
+									reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
+									return false;
 								}
 							}
 							else {
-								assert(false);
-								return false; // @ErrorMessage
+								reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
+								return false;
 							}
 						}
 						else {
-							assert(false);
-							return false; // @ErrorMessage
+							reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
+							return false;
 						}
 					}
 					break;
@@ -930,23 +1023,19 @@ bool assignOp(Type *correct, Expr *&given) {
 					}
 					else {
 						// @Incomplete should we allow this conversion in some cases, this code was originally taken
-						// from == and != where float conversion definitely shouldn't be allowed, since that's alredy
-						// bad enough without the compiler converting types behind your back
-						assert(false); // @ErrorMessage cannot implicitly convert f32 and f64
+						// from == and != where float conversion definitely shouldn't be allowed, since that's already
+						reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
 						return false;
 					}
 					break;
 				}
 				case TypeFlavor::FUNCTION: {
 					if (!typesAreSame(correct, given->type)) {
-						if (isVoidPointer(correct)) {
-							insertImplicitCast(&given, correct);
-						}
-						else if (isVoidPointer(given->type)) {
+						if (isVoidPointer(given->type)) {
 							insertImplicitCast(&given, correct);
 						}
 						else {
-							assert(false); // @ErrorMessage
+							reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
 							return false;
 						}
 					}
@@ -954,8 +1043,7 @@ bool assignOp(Type *correct, Expr *&given) {
 				case TypeFlavor::INTEGER: {
 					if ((correct->flags & TYPE_INTEGER_IS_SIGNED) == (given->type->flags & TYPE_INTEGER_IS_SIGNED)) {
 						if (given->type == &TYPE_UNSIGNED_INT_LITERAL || given->type == &TYPE_SIGNED_INT_LITERAL) {
-							if (!boundsCheckImplicitConversion(correct, static_cast<ExprLiteral *>(given))) {
-								assert(false); // @ErrorMessage
+							if (!boundsCheckImplicitConversion(location, correct, static_cast<ExprLiteral *>(given))) {
 								return false;
 							}
 
@@ -965,21 +1053,20 @@ bool assignOp(Type *correct, Expr *&given) {
 							insertImplicitCast(&given, correct);
 						}
 						else if (given->type->size < correct->size) {
-							assert(false); // @ErrorMessage
+							reportError(location, "Error: Cannot convert from %.*s to %.*s, precision will be lost", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
 							return false;
 						}
 					}
 					else {
 						if ((given->type == &TYPE_UNSIGNED_INT_LITERAL) && (correct->flags & TYPE_INTEGER_IS_SIGNED)) {
-							if (!boundsCheckImplicitConversion(correct, static_cast<ExprLiteral *>(given))) {
-								assert(false); // @ErrorMessage
+							if (!boundsCheckImplicitConversion(location, correct, static_cast<ExprLiteral *>(given))) {
 								return false;
 							}
 
 							given->type = correct;
 						}
 						else {
-							assert(false); // @ErrorMessage signed-unsigned mismatch
+							reportError(location, "Error: Signed-unsigned mismatch. Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
 							return false;
 						}
 					}
@@ -995,7 +1082,7 @@ bool assignOp(Type *correct, Expr *&given) {
 							insertImplicitCast(&given, correct);
 						}
 						else {
-							assert(false); // @ErrorMessage
+							reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
 							return false;
 						}
 					}
@@ -1004,7 +1091,7 @@ bool assignOp(Type *correct, Expr *&given) {
 				}
 				case TypeFlavor::TYPE: {
 					// @Incomplete make this work
-					assert(false); // @ErrorMessage cannot compare types
+					assert(false);
 					return false;
 				}
 				default:
@@ -1014,6 +1101,7 @@ bool assignOp(Type *correct, Expr *&given) {
 		else {
 			if (given->type->flavor == TypeFlavor::AUTO_CAST) {
 				if (!tryAutoCast(given, correct)) {
+					reportError(location, "Error: Cannot cast from %.*s to %.*s", STRING_PRINTF(static_cast<ExprBinaryOperator *>(given)->right->type->name), STRING_PRINTF(correct->name));
 					return false;
 				}
 			}
@@ -1034,7 +1122,7 @@ bool assignOp(Type *correct, Expr *&given) {
 				}
 
 				if (!typesAreSame(correct, given->type)) {
-					assert(false); // @ErrorMessage
+					reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
 					return false;
 				}
 			}
@@ -1056,40 +1144,83 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 
 				auto identifier = static_cast<ExprIdentifier *>(expr);
 				if (!identifier->declaration) {
+
+					bool outsideOfFunction = false;
+
 					for (; identifier->resolveFrom; identifier->resolveFrom = identifier->resolveFrom->parentBlock) {
 						if (!(identifier->resolveFrom->flags & BLOCK_IS_COMPLETE)) break;
 
-						if (Declaration *declaration = findDeclaration(identifier->resolveFrom, identifier->name)) {
+
+						u64 index;
+						if (Declaration *declaration = findDeclaration(identifier->resolveFrom, identifier->name, &index)) {
 							if (declaration->flags & DECLARATION_IS_CONSTANT) {
 								identifier->declaration = declaration;
 								break;
 							}
 							else {
-								assert(false); // @ErrorMessge Identifier cannot refer to a variable that was declared later in a block
-								return false;
+								if (identifier->flags & EXPR_IDENTIFIER_RESOLVING_IN_OUTER_FUNCTION) {
+									reportError(identifier, "Error: Cannot refer to %s from outer function, capture is not supported", (identifier->declaration->flags & DECLARATION_IS_ARGUMENT) ? "argument" : "variable");
+									return false;
+								}
+
+								if (index < identifier->indexInBlock) {
+									identifier->declaration = declaration;
+									break;
+								}
+								else {
+									reportError(identifier, "Error: Cannot refer to variable '%.*s' before it was declared", STRING_PRINTF(identifier->name));
+									reportError(identifier->declaration, "   ..: Here is the location of the declaration");
+									return false;
+								}
 							}
 						}
+
+						identifier->indexInBlock = identifier->resolveFrom->indexInParent;
+
+						if (identifier->resolveFrom->flags & BLOCK_IS_ARGUMENTS)
+							identifier->flags |= EXPR_IDENTIFIER_RESOLVING_IN_OUTER_FUNCTION;
 					}
 
-					if (!identifier->resolveFrom && !identifier->declaration) { // If we have checked all the local scopes and the 
-						identifier->declaration = findDeclaration(&globalBlock, identifier->name);
+					if (!identifier->resolveFrom && !identifier->declaration) { // If we have checked all the local scopes and the
+						u64 index;
+						identifier->declaration = findDeclaration(&globalBlock, identifier->name, &index);
 					}
 				}
 
 				if (identifier->declaration) {
-					if (identifier->declaration->flags & DECLARATION_TYPE_IS_READY) {
-						identifier->type = getDeclarationType(identifier->declaration);
+					if (identifier->flags & EXPR_IDENTIFIER_IS_BREAK_OR_CONTINUE_LABEL) {
+						// We shouldn't bother resolving types they aren't needed
+						// Replacing a constant would mean we have to check if the label
+						// is still an identifier when we infer break/continue and if we did that it would be a bad error message
+						// so we are done
+
 					}
 					else {
-						return true;
-					}
+						if (identifier->declaration->flags & DECLARATION_IS_ITERATOR) {
+							auto loop = CAST_FROM_SUBSTRUCT(ExprLoop, iteratorBlock, identifier->declaration->enclosingScope);
+							assert(loop->flavor == ExprFlavor::WHILE || loop->flavor == ExprFlavor::FOR);
 
-					if (identifier->declaration->flags & DECLARATION_IS_CONSTANT) {
-						if (identifier->declaration->flags & DECLARATION_VALUE_IS_READY) {
-							*exprPointer = identifier->declaration->initialValue;
+							if (loop->flavor == ExprFlavor::WHILE) {
+								reportError(identifier, "Error: Cannot use while loop label as a variable, it has no storage");
+								reportError(identifier->declaration, "   ..: Here is the location of the loop");
+								return false;
+							}
+						}
+
+						if (identifier->declaration->flags & DECLARATION_TYPE_IS_READY) {
+							identifier->type = getDeclarationType(identifier->declaration);
 						}
 						else {
 							return true;
+						}
+
+						if (identifier->declaration->flags & DECLARATION_IS_CONSTANT) {
+							if (identifier->declaration->flags & DECLARATION_VALUE_IS_READY) {
+								*exprPointer = identifier->declaration->initialValue;
+							}
+							else {
+								return true;
+							}
 						}
 					}
 				}
@@ -1103,7 +1234,14 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 				auto function = static_cast<ExprFunction *>(expr);
 
 				if (function->returnType->flavor != ExprFlavor::TYPE_LITERAL) {
-					assert(false); // @ErrorMessage return type must be a type
+					
+					if (function->returnType->type == &TYPE_TYPE) {
+						reportError(function->returnType, "Error: Function return type must evaluate to a constant");
+					}
+					else {
+						reportError(function->returnType, "Error: Function return type must be a type");
+					}
+
 					return false;
 				}
 
@@ -1117,17 +1255,16 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 						break;
 					}
 
-					if (argument->initialValue) {
-						if (argument->flags & DECLARATION_VALUE_IS_READY) {
-							if (!isLiteral(argument->type)) {
-								assert(false); // @ErrorMessage, default argument must be a constant
-								return false;
-							}
+
+					if (argument->initialValue && argument->flags & DECLARATION_VALUE_IS_READY) {
+						if (!isLiteral(argument->initialValue)) {
+							reportError(argument, "Error: Default arguments must be a constant value");
+							return false;
 						}
-						else {
-							argumentsInferred = false;
-							break;
-						}
+					}
+					else {
+						argumentsInferred = false;
+						break;
 					}
 				}
 
@@ -1153,6 +1290,8 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 					type->alignment = 8;
 					type->returnType = function->returnType;
 
+					generateTypeNameForFunction(type);
+
 					function->type = type;
 				}
 				else {
@@ -1161,14 +1300,49 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 				
 				break;
 			}
-			case ExprFlavor::TYPE_LITERAL:
+			case ExprFlavor::TYPE_LITERAL: {
+				auto type = static_cast<ExprLiteral *>(expr)->typeValue;
+
+				if (type->flavor == TypeFlavor::FUNCTION) {
+					auto function = static_cast<TypeFunction *>(type);
+
+					if (function->returnType->flavor != ExprFlavor::TYPE_LITERAL) {
+						assert(false); // @ErrorMessage
+						return false;
+					}
+
+					for (u64 i = 0; i < function->argumentCount; i++) {
+						if (function->argumentTypes[i]->flavor != ExprFlavor::TYPE_LITERAL) {
+							assert(false); // @ErrorMessage
+							return false;
+						}
+					}
+
+					generateTypeNameForFunction(function);
+				}
+
+				break;
+			}
 			case ExprFlavor::STRING_LITERAL:
 			case ExprFlavor::FLOAT_LITERAL:
 			case ExprFlavor::INT_LITERAL:
-			case ExprFlavor::BREAK:
-			case ExprFlavor::CONTINUE:
 			case ExprFlavor::BLOCK: {
 				break;
+			}
+			case ExprFlavor::BREAK:
+			case ExprFlavor::CONTINUE: {
+				auto continue_ = static_cast<ExprBreakOrContinue *>(expr);
+
+				assert(continue_->flavor == ExprFlavor::IDENTIFIER);
+				auto label = static_cast<ExprIdentifier *>(continue_->label);
+				assert(label->declaration);
+
+				if (!(label->declaration->flags & DECLARATION_IS_ITERATOR)) {
+					reportError(continue_, "Error: %s label '%.*s' is not a loop iterator", continue_->flavor == ExprFlavor::CONTINUE ? "Continue" : "Break", STRING_PRINTF(label->name));
+					return false;
+				}
+
+				continue_->refersTo = CAST_FROM_SUBSTRUCT(ExprLoop, iteratorBlock, label->declaration->enclosingScope);
 			}
 			case ExprFlavor::BINARY_OPERATOR: {
 				auto binary = static_cast<ExprBinaryOperator *>(expr);
@@ -1634,7 +1808,8 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 						}
 
 						if (!right) {
-							binary->right = createDefaultValue(binary->left->type);
+							assert(binary->left->flavor == ExprFlavor::IDENTIFIER);
+							binary->right = createDefaultValue(static_cast<ExprIdentifier *>(binary->left)->declaration, binary->left->type);
 							
 							if (!binary->right) {
 								return false;
@@ -1646,7 +1821,7 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 							assert(typesAreSame(binary->left->type, binary->right->type));
 						}
 						else {
-							if (!assignOp(left->type, binary->right)) {
+							if (!assignOp(binary, left->type, binary->right)) {
 								return false;
 							}
 
@@ -1908,9 +2083,6 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 
 
 						if (left) {
-							array = new TypeArray;
-							array->flavor = TypeFlavor::ARRAY;
-							array->arrayOf = type->typeValue;
 
 							if (left->type->flavor != TypeFlavor::INTEGER) {
 								assert(false); // @ErrorMessage
@@ -1934,11 +2106,7 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 								return false;
 							}
 
-							array->flags |= TYPE_ARRAY_IS_FIXED;
-							array->count = size->unsignedValue;
-							array->alignment = type->typeValue->alignment;
-							array->size = type->typeValue->size * size->unsignedValue;
-
+							array = getFixedArrayOf(type->typeValue, size->unsignedValue);
 						}
 						else {
 							if (expr->flags & EXPR_ARRAY_IS_DYNAMIC) {
@@ -2006,16 +2174,14 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 								trySolidifyNumericLiteralToDefault(loop->forEnd);
 							}
 							else if (loop->forBegin->type->size == 0) {
-								if (!boundsCheckImplicitConversion(loop->forEnd->type, static_cast<ExprLiteral *>(loop->forBegin))) {
-									assert(false); // @ErrorMessage
+								if (!boundsCheckImplicitConversion(loop, loop->forEnd->type, static_cast<ExprLiteral *>(loop->forBegin))) {
 									return false;
 								}
 
 								loop->forBegin->type = loop->forEnd->type;
 							}
 							else if (loop->forEnd->type->size == 0) {
-								if (!boundsCheckImplicitConversion(loop->forBegin->type, static_cast<ExprLiteral *>(loop->forEnd))) {
-									assert(false); // @ErrorMessage
+								if (!boundsCheckImplicitConversion(loop, loop->forBegin->type, static_cast<ExprLiteral *>(loop->forEnd))) {
 									return false;
 								}
 
@@ -2035,8 +2201,7 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 							if (loop->forBegin->type == &TYPE_UNSIGNED_INT_LITERAL) {
 								trySolidifyNumericLiteralToDefault(loop->forEnd);
 
-								if (!boundsCheckImplicitConversion(loop->forEnd->type, static_cast<ExprLiteral *>(loop->forBegin))) {
-									assert(false); // @ErrorMessage
+								if (!boundsCheckImplicitConversion(loop, loop->forEnd->type, static_cast<ExprLiteral *>(loop->forBegin))) {
 									return false;
 								}
 
@@ -2045,8 +2210,7 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 							else if (loop->forEnd->type == &TYPE_UNSIGNED_INT_LITERAL) {
 								trySolidifyNumericLiteralToDefault(loop->forBegin);
 
-								if (!boundsCheckImplicitConversion(loop->forBegin->type, static_cast<ExprLiteral *>(loop->forEnd))) {
-									assert(false); // @ErrorMessage
+								if (!boundsCheckImplicitConversion(loop, loop->forBegin->type, static_cast<ExprLiteral *>(loop->forEnd))) {
 									return false;
 								}
 
@@ -2170,7 +2334,7 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 
 					Type *correct = static_cast<ExprLiteral *>(function->argumentTypes[i])->typeValue;
 
-					if (!assignOp(correct, call->arguments[i])) {
+					if (!assignOp(call->arguments[i], correct, call->arguments[i])) {
 						return false;
 					}
 				}
@@ -2225,7 +2389,7 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 						}
 					}
 
-					if (!assignOp(returnType, return_->value)) {
+					if (!assignOp(return_, returnType, return_->value)) {
 						return false;
 					}
 				}
@@ -2400,12 +2564,26 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 							else {
 								if (value->type == &TYPE_UNSIGNED_INT_LITERAL) {
 									auto literal = static_cast<ExprLiteral *>(value);
-									if (!boundsCheckImplicitConversion(&TYPE_S64, literal)) {
-										assert(false); // @ErrorMessage
+									literal->start = unary->start;
+									
+									if (literal->unsignedValue > static_cast<u64>(INT64_MAX) + 1ULL) {
+										reportError(value, "Error: Integer literal too small, the minimum value is %" PRIi64, INT64_MIN);
 										return false;
 									}
 
+									literal->type = &TYPE_SIGNED_INT_LITERAL;
+
+									literal->signedValue = -literal->signedValue;
+									*exprPointer = value;
+								}
+								else if (value->type == &TYPE_SIGNED_INT_LITERAL) {
+									auto literal = static_cast<ExprLiteral *>(value);
 									literal->start = unary->start;
+
+									if (literal->signedValue == INT64_MIN) {
+										reportError(value, "Error: Integer literal too large, the maximum value is %" PRIi64, INT64_MAX);
+										return false;
+									}
 
 									literal->signedValue = -literal->signedValue;
 									*exprPointer = value;
@@ -2433,7 +2611,7 @@ bool inferFlattened(Array<Expr **> &flattened, u64 *index) {
 						break;
 					}
 					case TOKEN('+'): {
-						if (value->type->flavor == TypeFlavor::INTEGER) {
+						if (value->type->flavor == TypeFlavor::INTEGER) { // @Incomplete: Should unsigned int literals become signed?
 							value->start = unary->start;
 							*exprPointer = value;
 						}
@@ -2738,7 +2916,7 @@ void runInfer() {
 
 								Type *correct = static_cast<ExprLiteral *>(declaration->type)->typeValue;
 								
-								if (!assignOp(correct, declaration->initialValue)) {
+								if (!assignOp(declaration->initialValue, correct, declaration->initialValue)) {
 									assert(false);
 									goto error;
 								}
@@ -2760,7 +2938,7 @@ void runInfer() {
 								if (!(declaration->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_ARGUMENT | DECLARATION_IS_ITERATOR_INDEX | DECLARATION_IS_ITERATOR)) && declaration->enclosingScope == &globalBlock /* Declarations in local scope will be initialized in inferFlattened for the assign op they generate */) {
 									auto type = static_cast<ExprLiteral *>(declaration->type)->typeValue;
 
-									declaration->initialValue = createDefaultValue(type);
+									declaration->initialValue = createDefaultValue(declaration, type);
 
 									if (!declaration->initialValue) {
 										assert(false);

@@ -2,7 +2,6 @@
 #include "CoffWriter.h"
 #include "BucketedArenaAllocator.h"
 #include "Infer.h"
-#include "Parser.h"
 #include "CompilerMain.h"
 
 WorkQueue<CoffJob> coffWriterQueue;
@@ -41,7 +40,7 @@ void setSymbolName(BucketedArenaAllocator *stringTable, SymbolName *header, u64 
 	u64 characters = 0;
 
 
-	for (u64 shift = value ;;) {
+	for (u64 shift = value;;) {
 		++characters;
 
 		shift >>= 4;
@@ -53,7 +52,7 @@ void setSymbolName(BucketedArenaAllocator *stringTable, SymbolName *header, u64 
 		value >>= 4;
 	}
 
-	setSymbolName(stringTable, header, { buffer, characters + 1, 0 });
+	setSymbolName(stringTable, header, { buffer, characters + 1 });
 }
 
 #pragma pack(push, 1)
@@ -548,12 +547,21 @@ u32 *addRelocationToUnkownSymbol(BucketedArenaAllocator *allocator, u32 virtualA
 }
 Block externalsBlock;
 
-u32 createSymbolForFunction(BucketArray<Symbol> *symbols, ExprFunction *function) {
+u32 createSymbolForFunction(BucketArray<Symbol> *symbols, ExprFunction *function, bool *success) {
+	*success = true;
 	if (!(function->flags & EXPR_HAS_STORAGE)) {
 		function->flags |= EXPR_HAS_STORAGE;
 
 		if (function->flags & EXPR_FUNCTION_IS_EXTERNAL) {
-			if (Declaration *declaration = findDeclaration(&externalsBlock, function->valueOfDeclaration->name)) {
+			u64 index;
+
+			if (Declaration *declaration = findDeclaration(&externalsBlock, function->valueOfDeclaration->name, &index)) {
+				if (!typesAreSame(declaration->initialValue->type, function->type)) {
+					assert(false); // @ErrorMessage cannot define the same externals with different types
+					*success = false;
+					return 0;
+				}
+
 				return static_cast<ExprFunction *>(declaration->initialValue)->physicalStorage;
 			}
 			else {
@@ -568,7 +576,7 @@ u32 createSymbolForFunction(BucketArray<Symbol> *symbols, ExprFunction *function
 	return function->physicalStorage;
 }
 
-u32 createSymbolForString(s64 * emptyStringSymbolIndex, BucketArray<Symbol> *symbols, BucketedArenaAllocator *stringTable, BucketedArenaAllocator *rdata, ExprStringLiteral *string) {
+u32 createSymbolForString(s64 *emptyStringSymbolIndex, BucketArray<Symbol> *symbols, BucketedArenaAllocator *stringTable, BucketedArenaAllocator *rdata, ExprStringLiteral *string) {
 	if (string->string.length == 0) {
 		if (*emptyStringSymbolIndex == -1) {
 			*emptyStringSymbolIndex = symbols->count();
@@ -625,7 +633,7 @@ struct JumpPatch {
 	u64 rip;
 };
 
-void writeValue(BucketedArenaAllocator *data, BucketedArenaAllocator *dataRelocations, BucketArray<Symbol> *symbols, BucketedArenaAllocator *stringTable, Expr *value, s64 *emptyStringSymbolIndex, BucketedArenaAllocator *rdata) {
+bool writeValue(BucketedArenaAllocator *data, BucketedArenaAllocator *dataRelocations, BucketArray<Symbol> *symbols, BucketedArenaAllocator *stringTable, Expr *value, s64 *emptyStringSymbolIndex, BucketedArenaAllocator *rdata) {
 	auto type = value->type;
 
 	data->allocateUnaligned(AlignPO2(data->totalSize, type->alignment) - data->totalSize);
@@ -639,7 +647,14 @@ void writeValue(BucketedArenaAllocator *data, BucketedArenaAllocator *dataReloca
 	if (value->flavor == ExprFlavor::FUNCTION) {
 		assert(type->size == 8);
 		dataRelocations->add4(data->totalSize);
-		dataRelocations->add4(createSymbolForFunction(symbols, static_cast<ExprFunction *>(value)));
+
+		bool success;
+
+		dataRelocations->add4(createSymbolForFunction(symbols, static_cast<ExprFunction *>(value), &success));
+
+		if (!success)
+			return false;
+
 		dataRelocations->add2(IMAGE_REL_AMD64_ADDR64);
 
 		data->add8(0);
@@ -657,7 +672,9 @@ void writeValue(BucketedArenaAllocator *data, BucketedArenaAllocator *dataReloca
 
 		if (value->type->flags & TYPE_ARRAY_IS_FIXED) {
 			for (u64 i = 0; i < array->count; i++) {
-				writeValue(data, dataRelocations, symbols, stringTable, array->storage[i], emptyStringSymbolIndex, rdata);
+				if (!writeValue(data, dataRelocations, symbols, stringTable, array->storage[i], emptyStringSymbolIndex, rdata)) {
+					return false;
+				}
 			}
 		}
 		else {
@@ -665,7 +682,7 @@ void writeValue(BucketedArenaAllocator *data, BucketedArenaAllocator *dataReloca
 
 			data->add8(0);
 			data->add8(0);
-			
+
 			if (value->type->flags & TYPE_ARRAY_IS_DYNAMIC) {
 				data->add8(0);
 			}
@@ -690,6 +707,8 @@ void writeValue(BucketedArenaAllocator *data, BucketedArenaAllocator *dataReloca
 	else {
 		assert(false);
 	}
+
+	return true;
 }
 
 void runCoffWriter() {
@@ -722,7 +741,11 @@ void runCoffWriter() {
 		if (job.isFunction) {
 			auto function = job.function;
 
-			createSymbolForFunction(&symbols, function);
+			bool success;
+			createSymbolForFunction(&symbols, function, &success);
+
+			if (!success)
+				goto error;
 
 			if (function->flags & EXPR_FUNCTION_IS_EXTERNAL) {
 				assert(function->valueOfDeclaration);
@@ -1606,17 +1629,17 @@ void runCoffWriter() {
 					} break;
 					case IrOp::GOTO: {
 						code.add1(0xE9);
-						
+
 						JumpPatch patch;
 						patch.opToPatch = ir.b;
 						patch.location = reinterpret_cast<s32 *>(code.add4(0));
 						patch.rip = code.totalSize;
-						
+
 						jumpPatches.add(patch);
 					} break;
 					case IrOp::IF_Z_GOTO: {
 						loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
-						
+
 						if (ir.opSize == 8) {
 							code.add1(0x48);
 						}
@@ -1745,7 +1768,7 @@ void runCoffWriter() {
 						code.add1(0x48);
 						code.add1(0x8D);
 						code.add1(0x05);
-						
+
 						codeRelocations.add4(static_cast<u32>(code.totalSize));
 						codeRelocations.add4(createSymbolForDeclaration(&symbols, ir.declaration));
 						codeRelocations.add2(IMAGE_REL_AMD64_REL32);
@@ -2326,7 +2349,7 @@ void runCoffWriter() {
 							code.add1(0x89);
 							writeRSPOffsetByte(&code, RAX, (i + parameterOffset) * 8);
 						}
-						
+
 						if (!isStandardSize(ir.arguments->returnType->size)) {
 							code.add1(0x48);
 							code.add1(0x8D);
@@ -2405,7 +2428,13 @@ void runCoffWriter() {
 						code.add1(0x05);
 
 						codeRelocations.add4(code.totalSize);
-						codeRelocations.add4(createSymbolForFunction(&symbols, ir.function));
+
+						bool success;
+						codeRelocations.add4(createSymbolForFunction(&symbols, ir.function, &success));
+
+						if (!success)
+							goto error;
+
 						codeRelocations.add2(IMAGE_REL_AMD64_REL32);
 
 						code.add4(0);
@@ -2509,139 +2538,144 @@ void runCoffWriter() {
 				symbol->value = data.totalSize;
 				symbol->sectionNumber = DATA_SECTION_NUMBER;
 
-				writeValue(&data, &dataRelocations, &symbols, &stringTable, declaration->initialValue, &emptyStringSymbolIndex, &rdata);
+				if (!writeValue(&data, &dataRelocations, &symbols, &stringTable, declaration->initialValue, &emptyStringSymbolIndex, &rdata))
+					goto error;
 			}
 
 			symbol->numberOfAuxSymbols = 0;
 		}
 	}
 
-	u32 stringTableSize = sizeof(u32) + stringTable.totalSize;
-
-	struct Section {
-		SectionHeader *header;
-		BucketedArenaAllocator *data;
-		BucketedArenaAllocator *relocations;
-	};
-
-	Array<Section> sections;
-
-
-	SectionHeader rdataSection = {};
-	setSectionName(rdataSection.name, sizeof(rdataSection.name), ".rdata");
-	rdataSection.characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_ALIGN_4096BYTES;
-
-	setSectionName(bssSection.name, sizeof(bssSection.name), ".bss");
-	bssSection.characteristics = IMAGE_SCN_CNT_UNINITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE | IMAGE_SCN_ALIGN_4096BYTES;
-
-	SectionHeader dataSection = {};
-	setSectionName(dataSection.name, sizeof(dataSection.name), ".data");
-	dataSection.characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE | IMAGE_SCN_ALIGN_4096BYTES;
-
-	SectionHeader textSection = {};
-	setSectionName(textSection.name, sizeof(textSection.name), ".text");
-	textSection.characteristics = IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_ALIGN_4096BYTES;
-
-	sections.add({ &rdataSection, &rdata });
-	sections.add({ &bssSection });
-	sections.add({ &dataSection, &data, &dataRelocations });
-	sections.add({ &textSection, &code, &codeRelocations });
-
-
-
-	FileHeader header = {};
-	header.machine = IMAGE_FILE_MACHINE_AMD64;
-	header.numberOfSections = sections.count;
-	header.timestamp = (DWORD) time(0);
-	header.pointerToSymbolTable = sizeof(FileHeader) + sizeof(SectionHeader) * sections.count;
-	header.numberOfSymbols = symbols.count();
-	header.sizeOfOptionalHeader = 0;
-	header.characteristics = 0;
-
-	u32 prefixSize = header.pointerToSymbolTable + sizeof(Symbol) * symbols.count() + stringTableSize;
-
-
 	{
-		u32 sectionPointer = AlignPO2(prefixSize, 4);
+		u32 stringTableSize = sizeof(u32) + stringTable.totalSize;
 
-		for (auto section : sections) {
-			section.header->virtualAddress = 0;
+		struct Section {
+			SectionHeader *header;
+			BucketedArenaAllocator *data;
+			BucketedArenaAllocator *relocations;
+		};
 
-			if (section.data) {
-				section.header->virtualSize = section.data->totalSize;
+		Array<Section> sections;
 
-				section.header->sizeOfRawData = section.data->totalSize;
-				section.header->pointerToRawData = sectionPointer;
 
-				sectionPointer += AlignPO2(section.header->sizeOfRawData, 4);
+		SectionHeader rdataSection = {};
+		setSectionName(rdataSection.name, sizeof(rdataSection.name), ".rdata");
+		rdataSection.characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_ALIGN_4096BYTES;
 
-				if (section.relocations) {
-					section.header->pointerToRelocations = AlignPO2(sectionPointer, 4);
-					assert(section.relocations->totalSize / sizeof(Relocation) < UINT16_MAX);
+		setSectionName(bssSection.name, sizeof(bssSection.name), ".bss");
+		bssSection.characteristics = IMAGE_SCN_CNT_UNINITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE | IMAGE_SCN_ALIGN_4096BYTES;
 
-					section.header->numberOfRelocations = section.relocations->totalSize / sizeof(Relocation);
-					sectionPointer += AlignPO2(section.relocations->totalSize, 4);
+		SectionHeader dataSection = {};
+		setSectionName(dataSection.name, sizeof(dataSection.name), ".data");
+		dataSection.characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE | IMAGE_SCN_ALIGN_4096BYTES;
+
+		SectionHeader textSection = {};
+		setSectionName(textSection.name, sizeof(textSection.name), ".text");
+		textSection.characteristics = IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_ALIGN_4096BYTES;
+
+		sections.add({ &rdataSection, &rdata });
+		sections.add({ &bssSection });
+		sections.add({ &dataSection, &data, &dataRelocations });
+		sections.add({ &textSection, &code, &codeRelocations });
+
+
+
+		FileHeader header = {};
+		header.machine = IMAGE_FILE_MACHINE_AMD64;
+		header.numberOfSections = sections.count;
+		header.timestamp = (DWORD) time(0);
+		header.pointerToSymbolTable = sizeof(FileHeader) + sizeof(SectionHeader) * sections.count;
+		header.numberOfSymbols = symbols.count();
+		header.sizeOfOptionalHeader = 0;
+		header.characteristics = 0;
+
+		u32 prefixSize = header.pointerToSymbolTable + sizeof(Symbol) * symbols.count() + stringTableSize;
+
+
+		{
+			u32 sectionPointer = AlignPO2(prefixSize, 4);
+
+			for (auto section : sections) {
+				section.header->virtualAddress = 0;
+
+				if (section.data) {
+					section.header->virtualSize = section.data->totalSize;
+
+					section.header->sizeOfRawData = section.data->totalSize;
+					section.header->pointerToRawData = sectionPointer;
+
+					sectionPointer += AlignPO2(section.header->sizeOfRawData, 4);
+
+					if (section.relocations) {
+						section.header->pointerToRelocations = AlignPO2(sectionPointer, 4);
+						assert(section.relocations->totalSize / sizeof(Relocation) < UINT16_MAX);
+
+						section.header->numberOfRelocations = section.relocations->totalSize / sizeof(Relocation);
+						sectionPointer += AlignPO2(section.relocations->totalSize, 4);
+					}
+					else {
+						section.header->pointerToRelocations = 0;
+						section.header->numberOfRelocations = 0;
+					}
 				}
 				else {
+					section.header->sizeOfRawData = 0;
+					section.header->pointerToRawData = 0;
 					section.header->pointerToRelocations = 0;
 					section.header->numberOfRelocations = 0;
 				}
+
+
+				section.header->pointerToLinenumbers = 0;
+				section.header->numberOfLinenumbers = 0;
 			}
-			else {
-				section.header->sizeOfRawData = 0;
-				section.header->pointerToRawData = 0;
-				section.header->pointerToRelocations = 0;
-				section.header->numberOfRelocations = 0;
+		}
+
+		if (!hadError) {
+			HANDLE out = CreateFileA("out.obj", GENERIC_WRITE, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, 0);
+
+			DWORD written;
+			WriteFile(out, &header, sizeof(header), &written, 0);
+
+			for (auto section : sections) {
+				WriteFile(out, section.header, sizeof(*section.header), &written, 0);
 			}
 
 
-			section.header->pointerToLinenumbers = 0;
-			section.header->numberOfLinenumbers = 0;
+			//assert(ftell(out) == header.pointerToSymbolTable);
+			writeAllocator(out, symbols.allocator);
+
+			WriteFile(out, &stringTableSize, sizeof(stringTableSize), &written, 0);
+			writeAllocator(out, stringTable);
+
+			WriteFile(out, &alignmentPadding, AlignPO2(prefixSize, 4) - prefixSize, &written, 0);
+
+			for (u64 i = 0; i < sections.count; i++) {
+				auto section = sections[i];
+
+				if (section.data) {
+					//assert(section.header->pointerToRawData == ftell(out));
+					writeAllocator(out, *section.data);
+
+					WriteFile(out, &alignmentPadding, AlignPO2(section.data->totalSize, 4) - section.data->totalSize, &written, 0);
+				}
+
+				if (section.relocations) {
+					//assert(section.header->pointerToRelocations == ftell(out));
+
+					writeAllocator(out, *section.relocations);
+
+					WriteFile(out, &alignmentPadding, AlignPO2(section.relocations->totalSize, 4) - section.relocations->totalSize, &written, 0);
+				}
+			}
+
+			{
+				PROFILE_ZONE("fclose");
+
+				CloseHandle(out);
+			}
 		}
 	}
-
-	if (!hadError) {
-		HANDLE out = CreateFileA("out.obj", GENERIC_WRITE, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
-
-		DWORD written;
-		WriteFile(out, &header, sizeof(header), &written, 0);
-
-		for (auto section : sections) {
-			WriteFile(out, section.header, sizeof(*section.header), &written, 0);
-		}
-
-
-		//assert(ftell(out) == header.pointerToSymbolTable);
-		writeAllocator(out, symbols.allocator);
-
-		WriteFile(out, &stringTableSize, sizeof(stringTableSize), &written, 0);
-		writeAllocator(out, stringTable);
-
-		WriteFile(out, &alignmentPadding, AlignPO2(prefixSize, 4) - prefixSize, &written, 0);
-
-		for (u64 i = 0; i < sections.count; i++) {
-			auto section = sections[i];
-
-			if (section.data) {
-				//assert(section.header->pointerToRawData == ftell(out));
-				writeAllocator(out, *section.data);
-
-				WriteFile(out, &alignmentPadding, AlignPO2(section.data->totalSize, 4) - section.data->totalSize, &written, 0);
-			}
-
-			if (section.relocations) {
-				//assert(section.header->pointerToRelocations == ftell(out));
-
-				writeAllocator(out, *section.relocations);
-
-				WriteFile(out, &alignmentPadding, AlignPO2(section.relocations->totalSize, 4) - section.relocations->totalSize, &written, 0);
-			}
-		}
-
-		{
-			PROFILE_ZONE("fclose");
-
-			CloseHandle(out);
-		}
-	}
+error:
+	;
 }

@@ -1425,7 +1425,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			return dest;
 		}
 		case ExprFlavor::TYPE_LITERAL: {
-			assert(false); // @ErrorMessage
+			assert(false); // @Incomplete
 			return DEST_NONE;
 		}
 		case ExprFlavor::UNARY_OPERATOR: {

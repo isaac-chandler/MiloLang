@@ -5,11 +5,9 @@
 #include "Infer.h"
 #include "IrGenerator.h"
 #include "CoffWriter.h"
-#include <stdarg.h>
 #include "ArraySet.h"
 #include "UTF.h"
 #include "Lexer.h"
-#include <cinttypes>
 
 static ArraySet<FileInfo> files;
 
@@ -18,19 +16,19 @@ bool loadNewFile(String file) {
 	HANDLE handle = createFileUtf8(file, GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN); // @Platform
 
 	if (handle == INVALID_HANDLE_VALUE) {
-		reportError("Error: failed to open file: %.*s", file.length, file.characters);
+		reportError("Error: failed to open file: %.*s", STRING_PRINTF(file));
 		return false;
 	}
 
 	BY_HANDLE_FILE_INFORMATION fileInfo;
 
 	if (!GetFileInformationByHandle(handle, &fileInfo)) {
-		reportError("Error: failed to read file information for file: %.*s", file.length, file.characters);
+		reportError("Error: failed to read file information for file: %.*s", STRING_PRINTF(file));
 		return false; 
 	}
 
 	if (fileInfo.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) { // Are there any other attributes we should check for?
-		reportError("Error: %.*s is a directory, you can only compile files", file.length, file.characters);
+		reportError("Error: %.*s is a directory, you can only compile files", STRING_PRINTF(file));
 		return false;
 	}
 
@@ -39,7 +37,7 @@ bool loadNewFile(String file) {
 	info.handle = handle;
 	info.volumeSerialNumber = fileInfo.dwVolumeSerialNumber;
 	info.fileIndex = (static_cast<u64>(fileInfo.nFileIndexHigh) << 32ULL) | static_cast<u64>(fileInfo.nFileIndexLow);
-	info.fileUid = files.size();
+	info.fileUid = static_cast<u32>(files.size());
 
 	if (!files.add(info)) {
 		CloseHandle(handle);
@@ -60,11 +58,11 @@ FileInfo *getFileInfoByUid(u32 fileUid) {
 void printErrorLocation(CodeLocation *location) {
 	String filename = getFileInfoByUid(location->fileUid)->path;
 
-	printf("%.*s:%" PRIu32 ",%" PRIu32 " ", static_cast<u32>(filename.length), filename.characters, location->line, location->column);
+	printf("%.*s:%" PRIu32 ",%" PRIu32 " ", STRING_PRINTF(filename), location->line, location->column);
 
 }
 
-void reportError(const char *format, ...) {
+void reportError(CHECK_PRINTF const char *format, ...) {
 	hadError = true;
 
 	va_list args;
@@ -76,7 +74,7 @@ void reportError(const char *format, ...) {
 
 }
 
-void reportError(Expr *location, const char *format, ...) {
+void reportError(Expr *location, CHECK_PRINTF const char *format, ...) {
 	printErrorLocation(&location->start);
 
 	va_list args;
@@ -88,8 +86,20 @@ void reportError(Expr *location, const char *format, ...) {
 	va_end(args);
 }
 
+void reportError(CodeLocation *location, CHECK_PRINTF const char *format, ...) {
+	printErrorLocation(location);
 
-void reportError(Declaration *location, const char *format, ...) {
+	va_list args;
+	va_start(args, format);
+
+	reportError(format, args);
+	puts("\n");
+
+	va_end(args);
+}
+
+
+void reportError(Declaration *location, CHECK_PRINTF const char *format, ...) {
 	printErrorLocation(&location->start);
 
 	va_list args;
@@ -101,7 +111,7 @@ void reportError(Declaration *location, const char *format, ...) {
 	va_end(args);
 }
 
-void reportError(Token *location, const char *format, ...) {
+void reportError(Token *location, CHECK_PRINTF const char *format, ...) {
 	printErrorLocation(&location->start);
 
 	va_list args;
@@ -113,18 +123,23 @@ void reportError(Token *location, const char *format, ...) {
 	va_end(args);
 }
 
-void reportExpectedError(Token *location, const char *format, ...) {
-	printErrorLocation(&location->start);
+void reportExpectedError(Token *location, CHECK_PRINTF const char *format, ...) {
+	if (location->type == TokenT::INVALID) { // If it was invalid assume that the lexer already reported an error, don't print the error so we don't double report
+		assert(hadError);
+	}
+	else {
+		printErrorLocation(&location->start);
 
-	va_list args;
-	va_start(args, format);
+		va_list args;
+		va_start(args, format);
 
-	reportError(format, args);
-	String token = getTokenString(location);
-	printf(" but got %.*s", static_cast<u32>(token.length), token.characters);
-	puts("\n");
+		reportError(format, args);
+		String token = getTokenString(location);
+		printf(" but got %.*s", STRING_PRINTF(token));
+		puts("\n");
 
-	va_end(args);
+		va_end(args);
+	}
 }
 
 int main(int argc, char *argv[]) {
@@ -157,7 +172,7 @@ int main(int argc, char *argv[]) {
 		{
 			u64 i;
 			for (i = 0; i < files.size(); i++) {
-				parseFile(getFileInfoByUid(i));
+				parseFile(getFileInfoByUid(static_cast<u32>(i)));
 
 				if (hadError) {
 					break;
