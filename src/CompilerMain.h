@@ -1,9 +1,10 @@
 #pragma once
 
 #include "String.h"
-
+#include "Basic.h"
 inline volatile bool hadError = false;
-
+inline std::thread::id inferThread;
+inline std::thread::id mainThread;
 
 
 struct FileInfo { // @Platform

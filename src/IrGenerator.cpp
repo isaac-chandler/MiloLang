@@ -446,7 +446,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 					Type *castTo = binary->type;
 
-					if (typesAreSame(castTo, right->type))
+					if (castTo == right->type)
 						return rightReg;
 
 					switch(castTo->flavor) {
@@ -1276,7 +1276,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 			auto type = static_cast<TypeFunction *>(call->function->type);
 
-			if (!isStandardSize(static_cast<ExprLiteral *>(type->returnType)->typeValue->size)) {
+			if (!isStandardSize(type->returnType->size)) {
 				paramOffset = 1;
 			}
 			else {

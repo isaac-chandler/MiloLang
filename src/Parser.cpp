@@ -9,8 +9,8 @@
 BucketedArenaAllocator parserArena(1024 * 1024);
 
 #if 1
-#define PARSER_NEW(T) new (static_cast<T *>(parserArena.allocate(sizeof(T)))) T
-#define PARSER_NEW_ARRAY(T, C) new (static_cast<T *>(parserArena.allocate((C) * sizeof(T)))) T[C]
+#define PARSER_NEW(T) new (static_cast<T *>(assert(std::this_thread::get_id() == mainThread), parserArena.allocate(sizeof(T)))) T
+#define PARSER_NEW_ARRAY(T, C) new (static_cast<T *>(assert(std::this_thread::get_id() == mainThread), parserArena.allocate((C) * sizeof(T)))) T[C]
 
 #else
 #define PARSER_NEW(T) new T
@@ -18,40 +18,6 @@ BucketedArenaAllocator parserArena(1024 * 1024);
 #endif
 
 Block *currentBlock = nullptr;
-
-
-// @Incomplete: this should probably be moved to type inference
-static Declaration *resolveIdentifier(Token *location, String name, bool *success) {
-	Block *block;
-
-	*success = true;
-
-	bool outsideOfFunction = false;
-
-
-
-	for (block = currentBlock; block; block = block->parentBlock) {
-		u64 index;
-		if (Declaration *declaration = findDeclaration(block, name, &index)) {
-
-			if (declaration->name == name) {
-				if (outsideOfFunction && !(declaration->flags & DECLARATION_IS_CONSTANT)) {
-					*success = false;
-					reportError(location, "Error: Cannot use a variable '%.*s from outer function, capture is not supported", STRING_PRINTF(name));
-					return nullptr;
-				}
-
-				return declaration;
-			}
-		}
-
-		if (block->flags & BLOCK_IS_ARGUMENTS) { // If the block we were resolving is function arguments, we can only resolve globals or constants in outer blocks
-			outsideOfFunction = true;
-		}
-	}
-
-	return nullptr;
-}
 
 bool addDeclarationToBlock(Block *block, Declaration *declaration) {
 	assert(block);
@@ -131,6 +97,12 @@ static void popBlock(Block *block) { // This only takes the parameter to make su
 	queueBlock(block);
 }
 
+static void popBlockWithoutQueueing(Block *block) { // This only takes the parameter to make sure we are always popping the block we think we are in debug
+	assert(currentBlock == block);
+
+	currentBlock = currentBlock->parentBlock;
+}
+
 static bool expectAndConsume(LexerFile *lexer, TokenT type) {
 	if (lexer->token.type == type) {
 		lexer->advance();
@@ -152,7 +124,7 @@ Declaration *parseDeclaration(LexerFile *lexer);
 Expr *parseExpr(LexerFile *lexer);
 ExprBlock *parseBlock(LexerFile *lexer);
 
-ExprLiteral *makeTypeLiteral(CodeLocation &start, EndLocation &end, Type *type) {
+ExprLiteral *parserMakeTypeLiteral(CodeLocation &start, EndLocation &end, Type *type) {
 	ExprLiteral *literal = PARSER_NEW(ExprLiteral);
 	literal->flavor = ExprFlavor::TYPE_LITERAL;
 	literal->start = start;
@@ -624,7 +596,6 @@ ExprStringLiteral *makeStringLiteral(CodeLocation &start, EndLocation &end, Stri
 }
 
 
-// @Incomplete allow the return type expression of a function to refer to the arguments
 Expr *parsePrimaryExpr(LexerFile *lexer) {
 	CodeLocation start = lexer->token.start;
 	EndLocation end = lexer->token.end;
@@ -641,7 +612,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 				function->start = start;
 				function->end = lexer->previousTokenEnd;
 				function->arguments.flags |= BLOCK_IS_ARGUMENTS;
-				function->returnType = makeTypeLiteral(function->start, function->end, &TYPE_VOID);
+				function->returnType = parserMakeTypeLiteral(function->start, function->end, &TYPE_VOID);
 				pushBlock(&function->arguments);
 				
 				function->body = parseBlock(lexer);
@@ -661,7 +632,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 				function->start = start;
 				function->end = lexer->previousTokenEnd;
 				function->arguments.flags |= BLOCK_IS_ARGUMENTS;
-				function->returnType = makeTypeLiteral(function->start, function->end, &TYPE_VOID);
+				function->returnType = parserMakeTypeLiteral(function->start, function->end, &TYPE_VOID);
 				
 
 				function->body = nullptr;
@@ -718,17 +689,14 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 					expr = function;
 				}
 				else { // This is a function type
-					TypeFunction *type = PARSER_NEW(TypeFunction);
-					type->flavor = TypeFlavor::FUNCTION;
-					type->size = 8;
-					type->alignment = 8;
-					type->name.characters = 0;
-					type->name.length = 0;
-					type->argumentCount = 0;
-					type->argumentTypes = nullptr;
+					ExprFunction *type = PARSER_NEW(ExprFunction);
+					type->flavor = ExprFlavor::FUNCTION_PROTOTYPE;
+					type->start = start;
+					type->end = lexer->previousTokenEnd;
 					type->returnType = returnType;
-					
-					expr = makeTypeLiteral(start, lexer->previousTokenEnd, type);
+					type->type = &TYPE_TYPE;
+
+					expr = type;
 				}
 			}
 			else {
@@ -779,7 +747,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 				if (lexer->token.type == TOKEN('{')) {
 					function->end = lexer->previousTokenEnd;
-					function->returnType = makeTypeLiteral(function->start, function->end, &TYPE_VOID);
+					function->returnType = parserMakeTypeLiteral(function->start, function->end, &TYPE_VOID);
 
 					function->body = parseBlock(lexer);
 
@@ -793,9 +761,8 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 				else if (lexer->token.type == TokenT::EXTERNAL) {
 					lexer->advance();
 
-					ExprFunction *function = PARSER_NEW(ExprFunction);
 					function->end = lexer->previousTokenEnd;
-					function->returnType = makeTypeLiteral(function->start, function->end, &TYPE_VOID);
+					function->returnType = parserMakeTypeLiteral(function->start, function->end, &TYPE_VOID);
 
 					function->body = nullptr;
 					function->flags |= EXPR_FUNCTION_IS_EXTERNAL;
@@ -815,7 +782,6 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 					}
 
 					if (lexer->token.type == TOKEN('{')) {
-						ExprFunction *function = PARSER_NEW(ExprFunction);
 						function->end = lexer->previousTokenEnd;
 						function->returnType = returnType;
 
@@ -831,7 +797,6 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 					else if (lexer->token.type == TokenT::EXTERNAL) {
 						lexer->advance();
 
-						ExprFunction *function = PARSER_NEW(ExprFunction);
 						function->end = lexer->previousTokenEnd;
 						function->returnType = returnType;
 
@@ -847,17 +812,12 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 						expr = function;
 					}
 					else {
-						popBlock(&function->arguments);
+						popBlockWithoutQueueing(&function->arguments);
 
-						TypeFunction *type = PARSER_NEW(TypeFunction);
-						type->flavor = TypeFlavor::FUNCTION;
-						type->size = 8;
-						type->alignment = 8;
-						type->name.characters = 0;
-						type->name.length = 0;
-						type->argumentCount = function->arguments.declarations.count;
-						type->argumentTypes = PARSER_NEW_ARRAY(Expr *, type->argumentCount);
-						type->returnType = returnType;
+						function->flavor = ExprFlavor::FUNCTION_PROTOTYPE;
+						function->end = lexer->previousTokenEnd;
+						function->returnType = returnType;
+						function->type = &TYPE_TYPE;
 
 						for (u64 i = 0; i < function->arguments.declarations.count; i++) {
 							auto declaration = function->arguments.declarations[i];
@@ -868,12 +828,9 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 							}
 
 							assert(declaration->type);
-							type->argumentTypes[i] = declaration->type;
 						}
 
-						function->arguments.declarations.free();
-
-						expr = makeTypeLiteral(start, lexer->previousTokenEnd, type);
+						expr = function;
 					}
 				}
 				else {
@@ -902,34 +859,70 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 						return nullptr;
 					}
 
-					TypeFunction *type = PARSER_NEW(TypeFunction);
-					type->flavor = TypeFlavor::FUNCTION;
+					auto type = PARSER_NEW(ExprFunction);
+					type->flavor = ExprFlavor::FUNCTION_PROTOTYPE;
 					type->returnType = returnType;
-					type->size = 8;
-					type->alignment = 8;
-					type->name.characters = 0;
-					type->name.length = 0;
-					type->argumentCount = 1;
+					type->start = start;
+					type->end = end;
+					type->type = &TYPE_TYPE;
 
-					type->argumentTypes = PARSER_NEW_ARRAY(Expr *, 1){ expr };
+					pushBlock(&type->arguments);
+					
+					auto argument = PARSER_NEW(Declaration);
+					argument->type = expr;
+					argument->start = expr->start;
+					argument->end = expr->end;
+					argument->name = String(nullptr, 0ULL);
+					argument->initialValue = nullptr;
+					argument->enclosingScope = &type->arguments;
+					argument->flags |= DECLARATION_IS_ARGUMENT;
 
-					expr = makeTypeLiteral(start, end, type);
+					type->arguments.declarations.add(argument);
+
+					popBlockWithoutQueueing(&type->arguments);
+
+					expr = type;
 				}
 				else {
 					// We have put the bracketed expression in expr so we are done
 				}
 			}
 			else if (expectAndConsume(lexer, ',')) { // This is a function type since there are multiple comma separated values in parentheses
-				Array<Expr *> arguments;
-				arguments.add(expr);
+				auto *type = PARSER_NEW(ExprFunction);
+
+				pushBlock(&type->arguments);
+
+				auto argument = PARSER_NEW(Declaration);
+				argument->type = expr;
+				argument->start = expr->start;
+				argument->end = expr->end;
+				argument->name = String(nullptr, 0ULL);
+				argument->initialValue = nullptr;
+				argument->enclosingScope = &type->arguments;
+				argument->flags |= DECLARATION_IS_ARGUMENT;
+
+				type->arguments.declarations.add(argument);
+
+
 
 				do {
-					Expr *argument = parseExpr(lexer);
-					if (!argument)
+					Expr *arg = parseExpr(lexer);
+					if (!arg)
 						return nullptr;
 
-					arguments.add(expr);
+					argument = PARSER_NEW(Declaration);
+					argument->type = arg;
+					argument->start = arg->start;
+					argument->end = arg->end;
+					argument->name = String(nullptr, 0ULL);
+					argument->initialValue = nullptr;
+					argument->enclosingScope = &type->arguments;
+					argument->flags |= DECLARATION_IS_ARGUMENT;
+
+					type->arguments.declarations.add(argument);
 				} while (expectAndConsume(lexer, ','));
+
+				popBlockWithoutQueueing(&type->arguments);
 
 				if (!expectAndConsume(lexer, ')')) {
 					reportExpectedError(&lexer->token, "Error: Expected a ')' after function arguments");
@@ -945,17 +938,13 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 				if (!returnType)
 					return nullptr;
 
-				TypeFunction *type = PARSER_NEW(TypeFunction);
-				type->flavor = TypeFlavor::FUNCTION;
+				type->flavor = ExprFlavor::FUNCTION_PROTOTYPE;
 				type->returnType = returnType;
-				type->size = 8;
-				type->alignment = 8;
-				type->name.characters = 0;
-				type->name.length = 0;
-				type->argumentCount = arguments.count;
-				type->argumentTypes = arguments.storage;
+				type->start = start;
+				type->end = lexer->previousTokenEnd;
+				type->type = &TYPE_TYPE;
 
-				expr = makeTypeLiteral(start, lexer->previousTokenEnd, type);
+				expr = type;
 			}
 			else {
 				reportExpectedError(&lexer->token, "Error: Expected a ')'");
@@ -973,6 +962,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		identifier->name = lexer->token.text;
 		identifier->flavor = ExprFlavor::IDENTIFIER;
 		identifier->resolveFrom = currentBlock;
+		identifier->declaration = nullptr;
 
 		if (currentBlock) {
 			identifier->indexInBlock = currentBlock->declarations.count;
@@ -1024,7 +1014,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		expr = makeIntegerLiteral(start, end, 1, &TYPE_BOOL);
 	}
 	else if (expectAndConsume(lexer, TokenT::NULL_)) {
-		expr = makeIntegerLiteral(start, end, 0, getPointerTo(&TYPE_VOID));
+		expr = makeIntegerLiteral(start, end, 0, TYPE_VOID_POINTER);
 	}
 	else if (lexer->token.type == TokenT::STRING_LITERAL) {
 		expr = makeStringLiteral(start, end, lexer->token.text);
@@ -1080,53 +1070,88 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		expr = unary;
 	}
 	else if (expectAndConsume(lexer, TokenT::U8)) {
-		expr = makeTypeLiteral(start, end, &TYPE_U8);
+		expr = parserMakeTypeLiteral(start, end, &TYPE_U8);
 	}
 	else if (expectAndConsume(lexer, TokenT::U16)) {
-		expr = makeTypeLiteral(start, end, &TYPE_U16);
+		expr = parserMakeTypeLiteral(start, end, &TYPE_U16);
 	}
 	else if (expectAndConsume(lexer, TokenT::U32)) {
-		expr = makeTypeLiteral(start, end, &TYPE_U32);
+		expr = parserMakeTypeLiteral(start, end, &TYPE_U32);
 	}
 	else if (expectAndConsume(lexer, TokenT::U64)) {
-		expr = makeTypeLiteral(start, end, &TYPE_U64);
+		expr = parserMakeTypeLiteral(start, end, &TYPE_U64);
 	}
 	else if (expectAndConsume(lexer, TokenT::S8)) {
-		expr = makeTypeLiteral(start, end, &TYPE_S8);
+		expr = parserMakeTypeLiteral(start, end, &TYPE_S8);
 	}
 	else if (expectAndConsume(lexer, TokenT::S16)) {
-		expr = makeTypeLiteral(start, end, &TYPE_S16);
+		expr = parserMakeTypeLiteral(start, end, &TYPE_S16);
 	}
 	else if (expectAndConsume(lexer, TokenT::S32)) {
-		expr = makeTypeLiteral(start, end, &TYPE_S32);
+		expr = parserMakeTypeLiteral(start, end, &TYPE_S32);
 	}
 	else if (expectAndConsume(lexer, TokenT::S64)) {
-		expr = makeTypeLiteral(start, end, &TYPE_S64);
+		expr = parserMakeTypeLiteral(start, end, &TYPE_S64);
 	}
 	else if (expectAndConsume(lexer, TokenT::BOOL)) {
-		expr = makeTypeLiteral(start, end, &TYPE_BOOL);
+		expr = parserMakeTypeLiteral(start, end, &TYPE_BOOL);
 	}
 	else if (expectAndConsume(lexer, TokenT::TYPE)) {
-		expr = makeTypeLiteral(start, end, &TYPE_TYPE);
+		expr = parserMakeTypeLiteral(start, end, &TYPE_TYPE);
 	}
 	else if (expectAndConsume(lexer, TokenT::VOID)) {
-		expr = makeTypeLiteral(start, end, &TYPE_VOID);
+		expr = parserMakeTypeLiteral(start, end, &TYPE_VOID);
 	}
 	else if (expectAndConsume(lexer, TokenT::F32)) {
-		expr = makeTypeLiteral(start, end, &TYPE_F32);
+		expr = parserMakeTypeLiteral(start, end, &TYPE_F32);
 	}
 	else if (expectAndConsume(lexer, TokenT::F64)) {
-		expr = makeTypeLiteral(start, end, &TYPE_F64);
+		expr = parserMakeTypeLiteral(start, end, &TYPE_F64);
 	}
 	else if (expectAndConsume(lexer, TokenT::STRING)) {
-		expr = makeTypeLiteral(start, end, &TYPE_STRING);
+		expr = parserMakeTypeLiteral(start, end, &TYPE_STRING);
 	}
 	else if (expectAndConsume(lexer, TokenT::STRUCT)) {
-		assert(false); // @Incomplete
-		return nullptr;
+		auto type = PARSER_NEW(TypeStruct);
+		type->flavor = TypeFlavor::STRUCT;
+		pushBlock(&type->members);
+
+		type->size = 0;
+		type->alignment = 0;
+		
+		if (!expectAndConsume(lexer, '{')) {
+			reportExpectedError(&lexer->token, "Error: Expected '{' in struct definition");
+			return nullptr;
+		}
+
+		while (true) {
+			if (lexer->token.type == TokenT::IDENTIFIER) {
+				auto declaration = parseDeclaration(lexer);
+
+				if (!declaration)
+					return nullptr;
+
+				if (!addDeclarationToCurrentBlock(declaration)) {
+					return nullptr;
+				}
+			}
+			else if (expectAndConsume(lexer, ';')) {
+
+			}
+			else if (expectAndConsume(lexer, '}')) {
+				break;
+			}
+			else {
+				reportExpectedError(&lexer->token, "Error: Expected declaration in struct definition");
+			}
+		}
+		
+		popBlock(&type->members);
+		expr = parserMakeTypeLiteral(start, lexer->previousTokenEnd, type);
 	}
 	else {
 		reportExpectedError(&lexer->token, "Error: Expected an expression");
+		return nullptr;
 	}
 	
 	while (true) {
@@ -1539,7 +1564,7 @@ void parseFile(FileInfo *file) {
 
 	lexer.advance();
 
-	while (true) {
+	while (!hadError) {
 		if (lexer.token.type == TokenT::IDENTIFIER) {
 			Declaration *declaration = parseDeclaration(&lexer);
 			if (!declaration) {

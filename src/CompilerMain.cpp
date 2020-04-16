@@ -8,6 +8,7 @@
 #include "ArraySet.h"
 #include "UTF.h"
 #include "Lexer.h"
+#include "TypeTable.h"
 
 static ArraySet<FileInfo> files;
 
@@ -76,12 +77,13 @@ void reportError(CHECK_PRINTF const char *format, ...) {
 
 void reportError(Expr *location, CHECK_PRINTF const char *format, ...) {
 	printErrorLocation(&location->start);
+	hadError = true;
 
 	va_list args;
 	va_start(args, format);
 
-	reportError(format, args);
-	puts("\n");
+	vprintf(format, args);
+	puts("");
 
 	va_end(args);
 }
@@ -89,11 +91,13 @@ void reportError(Expr *location, CHECK_PRINTF const char *format, ...) {
 void reportError(CodeLocation *location, CHECK_PRINTF const char *format, ...) {
 	printErrorLocation(location);
 
+	hadError = true;
+
 	va_list args;
 	va_start(args, format);
 
-	reportError(format, args);
-	puts("\n");
+	vprintf(format, args);
+	puts("");
 
 	va_end(args);
 }
@@ -102,11 +106,13 @@ void reportError(CodeLocation *location, CHECK_PRINTF const char *format, ...) {
 void reportError(Declaration *location, CHECK_PRINTF const char *format, ...) {
 	printErrorLocation(&location->start);
 
+	hadError = true;
+
 	va_list args;
 	va_start(args, format);
 
-	reportError(format, args);
-	puts("\n");
+	vprintf(format, args);
+	puts("");
 
 	va_end(args);
 }
@@ -114,11 +120,13 @@ void reportError(Declaration *location, CHECK_PRINTF const char *format, ...) {
 void reportError(Token *location, CHECK_PRINTF const char *format, ...) {
 	printErrorLocation(&location->start);
 
+	hadError = true;
+
 	va_list args;
 	va_start(args, format);
 
-	reportError(format, args);
-	puts("\n");
+	vprintf(format, args);
+	puts("");
 
 	va_end(args);
 }
@@ -130,15 +138,18 @@ void reportExpectedError(Token *location, CHECK_PRINTF const char *format, ...) 
 	else {
 		printErrorLocation(&location->start);
 
+		hadError = true;
+
 		va_list args;
 		va_start(args, format);
 
-		reportError(format, args);
-		String token = getTokenString(location);
-		printf(" but got %.*s", STRING_PRINTF(token));
-		puts("\n");
+		vprintf(format, args);
 
 		va_end(args);
+
+		String token = getTokenString(location);
+		printf(" but got %.*s", STRING_PRINTF(token));
+		puts("");
 	}
 }
 
@@ -157,10 +168,17 @@ int main(int argc, char *argv[]) {
 
 	auto start = std::chrono::high_resolution_clock::now();
 
+	
+
 	if (!hadError && loadNewFile(String(input))) {
+		setupTypeTable();
+
 		std::thread infer(runInfer);
 		std::thread irGenerator(runIrGenerator);
 		std::thread coffWriter(runCoffWriter);
+
+		mainThread = std::this_thread::get_id();
+		inferThread = infer.get_id();
 
 		SetThreadDescription(infer.native_handle(), L"Infer");
 		SetThreadDescription(irGenerator.native_handle(), L"Ir Generator");
@@ -181,7 +199,7 @@ int main(int argc, char *argv[]) {
 
 			inferQueue.add(makeStopSignal());
 
-			for (++i; i < files.size(); i++) { // Just for the 5% of times microsoft fails to close handles when a process terminates
+			for (++i; i < files.size(); i++) { // In the event we had an error so stopped parsing files mid way through
 				CloseHandle(files[i].handle);
 			}
 		}
@@ -189,14 +207,16 @@ int main(int argc, char *argv[]) {
 
 
 	std::cout << "It took me " << (std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::duration<double>(
-		std::chrono::high_resolution_clock::now() - start)).count() / 1000.0) << "ms";
+		std::chrono::high_resolution_clock::now() - start)).count() / 1000.0) << "ms\n";
 	}
 
 #if BUILD_WINDOWS
 	if (!hadError) {
-		char buffer[256];
+		char buffer[1024];
 
-		strcpy_s(buffer, "link out.obj /entry:main /nologo /defaultlib:kernel32 /debug");
+		strcpy_s(buffer, "\"C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Community\\VC\\Tools\\MSVC\\14.23.28105\\bin\\Hostx64\\x64\\link.exe\" out.obj /debug /entry:main /defaultlib:kernel32 \"/libpath:C:\\Program Files (x86)\\Windows Kits\\10\\lib\\10.0.18362.0\\um\\x64\" /incremental:no /nologo");
+
+		printf("Linker command: %s\n", buffer);
 
 		STARTUPINFOA startup = {};
 		startup.cb = sizeof(STARTUPINFOA);

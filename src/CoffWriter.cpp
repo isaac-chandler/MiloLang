@@ -556,8 +556,10 @@ u32 createSymbolForFunction(BucketArray<Symbol> *symbols, ExprFunction *function
 			u64 index;
 
 			if (Declaration *declaration = findDeclaration(&externalsBlock, function->valueOfDeclaration->name, &index)) {
-				if (!typesAreSame(declaration->initialValue->type, function->type)) {
-					assert(false); // @ErrorMessage cannot define the same externals with different types
+				if (declaration->initialValue->type != function->type) {
+					reportError(function, "Error: Cannot define external function %.*s with different types, it was defined as %.*s", 
+						STRING_PRINTF(function->valueOfDeclaration->name), STRING_PRINTF(function->type->name));
+					reportError(declaration->initialValue, "   ..: but was previously %.*s", STRING_PRINTF(declaration->initialValue->type->name));
 					*success = false;
 					return 0;
 				}
@@ -2633,6 +2635,11 @@ void runCoffWriter() {
 
 		if (!hadError) {
 			HANDLE out = CreateFileA("out.obj", GENERIC_WRITE, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, 0);
+
+			if (out == INVALID_HANDLE_VALUE) {
+				reportError("Error: Could not open out.obj intermediate for writing");
+				goto error;
+			}
 
 			DWORD written;
 			WriteFile(out, &header, sizeof(header), &written, 0);

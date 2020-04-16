@@ -28,14 +28,14 @@ bool String::operator==(const String &other) const {
 
 	for (u64 i = 0; i < other.length / sizeof(u64); i++) {
 		if (*reinterpret_cast<u64 *>(a) != *reinterpret_cast<u64 *>(b))
-			false;
+			return false;
 
 		a += sizeof(u64);
 		b += sizeof(u64);
 	}
 
 	while (a < characters + length) {
-		if (*a != *b)
+		if (*a++ != *b++)
 			return false;
 	}
 

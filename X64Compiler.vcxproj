@@ -150,6 +150,7 @@
     <ClInclude Include="src\Lexer.h" />
     <ClInclude Include="src\Parser.h" />
     <ClInclude Include="src\String.h" />
+    <ClInclude Include="src\TypeTable.h" />
     <ClInclude Include="src\UTF.h" />
     <ClInclude Include="src\WorkQueue.h" />
   </ItemGroup>
@@ -167,6 +168,7 @@
     <ClCompile Include="src\Lexer.cpp" />
     <ClCompile Include="src\Parser.cpp" />
     <ClCompile Include="src\String.cpp" />
+    <ClCompile Include="src\TypeTable.cpp" />
     <ClCompile Include="src\UTF.cpp" />
   </ItemGroup>
   <ItemGroup>
