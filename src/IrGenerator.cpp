@@ -199,8 +199,10 @@ u64 loadAddressOf(IrState *state, Expr *expr, u64 dest) {
 				assert(false);
 			}
 		}
-		else {
-			assert(false); // @Incomplete
+		else if (type->flavor == TypeFlavor::STRUCT) {
+			assert(type->size);
+			
+			offset = access->declaration->physicalStorage; // In the case of struct members, physicalStorage is the offset within the struct
 		}
 
 		u64 store;

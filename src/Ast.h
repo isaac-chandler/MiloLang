@@ -221,17 +221,6 @@ struct ExprStructAccess : Expr {
 	Declaration *declaration;
 };
 
-#define BLOCK_IS_ARGUMENTS 0x1
-#define BLOCK_IS_COMPLETE 0x2
-#define BLOCK_IS_LOOP 0x4
-
-struct Block {
-	Array<Declaration *> declarations;
-	Block *parentBlock = nullptr;
-	u64 indexInParent;
-	u64 flags = 0;
-};
-
 struct ExprBlock : Expr {
 	Block declarations;
 

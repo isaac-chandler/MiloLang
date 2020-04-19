@@ -1118,6 +1118,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 		type->size = 0;
 		type->alignment = 0;
+		type->hash = 0;
 		
 		if (!expectAndConsume(lexer, '{')) {
 			reportExpectedError(&lexer->token, "Error: Expected '{' in struct definition");
@@ -1148,6 +1149,8 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		
 		popBlock(&type->members);
 		expr = parserMakeTypeLiteral(start, lexer->previousTokenEnd, type);
+
+		inferQueue.add(makeDeclarationPack(expr));
 	}
 	else {
 		reportExpectedError(&lexer->token, "Error: Expected an expression");
@@ -1219,6 +1222,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 			access->start = start;
 			access->left = expr;
 			access->flavor = ExprFlavor::STRUCT_ACCESS;
+			access->declaration = nullptr;
 
 			if (lexer->token.type != TokenT::IDENTIFIER) {
 				reportExpectedError(&lexer->token, "Error: Expected member name on right of struct access");

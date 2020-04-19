@@ -25,7 +25,7 @@ struct DeclarationPack {
 	union {
 		Declaration **declarations;
 		Declaration *declaration;
-		ExprFunction *function;
+		Expr *expr;
 	} data;
 };
 
@@ -46,11 +46,11 @@ inline DeclarationPack makeDeclarationPack(u64 count, Declaration **declarations
 	return result;
 }
 
-inline DeclarationPack makeDeclarationPack(ExprFunction *function) {
+inline DeclarationPack makeDeclarationPack(Expr *expr) {
 	DeclarationPack result;
 	result.count = 0;
 
-	result.data.function = function;
+	result.data.expr = expr;
 	return result;
 }
 
@@ -62,7 +62,3 @@ inline DeclarationPack makeStopSignal() {
 extern WorkQueue<DeclarationPack> inferQueue;
 
 void runInfer();
-
-inline Expr *getDefaultValueForType(Type *type) {
-
-}

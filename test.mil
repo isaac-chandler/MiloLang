@@ -13,9 +13,7 @@
 
 */
 
-
 copy_string :: (s: string) -> string {
-	
 	memory: *u8 = allocate(string_length(s) + 1)
 	
 	buf := memory
@@ -64,6 +62,11 @@ reallocate :: (block: *void, size: u64) -> *void {
 
 deallocate :: (block: *void) {
 	HeapFree(process_heap, 0, block)
+}
+
+ListNode :: struct {
+	value: string;
+	next: *ListNode;
 }
 
 min :: (a: u64, b: u64) -> u64 {
@@ -200,12 +203,38 @@ get_strings :: () -> [] string {
 	return a
 }
 
+get_linked_strings :: () -> ListNode {
+	a: ListNode;
+	a.value = "LinkedTest1";
+	a.next = allocate(size_of(ListNode));
+	
+	b := a.next;
+	b.value = "LinkedTest2";
+	b.next = null;
+	
+	return a;
+}
+
 _main :: () {
+/*
 	for get_strings() {
 		//if it_index {
 			print_string(it)
 			print_string(" ")
 		//}
+	}
+	*/
+	
+	list := get_linked_strings();
+	
+	while true {
+		print_string(list.value);
+		print_string(" ");
+		
+		if list.next == null
+			break;
+			
+		list = <<list.next;
 	}
 }
 
