@@ -434,9 +434,13 @@ Expr *parseStatement(LexerFile *lexer) {
 
 		return ifElse;
 	}
-	else if (lexer->token.type == TokenT::CONTINUE || lexer->token.type == TokenT::BREAK) {
+	else if (lexer->token.type == TokenT::CONTINUE || lexer->token.type == TokenT::BREAK || lexer->token.type == TokenT::REMOVE) {
 		ExprBreakOrContinue *continue_ = PARSER_NEW(ExprBreakOrContinue);
-		continue_->flavor = lexer->token.type == TokenT::CONTINUE ? ExprFlavor::CONTINUE : ExprFlavor::BREAK;
+		continue_->flavor = 
+			lexer->token.type == TokenT::CONTINUE ? ExprFlavor::CONTINUE : 
+			(lexer->token.type == TokenT::REMOVE  ? ExprFlavor::REMOVE : ExprFlavor::BREAK);
+
+
 		continue_->start = lexer->token.start;
 
 		lexer->advance();
@@ -473,7 +477,8 @@ Expr *parseStatement(LexerFile *lexer) {
 				}
 			}
 
-			reportError(continue_, "Error: Cannot have a %s outside of a loop", continue_->flavor == ExprFlavor::BREAK ? "break" : "continue");
+			reportError(continue_, "Error: Cannot have a %s outside of a loop", lexer->token.type == TokenT::CONTINUE ? "continue" :
+				(lexer->token.type == TokenT::REMOVE ? "remove" : "break"));
 			return nullptr;
 		}
 	}
@@ -541,7 +546,27 @@ Expr *parseStatement(LexerFile *lexer) {
 			MODIFY_ASSIGN(TokenT::OR_EQUALS)
 		else {
 			if (expr->flavor != ExprFlavor::FUNCTION_CALL) {
-				reportError(expr, "Error: Can only have an assignment or function call expression at statement level");
+				auto unary = static_cast<ExprUnaryOperator *>(expr);
+				auto binary = static_cast<ExprBinaryOperator *>(expr);
+
+				if (expr->flavor == ExprFlavor::UNARY_OPERATOR && unary->op == TOKEN('+') &&
+					unary->value->flavor == ExprFlavor::UNARY_OPERATOR && static_cast<ExprUnaryOperator *>(unary->value)->op == TOKEN('+') && 
+					unary->start.locationInMemory + 1 == unary->value->start.locationInMemory) {
+
+					reportError(expr, "Error: '++' is not supported");
+				}
+				else if (expr->flavor == ExprFlavor::BINARY_OPERATOR && binary->op == TOKEN('+') &&
+					binary->right->flavor == ExprFlavor::UNARY_OPERATOR && static_cast<ExprUnaryOperator *>(binary->right)->op == TOKEN('+') &&
+					binary->start.locationInMemory + 1 == binary->right->start.locationInMemory) {
+
+					reportError(expr, "Error: '++' is not supported");
+				}
+				else if(lexer->token.type == TokenT::DOUBLE_DASH) {
+					reportError(&lexer->token, "Error: '--' is not supported as an operator");
+				}
+				else {
+					reportError(expr, "Error: Can only have an assignment or function call expression at statement level");
+				}
 				return nullptr;
 			}
 
@@ -1252,7 +1277,12 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		inferQueue.add(makeDeclarationPack(expr));
 	}
 	else {
-		reportExpectedError(&lexer->token, "Error: Expected an expression");
+		if (lexer->token.type == TokenT::DOUBLE_DASH) {
+			reportError(&lexer->token, "Error: '--' is not supported as an operator");
+		}
+		else {
+			reportExpectedError(&lexer->token, "Error: Expected an expression");
+		}
 		return nullptr;
 	}
 
@@ -1373,7 +1403,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 	}
 }
 
-Expr *parseUnaryExpr(LexerFile *lexer);
+Expr *parseUnaryExpr(LexerFile *lexer, CodeLocation *plusStart = nullptr);
 
 Expr *makeUnaryOperator(LexerFile *lexer, CodeLocation &start, EndLocation &end, TokenT type) {
 	ExprUnaryOperator *expr = PARSER_NEW(ExprUnaryOperator);
@@ -1390,7 +1420,7 @@ Expr *makeUnaryOperator(LexerFile *lexer, CodeLocation &start, EndLocation &end,
 	return expr;
 }
 
-Expr *parseUnaryExpr(LexerFile *lexer) {
+Expr *parseUnaryExpr(LexerFile *lexer, CodeLocation *plusStart) {
 	CodeLocation start = lexer->token.start;
 	EndLocation end = lexer->token.end;
 
@@ -1410,7 +1440,13 @@ Expr *parseUnaryExpr(LexerFile *lexer) {
 		return makeUnaryOperator(lexer, start, end, TOKEN('!'));
 	}
 	else if (expectAndConsume(lexer, '+')) {
-		return makeUnaryOperator(lexer, start, end, TOKEN('+'));
+		auto expr = makeUnaryOperator(lexer, start, end, TOKEN('+'));
+
+		if (!expr && plusStart && plusStart->locationInMemory + 1 == start.locationInMemory) {
+			reportError(plusStart, &end, "Error: '++' is not supported");
+		}
+
+		return expr;
 	}
 	else if (expectAndConsume(lexer, TokenT::CAST)) {
 		if (!expectAndConsume(lexer, '(')) {
@@ -1542,7 +1578,16 @@ Expr *parseBinaryOperator(LexerFile *lexer) {
 
 		lexer->advance();
 
-		right = parseUnaryExpr(lexer);
+		CodeLocation *plusStart;
+
+		if (current.type == TOKEN('+')) {
+			plusStart = &current.start;
+		}
+		else {
+			plusStart = nullptr;
+		}
+
+		right = parseUnaryExpr(lexer, plusStart);
 
 		if (!right)
 			return nullptr;

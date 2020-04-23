@@ -36,5 +36,6 @@ void reportError(struct Expr *location, CHECK_PRINTF const char *format, ...);
 void reportError(struct Declaration *location, CHECK_PRINTF const char *format, ...);
 void reportError(struct Token *location, CHECK_PRINTF const char *format, ...);
 void reportError(struct CodeLocation *location, CHECK_PRINTF const char *format, ...);
+void reportError(CodeLocation *start, EndLocation *end, CHECK_PRINTF const char *format, ...);
 void reportExpectedError(struct Token *location, CHECK_PRINTF const char *format, ...);
 void reportError(CHECK_PRINTF const char *format, ...);

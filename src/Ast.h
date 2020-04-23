@@ -135,6 +135,7 @@ enum class ExprFlavor : u8 {
 	WHILE, 
 	BREAK, 
 	CONTINUE, 
+	REMOVE, 
 	RETURN, 
 	IF, 
 

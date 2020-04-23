@@ -43,7 +43,8 @@ static const Keyword keywords[] = {
 	{"#external", TokenT::EXTERNAL}, 
 	{"#load", TokenT::LOAD}, 
 	{"union", TokenT::UNION}, 
-	{"completed", TokenT::COMPLETED}
+	{"completed", TokenT::COMPLETED},  // @Incomplete Change this keyword because people will almost certainly want to call a variable completed
+	{"remove", TokenT::REMOVE}
 };
 
 void BigInt::zero() {

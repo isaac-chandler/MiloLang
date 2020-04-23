@@ -97,10 +97,11 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 		case ExprFlavor::INT_LITERAL:
 			break;
 		case ExprFlavor::BREAK:
-		case ExprFlavor::CONTINUE: {
+		case ExprFlavor::CONTINUE: 
+		case ExprFlavor::REMOVE: {
 			auto continue_ = static_cast<ExprBreakOrContinue *>(*expr);
 
-			if (continue_->label) {
+			if (continue_->flavor == ExprFlavor::REMOVE || continue_->label) {
 				flatten(flattenTo, &continue_->label);
 			}
 
@@ -1604,7 +1605,8 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 				break;
 			}
 			case ExprFlavor::BREAK:
-			case ExprFlavor::CONTINUE: {
+			case ExprFlavor::CONTINUE:
+			case ExprFlavor::REMOVE: {
 				auto continue_ = static_cast<ExprBreakOrContinue *>(expr);
 
 				assert(continue_->flavor == ExprFlavor::IDENTIFIER);
@@ -1617,6 +1619,28 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 				}
 
 				continue_->refersTo = CAST_FROM_SUBSTRUCT(ExprLoop, iteratorBlock, label->declaration->enclosingScope);
+
+				if (continue_->flavor == ExprFlavor::REMOVE) {
+					if (continue_->refersTo->flavor == ExprFlavor::WHILE) {
+						reportError(continue_, "Error: Cannot remove from a while loop");
+						return false;
+					}
+
+					if (continue_->refersTo->forBegin->type->flavor != TypeFlavor::ARRAY) {
+						reportError(continue_, "Error: Can only remove from an array, not a %.*s",
+							STRING_PRINTF(continue_->refersTo->forBegin->type->name));
+
+						return false;
+					}
+
+					if (continue_->refersTo->forBegin->type->flags & TYPE_ARRAY_IS_FIXED) {
+						reportError(continue_, "Error: Cannot remove from a static size array");
+
+						return false;
+					}
+				}
+
+				break;
 			}
 			case ExprFlavor::BINARY_OPERATOR: {
 				auto binary = static_cast<ExprBinaryOperator *>(expr);
@@ -2196,6 +2220,15 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 					}
 					case TokenT::PLUS_EQUALS:
 					case TokenT::MINUS_EQUALS: {
+						if (!isAssignable(left)) {
+							// @Incomplete: better error messages here
+							//  - If we were assigning to a constant
+							//  - If we were assigning to a pointer
+
+							reportError(binary, "Error: Left side of binary is not assignable");
+							return false;
+						}
+
 						if (left->type->flavor == right->type->flavor) {
 							switch (left->type->flavor) {
 								case TypeFlavor::ARRAY: {
@@ -2298,6 +2331,15 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 					case TokenT::AND_EQUALS:
 					case TokenT::OR_EQUALS:
 					case TokenT::XOR_EQUALS: {
+						if (!isAssignable(left)) {
+							// @Incomplete: better error messages here
+							//  - If we were assigning to a constant
+							//  - If we were assigning to a pointer
+
+							reportError(binary, "Error: Left side of binary is not assignable");
+							return false;
+						}
+
 						const char *opName = binary->op == TokenT::AND_EQUALS ? "and" : (binary->op == TokenT::OR_EQUALS ? "or" : "xor");
 
 						if (left->type->flavor == right->type->flavor) {
@@ -2360,6 +2402,15 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 					}
 					case TokenT::SHIFT_LEFT_EQUALS:
 					case TokenT::SHIFT_RIGHT_EQUALS: {
+						if (!isAssignable(left)) {
+							// @Incomplete: better error messages here
+							//  - If we were assigning to a constant
+							//  - If we were assigning to a pointer
+
+							reportError(binary, "Error: Left side of binary is not assignable");
+							return false;
+						}
+
 						if (left->type->flavor == right->type->flavor) {
 							switch (left->type->flavor) {
 								case TypeFlavor::ARRAY: {
@@ -2425,6 +2476,15 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 					case TokenT::TIMES_EQUALS:
 					case TokenT::DIVIDE_EQUALS:
 					case TokenT::MOD_EQUALS: {
+						if (!isAssignable(left)) {
+							// @Incomplete: better error messages here
+							//  - If we were assigning to a constant
+							//  - If we were assigning to a pointer
+
+							reportError(binary, "Error: Left side of binary is not assignable");
+							return false;
+						}
+
 						const char *opName = binary->op == TOKEN('*') ? "multiply" : (binary->op == TOKEN('/') ? "divide" : "mod");
 
 						if (left->type->flavor == right->type->flavor) {
@@ -3704,7 +3764,12 @@ void runInfer() {
 
 						if (!(declaration->flags & DECLARATION_TYPE_IS_READY) && declaration->type && job->typeFlattenedIndex == job->typeFlattened.count) {
 							if (declaration->type->type != &TYPE_TYPE) {
-								reportError(declaration->type, "Error: Declaration type must be a type, but got a %.*s", STRING_PRINTF(declaration->type->type->name));
+								if (declaration->type->type->flavor == TypeFlavor::FUNCTION) {
+									reportError(declaration->type, "Error: Declaration type cannot be a function, did you miss a colon?");
+								}
+								else {
+									reportError(declaration->type, "Error: Declaration type must be a type, but got a %.*s", STRING_PRINTF(declaration->type->type->name));
+								}
 								goto error;
 							}
 							if (declaration->type->flavor != ExprFlavor::TYPE_LITERAL) {

@@ -152,6 +152,23 @@ void reportError(Expr *location, CHECK_PRINTF const char *format, ...) {
 	displayErrorLocation(&location->start, &location->end);
 }
 
+
+
+void reportError(CodeLocation *start, EndLocation *end, CHECK_PRINTF const char *format, ...) {
+	printErrorLocation(start);
+	hadError = true;
+
+	va_list args;
+	va_start(args, format);
+
+	vprintf(format, args);
+	puts("");
+
+	va_end(args);
+
+	displayErrorLocation(start, end);
+}
+
 void reportError(CodeLocation *location, CHECK_PRINTF const char *format, ...) {
 	printErrorLocation(location);
 

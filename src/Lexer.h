@@ -100,7 +100,8 @@ enum class TokenT : u8 {
 	ARRAY_TYPE, 
 	LOAD, 
 	UNION, 
-	COMPLETED
+	COMPLETED, 
+	REMOVE
 };
 
 struct Token {

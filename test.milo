@@ -197,7 +197,7 @@ u64_to_string :: (value: u64) -> string {
 	remaining = value
 	
 	while remaining {
-		result -= 1;
+		result--
 		
 		<<result = cast() (remaining % 10 + '0')
 		remaining /= 10
