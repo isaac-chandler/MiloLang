@@ -94,7 +94,7 @@ struct TypeStruct : Type {
 inline Type TYPE_S8 = { 1, 1, "s8", 2, TYPE_INTEGER_IS_SIGNED, TypeFlavor::INTEGER };
 inline Type TYPE_S16 = { 2, 2, "s16", 3, TYPE_INTEGER_IS_SIGNED, TypeFlavor::INTEGER };
 inline Type TYPE_S32 = { 4, 4, "s32", 5, TYPE_INTEGER_IS_SIGNED, TypeFlavor::INTEGER };
-inline Type TYPE_S64 = { 8, 8, "S64", 7, TYPE_INTEGER_IS_SIGNED, TypeFlavor::INTEGER };
+inline Type TYPE_S64 = { 8, 8, "s64", 7, TYPE_INTEGER_IS_SIGNED, TypeFlavor::INTEGER };
 
 inline Type TYPE_U8 = { 1, 1, "u8", 11, 0, TypeFlavor::INTEGER };
 inline Type TYPE_U16 = { 2, 2, "u16", 13, 0, TypeFlavor::INTEGER };

@@ -42,7 +42,8 @@ static const Keyword keywords[] = {
 	{"type_of", TokenT::TYPE_OF},
 	{"#external", TokenT::EXTERNAL}, 
 	{"#load", TokenT::LOAD}, 
-	{"union", TokenT::UNION}
+	{"union", TokenT::UNION}, 
+	{"completed", TokenT::COMPLETED}
 };
 
 void BigInt::zero() {

@@ -159,15 +159,73 @@ get_strings :: () -> [] string {
 }
 
 get_linked_strings :: () -> ListNode {
-	a: ListNode;
-	a.value = "LinkedTest1";
-	a.next = allocate(size_of(ListNode));
+	a: ListNode
+	a.value = "LinkedTest1"
+	a.next = allocate(size_of(ListNode))
 	
-	b := a.next;
-	b.value = "LinkedTest2";
-	b.next = null;
+	b := a.next
+	b.value = "LinkedTest2"
+	b.next = null
 	
-	return a;
+	return a
+}
+
+u64_to_string :: (value: u64) -> string {
+	if value == 0 {
+		result := cast(*u8) allocate(2)
+		result[0] = '0'
+		result[1] = 0
+		
+		return cast() result
+	}
+
+	digitCount: u64
+	
+	remaining := value
+	
+	while remaining {
+		digitCount += 1
+		
+		remaining /= 10
+	}
+	
+	result := cast(*u8) allocate(digitCount + 1)
+	
+	result += digitCount;
+	
+	<<result = 0
+	remaining = value
+	
+	while remaining {
+		result -= 1;
+		
+		<<result = cast() (remaining % 10 + '0')
+		remaining /= 10
+	}
+	
+	return cast() result
+}
+
+find_string :: (array: []string, s: string) {
+	for array {
+		if it == s {
+			index := u64_to_string(it_index)
+			
+			print_string(index)
+			print_string(": found ")
+			print_string(s)
+			print_string("\n")
+			
+			deallocate(cast() index)
+			
+			break
+		}
+	} completed {
+		print_string("Couldn't find ")
+		print_string(s)
+		print_string("\n")
+	}
+	
 }
 
 _main :: () {
@@ -180,19 +238,11 @@ _main :: () {
 	}
 	*/
 	
-	list := get_linked_strings();
+	list := get_strings();
 	
-	list := 6
-	
-	while true {
-		print_string(list.value);
-		print_string(" ");
-		
-		if list.next == null
-			break;
-			
-		list = <<list.next;
-	}
+	find_string(list, "Test2")
+	find_string(list, "Hello")
+	find_string(list, "Test1")
 }
 
 factorial2 :: (n: u64) -> u64 {

@@ -1211,7 +1211,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 					compare.flags |= IR_SIGNED_OP;
 			}
 
-			state->loopStack[state->loopCount - 1].endPatches.add(state->ir.count);
+			u64 patch = state->ir.count; // Patch this manually so it doesn't skip the completed block if it exists
 
 			Ir &branch = state->ir.add();
 			branch.op = IrOp::IF_Z_GOTO;
@@ -1237,6 +1237,11 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			Ir &jump = state->ir.add();
 			jump.op = IrOp::GOTO;
 			jump.b = state->loopStack[state->loopCount - 1].start;
+
+			state->ir[patch].b = state->ir.count;
+
+			if (loop->completedBody)
+				generateIr(state, loop->completedBody, DEST_NONE);
 
 			popLoop(state);
 			
@@ -1551,7 +1556,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 			u64 conditionReg = generateIr(state, loop->whileCondition, state->nextRegister++);
 			
-			state->loopStack[state->loopCount - 1].endPatches.add(state->ir.count);
+			u64 patch = state->ir.count; // Patch this manually so it doesn't skip the completed block if it exists
 
 			Ir &ifZ = state->ir.add();
 			ifZ.op = IrOp::IF_Z_GOTO;
@@ -1564,6 +1569,11 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			Ir &jump = state->ir.add();
 			jump.op = IrOp::GOTO;
 			jump.b = state->loopStack[state->loopCount - 1].start;
+
+			state->ir[patch].b = state->ir.count;
+
+			if (loop->completedBody)
+				generateIr(state, loop->completedBody, DEST_NONE);
 
 			popLoop(state);
 

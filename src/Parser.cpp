@@ -289,10 +289,30 @@ Expr *parseStatement(LexerFile *lexer) {
 
 			pushBlock(&loop->iteratorBlock);
 			loop->body = parseStatement(lexer);
-			popBlock(&loop->iteratorBlock);
 
 			if (!loop->body)
 				return nullptr;
+
+			popBlock(&loop->iteratorBlock);
+
+		}
+
+		// A completed block is executed if the loop finishes without a break statement or a continue to an outer loop
+		if (expectAndConsume(lexer, TokenT::COMPLETED)) {
+			loop->end = lexer->previousTokenEnd;
+			if (expectAndConsume(lexer, ';')) {
+				loop->completedBody = nullptr;
+
+			}
+			else {
+				loop->completedBody = parseStatement(lexer);
+
+				if (!loop->completedBody)
+					return nullptr;
+			}
+		}
+		else {
+			loop->completedBody = nullptr;
 		}
 
 		return loop;
@@ -344,10 +364,30 @@ Expr *parseStatement(LexerFile *lexer) {
 
 			pushBlock(&loop->iteratorBlock);
 			loop->body = parseStatement(lexer);
-			popBlock(&loop->iteratorBlock);
 
 			if (!loop->body)
 				return nullptr;
+
+			popBlock(&loop->iteratorBlock);
+
+		}
+
+		// A completed block is executed if the loop finishes without a break statement or a continue to an outer loop
+		if (expectAndConsume(lexer, TokenT::COMPLETED)) {
+			loop->end = lexer->previousTokenEnd;
+			if (expectAndConsume(lexer, ';')) {
+				loop->completedBody = nullptr;
+
+			}
+			else {
+				loop->completedBody = parseStatement(lexer);
+
+				if (!loop->completedBody)
+					return nullptr;
+			}
+		}
+		else {
+			loop->completedBody = nullptr;
 		}
 
 		return loop;

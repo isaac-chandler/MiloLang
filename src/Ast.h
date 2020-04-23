@@ -254,6 +254,8 @@ struct ExprLoop : Expr {
 
 	Expr *body;
 
+	Expr *completedBody;
+
 	u64 irPointer;
 	Block iteratorBlock;
 };

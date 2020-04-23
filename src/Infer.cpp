@@ -153,6 +153,9 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 			if (loop->body)
 				flatten(flattenTo, &loop->body);
 
+			if (loop->completedBody)
+				flatten(flattenTo, &loop->completedBody);
+
 			break;
 		}
 		case ExprFlavor::FUNCTION_CALL: {
@@ -215,6 +218,9 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 
 			if (loop->body)
 				flatten(flattenTo, &loop->body);
+
+			if (loop->completedBody)
+				flatten(flattenTo, &loop->completedBody);
 
 			break;
 		}
@@ -1264,7 +1270,7 @@ bool assignOp(InferJob *job, Expr *location, Type *correct, Expr *&given) {
 						else if (correct->size > given->type->size) {
 							insertImplicitCast(job, &given, correct);
 						}
-						else if (given->type->size < correct->size) {
+						else if (correct->size < given->type->size) {
 							reportError(location, "Error: Cannot convert from %.*s to %.*s, precision will be lost", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
 							return false;
 						}
