@@ -1047,14 +1047,15 @@ bool hasDefaultValue(Type *type) {
 	}
 }
 
-bool defaultValueIsZero(Type *type) {
+bool defaultValueIsZero(Type *type, bool *yield) {
+	*yield = false;
+
 	switch (type->flavor) {
 		case TypeFlavor::BOOL:
 		case TypeFlavor::FLOAT:
 		case TypeFlavor::FUNCTION:
 		case TypeFlavor::INTEGER:
-		case TypeFlavor::POINTER:
-		case TypeFlavor::STRUCT: /* @Incomplete: struct initialization */{
+		case TypeFlavor::POINTER: {
 			return true;
 		}
 		case TypeFlavor::STRING: {
@@ -1062,11 +1063,37 @@ bool defaultValueIsZero(Type *type) {
 		}
 		case TypeFlavor::ARRAY: {
 			if (type->flags & TYPE_ARRAY_IS_FIXED) {
-				return defaultValueIsZero(static_cast<TypeArray *>(type)->arrayOf);
+				return defaultValueIsZero(static_cast<TypeArray *>(type)->arrayOf, yield);
 			}
 			else {
 				return true;
 			}
+		}
+		case TypeFlavor::STRUCT: {
+			auto struct_ = static_cast<TypeStruct *>(type);
+			
+			for (auto member : struct_->members.declarations) {
+				if (member->flags & DECLARATION_IS_CONSTANT) continue;
+
+				if (member->flags & DECLARATION_IS_UNINITIALIZED) return false;
+
+				if (!(member->flags & DECLARATION_VALUE_IS_READY)) {
+					*yield = true;
+					return true;
+				}
+
+				assert(member->initialValue);
+
+				if ((member->initialValue->flavor == ExprFlavor::INT_LITERAL || member->initialValue->flavor == ExprFlavor::FLOAT_LITERAL)
+					&& static_cast<ExprLiteral *>(member->initialValue)->unsignedValue == 0) { // Check against unsignedValue even for float literals so if the user explicitly 
+																							   // sets the default value to -0, they will actually get -0, not 0
+				}
+				else {
+					return false;
+				}
+			}
+
+			return true;
 		}
 		default: {
 			return false;
@@ -1074,21 +1101,41 @@ bool defaultValueIsZero(Type *type) {
 	}
 }
 
-Expr *createDefaultValue(Declaration *location, Type *type) {
+Expr *createDefaultValue(Declaration *location, Type *type, bool *shouldYield) {
+	*shouldYield = false;
+
+	bool yield;
+
+	if (defaultValueIsZero(type, &yield)) {
+		ExprLiteral *zero = new ExprLiteral;
+		zero->flavor = ExprFlavor::INT_LITERAL;
+		zero->unsignedValue = 0;
+		zero->type = type;
+
+		return zero;
+	}
+
+	if (yield) {
+		*shouldYield = true;
+		return nullptr;
+	}
+
 	switch (type->flavor) {
 		case TypeFlavor::BOOL:
 		case TypeFlavor::FLOAT:
 		case TypeFlavor::FUNCTION:
 		case TypeFlavor::INTEGER:
-		case TypeFlavor::POINTER:
-		case TypeFlavor::STRUCT: /* @Incomplete struct initialization */ {
-			ExprLiteral *zero = new ExprLiteral;
-			zero->flavor = type->flavor == TypeFlavor::FLOAT ? ExprFlavor::FLOAT_LITERAL : ExprFlavor::INT_LITERAL;
-			zero->unsignedValue = 0;
-			zero->type = type;
+		case TypeFlavor::POINTER: {
+			assert(false); // This should be handled by the defaultValueIsZero check
+			break;
+		}
+		case TypeFlavor::STRUCT: {
+			Expr *literal = new Expr;
+			literal->flavor = ExprFlavor::STRUCT_DEFAULT;
+			literal->type = type;
 
-			return zero;
-		} break;
+			return literal;
+		}
 		case TypeFlavor::STRING: {
 			ExprStringLiteral *empty = new ExprStringLiteral;
 			empty->flavor = ExprFlavor::STRING_LITERAL;
@@ -1108,22 +1155,27 @@ Expr *createDefaultValue(Declaration *location, Type *type) {
 				auto array = static_cast<TypeArray *>(type);
 				defaults->count = array->count;
 
-				if (defaultValueIsZero(array->arrayOf)) {
-					defaults->storage = nullptr;
-				}
-				else {
-					defaults->storage = new Expr * [array->count];
+				
+				defaults->storage = new Expr * [array->count];
 
-					Expr *value = createDefaultValue(location, array->arrayOf);
+				bool yield;
 
-					for (u64 i = 0; i < array->count; i++) {
-						defaults->storage[i] = value;
-					}
+				Expr *value = createDefaultValue(location, array->arrayOf, &yield);
+
+				if (yield) {
+					*shouldYield = true;
+					return nullptr;
 				}
-			}
-			else {
-				defaults->storage = nullptr;
-				defaults->count = 0;
+
+				if (!value) {
+					return nullptr;
+				}
+
+				defaults->storage[0] = value;
+
+				if (array->count > 1) {
+					defaults->storage[1] = nullptr; // A value of nullptr signifies all remaining values are the same as the previous
+				}
 			}
 
 			return defaults;
@@ -2108,8 +2160,14 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 
 						if (!right) {
 							assert(binary->left->flavor == ExprFlavor::IDENTIFIER);
-							binary->right = createDefaultValue(static_cast<ExprIdentifier *>(binary->left)->declaration, binary->left->type);
+							bool yield;
+
+							binary->right = createDefaultValue(static_cast<ExprIdentifier *>(binary->left)->declaration, binary->left->type, &yield);
 							
+							if (yield) {
+								return true;
+							}
+
 							if (!binary->right) {
 								return false;
 							}
@@ -2724,11 +2782,75 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 					functionForArgumentNames = static_cast<ExprFunction *>(call->function->valueOfDeclaration->initialValue);
 				}
 
+				bool hasNamedArguments = false;
 
-				if (call->argumentCount != function->argumentCount) {
+				for (u64 i = 0; i < call->argumentCount; i++) {
+					if (call->argumentNames[i].length != 0) {
+						hasNamedArguments = true;
+					}
+				}
+
+				u64 minArguments = function->argumentCount;
+
+				if (functionForArgumentNames) {
+					for (u64 i = 0; i < functionForArgumentNames->arguments.declarations.count; i++) {
+						if (functionForArgumentNames->arguments.declarations[i]->initialValue) {
+							--minArguments;
+						}
+					}
+				}
+
+				if (hasNamedArguments && !functionForArgumentNames) {
+					reportError(call, "Error: Cannot use named arguments with an unknown function"); // @Improvement better message
+					return false;
+				}
+
+				if (hasNamedArguments || (call->argumentCount < function->argumentCount && minArguments != function->argumentCount)) {
+					Expr **sortedArguments = new Expr * [function->argumentCount] {};
+
+					for (u64 i = 0; i < call->argumentCount; i++) {
+						u64 index = i;
+						if (call->argumentNames[i].length) {
+							auto argument = findDeclaration(&functionForArgumentNames->arguments, call->argumentNames[i], &index);
+
+							if (!argument) {
+								reportError(call->arguments[i], "Error: %.*s does not have an argument called %.*s", STRING_PRINTF(functionName), STRING_PRINTF(call->argumentNames[i]));
+								return false;
+							}
+						}
+
+						if (sortedArguments[index]) {
+							reportError(call->arguments[i], "Error: Argument %.*s was supplied twice", STRING_PRINTF(functionForArgumentNames->arguments.declarations[index]->name));
+							reportError(sortedArguments[index], "   ..: It was previously given here");
+							return false;
+						}
+
+						sortedArguments[index] = call->arguments[i];
+					}
+
+					for (u64 i = 0; i < function->argumentCount; i++) {
+						if (!sortedArguments[i]) {
+							auto argument = functionForArgumentNames->arguments.declarations[i];
+
+							if (argument->initialValue) {
+								sortedArguments[i] = argument->initialValue;
+								addSizeDependency(job, argument->initialValue->type);
+							}
+							else {
+								reportError(call, "Error: Required argument '%.*s' was not given", STRING_PRINTF(argument->name));
+								reportError(argument, "   ..: Here is the argument");
+								return false;
+							}
+						}
+					}
+
+					call->arguments = sortedArguments;
+					call->argumentCount = function->argumentCount;
+				}
+				else if (call->argumentCount != function->argumentCount) {
 
 					if (call->argumentCount < function->argumentCount) {
-						reportError(call, "Error: Too few arguments for %.*s, (Expected: %" PRIu64 "Given: %" PRIu64 ")", 
+						reportError(call, "Error: Too few arguments for %.*s (Expected: %" PRIu64 ", Given: %" PRIu64 ")", 
 							STRING_PRINTF(functionName), function->argumentCount, call->argumentCount);
 
 						if (functionForArgumentNames) {
@@ -2736,7 +2858,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 						}
 					}
 					else if (call->argumentCount > function->argumentCount) {
-						reportError(call, "Error: Too many arguments for %.*s, (Expected: %" PRIu64 "Given: %" PRIu64 ")",
+						reportError(call, "Error: Too many arguments for %.*s (Expected: %" PRIu64 ", Given: %" PRIu64 ")",
 							STRING_PRINTF(functionName), function->argumentCount, call->argumentCount);
 					}
 
@@ -3262,11 +3384,13 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 						}
 						else if (value->flavor == ExprFlavor::STRUCT_ACCESS) {
 							if (!isAddressable(value)) {
-								reportError(value, "Error: Canmnot take an address to something that has no storage");
+								reportError(value, "Error: Cannot take an address to something that has no storage");
 								return false;
 							}
 
-							return true;
+							auto pointer = getPointer(value->type);
+
+							unary->type = pointer;
 						}
 						else if (value->flavor == ExprFlavor::IDENTIFIER) {
 							checkedRemoveLastSizeDependency(job, value->type);
@@ -3601,7 +3725,8 @@ void runInfer() {
 									goto error;
 								}
 
-								if ((declaration->flags & DECLARATION_IS_CONSTANT) || declaration->enclosingScope == &globalBlock) {
+								if ((declaration->flags & 
+									(DECLARATION_IS_CONSTANT | DECLARATION_IS_ARGUMENT | DECLARATION_IS_STRUCT_MEMBER)) || declaration->enclosingScope == &globalBlock) {
 									if (!isLiteral(declaration->initialValue)) {
 										reportError(declaration->type, "Error: Declaration value must be a constant");
 										goto error;
@@ -3624,15 +3749,20 @@ void runInfer() {
 						}
 						else if (declaration->type) {
 							if (job->typeFlattenedIndex == job->typeFlattened.count) {
-								if (!(declaration->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_ARGUMENT | DECLARATION_IS_ITERATOR_INDEX | DECLARATION_IS_ITERATOR)) && declaration->enclosingScope == &globalBlock /* Declarations in local scope will be initialized in inferFlattened for the assign op they generate */) {
+								if (!(declaration->flags & DECLARATION_IS_UNINITIALIZED) && 
+									(declaration->enclosingScope == &globalBlock || (declaration->flags & DECLARATION_IS_STRUCT_MEMBER)) /* Declarations in local scope will be initialized in inferFlattened for the assign op they generate */) {
 									auto type = static_cast<ExprLiteral *>(declaration->type)->typeValue;
 
-									declaration->initialValue = createDefaultValue(declaration, type);
-									declaration->initialValue->valueOfDeclaration = declaration;
+									bool yield;
+									declaration->initialValue = createDefaultValue(declaration, type, &yield);
+
+									if (yield) continue;
 
 									if (!declaration->initialValue) {
 										goto error;
 									}
+
+									declaration->initialValue->valueOfDeclaration = declaration;
 
 									declaration->initialValue->start = declaration->start;
 									declaration->initialValue->end = declaration->end;
@@ -3669,6 +3799,14 @@ void runInfer() {
 								}
 
 								declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, declaration->initialValue->type);
+
+								if ((declaration->flags &
+									(DECLARATION_IS_CONSTANT | DECLARATION_IS_ARGUMENT | DECLARATION_IS_STRUCT_MEMBER)) || declaration->enclosingScope == &globalBlock) {
+									if (!isLiteral(declaration->initialValue)) {
+										reportError(declaration->type, "Error: Declaration value must be a constant");
+										goto error;
+									}
+								}
 
 								madeProgress = true;
 
@@ -3708,12 +3846,20 @@ void runInfer() {
 									if (!memberType->size)
 										break;
 
-									job->runningSize = AlignPO2(job->runningSize, memberType->alignment);
 									struct_->alignment = my_max(struct_->alignment, memberType->alignment);
 
-									member->physicalStorage = job->runningSize;
+									if (struct_->flags & TYPE_STRUCT_IS_UNION) {
+										job->runningSize = my_max(job->runningSize, memberType->size);
 
-									job->runningSize += memberType->size;
+										member->physicalStorage = 0;
+									}
+									else {
+										job->runningSize = AlignPO2(job->runningSize, memberType->alignment);
+
+										member->physicalStorage = job->runningSize;
+
+										job->runningSize += memberType->size;
+									}
 								}
 
 								job->sizingIndexInMembers++;

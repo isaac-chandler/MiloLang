@@ -135,9 +135,6 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <None Include="test.mil" />
-  </ItemGroup>
-  <ItemGroup>
     <ClInclude Include="src\Array.h" />
     <ClInclude Include="src\ArraySet.h" />
     <ClInclude Include="src\Ast.h" />

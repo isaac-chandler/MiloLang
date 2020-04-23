@@ -81,6 +81,13 @@ struct CodeLocation : EndLocation {
 #define my_min(a, b) ((a) < (b) ? (a) : (b))
 #define my_max(a, b) ((a) > (b) ? (a) : (b))
 
+struct ScopeLock {
+	std::mutex &lock;
+
+	ScopeLock(std::mutex &lock) : lock(lock) { lock.lock(); }
+	~ScopeLock() { lock.unlock(); }
+};
+
 
 #if PROFILE
 struct Profile {

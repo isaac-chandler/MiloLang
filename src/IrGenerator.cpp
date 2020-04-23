@@ -1412,6 +1412,51 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 			return DEST_NONE;
 		}
+		case ExprFlavor::STRUCT_DEFAULT: {
+			if (dest == DEST_NONE) return DEST_NONE;
+
+			u64 memberSize = 0;
+
+			auto struct_ = static_cast<TypeStruct *>(expr->type);
+
+			for (auto decl : struct_->members.declarations) {
+				if (decl->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_CONSTANT)) continue;
+
+				if (decl->physicalStorage & 7) {
+					memberSize = my_max(static_cast<ExprLiteral *>(decl->type)->typeValue->size, memberSize);
+				}
+			}
+
+			u64 addressReg = state->nextRegister++;
+			u64 memberTemp = state->nextRegister;
+			state->nextRegister += (memberSize + 7) / 8;
+
+			for (auto decl : struct_->members.declarations) {
+				if (decl->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_CONSTANT)) continue;
+
+				if (decl->physicalStorage & 7) {
+					generateIrForceDest(state, decl->initialValue, memberTemp);
+
+					Ir &address = state->ir.add();
+					address.op = IrOp::ADDRESS_OF_LOCAL;
+					address.a = dest;
+					address.b = decl->physicalStorage;
+					address.dest = addressReg;
+					address.opSize = 8;
+
+					Ir &write = state->ir.add();
+					write.op = IrOp::WRITE;
+					write.a = addressReg;
+					write.b = memberTemp;
+					write.opSize = static_cast<ExprLiteral *>(decl->type)->typeValue->size;
+				}
+				else {
+					generateIrForceDest(state, decl->initialValue, dest + decl->physicalStorage / 8);
+				}
+			}
+
+			return dest;
+		}
 		case ExprFlavor::STRUCT_ACCESS: {
 			if (dest == DEST_NONE) return dest;
 
@@ -1532,15 +1577,55 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			if (array->type->flags & TYPE_ARRAY_IS_FIXED) {
 				auto elementType = static_cast<TypeArray *>(array->type)->arrayOf;
 
-				if (elementType->size % 8 == 0) {
-					for (u64 i = 0; i < array->count; i++) {
-						generateIrForceDest(state, array->storage[i], dest + i * elementType->size / 8);
+				u64 addressReg = state->nextRegister++;
+				u64 valueReg = allocateSpaceForType(state, elementType);
+				for (u64 i = 0; i < array->count; i++) {
+					if (i + 1 < array->count && array->storage[i + 1] == nullptr) {
+						u64 countReg = state->nextRegister++;
+						Ir &count = state->ir.add();
+						count.op = IrOp::IMMEDIATE;
+						count.dest = countReg;
+						count.a = array->count - i;
+						count.opSize = 8;
+						
+						Ir &address = state->ir.add();
+						address.op = IrOp::ADDRESS_OF_LOCAL;
+						address.dest = addressReg;
+						address.a = dest;
+						address.b = dest + i * elementType->size;
+						address.opSize = 8;
+
+						u64 patch = state->ir.count;
+
+						generateIrForceDest(state, array->storage[i], valueReg);
+
+						Ir &write = state->ir.add();
+						address.op = IrOp::WRITE;
+						address.a = addressReg;
+						address.b = valueReg;
+						address.opSize = elementType->size;
+
+						Ir &add = state->ir.add();
+						add.op = IrOp::ADD_CONSTANT;
+						add.dest = addressReg;
+						add.a = addressReg;
+						add.b = elementType->size;
+						add.opSize = 8;
+
+						Ir &dec = state->ir.add();
+						dec.op = IrOp::ADD_CONSTANT;
+						dec.dest = countReg;
+						dec.a = countReg;
+						dec.b = static_cast<u64>(-1LL);
+						dec.opSize = 8;
+
+						Ir &branch = state->ir.add();
+						branch.op = IrOp::IF_NZ_GOTO;
+						branch.a = countReg;
+						branch.b = patch;
+						branch.opSize = 8;
 					}
-				}
-				else {
-					u64 addressReg = state->nextRegister++;
-					u64 valueReg = allocateSpaceForType(state, elementType);
-					for (u64 i = 0; i < array->count; i++) {
+					else {
 						Ir &address = state->ir.add();
 						address.op = IrOp::ADDRESS_OF_LOCAL;
 						address.dest = addressReg;
@@ -1549,7 +1634,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 						address.opSize = 8;
 
 						generateIrForceDest(state, array->storage[i], valueReg);
-						
+
 						Ir &write = state->ir.add();
 						address.op = IrOp::WRITE;
 						address.a = addressReg;
@@ -1624,7 +1709,7 @@ void runIrGenerator() {
 				declaration->physicalStorage = i + 1 + paramOffset;
 			}
 			else {
-				declaration->physicalStorage += allocateSpaceForType(&function->state, type);
+				declaration->physicalStorage = allocateSpaceForType(&function->state, type);
 			}
 		}
 

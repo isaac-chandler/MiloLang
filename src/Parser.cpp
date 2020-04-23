@@ -26,7 +26,7 @@ bool addDeclarationToBlock(Block *block, Declaration *declaration) {
 	for (auto previous : block->declarations) {
 		if (previous->name == declaration->name) {
 			reportError(declaration, "Error: Cannot redeclare variable '%.*s' within the same scope", STRING_PRINTF(declaration->name));
-			reportError(previous, "<- Here is the location it was declared");
+			reportError(previous, "   ..: Here is the location it was declared");
 		}
 	}
 
@@ -46,9 +46,9 @@ struct BinaryOperator {
 };
 
 static BinaryOperator binaryOpPrecedences[] = {
-	{{TokenT::LOGIC_OR, TokenT::LOGIC_AND}}, 
+	{{TokenT::LOGIC_OR, TokenT::LOGIC_AND}},
 	{{TokenT::EQUAL, TokenT::NOT_EQUAL}},
-	{{TOKEN('|'), TOKEN('^'), TOKEN('&')}}, 
+	{{TOKEN('|'), TOKEN('^'), TOKEN('&')}},
 	{{TOKEN('>'), TokenT::LESS_EQUAL, TOKEN('<'), TokenT::GREATER_EQUAL}},
 	{{TokenT::SHIFT_LEFT, TokenT::SHIFT_RIGHT}},
 	{{TOKEN('+'), TOKEN('-')}},
@@ -145,7 +145,7 @@ ExprIdentifier *makeIdentifier(CodeLocation &start, EndLocation &end, Declaratio
 	identifier->name = declaration->name;
 	identifier->resolveFrom = nullptr;
 	identifier->indexInBlock = 0;
-	
+
 	return identifier;
 }
 
@@ -263,7 +263,7 @@ Expr *parseStatement(LexerFile *lexer) {
 				assert(false); // Invalid code path, we should never fail to add this
 			}
 		}
-		
+
 		loop->forBegin = parseExpr(lexer);
 		if (!loop->forBegin)
 			return nullptr;
@@ -398,7 +398,7 @@ Expr *parseStatement(LexerFile *lexer) {
 		ExprBreakOrContinue *continue_ = PARSER_NEW(ExprBreakOrContinue);
 		continue_->flavor = lexer->token.type == TokenT::CONTINUE ? ExprFlavor::CONTINUE : ExprFlavor::BREAK;
 		continue_->start = lexer->token.start;
-		
+
 		lexer->advance();
 
 		if (lexer->token.type == TokenT::IDENTIFIER) {
@@ -443,13 +443,13 @@ Expr *parseStatement(LexerFile *lexer) {
 		return_->start = lexer->token.start;
 		lexer->advance();
 
-		
+
 		if (expectAndConsume(lexer, ';')) {
 			return_->value = nullptr;
 		}
 		else {
 			return_->value = parseExpr(lexer);
-			
+
 			if (!return_->value)
 				return nullptr;
 		}
@@ -489,16 +489,16 @@ Expr *parseStatement(LexerFile *lexer) {
 
 		if (false);
 		MODIFY_ASSIGN(TOKEN('='))
-		MODIFY_ASSIGN(TokenT::PLUS_EQUALS)
-		MODIFY_ASSIGN(TokenT::MINUS_EQUALS)
-		MODIFY_ASSIGN(TokenT::TIMES_EQUALS)
-		MODIFY_ASSIGN(TokenT::DIVIDE_EQUALS)
-		MODIFY_ASSIGN(TokenT::MOD_EQUALS)
-		MODIFY_ASSIGN(TokenT::SHIFT_LEFT_EQUALS)
-		MODIFY_ASSIGN(TokenT::SHIFT_RIGHT_EQUALS)
-		MODIFY_ASSIGN(TokenT::XOR_EQUALS)
-		MODIFY_ASSIGN(TokenT::AND_EQUALS)
-		MODIFY_ASSIGN(TokenT::OR_EQUALS)
+			MODIFY_ASSIGN(TokenT::PLUS_EQUALS)
+			MODIFY_ASSIGN(TokenT::MINUS_EQUALS)
+			MODIFY_ASSIGN(TokenT::TIMES_EQUALS)
+			MODIFY_ASSIGN(TokenT::DIVIDE_EQUALS)
+			MODIFY_ASSIGN(TokenT::MOD_EQUALS)
+			MODIFY_ASSIGN(TokenT::SHIFT_LEFT_EQUALS)
+			MODIFY_ASSIGN(TokenT::SHIFT_RIGHT_EQUALS)
+			MODIFY_ASSIGN(TokenT::XOR_EQUALS)
+			MODIFY_ASSIGN(TokenT::AND_EQUALS)
+			MODIFY_ASSIGN(TokenT::OR_EQUALS)
 		else {
 			if (expr->flavor != ExprFlavor::FUNCTION_CALL) {
 				reportError(expr, "Error: Can only have an assignment or function call expression at statement level");
@@ -555,11 +555,11 @@ ExprBlock *parseBlock(LexerFile *lexer) {
 
 					block->exprs.add(assign);
 				}
-				
+
 				continue;
 			}
 		}
-		
+
 		Expr *expr = parseStatement(lexer);
 
 		if (!expr)
@@ -614,8 +614,11 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 				function->arguments.flags |= BLOCK_IS_ARGUMENTS;
 				function->returnType = parserMakeTypeLiteral(function->start, function->end, &TYPE_VOID);
 				pushBlock(&function->arguments);
-				
+
 				function->body = parseBlock(lexer);
+				if (!function->body) {
+					return nullptr;
+				}
 
 				popBlock(&function->arguments);
 
@@ -633,7 +636,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 				function->end = lexer->previousTokenEnd;
 				function->arguments.flags |= BLOCK_IS_ARGUMENTS;
 				function->returnType = parserMakeTypeLiteral(function->start, function->end, &TYPE_VOID);
-				
+
 
 				function->body = nullptr;
 				function->flags |= EXPR_FUNCTION_IS_EXTERNAL;
@@ -659,6 +662,10 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 					pushBlock(&function->arguments);
 
 					function->body = parseBlock(lexer);
+
+					if (!function->body) {
+						return nullptr;
+					}
 
 					popBlock(&function->arguments);
 
@@ -708,7 +715,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 			TokenT peek;
 
 			lexer->peekTokenTypes(1, &peek);
-			
+
 			if (peek == TOKEN(':')) { // This is an argument declaration
 				ExprFunction *function = PARSER_NEW(ExprFunction);
 				function->flavor = ExprFlavor::FUNCTION;
@@ -750,6 +757,9 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 					function->returnType = parserMakeTypeLiteral(function->start, function->end, &TYPE_VOID);
 
 					function->body = parseBlock(lexer);
+					if (!function->body) {
+						return nullptr;
+					}
 
 					popBlock(&function->arguments);
 
@@ -786,6 +796,9 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 						function->returnType = returnType;
 
 						function->body = parseBlock(lexer);
+						if (!function->body) {
+							return nullptr;
+						}
 
 						popBlock(&function->arguments);
 
@@ -867,7 +880,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 					type->type = &TYPE_TYPE;
 
 					pushBlock(&type->arguments);
-					
+
 					auto argument = PARSER_NEW(Declaration);
 					argument->type = expr;
 					argument->start = expr->start;
@@ -951,7 +964,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 				return nullptr;
 			}
 		}
-	
+
 	}
 	else if (lexer->token.type == TokenT::IDENTIFIER) {
 		bool success;
@@ -1119,7 +1132,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		type->size = 0;
 		type->alignment = 0;
 		type->hash = 0;
-		
+
 		if (!expectAndConsume(lexer, '{')) {
 			reportExpectedError(&lexer->token, "Error: Expected '{' in struct definition");
 			return nullptr;
@@ -1131,6 +1144,8 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 				if (!declaration)
 					return nullptr;
+
+				declaration->flags |= DECLARATION_IS_STRUCT_MEMBER;
 
 				if (!addDeclarationToCurrentBlock(declaration)) {
 					return nullptr;
@@ -1146,7 +1161,51 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 				reportExpectedError(&lexer->token, "Error: Expected declaration in struct definition");
 			}
 		}
-		
+
+		popBlock(&type->members);
+		expr = parserMakeTypeLiteral(start, lexer->previousTokenEnd, type);
+
+		inferQueue.add(makeDeclarationPack(expr));
+	}
+	else if (expectAndConsume(lexer, TokenT::UNION)) {
+		auto type = PARSER_NEW(TypeStruct);
+		type->flavor = TypeFlavor::STRUCT;
+		type->flags |= TYPE_STRUCT_IS_UNION;
+		pushBlock(&type->members);
+
+		type->size = 0;
+		type->alignment = 0;
+		type->hash = 0;
+
+		if (!expectAndConsume(lexer, '{')) {
+			reportExpectedError(&lexer->token, "Error: Expected '{' in union definition");
+			return nullptr;
+		}
+
+		while (true) {
+			if (lexer->token.type == TokenT::IDENTIFIER) {
+				auto declaration = parseDeclaration(lexer);
+
+				if (!declaration)
+					return nullptr;
+
+				declaration->flags |= DECLARATION_IS_STRUCT_MEMBER;
+
+				if (!addDeclarationToCurrentBlock(declaration)) {
+					return nullptr;
+				}
+			}
+			else if (expectAndConsume(lexer, ';')) {
+
+			}
+			else if (expectAndConsume(lexer, '}')) {
+				break;
+			}
+			else {
+				reportExpectedError(&lexer->token, "Error: Expected declaration in union definition");
+			}
+		}
+
 		popBlock(&type->members);
 		expr = parserMakeTypeLiteral(start, lexer->previousTokenEnd, type);
 
@@ -1156,7 +1215,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		reportExpectedError(&lexer->token, "Error: Expected an expression");
 		return nullptr;
 	}
-	
+
 	while (true) {
 		start = lexer->token.start;
 
@@ -1173,15 +1232,48 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 			}
 			else {
 				Array<Expr *> arguments;
+				Array<String> names;
+
+				bool hadNamed = false;
 
 				// @Incomplete: named arguments?
 				do {
+					String name = { nullptr, 0ULL };
+
+					if (lexer->token.type == TokenT::IDENTIFIER) {
+						TokenT peek;
+
+						lexer->peekTokenTypes(1, &peek);
+
+						if (peek == TOKEN('=')) {
+							hadNamed = true;
+							name = lexer->token.text;
+
+							lexer->advance();
+
+							assert(lexer->token.type == TOKEN('='));
+
+							lexer->advance();
+						}
+						else {
+							goto unnamed;
+						}
+					}
+					else {
+					unnamed:
+
+						if (hadNamed) {
+							reportError(&lexer->token, "Error: Cannot have unnamed arguments after named arguments");
+						}
+					}
+
 					Expr *argument = parseExpr(lexer);
 
 					if (!argument)
 						return nullptr;
 
 					arguments.add(argument);
+					names.add(name);
 				} while (expectAndConsume(lexer, ',')); // @Incomple: We currently don't allow trailing comma in function calls, should we?
 
 				call->end = lexer->token.end;
@@ -1193,6 +1285,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 				call->argumentCount = arguments.count;
 				call->arguments = arguments.storage;
+				call->argumentNames = names.storage;
 			}
 
 			expr = call;
@@ -1254,7 +1347,7 @@ Expr *makeUnaryOperator(LexerFile *lexer, CodeLocation &start, EndLocation &end,
 		return nullptr;
 	}
 
-return expr;
+	return expr;
 }
 
 Expr *parseUnaryExpr(LexerFile *lexer) {
@@ -1322,7 +1415,7 @@ Expr *parseUnaryExpr(LexerFile *lexer) {
 		array->flavor = ExprFlavor::BINARY_OPERATOR;
 		array->start = start;
 		array->op = TokenT::ARRAY_TYPE;
-		
+
 		if (expectAndConsume(lexer, TokenT::DOUBLE_DOT)) {
 			array->end = lexer->token.end;
 			array->left = nullptr;
@@ -1439,7 +1532,7 @@ Expr *parseBinaryOperator(LexerFile *lexer) {
 		binary->start = current.start;
 		binary->end = current.end;
 		binary->op = current.type;
-		
+
 		current.left = binary;
 	}
 
@@ -1521,7 +1614,7 @@ Declaration *parseDeclaration(LexerFile *lexer) {
 			}
 			else {
 				declaration->initialValue = parseExpr(lexer);
-				
+
 				if (!declaration->initialValue) {
 					return nullptr;
 				}
@@ -1582,6 +1675,20 @@ void parseFile(FileInfo *file) {
 			_ReadWriteBarrier();
 
 			inferQueue.add(makeDeclarationPack(1, &declaration));
+		}
+		else if (lexer.token.type == TokenT::LOAD) {
+			lexer.advance();
+
+			if (lexer.token.type != TokenT::STRING_LITERAL) {
+				reportExpectedError(&lexer.token, "Error: Expected file name after #load");
+				break;
+			}
+
+			if (!loadNewFile(lexer.token.text)) {
+				break;
+			}
+
+			lexer.advance();
 		}
 		else if (lexer.token.type == TokenT::END_OF_FILE) {
 			break;

@@ -15,6 +15,7 @@ struct FileInfo { // @Platform
 	HANDLE handle;
 
 	char *data;
+	u64 size;
 
 	bool operator==(const FileInfo &other) const {
 		return fileIndex == other.fileIndex && volumeSerialNumber == other.volumeSerialNumber;

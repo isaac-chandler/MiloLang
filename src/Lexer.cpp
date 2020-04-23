@@ -40,18 +40,10 @@ static const Keyword keywords[] = {
 	{"null", TokenT::NULL_}, 
 	{"size_of", TokenT::SIZE_OF},
 	{"type_of", TokenT::TYPE_OF},
-	{"#external", TokenT::EXTERNAL}
+	{"#external", TokenT::EXTERNAL}, 
+	{"#load", TokenT::LOAD}, 
+	{"union", TokenT::UNION}
 };
-
-/*
-struct BigInt {
-	SmallArray<u32, 8> numbers;
-
-
-	bool getU64(u64 *value);
-	double getDouble();
-};
-*/
 
 void BigInt::zero() {
 	numbers.clear();
@@ -62,7 +54,7 @@ void BigInt::multiplyAdd(u32 multiplyBy, u32 add) {
 	u64 carry = add;
 
 	for (u32 i = 0; i < numbers.count; i++) {
-		u64 value = numbers[i] * multiplyBy + carry;
+		u64 value = static_cast<u64>(numbers[i]) * static_cast<u64>(multiplyBy) + carry;
 		carry = value >> 32ULL;
 		numbers[i] = static_cast<u32>(value);
 	}
@@ -100,14 +92,23 @@ double BigInt::getDouble() {
 	// @Efficiency, we could just look at the 53 most significant bits, but how often do we have giant float literals
 	for (u64 i = 0; i < numbers.count; i++) {
 		value += numbers[i] * multiply;
-		multiply *= 0x1.P+32;
+		multiply *= 0x1P+32;
 	}
 
 	return value;
 }
 
 String getTokenString(Token *token) {
-	return String(getFileInfoByUid(token->start.fileUid)->data + token->start.locationInMemory, token->end.locationInMemory - token->start.locationInMemory);
+	char *file = getFileInfoByUid(token->start.fileUid)->data;
+	char *start = file + token->start.locationInMemory;
+	char *end = file + token->end.locationInMemory;
+
+	do {
+		--start;
+		assert(start >= file);
+	} while (!utf8ByteCount(*start));
+
+	return String(start, end);
 }
 
 static u32 readCharacter(LexerFile *file, bool *endOfFile, bool silent = false) {
@@ -1796,27 +1797,37 @@ bool LexerFile::open(FileInfo *file) {
 
 	GetFileSizeEx(file->handle, &size);
 
-	assert(size.QuadPart <= UINT32_MAX); // We read the entire file at once and read file only supports DWORD
-
 	text = static_cast<char *>(malloc(size.QuadPart));
 	file->data = text;
 	
 	DWORD bytesRead = 0;
 
-	if (!ReadFile(file->handle, text, size.LowPart, &bytesRead, nullptr)) {
-		CloseHandle(file->handle);
-		reportError("Error: failed to read file: %.*s", STRING_PRINTF(file->path));
-		return false;
-	}
-	CloseHandle(file->handle);
+	u64 toRead = size.QuadPart;
 
-	assert(bytesRead == size.LowPart);
+	char *buffer = text;
+
+	while (toRead) {
+		u32 readAmount = static_cast<u32>(my_min(toRead, UINT32_MAX));
+
+		if (!ReadFile(file->handle, buffer, readAmount, &bytesRead, nullptr) || bytesRead != readAmount) {
+			CloseHandle(file->handle);
+			reportError("Error: failed to read file: %.*s", STRING_PRINTF(file->path));
+			return false;
+		}
+
+		toRead -= readAmount;
+		buffer += readAmount;
+	}
+
+	CloseHandle(file->handle);
 
 	location.line = 1;
 	location.column = 0;
 	location.locationInMemory = 0;
 	location.fileUid = file->fileUid;
 	bytesRemaining = size.QuadPart;
+
+	file->size = size.QuadPart;
 
 
 	return true;

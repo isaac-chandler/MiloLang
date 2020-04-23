@@ -10,6 +10,15 @@
 #include "Lexer.h"
 #include "TypeTable.h"
 
+#if BUILD_WINDOWS
+bool doColorPrint = false; // False by default, set at startup if color can be enabled
+#else
+bool doColorPrint = true;
+#endif
+
+
+std::mutex filesMutex;
+
 static ArraySet<FileInfo> files;
 
 bool loadNewFile(String file) {
@@ -40,20 +49,73 @@ bool loadNewFile(String file) {
 	info.fileIndex = (static_cast<u64>(fileInfo.nFileIndexHigh) << 32ULL) | static_cast<u64>(fileInfo.nFileIndexLow);
 	info.fileUid = static_cast<u32>(files.size());
 
-	if (!files.add(info)) {
-		CloseHandle(handle);
-	}
 
+	{
+		ScopeLock fileLock(filesMutex);
+		if (!files.add(info)) {
+			CloseHandle(handle);
+		}
+	}
 
 	return true;
 }
 
 FileInfo *getFileInfoByUid(u32 fileUid) {
-	FileInfo *info = &files[fileUid];
+	FileInfo *info;
+
+	{
+		ScopeLock fileLock(filesMutex);
+		info = &files[fileUid];
+	}
 
 	assert(info->fileUid == fileUid);
 
 	return info;
+}
+
+void displayErrorLocation(CodeLocation *start, EndLocation *end) {
+	auto info = getFileInfoByUid(start->fileUid);
+
+	char *file = info->data;
+	char *errorStart = file + start->locationInMemory;
+	char *errorEnd = file + end->locationInMemory;
+
+	do {
+		--errorStart;
+		assert(errorStart >= file);
+	} while (!utf8ByteCount(*errorStart));
+
+	char *lineStart = errorStart;
+
+	while (lineStart != file) {
+		--lineStart;
+
+		if (*lineStart == '\n' || *lineStart == '\r') {
+			++lineStart;
+			break;
+		}
+	}
+
+	char *lineEnd = errorEnd;
+
+	while (lineEnd != file + info->size) {
+		if (*lineEnd == '\n' || *lineEnd == '\r') {
+			break;
+		}
+
+		++lineEnd;
+	}
+
+	String pre = { lineStart, errorStart };
+	String error = { errorStart, errorEnd };
+	String post = { errorEnd, lineEnd };
+
+	if (doColorPrint) {
+		printf("%.*s\x1b[91m%.*s\x1b[0m%.*s\n", STRING_PRINTF(pre), STRING_PRINTF(error), STRING_PRINTF(post));
+	}
+	else {
+		printf("%.*s%.*s%.*s\n", STRING_PRINTF(pre), STRING_PRINTF(error), STRING_PRINTF(post));
+	}
 }
 
 void printErrorLocation(CodeLocation *location) {
@@ -86,6 +148,8 @@ void reportError(Expr *location, CHECK_PRINTF const char *format, ...) {
 	puts("");
 
 	va_end(args);
+
+	displayErrorLocation(&location->start, &location->end);
 }
 
 void reportError(CodeLocation *location, CHECK_PRINTF const char *format, ...) {
@@ -115,6 +179,8 @@ void reportError(Declaration *location, CHECK_PRINTF const char *format, ...) {
 	puts("");
 
 	va_end(args);
+
+	displayErrorLocation(&location->start, &location->end);
 }
 
 void reportError(Token *location, CHECK_PRINTF const char *format, ...) {
@@ -129,6 +195,8 @@ void reportError(Token *location, CHECK_PRINTF const char *format, ...) {
 	puts("");
 
 	va_end(args);
+
+	displayErrorLocation(&location->start, &location->end);
 }
 
 void reportExpectedError(Token *location, CHECK_PRINTF const char *format, ...) {
@@ -150,10 +218,27 @@ void reportExpectedError(Token *location, CHECK_PRINTF const char *format, ...) 
 		String token = getTokenString(location);
 		printf(" but got %.*s", STRING_PRINTF(token));
 		puts("");
+
+		displayErrorLocation(&location->start, &location->end);
 	}
 }
 
 int main(int argc, char *argv[]) {
+#if BUILD_WINDOWS
+	{
+		HANDLE console = GetStdHandle(STD_OUTPUT_HANDLE);
+		if (console != INVALID_HANDLE_VALUE) {
+			DWORD mode;
+
+			if (GetConsoleMode(console, &mode)) {
+				if (SetConsoleMode(console, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) {
+					doColorPrint = true;
+				}
+			}
+		}
+	}
+#endif
+
 #if PROFILE
 	u64 startTime;
 	QueryPerformanceCounter(reinterpret_cast<LARGE_INTEGER *>(&startTime));

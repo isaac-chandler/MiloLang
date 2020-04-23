@@ -138,7 +138,8 @@ enum class ExprFlavor : u8 {
 	RETURN, 
 	IF, 
 
-	FUNCTION_PROTOTYPE
+	FUNCTION_PROTOTYPE, 
+	STRUCT_DEFAULT
 };
 
 struct Declaration;
@@ -213,6 +214,7 @@ struct ExprFunctionCall : Expr {
 	Expr *function;
 	u64 argumentCount;
 	Expr **arguments;
+	String *argumentNames;
 };
 
 struct ExprStructAccess : Expr {
@@ -275,6 +277,7 @@ struct ExprIf : Expr {
 #define DECLARATION_TYPE_IS_READY 0x20
 #define DECLARATION_IS_ARGUMENT 0x40
 #define DECLARATION_HAS_STORAGE 0x80
+#define DECLARATION_IS_STRUCT_MEMBER 0x100
 
 
 struct Declaration {

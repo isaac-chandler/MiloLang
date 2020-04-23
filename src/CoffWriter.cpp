@@ -2321,7 +2321,7 @@ void runCoffWriter() {
 
 									code.add1(0x48);
 									code.add1(0x8D);
-									writeRSPOffsetByte(&code, intRegisters[i + 1], parameterSpace * 8);
+									writeRSPOffsetByte(&code, intRegisters[i + parameterOffset], parameterSpace * 8);
 
 									u64 size = ir.arguments->args[i].type->size;
 									parameterSpace += (size + 7) / 8;

@@ -97,7 +97,9 @@ enum class TokenT : u8 {
 
 	EXTERNAL, 
 	
-	ARRAY_TYPE
+	ARRAY_TYPE, 
+	LOAD, 
+	UNION
 };
 
 struct Token {

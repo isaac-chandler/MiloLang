@@ -1,17 +1,4 @@
-/*
-
-[]T :: struct {
-	buffer: *T
-	count: u64
-}
-
-[..]T :: struct {
-	buffer: *T
-	count: u64
-	capacity: u64
-}
-
-*/
+#load "windows.milo"
 
 copy_string :: (s: string) -> string {
 	memory: *u8 = allocate(string_length(s) + 1)
@@ -29,40 +16,6 @@ copy_string :: (s: string) -> string {
 }
 
 args: []string
-
-STD_INPUT_HANDLE: u32: cast() -10
-STD_OUTPUT_HANDLE: u32: cast() -11
-STD_ERROR_HANDLE: u32: cast() -12
-
-GetStdHandle :: (nStdHandle: u32) -> HANDLE #external
-
-HANDLE :: *void
-WriteConsoleA :: (hConsoleOutput: HANDLE, lpBuffer: *void, nNumberOfCharactersToWrite: u32, lpNumberOfCharactersWritten: *u32 = null, lpReserved: *void = null) -> bool #external
-
-process_heap: HANDLE
-
-
-GetCommandLineA :: () -> string #external
-GetProcessHeap :: () -> HANDLE #external
-
-HeapAlloc :: (hHeap: HANDLE, dwFlags: u32, dwBytes: u64) -> *void #external
-HeapReAlloc :: (hHeap: HANDLE, dwFlags: u32, lpMem: *void, dwBytes: u64) -> *void #external
-HeapFree :: (hHeap: HANDLE, dwFlags: u32, lpMem: *void) -> bool #external
-
-allocate :: (size: u64) -> *void {
-	return HeapAlloc(process_heap, 0, size)
-}
-
-reallocate :: (block: *void, size: u64) -> *void {
-	if block == null
-		return allocate(size)
-	else
-		return HeapReAlloc(process_heap, 0, block, size)
-}
-
-deallocate :: (block: *void) {
-	HeapFree(process_heap, 0, block)
-}
 
 ListNode :: struct {
 	value: string;
@@ -101,12 +54,16 @@ string_length :: (s: string) -> u64 {
 	return len
 }
 
+
+
 print_string :: (s: string) {
-	WriteConsoleA(std_out, cast() s, cast() string_length(s), null, null)
+	buffer: []u8
+	
+	buffer.data = cast() s
+	buffer.count = string_length(s)
+
+	print_buffer(buffer)
 }
-
-
-std_out: HANDLE
 
 
 parse_command_line :: (cmd: string) -> [] string {
@@ -169,9 +126,7 @@ parse_command_line :: (cmd: string) -> [] string {
 main :: () -> s32 {
 	//args.data = argv
 	//args.count = cast(u64) argc
-
-	process_heap = GetProcessHeap()
-	std_out = GetStdHandle(STD_OUTPUT_HANDLE)
+	init_runtime()
 
 	_main()
 
@@ -226,6 +181,8 @@ _main :: () {
 	*/
 	
 	list := get_linked_strings();
+	
+	list := 6
 	
 	while true {
 		print_string(list.value);
