@@ -1164,7 +1164,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			else {
 				compareDest = state->nextRegister++;
 			}
-
+			
 			if (loop->forBegin->type->flavor == TypeFlavor::STRING) {
 				// @StringFormat
 				Ir &read = state->ir.add();

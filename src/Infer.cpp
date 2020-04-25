@@ -118,7 +118,7 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 				flatten(flattenTo, &binary->left);
 			}
 
-			if (binary->right) {
+			if (!(binary->flags & EXPR_ASSIGN_IS_IMPLICIT_INITIALIZER)) {
 				flatten(flattenTo, &binary->right);
 			}
 
@@ -1648,10 +1648,23 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 				auto &left = binary->left;
 				auto &right = binary->right;
 
+				if (binary->flags & EXPR_ASSIGN_IS_IMPLICIT_INITIALIZER) {
+					auto declaration = static_cast<ExprIdentifier *>(left)->declaration;
+
+					if (!(declaration->flags & DECLARATION_VALUE_IS_READY)) {
+						return true;
+					}
+					else {
+						binary->right = declaration->initialValue;
+						assert(binary->left->type == binary->right->type);
+						break;
+					}
+				}
+
 				assert(binary->op == TokenT::ARRAY_TYPE || left); // This is safe since even though auto-casts can have a left of null, they shouldn't be added to the flattened array
 
 
-				assert(binary->op == TOKEN('=') || right);
+				assert(right);
 
 				if (left && right && left->type->flavor == right->type->flavor && left->type->flavor == TypeFlavor::AUTO_CAST) {
 					reportError(binary, "Error: Cannot infer the type of an expression when both sides are an auto cast");
@@ -2189,24 +2202,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 						}
 
 						if (!right) {
-							assert(binary->left->flavor == ExprFlavor::IDENTIFIER);
-							bool yield;
-
-							binary->right = createDefaultValue(static_cast<ExprIdentifier *>(binary->left)->declaration, binary->left->type, &yield);
-							
-							if (yield) {
-								return true;
-							}
-
-							if (!binary->right) {
-								return false;
-							}
-
-							binary->right->start = binary->left->start;
-							binary->right->end = binary->left->end;
-							binary->right->valueOfDeclaration = static_cast<ExprIdentifier *>(binary->left)->declaration;
-
-							assert(binary->left->type == binary->right->type);
+							assert(false);
 						}
 						else {
 							if (!assignOp(job, binary, left->type, binary->right)) {
@@ -2875,9 +2871,9 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 					Expr **sortedArguments = new Expr * [function->argumentCount] {};
 
 					for (u64 i = 0; i < call->argumentCount; i++) {
-						u64 index = i;
+						u64 argIndex = i;
 						if (call->argumentNames[i].length) {
-							auto argument = findDeclaration(&functionForArgumentNames->arguments, call->argumentNames[i], &index);
+							auto argument = findDeclaration(&functionForArgumentNames->arguments, call->argumentNames[i], &argIndex);
 
 							if (!argument) {
 								reportError(call->arguments[i], "Error: %.*s does not have an argument called %.*s", STRING_PRINTF(functionName), STRING_PRINTF(call->argumentNames[i]));
@@ -2885,13 +2881,13 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 							}
 						}
 
-						if (sortedArguments[index]) {
-							reportError(call->arguments[i], "Error: Argument %.*s was supplied twice", STRING_PRINTF(functionForArgumentNames->arguments.declarations[index]->name));
-							reportError(sortedArguments[index], "   ..: It was previously given here");
+						if (sortedArguments[argIndex]) {
+							reportError(call->arguments[i], "Error: Argument %.*s was supplied twice", STRING_PRINTF(functionForArgumentNames->arguments.declarations[argIndex]->name));
+							reportError(sortedArguments[argIndex], "   ..: It was previously given here");
 							return false;
 						}
 
-						sortedArguments[index] = call->arguments[i];
+						sortedArguments[argIndex] = call->arguments[i];
 					}
 
 					for (u64 i = 0; i < function->argumentCount; i++) {
@@ -3820,8 +3816,7 @@ void runInfer() {
 						}
 						else if (declaration->type) {
 							if (job->typeFlattenedIndex == job->typeFlattened.count) {
-								if (!(declaration->flags & DECLARATION_IS_UNINITIALIZED) && 
-									(declaration->enclosingScope == &globalBlock || (declaration->flags & DECLARATION_IS_STRUCT_MEMBER)) /* Declarations in local scope will be initialized in inferFlattened for the assign op they generate */) {
+								if (!(declaration->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_ITERATOR | DECLARATION_IS_ITERATOR_INDEX | DECLARATION_IS_ARGUMENT))) {
 									auto type = static_cast<ExprLiteral *>(declaration->type)->typeValue;
 
 									bool yield;

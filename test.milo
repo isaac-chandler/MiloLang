@@ -197,7 +197,7 @@ u64_to_string :: (value: u64) -> string {
 	remaining = value
 	
 	while remaining {
-		result--
+		result -= 1;
 		
 		<<result = cast() (remaining % 10 + '0')
 		remaining /= 10
@@ -228,6 +228,28 @@ find_string :: (array: []string, s: string) {
 	
 }
 
+
+// @Incomplete, only converts ascii to UTF16, not UTF8
+create_wide_string :: (s: string) -> *u16 {
+	result: *u16 = allocate((string_length(s) + 1) * size_of(u16))
+	
+	buffer := result
+	
+	sbuf := cast(*u8) s
+	
+	while <<sbuf {
+		<<buffer = <<sbuf
+		buffer += 1
+		sbuf += 1
+	}
+	
+	<<buffer = 0
+	
+	return result
+}
+
+should_quit: bool
+
 _main :: () {
 /*
 	for get_strings() {
@@ -238,11 +260,74 @@ _main :: () {
 	}
 	*/
 	
-	list := get_strings();
+	startup_info: STARTUPINFOW
 	
-	find_string(list, "Test2")
-	find_string(list, "Hello")
-	find_string(list, "Test1")
+	GetStartupInfoW(*startup_info)
+	
+	show_command := SW_SHOWDEFAULT
+	
+	if (startup_info.dwFlags & STARTF_USESHOWWINDOW) {
+		show_command = startup_info.wShowWindow
+	}
+	
+	instance := GetModuleHandleW(null)
+	
+	class_name := create_wide_string("Window Class")
+	window_class: WNDCLASSW
+	
+	window_class.style = CS_OWNDC | CS_VREDRAW | CS_HREDRAW
+	window_class.lpfnWndProc = (hwnd: HWND, uMsg: u32, wParam: u64, lParam: s64) -> s64 {
+		if uMsg == WM_CLOSE {
+			DestroyWindow(hwnd)
+			return 0
+		} else if uMsg == WM_DESTROY {
+			PostQuitMessage(0)
+			return 0
+		} else if uMsg == WM_PAINT {
+			paint: PAINTSTRUCT = --
+			device_context := BeginPaint(hwnd, *paint)
+			
+			PatBlt(device_context, paint.rcPaint.left, paint.rcPaint.top, paint.rcPaint.right - paint.rcPaint.left, paint.rcPaint.bottom - paint.rcPaint.top, BLACKNESS)
+			
+			EndPaint(hwnd, *paint)
+		} else if uMsg == WM_SIZE {
+			return 0
+		} else {
+			return DefWindowProcW(hwnd, uMsg, wParam, lParam)
+		}
+	}
+	window_class.hInstance = instance
+	window_class.lpszClassName = class_name
+	window_class.hbrBackground = GetStockObject(BLACK_BRUSH)
+	
+	
+	if RegisterClassW(*window_class) == 0 {
+		print_string("Failed to register window class\n")
+		print_string(u64_to_string(GetLastError()))
+	}
+	
+	
+	window_handle := CreateWindowExW(lpClassName = class_name, lpWindowName = create_wide_string("Test Window"), nWidth = 1280, nHeight = 720, hInstance = instance)
+	
+	if window_handle == null {
+		print_string("Failed to open window\n")
+		print_string(u64_to_string(GetLastError()))
+		return;
+	}
+	
+	ShowWindow(window_handle, cast() show_command)
+	
+	while !should_quit {
+		message: MSG = --
+		result := GetMessageW(*message, null, 0, 0)
+		
+		if result <= 0 {
+			should_quit = true
+		} else {
+			TranslateMessage(*message)
+			DispatchMessageW(*message)
+		}
+	}
 }
 
 factorial2 :: (n: u64) -> u64 {

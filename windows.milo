@@ -1,12 +1,301 @@
+HINSTANCE :: *struct {
+	unused: s32
+}
+
+
+HMODULE :: HINSTANCE
+
+HWND :: *struct {
+	unused: s32
+}
+
+HICON :: *struct {
+	unused: s32
+}
+
+HCURSOR :: HICON
+
+HBRUSH :: *struct {
+	unused: s32
+}
+
+HMENU :: *struct {
+	unused: s32
+}
+
+HDC :: *struct {
+	unused: s32
+}
+RECT :: struct {
+	left: s32
+	top: s32
+	right: s32
+	bottom: s32
+}
+
 HANDLE :: *void
+HGDIOBJ :: *void
+
+WNDPROC :: (hwnd: HWND, uMsg: u32, wParam: u64, lParam: s64) -> s64
+DefWindowProcW :: (hWnd: HWND, Msg: u32, wParam: u64, lParam: s64) -> s64 #external
+
+WNDCLASSW :: struct {
+	style: u32
+	lpfnWndProc: WNDPROC
+	cbClsExtra: s32
+	cbWndExtra: s32
+	hInstance: HINSTANCE
+	hIcon: HICON
+	hCursor: HCURSOR
+	hbrBackground: HBRUSH
+	lpszMenuName: *u16
+	lpszClassName: *u16
+}
+
+STARTUPINFOW :: struct {
+	cb: u32
+	lpReserved: *u16
+	lpDesktop: *u16
+	lpTitle: *u16
+	dwX: u32
+	dwY: u32
+	dwXSize: u32
+	dwYSize: u32
+	dwXCountChars: u32
+	dwYCountChars: u32
+	dwFillAttribute: u32
+	dwFlags: u32
+	wShowWindow: u16
+	cbReserved2: u16
+	lpReserved2: *u8
+	hStdInput: HANDLE
+	hStdOutput: HANDLE
+	hStdError: HANDLE
+}
+
+WS_OVERLAPPED:   u32: 0x0000_0000
+WS_POPUP:        u32: 0x8000_0000
+WS_CHILD:        u32: 0x4000_0000
+WS_MINIMIZE:     u32: 0x2000_0000
+WS_VISIBLE:      u32: 0x1000_0000
+WS_DISABLED:     u32: 0x0800_0000
+WS_CLIPSIBLINGS: u32: 0x0400_0000
+WS_CLIPCHILDREN: u32: 0x0200_0000
+WS_MAXIMIZE:     u32: 0x0100_0000
+WS_CAPTION:      u32: 0x00C0_0000 // WS_BORDER | WS_DLGFRAME
+WS_BORDER:       u32: 0x0080_0000
+WS_DLGFRAME:     u32: 0x0040_0000
+WS_VSCROLL:      u32: 0x0020_0000
+WS_HSCROLL:      u32: 0x0010_0000
+WS_SYSMENU:      u32: 0x0008_0000
+WS_THICKFRAME:   u32: 0x0004_0000
+WS_GROUP:        u32: 0x0002_0000
+WS_TABSTOP:      u32: 0x0001_0000
+
+WS_MINIMIZEBOX:  u32: 0x0002_0000
+WS_MAXIMIZEBOX:  u32: 0x0001_0000
+
+WS_TILED :: WS_OVERLAPPED
+WS_ICONIC :: WS_MINIMIZE
+WS_SIZEBOX :: WS_THICKFRAME
+WS_TILEDWINDOW :: WS_OVERLAPPEDWINDOW
+
+WS_OVERLAPPEDWINDOW: u32: 0x00CF_0000 // WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX
+
+WS_POPUPWINDOW: u32: 0x8088_0000 // WS_POPUP | WS_BORDER | WS_SYSMENU
+
+WS_CHILDWINDOW :: WS_CHILD
+
+WS_EX_DLGMODALFRAME:       u32: 0x0000_0001
+WS_EX_NOPARENTNOTIFY:      u32: 0x0000_0004
+WS_EX_TOPMOST:             u32: 0x0000_0008
+WS_EX_ACCEPTFILES:         u32: 0x0000_0010
+WS_EX_TRANSPARENT:         u32: 0x0000_0020
+WS_EX_MDICHILD:            u32: 0x0000_0040
+WS_EX_TOOLWINDOW:          u32: 0x0000_0080
+WS_EX_WINDOWEDGE:          u32: 0x0000_0100
+WS_EX_CLIENTEDGE:          u32: 0x0000_0200
+WS_EX_CONTEXTHELP:         u32: 0x0000_0400
+WS_EX_RIGHT:               u32: 0x0000_1000
+WS_EX_LEFT:                u32: 0x0000_0000
+WS_EX_RTLEADING:           u32: 0x0000_2000
+WS_EX_LTLEADING:           u32: 0x0000_0000
+WS_EX_LEFTSCROLLBAR:       u32: 0x0000_4000
+WS_EX_RIGHTSCROLLBAR:      u32: 0x0000_0000
+WS_EX_CONTROLPARENT:       u32: 0x0001_0000
+WS_EX_STATICEDGE:          u32: 0x0002_0000
+WS_EX_APPWINDOW:           u32: 0x0004_0000
+WS_EX_LAYERED:             u32: 0x0008_0000
+WS_EX_NOINHERITLAYOUT:     u32: 0x0010_0000
+WS_EX_NOREDIRECTIONBITMAP: u32: 0x0020_0000
+WS_EX_LAYOUTRTL:           u32: 0x0200_0000
+WS_EX_COMPOSITED:          u32: 0x0400_0000
+WS_EX_NOACTIBE:            u32: 0x0800_0000
+
+CS_VREDRAW:          u32: 0x0000_0001
+CS_HREDRAW:          u32: 0x0000_0002
+CS_DBLCLKS:          u32: 0x0000_0008
+CS_OWNDC:            u32: 0x0000_0020
+CS_CLASSDC:          u32: 0x0000_0040
+CS_PARENTDC:         u32: 0x0000_0080
+CS_NOCLOSE:          u32: 0x0000_0200
+CS_SAVEBITS:         u32: 0x0000_0800
+CS_BYTEALIGNCLIENT:  u32: 0x0000_1000
+CS_BYTEALIGNWINDOW:  u32: 0x0000_2000
+CS_GLOBALCLASS:      u32: 0x0000_4000
+CS_IME:              u32: 0x0001_0000
+CS_DROPSHADOW:       u32: 0x0002_0000
+
+
+WS_EX_OVERLAPPEDWINDOW: u32: 0x0000_0300 // WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE
+WS_EX_PALETTE_WINDOW:   u32: 0x0000_0188 // WS_EX_WINDOWEDGE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST
+
+STARTF_USESHOWWINDOW:    u32: 0x0000_0001
+STARTF_USESIZE:          u32: 0x0000_0002
+STARTF_USEPOSITION:      u32: 0x0000_0004
+STARTF_USECOUNTCHARS:    u32: 0x0000_0008
+STARTF_USEFILLATTRIBUTE: u32: 0x0000_0010
+STARTF_RUNFULLSCREEN:    u32: 0x0000_0020
+STARTF_FORCEONFEEDBACK:  u32: 0x0000_0040
+STARTF_FORCEOFFFEEDBACK: u32: 0x0000_0080
+STARTF_USESTDHANDLES:    u32: 0x0000_0100
+
+SW_HIDE:            u16: 0
+SW_SHOWNORMAL:      u16: 1
+SW_NORMAL:          u16: 1
+SW_SHOWMINIMIZED:   u16: 2
+SW_SHOWMAXIMIZED:   u16: 3
+SW_MAXIMIZE:        u16: 3
+SW_SHOWNOACTIVATE:  u16: 4
+SW_SHOW:            u16: 5
+SW_MINIMIZE:        u16: 6
+SW_SHOWMINNOACTIVE: u16: 7
+SW_SHOWNA:          u16: 8
+SW_RESTORE:         u16: 9
+SW_SHOWDEFAULT:     u16: 10
+SW_FORCEMINIMIZE:   u16: 11
+SW_MAX:             u16: 11
+
+POINT :: struct {
+	x: s32
+	y: s32
+}
+
+MSG :: struct {
+	hwnd: HWND
+	message: u32
+	wParam: u64
+	lParam: s64
+	time: u32
+	pt: POINT
+}
+
+
+CW_USEDEFAULT :: cast(s32) 0x80000000
+
+GetStartupInfoW :: (lpStartupInfo: *STARTUPINFOW) #external
+
+CreateWindowExW :: (dwExStyle: u32 = 0, lpClassName: *u16, lpWindowName: *u16, dwStyle: u32 = WS_OVERLAPPEDWINDOW, X: s32 = CW_USEDEFAULT, Y: s32 = CW_USEDEFAULT, nWidth: s32, nHeight: s32, hWndParent: HWND = null, hMenu: HMENU = null, hInstance: HINSTANCE, lpParam: *void = null) -> HWND #external
+
+PAINTSTRUCT :: struct {
+	hdc: HDC
+	fErase: s32
+	rcPaint: RECT
+	fRestore: s32
+	fIncUpdate: s32
+	rgbReserved: [32]u8
+}
+
+BeginPaint :: (hWnd: HWND, lpPaint: *PAINTSTRUCT) -> HDC #external
+EndPaint :: (hWnd: HWND, lpPaint: *PAINTSTRUCT) -> s32 #external
+
+PatBlt :: (hdc: HDC, x: s32, y: s32, w: s32, h: s32, rop: u32) -> s32 #external
+
+BLACKNESS: u32: 0x0000_0042
+WHITENESS: u32: 0x00FF_0062
+
+GetStockObject :: (i: s32) -> HGDIOBJ #external
+
+WHITE_BRUSH:         s32: 0
+LTGRAY_BRUSH:        s32: 1
+GRAY_BRUSH:          s32: 2
+DKGRAY_BRUSH:        s32: 3
+BLACK_BRUSH:         s32: 4
+NULL_BRUSH:          s32: 5
+HOLLOW_BRUSH:        s32: NULL_BRUSH
+WHITE_PEN:           s32: 6
+BLACK_PEN:           s32: 7
+NULL_PEN:            s32: 8
+OEM_FIXED_FONT:      s32: 10
+ANSI_FIXED_FONT:     s32: 11
+ANSI_VAR_FONT:       s32: 12
+SYSTEM_FONT:         s32: 13
+DEVICE_DEFAULT_FONT: s32: 14
+DEFAULT_PALETTE:     s32: 15
+SYSTEM_FIXED_FONT:   s32: 16
+DEFAULT_GUI_FONT:    s32: 17
+DC_BRUSH:            s32: 18
+DC_PEN:              s32: 19
 
 STD_INPUT_HANDLE: u32: cast() -10
 STD_OUTPUT_HANDLE: u32: cast() -11
 STD_ERROR_HANDLE: u32: cast() -12
 
-GetStdHandle :: (nStdHandle: u32) -> HANDLE #external
+GetLastError :: () -> u32 #external
 
-WriteConsoleA :: (hConsoleOutput: HANDLE, lpBuffer: *void, nNumberOfCharactersToWrite: u32, lpNumberOfCharactersWritten: *u32 = null, lpReserved: *void = null) -> bool #external
+GetStdHandle :: (nStdHandle: u32) -> HANDLE #external
+GetModuleHandleW :: (lpModuleName: *u8) -> HMODULE #external
+
+WriteConsoleA :: (hConsoleOutput: HANDLE, lpBuffer: *void, nNumberOfCharactersToWrite: u32, lpNumberOfCharactersWritten: *u32 = null, lpReserved: *void = null) -> s32 #external
+
+RegisterClassW :: (lpWndClass: *WNDCLASSW) -> u16 #external
+
+ShowWindow :: (hWnd: HWND, nCmdShow: s32) -> s32 #external
+
+GetMessageW :: (lpMsg: *MSG, hWnd: HWND,  wMsgFilterMin: u32, wMsgFilterMax: u32) -> s32 #external
+PeekMessageW :: (lpMsg: *MSG, hWnd: HWND,  wMsgFilterMin: u32, wMsgFilterMax: u32, wRemoveMessage: u32) -> s32 #externalTranslateMessage :: (lpMsg: *MSG) -> s32 #external
+DispatchMessageW :: (lpMsg: *MSG) -> s32 #external
+
+WM_NULL:            u32: 0x0000
+WM_CREATE:          u32: 0x0001
+WM_DESTROY:         u32: 0x0002
+WM_MOVE:            u32: 0x0003
+WM_SIZE:            u32: 0x0005
+WM_ACTIVATE:        u32: 0x0006
+WM_SETFOCUS:        u32: 0x0007
+WM_KILLFOCUES:      u32: 0x0008
+WM_ENABLE:          u32: 0x000A
+WM_SETREDRAW:       u32: 0x000B
+WM_SETTEXT:         u32: 0x000C
+WM_GETTEXT:         u32: 0x000D
+WM_GETTEXTLENGTH:   u32: 0x000E
+WM_PAINT:           u32: 0x000F
+WM_CLOSE:           u32: 0x0010
+WM_QUERYENDSESSION: u32: 0x0011
+WM_QUIT:            u32: 0x0012
+WM_QUERYOPEN:       u32: 0x0013
+WM_ERASEBKGND:      u32: 0x0014
+WM_SYSCOLORCHANGE:  u32: 0x0015
+WM_ENDSESSION:      u32: 0x0016
+WM_SHOWWINDOW:      u32: 0x0018
+WM_WININICHANGE:    u32: 0x001A
+WM_DEVMODECHANGE:   u32: 0x001B
+WM_ACTIVATEAPP:     u32: 0x001C
+WM_FONTCHANGE:      u32: 0x001D
+WM_TIMECHANGE:      u32: 0x001E
+WM_CANCELMODE:      u32: 0x001F
+WM_SETCURSOR:       u32: 0x0020
+WM_MOUSEACTIVATE:   u32: 0x0021
+WM_CHILDACTIVATE:   u32: 0x0022
+WM_QUEUESYNC:       u32: 0x0023
+WM_GETMINMAXINFO:   u32: 0x0024
+
+DestroyWindow :: (hWnd: HWND) -> s32 #external
+PostQuitMessage :: (nExitCode: s32) #external
+
+PM_NOREMOVE: u32: 0
+PM_REMOVE:   u32: 1
+PM_NOYIELD:  u32: 2
 
 process_heap: HANDLE
 
@@ -16,7 +305,7 @@ GetProcessHeap :: () -> HANDLE #external
 
 HeapAlloc :: (hHeap: HANDLE, dwFlags: u32, dwBytes: u64) -> *void #external
 HeapReAlloc :: (hHeap: HANDLE, dwFlags: u32, lpMem: *void, dwBytes: u64) -> *void #external
-HeapFree :: (hHeap: HANDLE, dwFlags: u32, lpMem: *void) -> bool #external
+HeapFree :: (hHeap: HANDLE, dwFlags: u32, lpMem: *void) -> s32 #external
 
 allocate :: (size: u64) -> *void {
 	return HeapAlloc(process_heap, 0, size)

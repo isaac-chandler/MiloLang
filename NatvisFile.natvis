@@ -50,4 +50,8 @@
     <DisplayString Condition="op == IrOp::GOTO">GOTO {b}</DisplayString>
     <DisplayString>{op,en}_{opSize*8} {dest} &lt;- {a}, {b}</DisplayString>
   </Type>
+
+  <Type Name="Declaration">
+    <DisplayString>Decl{{{name}}}</DisplayString>
+  </Type>
 </AutoVisualizer>

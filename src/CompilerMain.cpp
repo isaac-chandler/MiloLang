@@ -311,12 +311,12 @@ int main(int argc, char *argv[]) {
 	std::cout << "It took me " << (std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::duration<double>(
 		std::chrono::high_resolution_clock::now() - start)).count() / 1000.0) << "ms\n";
 	}
-
+	
 #if BUILD_WINDOWS
 	if (!hadError) {
 		char buffer[1024];
 
-		strcpy_s(buffer, "\"C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Community\\VC\\Tools\\MSVC\\14.23.28105\\bin\\Hostx64\\x64\\link.exe\" out.obj /debug /entry:main /defaultlib:kernel32 \"/libpath:C:\\Program Files (x86)\\Windows Kits\\10\\lib\\10.0.18362.0\\um\\x64\" /incremental:no /nologo");
+		strcpy_s(buffer, "\"C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Community\\VC\\Tools\\MSVC\\14.23.28105\\bin\\Hostx64\\x64\\link.exe\" out.obj /debug /entry:main /defaultlib:kernel32 /defaultlib:user32 /defaultlib:gdi32 \"/libpath:C:\\Program Files (x86)\\Windows Kits\\10\\lib\\10.0.18362.0\\um\\x64\" /incremental:no /nologo");
 
 		printf("Linker command: %s\n", buffer);
 

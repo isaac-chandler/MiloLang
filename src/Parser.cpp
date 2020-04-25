@@ -616,7 +616,8 @@ ExprBlock *parseBlock(LexerFile *lexer) {
 					assign->flavor = ExprFlavor::BINARY_OPERATOR;
 					assign->op = TOKEN('=');
 					assign->left = makeIdentifier(declaration->start, declaration->end, declaration);
-					assign->right = declaration->initialValue; // This may be null, a rhs of null for an assign expression means the default value for that type should be filled in when its type is inferred
+					assign->right = nullptr;
+					assign->flags |= EXPR_ASSIGN_IS_IMPLICIT_INITIALIZER;
 
 					block->exprs.add(assign);
 				}
@@ -768,6 +769,9 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 					type->returnType = returnType;
 					type->type = &TYPE_TYPE;
 
+					pushBlock(&type->arguments);
+					popBlock(&type->arguments);
+
 					expr = type;
 				}
 			}
@@ -890,7 +894,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 						expr = function;
 					}
 					else {
-						popBlockWithoutQueueing(&function->arguments);
+						popBlock(&function->arguments);
 
 						function->flavor = ExprFlavor::FUNCTION_PROTOTYPE;
 						function->end = lexer->previousTokenEnd;
@@ -957,7 +961,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 					type->arguments.declarations.add(argument);
 
-					popBlockWithoutQueueing(&type->arguments);
+					popBlock(&type->arguments);
 
 					expr = type;
 				}
@@ -1632,7 +1636,11 @@ Expr *parseExpr(LexerFile *lexer) {
 
 Declaration *parseDeclaration(LexerFile *lexer) {
 	PROFILE_FUNC();
-	assert(lexer->token.type == TokenT::IDENTIFIER);
+
+	if (lexer->token.type != TokenT::IDENTIFIER) {
+		reportExpectedError(&lexer->token, "Error: Expected declaration name");
+		return nullptr;
+	}
 
 	Declaration *declaration = PARSER_NEW(Declaration);
 	declaration->flags = 0;
