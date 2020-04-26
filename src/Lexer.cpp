@@ -572,6 +572,12 @@ zero:
 		base = 2;
 		goto integerLiteral;
 	}
+	else if (c == '.') {
+		goto decimalPoint;
+	}
+	else if (c == '_') {
+		goto integerLiteral;
+	}
 	else {
 		undoReadChar(lexer, c);
 		return TokenT::INT_LITERAL;
@@ -825,7 +831,7 @@ void LexerFile::advance() {
 
 	token.unsignedValue = 0;
 	s64 digitsAfterDecimal = 0;
-	u64 base;
+	u64 base = 10;
 	u64 exponentBase;
 	s64 exponent = 0;
 	u64 exponentIsNegative;
@@ -1452,6 +1458,12 @@ zero:
 	else if (c == 'b' || c == 'B') {
 		base = 2;
 		token.flags |= LITERAL_IS_BINARY;
+		goto integerLiteral;
+	}
+	else if (c == '.') {
+		goto decimalPoint;
+	}
+	else if (c == '_') {
 		goto integerLiteral;
 	}
 	else {

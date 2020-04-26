@@ -272,6 +272,20 @@ Bmp_Dib_Header :: struct {
 	BI_BITFIELDS :: 3
 }
 
+check_gl_errors :: () {
+	while true {
+		error := glGetError()
+		
+		if !error
+			break;
+			
+		print_string("GL error: ")
+		print_u64(error)
+		print_string("\n")
+	}
+
+}
+
 load_image :: (filename: string) -> u32 {
 	success: bool
 	
@@ -301,22 +315,28 @@ load_image :: (filename: string) -> u32 {
 		dib_header.red_mask   != 0x00FF0000 ||
 		dib_header.green_mask != 0x0000FF00 ||
 		dib_header.blue_mask  != 0x000000FF ||
-		dib_header.height >= 0 {
+		dib_header.height <= 0 {
 		
 		deallocate(file.data)
 		return 0
 	}
+	
+	data: [4]u32
 	
 	texture: u32
 	
 	glGenTextures(1, *texture)
 	glBindTexture(GL_TEXTURE_2D, texture)
 	
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP)
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP)
 	
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, dib_header.width, -dib_header.height, 0, GL_BGRA_EXT, GL_UNSIGNED_BYTE, file.data + file_header.offset_to_image)
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, dib_header.width, dib_header.height, 0, GL_BGRA_EXT, GL_UNSIGNED_BYTE, file.data + file_header.offset_to_image)
+	//glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, *data)
 	
+	return texture
 }
 
 _main :: () {
@@ -386,7 +406,7 @@ _main :: () {
 	}
 	
 	
-	window_handle := CreateWindowExW(lpClassName = class_name, lpWindowName = create_wide_string("Test Window"), nWidth = window_width, nHeight = window_height, hInstance = instance)
+	window_handle := CreateWindowExW(lpClassName = class_name, lpWindowName = create_wide_string("Test Window"), dwStyle = WS_OVERLAPPEDWINDOW ^ WS_THICKFRAME, nWidth = window_width, nHeight = window_height, hInstance = instance)
 	
 	if window_handle == null {
 		print_string("Failed to open window\n")
@@ -430,11 +450,17 @@ _main :: () {
 	load_gl_extensions()
 	wglSwapIntervalEXT(1)
 	
-	load_image("Invaders/Spaceship.bmp")
+	
+	glEnable(GL_TEXTURE_2D)
+	texture := load_image("Invaders/Spaceship.bmp")
+	
+	glEnable(GL_BLEND)
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 	
 	ShowWindow(window_handle, cast() show_command)
 	
 	last_time: s64
+
 	
 	QueryPerformanceCounter(*last_time)
 	
@@ -458,8 +484,32 @@ _main :: () {
 		delta := cast() (current_time - last_time) * counter_scale
 	
 		glViewport(0, 0, window_width, window_height)
-		glClearColor(0, 0, 0, 0)
+		glClearColor(0, 0.1, 0.2, 0)
 		glClear(GL_COLOR_BUFFER_BIT)
+		
+		glMatrixMode(GL_PROJECTION)
+		glLoadIdentity()
+		glOrtho(0, 1280, 0, 720, -5, 5)
+		
+		glBindTexture(GL_TEXTURE_2D, texture)
+		glBegin(GL_QUADS)
+		
+		glTexCoord2f(0, 0)
+		glVertex2f(100, 100)
+		
+		
+		glTexCoord2f(1, 0)
+		glVertex2f(228, 100)
+		
+		
+		glTexCoord2f(1, 1)
+		glVertex2f(228, 228)
+		
+		
+		glTexCoord2f(0, 1)
+		glVertex2f(100, 228)
+		
+		glEnd()
 		
 		SwapBuffers(device_context)
 		
