@@ -1227,6 +1227,9 @@ bool isLiteral(Expr *expr);
 
 bool arrayIsLiteral(ExprArray *array) {
 	for (u64 i = 0; i < array->count; i++) {
+		if (!array->storage[i])
+			break;
+
 		if (!isLiteral(array->storage[i])) {
 			return false;
 		}
@@ -1237,7 +1240,7 @@ bool arrayIsLiteral(ExprArray *array) {
 
 bool isLiteral(Expr *expr) {
 	return ((expr->flavor == ExprFlavor::INT_LITERAL || expr->flavor == ExprFlavor::FLOAT_LITERAL) && !(expr->flags & EXPR_WAS_EVALUATED_BINARY)) /* See :EvaluatedBinaryLiterals*/
-		|| expr->flavor == ExprFlavor::TYPE_LITERAL || expr->flavor == ExprFlavor::STRING_LITERAL || expr->flavor == ExprFlavor::FUNCTION || (expr->flavor == ExprFlavor::ARRAY && arrayIsLiteral(static_cast<ExprArray *>(expr)));
+		|| expr->flavor == ExprFlavor::TYPE_LITERAL || expr->flavor == ExprFlavor::STRING_LITERAL || expr->flavor == ExprFlavor::FUNCTION || (expr->flavor == ExprFlavor::ARRAY && arrayIsLiteral(static_cast<ExprArray *>(expr))) || expr->flavor == ExprFlavor::STRUCT_DEFAULT;
 }
 
 
@@ -1594,7 +1597,29 @@ bool isAddressable(Expr *expr) {
 	}
 }
 
-u64 failedLookups = 0;
+void copyLiteral(Expr **exprPointer, Expr *expr) {
+	switch (expr->flavor) {
+	case ExprFlavor::FUNCTION: // Functions are unique
+	case ExprFlavor::STRUCT_DEFAULT: // Struct defaults have no mutable data
+	case ExprFlavor::STRING_LITERAL: // Don't duplicate string literals this will bloat the binary
+	case ExprFlavor::ARRAY: { // Don't duplicate array literals this will bloat the binary
+		*exprPointer = expr;
+		break;
+	}
+	case ExprFlavor::FLOAT_LITERAL:
+	case ExprFlavor::TYPE_LITERAL:
+	case ExprFlavor::INT_LITERAL: {
+		ExprLiteral *newLiteral = new ExprLiteral;
+		*newLiteral = *static_cast<ExprLiteral *>(expr);
+		newLiteral->start = (*exprPointer)->start;
+		newLiteral->end = (*exprPointer)->end;
+
+		*exprPointer = newLiteral;
+
+		break;
+	}
+	}
+}
 
 bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 	*yield = false;
@@ -2668,7 +2693,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 
 						if (identifier->declaration->flags & DECLARATION_IS_CONSTANT) {
 							if (identifier->declaration->flags & DECLARATION_VALUE_IS_READY) {
-								*exprPointer = identifier->declaration->initialValue;
+								copyLiteral(exprPointer, identifier->declaration->initialValue);
 							}
 							else {
 								return true;
@@ -3284,7 +3309,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 
 					if (access->declaration->flags & DECLARATION_IS_CONSTANT) {
 						if (access->declaration->flags & DECLARATION_VALUE_IS_READY) {
-							*exprPointer = access->declaration->initialValue;
+							copyLiteral(exprPointer, access->declaration->initialValue);
 						}
 						else {
 							return true;
@@ -3367,7 +3392,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 
 						if (access->declaration->flags & DECLARATION_IS_CONSTANT) {
 							if (access->declaration->flags & DECLARATION_VALUE_IS_READY) {
-								*exprPointer = access->declaration->initialValue;
+								copyLiteral(exprPointer, access->declaration->initialValue);
 							}
 							else {
 								return true;
@@ -4088,8 +4113,10 @@ void runInfer() {
 						else if (declaration->initialValue) {
 							if (job->valueFlattenedIndex == job->valueFlattened.count) {
 								assert(declaration->initialValue->type);
-
-								trySolidifyNumericLiteralToDefault(declaration->initialValue);
+								
+								if (!(declaration->flags & DECLARATION_IS_CONSTANT)) {
+									trySolidifyNumericLiteralToDefault(declaration->initialValue);
+								}
 
 								if (declaration->initialValue->type == &TYPE_VOID) {
 									reportError(declaration->type, "Error: Declaration cannot have type void");

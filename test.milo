@@ -268,7 +268,7 @@ Bmp_Dib_Header :: struct {
 	blue_mask: u32
 	alpha_mask: u32
 	
-	BI_RGB :: 0
+	BI_RGB       :: 0
 	BI_BITFIELDS :: 3
 }
 
@@ -294,10 +294,29 @@ load_image :: (filename: string) -> u32 {
 		return 0
 	}
 	
-	print_u64(dib_header.bits_per_pixel)
-	print_string("\n")
-	print_u64(dib_header.compression_method)
-	print_string("\n")
+	
+	if dib_header.bits_per_pixel != 32 || 
+		dib_header.compression_method != Bmp_Dib_Header.BI_BITFIELDS || 
+		dib_header.alpha_mask != 0xFF000000 ||
+		dib_header.red_mask   != 0x00FF0000 ||
+		dib_header.green_mask != 0x0000FF00 ||
+		dib_header.blue_mask  != 0x000000FF ||
+		dib_header.height >= 0 {
+		
+		deallocate(file.data)
+		return 0
+	}
+	
+	texture: u32
+	
+	glGenTextures(1, *texture)
+	glBindTexture(GL_TEXTURE_2D, texture)
+	
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+	
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, dib_header.width, -dib_header.height, 0, GL_BGRA_EXT, GL_UNSIGNED_BYTE, file.data + file_header.offset_to_image)
+	
 }
 
 _main :: () {
