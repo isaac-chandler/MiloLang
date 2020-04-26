@@ -36,6 +36,7 @@ enum class TypeFlavor : u8 {
 #define TYPE_ARRAY_IS_FIXED 0x8
 #define TYPE_ARRAY_IS_DYNAMIC 0x10
 #define TYPE_STRUCT_IS_UNION 0x20
+#define TYPE_STRUCT_IS_PACKED 0x40
 
 struct Type {
 	u64 size;

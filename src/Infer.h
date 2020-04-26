@@ -17,8 +17,6 @@ inline Declaration *findDeclaration(Block *block, String name, u64 *index) {
 	return nullptr;
 }
 
-
-
 struct DeclarationPack {
 	u64 count; // If the count is zero we are submitting a function
 

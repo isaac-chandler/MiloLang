@@ -1050,25 +1050,6 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 			identifier->indexInBlock = currentBlock->declarations.count;
 		}
 
-		/*
-		identifier->declaration = resolveIdentifier(&lexer->token, identifier->name, &success); // This may fail to find the identifier which may mean that it is an identifier not yet declared in global scope or an error
-
-		if (!success)
-			return nullptr;
-
-		if (!identifier->declaration) {
-			identifier->resolveFrom = currentBlock;
-		}
-		if (identifier->declaration && (identifier->declaration->flags & DECLARATION_IS_ITERATOR)) {
-			ExprLoop *loop = CAST_FROM_SUBSTRUCT(ExprLoop, iteratorBlock, identifier->declaration->enclosingScope);
-
-			if (loop->flavor == ExprFlavor::WHILE) {
-				reportError(&lexer->token, "Error: Cannot access a while loop label outside of a break or continue");
-				return nullptr;
-			}
-		}
-		*/
-
 		lexer->advance();
 
 		expr = identifier;
@@ -1199,8 +1180,12 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		pushBlock(&type->members);
 
 		type->size = 0;
-		type->alignment = 0;
+		type->alignment = 1;
 		type->hash = 0;
+
+		if (expectAndConsume(lexer, TokenT::PACK)) {
+			type->flags |= TYPE_STRUCT_IS_PACKED;
+		}
 
 		if (!expectAndConsume(lexer, '{')) {
 			reportExpectedError(&lexer->token, "Error: Expected '{' in struct definition");
@@ -1243,8 +1228,12 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		pushBlock(&type->members);
 
 		type->size = 0;
-		type->alignment = 0;
+		type->alignment = 1;
 		type->hash = 0;
+
+		if (expectAndConsume(lexer, TokenT::PACK)) {
+			type->flags |= TYPE_STRUCT_IS_PACKED;
+		}
 
 		if (!expectAndConsume(lexer, '{')) {
 			reportExpectedError(&lexer->token, "Error: Expected '{' in union definition");

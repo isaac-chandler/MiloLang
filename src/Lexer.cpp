@@ -44,7 +44,8 @@ static const Keyword keywords[] = {
 	{"#load", TokenT::LOAD}, 
 	{"union", TokenT::UNION}, 
 	{"completed", TokenT::COMPLETED},  // @Incomplete Change this keyword because people will almost certainly want to call a variable completed
-	{"remove", TokenT::REMOVE}
+	{"remove", TokenT::REMOVE}, 
+	{"#pack", TokenT::PACK}
 };
 
 void BigInt::zero() {
@@ -622,6 +623,7 @@ lineComment:
 blockComment:
 	c = readCharacter(lexer, &endOfFile, true);
 
+blockCommentAlreadyRead:
 	if (endOfFile)
 		goto fileEnd;
 
@@ -652,8 +654,7 @@ blockCommentEnd:
 	if (c == '/' && --commentNestCount == 0)
 		goto whitespace;
 	else
-		goto blockComment;
-
+		goto blockCommentAlreadyRead;
 identifier:
 	c = readCharacter(lexer, &endOfFile, true);
 
@@ -1594,7 +1595,7 @@ blockCommentEnd:
 	if (c == '/' && --commentNestCount == 0)
 		goto whitespace;
 	else
-		goto blockComment;
+		goto blockCommentAlreadyRead;
 
 identifier:
 	c = readCharacter(this, &endOfFile);

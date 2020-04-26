@@ -26,6 +26,10 @@ HMENU :: *struct {
 HDC :: *struct {
 	unused: s32
 }
+
+HGLRC :: *struct {
+	unused: s32
+}
 RECT :: struct {
 	left: s32
 	top: s32
@@ -237,6 +241,8 @@ DEFAULT_GUI_FONT:    s32: 17
 DC_BRUSH:            s32: 18
 DC_PEN:              s32: 19
 
+GetClientRect :: (hWnd: HWND, lpRect: *RECT) -> s32 #external
+
 STD_INPUT_HANDLE: u32: cast() -10
 STD_OUTPUT_HANDLE: u32: cast() -11
 STD_ERROR_HANDLE: u32: cast() -12
@@ -255,6 +261,10 @@ ShowWindow :: (hWnd: HWND, nCmdShow: s32) -> s32 #external
 GetMessageW :: (lpMsg: *MSG, hWnd: HWND,  wMsgFilterMin: u32, wMsgFilterMax: u32) -> s32 #external
 PeekMessageW :: (lpMsg: *MSG, hWnd: HWND,  wMsgFilterMin: u32, wMsgFilterMax: u32, wRemoveMessage: u32) -> s32 #externalTranslateMessage :: (lpMsg: *MSG) -> s32 #external
 DispatchMessageW :: (lpMsg: *MSG) -> s32 #external
+
+GetDC :: (hWnd: HWND) -> HDC #external
+ReleaseDC :: (hWnd: HWND, hdc: HDC) -> s32 #external
+DeleteDC :: (hdc: HDC) -> s32 #external
 
 WM_NULL:            u32: 0x0000
 WM_CREATE:          u32: 0x0001
@@ -333,3 +343,209 @@ init_runtime :: () {
 print_buffer :: (buffer: []u8) {
 	WriteConsoleA(std_out, buffer.data, cast() buffer.count)
 }
+
+SwapBuffers :: (Arg1: HDC) -> s32 #external
+wglCreateContext :: (Arg1: HDC) -> HGLRC #external
+wglMakeCurrent :: (hdc: HDC, hglrc: HGLRC) -> s32 #external
+wglDeleteContext :: (Arg1: HGLRC) -> s32 #external
+wglGetCurrentDC :: () -> HDC #external
+wglGetProcAddress :: (Arg1: *u8) -> *void #external
+
+ExitProcess :: (uExitCode: u32) #external
+
+PIXELFORMATDESCRIPTOR :: struct {
+	nSize: u16 = size_of(PIXELFORMATDESCRIPTOR)
+	nVersion: u16 = 1
+	dwFlags: u32
+	iPixelType: u8
+	cColorBits: u8
+	cRedBits: u8
+	cRedShift: u8
+	cGreenBits: u8
+	cGreenShift: u8
+	cBlueBits: u8
+	cBlueShift: u8
+	cAlphaBits: u8
+	cAlphaShift: u8
+	cAccumBits: u8
+	cAccumRedBits: u8
+	cAccumGreenBits: u8
+	cAccumBlueBits: u8
+	cDepthBits: u8
+	cStencilBits: u8
+	cAuxBuffers: u8
+	iLayerType: u8
+	bReserved: u8
+	dwLayerMask: u32
+	dwVisibleMask: u32
+	dwDamageMask: u32
+}
+
+PFD_DOUBLEBUFFER:          u32: 0x00000001
+PFD_STEREO:                u32: 0x00000002
+PFD_DRAW_TO_WINDOW:        u32: 0x00000004
+PFD_DRAW_TO_BITMAP:        u32: 0x00000008
+PFD_SUPPORT_GDI:           u32: 0x00000010
+PFD_SUPPORT_OPENGL:        u32: 0x00000020
+PFD_GENERIC_FORMAT:        u32: 0x00000040
+PFD_NEED_PALETTE:          u32: 0x00000080
+PFD_NEED_SYSTEM_PALETTE:   u32: 0x00000100
+PFD_SWAP_EXCHANGE:         u32: 0x00000200
+PFD_SWAP_COPY:             u32: 0x00000400
+PFD_SWAP_LAYER_BUFFERS:    u32: 0x00000800
+PFD_GENERIC_ACCELERATED:   u32: 0x00001000
+PFD_SUPPORT_DIRECTDRAW:    u32: 0x00002000
+PFD_DIRECT3D_ACCELERATED:  u32: 0x00004000
+PFD_SUPPORT_COMPOSITION:   u32: 0x00008000
+PFD_DEPTH_DONTCARE:        u32: 0x20000000
+PFD_DOUBLEBUFFER_DONTCARE: u32: 0x40000000
+PFD_STEREO_DONTCARE:       u32: 0x80000000
+
+PFD_TYPE_RGBA:       u8: 0
+PFD_TYPE_COLORINDEX: u8: 1
+
+PFD_MAIN_PLANE:     u8: 0
+PFD_OVERLAY_PLANE:  u8: 1
+PFD_UNDERLAY_PLANE: u8: cast(u8) -1
+
+ChoosePixelFormat :: (hdc: HDC, ppfd: *PIXELFORMATDESCRIPTOR) -> s32 #external
+SetPixelFormat :: (hdc: HDC, format: s32, ppfd: *PIXELFORMATDESCRIPTOR) -> s32 #external
+
+QueryPerformanceCounter :: (lpPerformanceCount: *s64) -> s32 #external
+QueryPerformanceFrequency :: (lpFrequency: *s64) -> s32 #external
+
+SECURITY_ATTRIBUTES :: struct {
+	nLength: u32 = size_of(SECURITY_ATTRIBUTES)
+	lpSecurityDescriptor: *void
+	bInheritHandle: s32
+}
+
+OVERLAPPED :: struct {
+	Internal: u64
+	InternalHigh: u64
+	
+	data: union {
+		Offset: u64
+		Pointer: *void
+	}
+	
+	hEvent: HANDLE
+}
+
+CloseHandle :: (hObject: HANDLE) -> s32 #external
+CreateFileW :: (lpFileName: *u16, dwDesiredAccess: u32, dwShareMode: u32, lpSecurityAttributes: *SECURITY_ATTRIBUTES = null, dwCreationDisposition: u32, dwFlagsAndAttributes: u32, hTemplateFile : HANDLE = null) -> HANDLE #external
+GetFileSizeEx :: (hFile: HANDLE, lpFileSize: *s64) -> s32 #external
+ReadFile :: (hFile: HANDLE, lpBuffer: *void, nNumberOfBytesToRead: u32, lpNumberOfBytesRead: *u32, lpOverlapped: *OVERLAPPED = null) -> s32 #external
+
+INVALID_HANDLE_VALUE :: cast(HANDLE) -1
+
+GENERIC_READ:    u32: 0x8000_0000
+GENERIC_WRITE:   u32: 0x4000_0000
+GENERIC_EXECUTE: u32: 0x2000_0000
+GENERIC_ALL:     u32: 0x1000_0000
+
+FILE_SHARE_DELETE: u32: 0x4
+FILE_SHARE_READ:   u32: 0x2
+FILE_SHARE_WRITE:  u32: 0x1
+
+CREATE_NEW:        u32: 1
+CREATE_ALWAYS:     u32: 2
+OPEN_EXISTING:     u32: 3
+OPEN_ALWAYS:       u32: 4
+TRUNCATE_EXISTING: u32: 5
+
+FILE_ATTRIBUTE_READONLY:  u32: 0x0000_0001
+FILE_ATTRIBUTE_HIDDEN:    u32: 0x0000_0002
+FILE_ATTRIBUTE_SYSTEM:    u32: 0x0000_0004
+FILE_ATTRIBUTE_ARCHIVE:   u32: 0x0000_0020
+FILE_ATTRIBUTE_NORMAL:    u32: 0x0000_0080
+FILE_ATTRIBUTE_TEMPORARY: u32: 0x0000_0100
+FILE_ATTRIBUTE_OFFLINE:   u32: 0x0000_1000
+FILE_ATTRIBUTE_ENCRYPTED: u32: 0x0000_4000
+
+FILE_FLAG_OPEN_NO_RECALL:     u32: 0x0010_0000
+FILE_FLAG_OPEN_REPARSE_POINT: u32: 0x0020_0000
+FILE_FLAG_SESSION_AWARE:      u32: 0x0080_0000
+FILE_FLAG_POSIX_SEMANCTICS:   u32: 0x0100_0000
+FILE_FLAG_BACKUP_SEMANTICS:   u32: 0x0200_0000
+FILE_FLAG_DELETE_ON_CLOSE:    u32: 0x0400_0000
+FILE_FLAG_SEQUENTIAL_SCAN:    u32: 0x0800_0000
+FILE_FLAG_RANDOM_ACCESS:      u32: 0x1000_0000
+FILE_FLAG_NO_BUFFERING:       u32: 0x2000_0000
+FILE_FLAG_OVERLAPPED:         u32: 0x4000_0000
+FILE_FLAG_WRITETHROUGH:       u32: 0x8000_0000
+
+
+// @Incomplete, only converts ascii to UTF16, not UTF8
+create_wide_string :: (s: string) -> *u16 {
+	result: *u16 = allocate((string_length(s) + 1) * size_of(u16))
+	
+	buffer := result
+	
+	sbuf := cast(*u8) s
+	
+	while <<sbuf {
+		<<buffer = <<sbuf
+		buffer += 1
+		sbuf += 1
+	}
+	
+	<<buffer = 0
+	
+	return result
+}
+
+// @Incomplete add multiple return values 
+read_entire_file :: (file: string, success: *bool) -> []u8 {
+	<<success = true
+
+	result: []u8 = --
+	
+	filename := create_wide_string(file)
+	
+	handle := CreateFileW(filename, GENERIC_READ, 0, null, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN)
+	
+	if handle == INVALID_HANDLE_VALUE {
+		print_string("A");
+		<<success = false
+	} else {
+	
+		if GetFileSizeEx(handle, cast() *result.count) {
+			result.data = allocate(result.count)
+			remaining := result
+			
+			
+			while remaining {
+				bytes_read: u32
+				
+				bytes_to_read := remaining.count
+				
+				if (bytes_to_read > 0xFFFF_FFFF) {
+					bytes_to_read = 0xFFFF_FFFF
+				}
+				
+				if !ReadFile(handle, remaining.data, cast() bytes_to_read, *bytes_read) || bytes_read != bytes_to_read {
+					print_string("B");
+					<<success = false
+					result.count = 0
+					deallocate(result.data)
+					result.data = null
+					break
+				}
+				
+				remaining.count -= bytes_to_read
+				remaining.data += bytes_to_read
+			}
+		} else {
+			print_string("C");
+			<<success = false
+		}
+		
+		CloseHandle(handle)
+	}
+	deallocate(filename)
+	
+	return result
+}
+
+

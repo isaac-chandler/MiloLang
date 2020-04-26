@@ -101,7 +101,8 @@ enum class TokenT : u8 {
 	LOAD, 
 	UNION, 
 	COMPLETED, 
-	REMOVE
+	REMOVE, 
+	PACK
 };
 
 struct Token {

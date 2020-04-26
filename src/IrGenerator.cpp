@@ -601,6 +601,8 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				}
 				case TokenT::EQUAL:
 				case TokenT::NOT_EQUAL: {
+					assert(left->type == right->type);
+
 					if (left->type->flavor == TypeFlavor::STRING) {
 						u64 leftReg = generateIr(state, left, dest);
 
@@ -796,6 +798,9 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 						ir.flags |= IR_SIGNED_OP;
 					}
+
+					if (left->type->flavor == TypeFlavor::FLOAT)
+						ir.flags |= IR_FLOAT_OP;
 					
 					return dest;
 				}
@@ -965,6 +970,10 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 						ir.flags |= IR_SIGNED_OP;
 					}
 
+
+					if (left->type->flavor == TypeFlavor::FLOAT)
+						ir.flags |= IR_FLOAT_OP;
+
 					writeForModifyWrite(state, info, left);
 
 					return info.leftReg;
@@ -1050,6 +1059,8 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 				if (literal->type->flags & TYPE_INTEGER_IS_SIGNED)
 					load.flags |= IR_SIGNED_OP;
+				
+				
 
 				return dest;
 			}

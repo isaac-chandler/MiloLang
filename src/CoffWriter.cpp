@@ -302,10 +302,10 @@ void loadIntoFloatRegister(BucketedArenaAllocator *code, ExprFunction *function,
 	}
 
 	if (size == 8) {
-		code->add1(0xF3);
+		code->add1(0xF2);
 	}
 	else {
-		code->add1(0xF2);
+		code->add1(0xF3);
 	}
 
 	if (loadInto >= 8) {
@@ -321,10 +321,10 @@ void loadIntoFloatRegister(BucketedArenaAllocator *code, ExprFunction *function,
 
 void storeFromFloatRegister(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u64 regNo, u8 storeFrom) {
 	if (size == 8) {
-		code->add1(0xF3);
+		code->add1(0xF2);
 	}
 	else {
-		code->add1(0xF2);
+		code->add1(0xF3);
 	}
 
 	if (storeFrom >= 8) {

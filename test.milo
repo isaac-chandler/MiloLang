@@ -1,4 +1,5 @@
 #load "windows.milo"
+#load "gl.milo"
 
 copy_string :: (s: string) -> string {
 	memory: *u8 = allocate(string_length(s) + 1)
@@ -206,6 +207,13 @@ u64_to_string :: (value: u64) -> string {
 	return cast() result
 }
 
+print_u64 :: (num: u64) {
+	s := u64_to_string(num)
+	print_string(s)
+	
+	deallocate(cast() s)	
+}
+
 find_string :: (array: []string, s: string) {
 	for array {
 		if it == s {
@@ -228,27 +236,69 @@ find_string :: (array: []string, s: string) {
 	
 }
 
+should_quit: bool
 
-// @Incomplete, only converts ascii to UTF16, not UTF8
-create_wide_string :: (s: string) -> *u16 {
-	result: *u16 = allocate((string_length(s) + 1) * size_of(u16))
-	
-	buffer := result
-	
-	sbuf := cast(*u8) s
-	
-	while <<sbuf {
-		<<buffer = <<sbuf
-		buffer += 1
-		sbuf += 1
-	}
-	
-	<<buffer = 0
-	
-	return result
+window_width: s32 = 1280
+window_height: s32 = 720
+
+counter_scale: f32
+
+Bmp_File_Header :: struct #pack {
+	header: [2]u8
+	file_size: u32
+	reserved1: u16
+	reserved2: u16
+	offset_to_image: u32
 }
 
-should_quit: bool
+Bmp_Dib_Header :: struct {
+	header_size: u32
+	width: s32
+	height: s32
+	color_plane_count: u16
+	bits_per_pixel: u16
+	compression_method: u32
+	image_size: u32
+	horizontal_resolution: u32
+	vertical_resolution: u32
+	palette_color_count: u32
+	important_color_count: u32
+	red_mask: u32
+	green_mask: u32
+	blue_mask: u32
+	alpha_mask: u32
+	
+	BI_RGB :: 0
+	BI_BITFIELDS :: 3
+}
+
+load_image :: (filename: string) -> u32 {
+	success: bool
+	
+	file := read_entire_file(filename, *success)
+	
+	if !success {
+		return 0
+	}
+	
+	if file.count < size_of(Bmp_File_Header) + size_of(Bmp_Dib_Header) {
+		deallocate(file.data)
+		return 0
+	}
+
+	file_header := cast(*Bmp_File_Header)file.data
+	dib_header := cast(*Bmp_Dib_Header)(file.data + size_of(Bmp_File_Header))
+	
+	if file_header.header[0] != 'B' || file_header.header[1] != 'M' || file_header.file_size != file.count {
+		deallocate(file.data)
+		return 0
+	}
+	
+	print_u64(dib_header.bits_per_pixel)
+	print_string("\n")
+	print_u64(dib_header.compression_method)
+	print_string("\n")
+}
 
 _main :: () {
 /*
@@ -259,6 +309,12 @@ _main :: () {
 		//}
 	}
 	*/
+	
+	performance_counter_frequency: s64
+	
+	QueryPerformanceFrequency(*performance_counter_frequency)
+	
+	counter_scale = 1.0 / cast(f32) performance_counter_frequency
 	
 	startup_info: STARTUPINFOW
 	
@@ -279,22 +335,25 @@ _main :: () {
 	window_class.lpfnWndProc = (hwnd: HWND, uMsg: u32, wParam: u64, lParam: s64) -> s64 {
 		if uMsg == WM_CLOSE {
 			DestroyWindow(hwnd)
-			return 0
 		} else if uMsg == WM_DESTROY {
 			PostQuitMessage(0)
-			return 0
 		} else if uMsg == WM_PAINT {
 			paint: PAINTSTRUCT = --
-			device_context := BeginPaint(hwnd, *paint)
 			
-			PatBlt(device_context, paint.rcPaint.left, paint.rcPaint.top, paint.rcPaint.right - paint.rcPaint.left, paint.rcPaint.bottom - paint.rcPaint.top, BLACKNESS)
-			
+			dc := BeginPaint(hwnd, *paint)
 			EndPaint(hwnd, *paint)
 		} else if uMsg == WM_SIZE {
-			return 0
+			client_rect: RECT = --
+			
+			GetClientRect(hwnd, *client_rect)
+			
+			window_width = client_rect.right - client_rect.left
+			window_height = client_rect.bottom - client_rect.top
 		} else {
 			return DefWindowProcW(hwnd, uMsg, wParam, lParam)
 		}
+		
+		return 0
 	}
 	window_class.hInstance = instance
 	window_class.lpszClassName = class_name
@@ -304,10 +363,11 @@ _main :: () {
 	if RegisterClassW(*window_class) == 0 {
 		print_string("Failed to register window class\n")
 		print_string(u64_to_string(GetLastError()))
+		return;
 	}
 	
 	
-	window_handle := CreateWindowExW(lpClassName = class_name, lpWindowName = create_wide_string("Test Window"), nWidth = 1280, nHeight = 720, hInstance = instance)
+	window_handle := CreateWindowExW(lpClassName = class_name, lpWindowName = create_wide_string("Test Window"), nWidth = window_width, nHeight = window_height, hInstance = instance)
 	
 	if window_handle == null {
 		print_string("Failed to open window\n")
@@ -315,19 +375,82 @@ _main :: () {
 		return;
 	}
 	
+	device_context := GetDC(window_handle)
+	
+	desired_format: PIXELFORMATDESCRIPTOR
+	desired_format.dwFlags = PFD_SUPPORT_OPENGL | PFD_DRAW_TO_WINDOW | PFD_DOUBLEBUFFER
+	desired_format.cColorBits = 32
+	desired_format.cAlphaBits = 8
+	desired_format.iLayerType = PFD_MAIN_PLANE
+	
+	found_format := ChoosePixelFormat(device_context, *desired_format)
+	
+	if found_format == 0 {
+		print_string("Could not find a pixel format\n")
+		return;
+	}
+	
+	used_format: PIXELFORMATDESCRIPTOR
+	
+	if !SetPixelFormat(device_context, found_format, *used_format) {
+		print_string("Failed to set pixel format")
+		return;
+	}
+	
+	
+	gl_context := wglCreateContext(device_context)
+	
+	if !gl_context {
+		print_string("Failed to create gl context")
+		return;
+	}
+	
+	wglMakeCurrent(device_context, gl_context)
+	
+	
+	load_gl_extensions()
+	wglSwapIntervalEXT(1)
+	
+	load_image("Invaders/Spaceship.bmp")
+	
 	ShowWindow(window_handle, cast() show_command)
+	
+	last_time: s64
+	
+	QueryPerformanceCounter(*last_time)
 	
 	while !should_quit {
 		message: MSG = --
-		result := GetMessageW(*message, null, 0, 0)
 		
-		if result <= 0 {
-			should_quit = true
-		} else {
+		while PeekMessageW(*message, null, 0, 0, PM_REMOVE) {
+			if (message.message == WM_QUIT) {
+				should_quit = true
+				break
+			}
+			
 			TranslateMessage(*message)
 			DispatchMessageW(*message)
 		}
+		
+		current_time: s64
+		
+		QueryPerformanceCounter(*current_time)
+		
+		delta := cast() (current_time - last_time) * counter_scale
+	
+		glViewport(0, 0, window_width, window_height)
+		glClearColor(0, 0, 0, 0)
+		glClear(GL_COLOR_BUFFER_BIT)
+		
+		SwapBuffers(device_context)
+		
+		last_time = current_time
 	}
+	
+	wglDeleteContext(gl_context)
+	ReleaseDC(window_handle, device_context)
+	
+	ExitProcess(0)
 }
 
 factorial2 :: (n: u64) -> u64 {

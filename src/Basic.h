@@ -28,7 +28,7 @@
 #undef VOID
 
 
-#ifdef PROFILE
+#if BUILD_PROFILE
 #define CONCAT2(x, y) x##y
 #define CONCAT(x, y) CONCAT2(x, y)
 #define PROFILE_FUNC()                 Timer CONCAT(timer,__LINE__)(__FUNCTION__)
@@ -89,19 +89,18 @@ struct ScopeLock {
 };
 
 
-#if PROFILE
+#if BUILD_PROFILE
 struct Profile {
-	const char *name = 0;
-	const char *data = 0;
+	const char *name;
+	const char *data;
 	u64 time;
 	s32 threadId;
 };
 
-extern Profile profiles[10000000];
-extern std::atomic_uint32_t profileIndex;
+inline Profile profiles[10000000];
+inline std::atomic_uint32_t profileIndex = 0;
 
 struct Timer {
-
 	Timer(const char *name) {
 		u32 write = profileIndex++;
 
@@ -123,9 +122,8 @@ struct Timer {
 		profiles[write].threadId = *reinterpret_cast<s32 *>(reinterpret_cast<u8 *>(__readgsqword(0x30)) + 0x48);
 	}
 
-	~Timer() {
+	__declspec(noinline) ~Timer() {
 		u32 write = profileIndex++;
-
 
 		QueryPerformanceCounter(reinterpret_cast<LARGE_INTEGER *>(&profiles[write].time));
 

@@ -168,6 +168,12 @@ struct Expr {
 #define EXPR_IDENTIFIER_RESOLVING_IN_OUTER_FUNCTION 0x20
 #define EXPR_IDENTIFIER_IS_BREAK_OR_CONTINUE_LABEL 0x40
 #define EXPR_ASSIGN_IS_IMPLICIT_INITIALIZER 0x80
+// :EvaluatedBinaryLiterals
+// Set for consistency in rules that only a literal can be assigned to a constant even though we do 'constexpr' evaluate 
+// int + int -> int binary expressions so that expressions such as 3 + 5 can still be converted to unsigned implicitly 
+// instead of being stuck as s64. We could allow these to be constants but it would be inconsistent which binary ops are 
+// allowed as constants since we don't evaluate comparisons
+#define EXPR_WAS_EVALUATED_BINARY 0x100
 
 
 struct ExprLiteral : Expr {
