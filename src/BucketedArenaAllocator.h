@@ -42,6 +42,7 @@ struct BucketedArenaAllocator {
 	u64 *add8(u64 value);
 	void add(const void *value, u64 size);
 	void addNullTerminatedString(String string);
+	void addNullTerminatedString(const char *string);
 	void ensure(u64 size);
 };
 

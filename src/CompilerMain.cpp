@@ -73,6 +73,10 @@ FileInfo *getFileInfoByUid(u32 fileUid) {
 	return info;
 }
 
+Array<FileInfo> getAllFilesNoLock() {
+	return files.array;
+}
+
 void displayErrorLocation(CodeLocation *start, EndLocation *end) {
 	auto info = getFileInfoByUid(start->fileUid);
 

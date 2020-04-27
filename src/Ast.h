@@ -44,7 +44,8 @@ enum class IrOp : u8 {
 	NOOP,
 	FUNCTION, 
 	STRING, 
-	STRING_EQUAL
+	STRING_EQUAL, 
+	LINE_MARKER
 };
 
 #define IR_SIGNED_OP 0x1
@@ -69,25 +70,33 @@ struct FunctionCall {
 };
 
 struct Ir {
-	u64 dest;
-
 	union {
-		u64 a;
-		struct Declaration *declaration;
-		struct ExprFunction *function;
-		struct ExprStringLiteral *string;
-	};
+		struct {
+			u64 dest;
 
-	union {
-		u64 b;
-		u64 destSize;
-		FunctionCall *arguments;
+			union {
+				u64 a;
+				struct Declaration *declaration;
+				struct ExprFunction *function;
+				struct ExprStringLiteral *string;
+			};
+
+			union {
+				u64 b;
+				u64 destSize;
+				FunctionCall *arguments;
+			};
+
+			u8 opSize;
+		};
+
+		struct {
+			CodeLocation start;
+			EndLocation end;
+		} location;
 	};
 
 	u64 flags = 0;
-
-	u8 opSize;
-
 	IrOp op;
 };
 

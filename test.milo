@@ -321,8 +321,6 @@ load_image :: (filename: string) -> u32 {
 		return 0
 	}
 	
-	data: [4]u32
-	
 	texture: u32
 	
 	glGenTextures(1, *texture)
@@ -334,7 +332,8 @@ load_image :: (filename: string) -> u32 {
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP)
 	
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, dib_header.width, dib_header.height, 0, GL_BGRA_EXT, GL_UNSIGNED_BYTE, file.data + file_header.offset_to_image)
-	//glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, *data)
+	
+	deallocate(file.data)
 	
 	return texture
 }

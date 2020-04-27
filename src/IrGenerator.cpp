@@ -408,6 +408,14 @@ static void generateIncrement(IrState *state, ExprLoop *loop) {
 	}
 }
 
+void addLineMarker(IrState *state, Expr *expr) {
+	Ir &ir = state->ir.add();
+
+	ir.op = IrOp::LINE_MARKER;
+	ir.location.start = expr->start;
+	ir.location.end = expr->end;
+}
+
 u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 	if (dest != DEST_NONE && expr->type->size > 8 && !destWasForced) {
 		// @Hack when ir generation was originally written it wasn't designed for large types, the dest register is often used for intermediates which may be larger than the final value
@@ -920,6 +928,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 					branch.a = dest;
 					branch.opSize = 1;
 
+					addLineMarker(state, right);
 					generateIrForceDest(state, right, dest);
 
 					state->ir[patch].b = state->ir.count;
@@ -931,6 +940,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				case TokenT::XOR_EQUALS:
 				case TokenT::SHIFT_LEFT_EQUALS:
 				case TokenT::SHIFT_RIGHT_EQUALS: {
+
 					auto info = readForModifyWrite(state, left, right);
 
 					Ir &ir = state->ir.add();
@@ -954,6 +964,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				case TokenT::TIMES_EQUALS:
 				case TokenT::DIVIDE_EQUALS:
 				case TokenT::MOD_EQUALS: {
+
 					auto info = readForModifyWrite(state, left, right);
 
 					Ir &ir = state->ir.add();
@@ -994,6 +1005,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			}
 
 			for (auto subExpr : block->exprs) {
+				addLineMarker(state, subExpr);
 				generateIr(state, subExpr, DEST_NONE);
 			}
 
@@ -1159,6 +1171,8 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			initItIndex.destSize = 8;
 
 			pushLoop(state, loop);
+
+			addLineMarker(state, expr);
 
 
 			u64 irEnd;

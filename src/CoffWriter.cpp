@@ -537,6 +537,7 @@ void writeSet(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u6
 #define BSS_SECTION_NUMBER 2
 #define DATA_SECTION_NUMBER 3
 #define TEXT_SECTION_NUMBER 4
+#define DEBUG_SYMBOL_SECTION_NUMBER 5
 
 u32 *addRelocationToUnkownSymbol(BucketedArenaAllocator *allocator, u32 virtualAddress, u16 type) {
 	allocator->add4(virtualAddress);
@@ -713,6 +714,99 @@ bool writeValue(BucketedArenaAllocator *data, BucketedArenaAllocator *dataReloca
 	return true;
 }
 
+void alignAllocator(BucketedArenaAllocator *allocator, u64 alignment) {
+	u64 padding = 0;
+
+	allocator->add(&padding, AlignPO2(allocator->totalSize, alignment) - allocator->totalSize);
+}
+
+struct LineInfo {
+	u32 offset;
+	u32 line;
+};
+
+struct ColumnInfo {
+	u16 start;
+	u16 end;
+};
+
+
+void addLineInfo(Array<LineInfo> *lineInfo, Array<ColumnInfo> *columnInfo, u32 offset, CodeLocation start, EndLocation end) {
+	s64 delta = end.line - start.line;
+
+	if (delta < 0) {
+		delta = 0;
+	}
+
+	auto &line = lineInfo->add();
+
+	line.offset = offset;
+	line.line=  (start.line & 0xFFF) | ((delta & 0x7F) << 24) | (1 << 31);
+
+
+	auto &column = columnInfo->add();
+
+	column.start = start.column;
+	column.end = end.column + 1;
+}
+
+const u32 S_UDT       = 0x1108;
+const u32 T_VOID      = 0x0003;
+const u32 T_64PVOID   = 0x0603;
+const u32 T_64PUCHAR  = 0x0620;
+const u32 T_INT1      = 0x0068;
+const u32 T_64PINT1   = 0x0668;
+const u32 T_UINT1     = 0x0069;
+const u32 T_64PUINT1  = 0x0669;
+const u32 T_INT2      = 0x0072;
+const u32 T_64PINT2   = 0x0672;
+const u32 T_UINT2     = 0x0073;
+const u32 T_64PUINT2  = 0x0673;
+const u32 T_INT4      = 0x0074;
+const u32 T_64PINT4   = 0x0674;
+const u32 T_UINT4     = 0x0075;
+const u32 T_64PUINT4  = 0x0675;
+const u32 T_INT8      = 0x0076;
+const u32 T_64PINT8   = 0x0676;
+const u32 T_UINT8     = 0x0077;
+const u32 T_64PUINT8  = 0x0677;
+const u32 T_REAL32    = 0x0040;
+const u32 T_64PREAL32 = 0x0640;
+const u32 T_REAL64    = 0x0041;
+const u32 T_64PREAL64 = 0x0641;
+const u32 T_BOOL08    = 0x0030;
+const u32 T_64PBOOL08 = 0x0630;
+
+void emitBasicType(BucketedArenaAllocator *debugSymbols, u32 type, const char *name) {
+	debugSymbols->add2(7 + strlen(name));
+	debugSymbols->add2(S_UDT);
+	debugSymbols->add4(type);
+	debugSymbols->addNullTerminatedString(name);
+}
+
+void emitBasicTypeDebugInfo(BucketedArenaAllocator *debugSymbols) {
+	debugSymbols->add4(0xF1);
+	u32 *subsectionSizePatch = debugSymbols->add4(0);
+
+	u32 previousSize = debugSymbols->totalSize;
+
+	emitBasicType(debugSymbols, T_64PUCHAR, "string"); // @StringFormat
+	emitBasicType(debugSymbols, T_INT1, "s8");
+	emitBasicType(debugSymbols, T_INT2, "s16");
+	emitBasicType(debugSymbols, T_INT4, "s32");
+	emitBasicType(debugSymbols, T_INT8, "s64");
+	emitBasicType(debugSymbols, T_UINT1, "u8");
+	emitBasicType(debugSymbols, T_UINT2, "u16");
+	emitBasicType(debugSymbols, T_UINT4, "u32");
+	emitBasicType(debugSymbols, T_UINT8, "u64");
+	emitBasicType(debugSymbols, T_REAL32, "f32");
+	emitBasicType(debugSymbols, T_REAL64, "f64");
+
+	*subsectionSizePatch = debugSymbols->totalSize - previousSize;
+	alignAllocator(debugSymbols, 4);
+}
+
+
 void runCoffWriter() {
 	PROFILE_FUNC();
 
@@ -722,6 +816,8 @@ void runCoffWriter() {
 	BucketedArenaAllocator dataRelocations(4096);
 	BucketedArenaAllocator rdata(4096);
 	BucketedArenaAllocator stringTable(4096);
+	BucketedArenaAllocator debugSymbols(4096);
+	BucketedArenaAllocator debugSymbolsRelocations(4096);
 	SectionHeader bssSection = {};
 	bssSection.virtualSize = 0;
 	BucketArray<Symbol> symbols;
@@ -734,6 +830,25 @@ void runCoffWriter() {
 
 	Array<u64> instructionOffsets;
 	Array<JumpPatch> jumpPatches;
+
+	Array<LineInfo> lineInfo;
+	Array<ColumnInfo> columnInfo;
+
+	u32 textSectionSymbolIndex = symbols.count();
+
+	Symbol textSectionSymbol;
+	setSymbolName(&stringTable, &textSectionSymbol.name, ".text");
+	textSectionSymbol.value = 0;
+	textSectionSymbol.sectionNumber = TEXT_SECTION_NUMBER;
+	textSectionSymbol.type = IMAGE_SYM_TYPE_NULL;
+	textSectionSymbol.storageClass = IMAGE_SYM_CLASS_STATIC;
+	textSectionSymbol.numberOfAuxSymbols = 0;
+
+	symbols.add(textSectionSymbol);
+
+	debugSymbols.add4(4);
+
+	emitBasicTypeDebugInfo(&debugSymbols);
 
 	while (true) {
 		CoffJob job = coffWriterQueue.take();
@@ -769,7 +884,14 @@ void runCoffWriter() {
 
 			jumpPatches.clear();
 
+			lineInfo.clear();
+			columnInfo.clear();
+
+			u32 functionStart = code.totalSize;
+
 			{
+				addLineInfo(&lineInfo, &columnInfo, code.totalSize - functionStart, function->start, function->end);
+
 				auto symbol = function->symbol;
 
 				if (function->valueOfDeclaration) {
@@ -2496,6 +2618,9 @@ void runCoffWriter() {
 						code.add1(0x94);
 						writeRSPRegisterByte(&code, function, RAX, ir.dest);
 					} break;
+					case IrOp::LINE_MARKER: {
+						addLineInfo(&lineInfo, &columnInfo, code.totalSize - functionStart, ir.location.start, ir.location.end);
+					} break;
 					default: {
 						assert(false);
 					}
@@ -2505,6 +2630,31 @@ void runCoffWriter() {
 			for (auto patch : jumpPatches) {
 				*patch.location = static_cast<s32>(static_cast<s64>(instructionOffsets[patch.opToPatch]) - static_cast<s64>(patch.rip));
 			}
+
+			debugSymbols.add4(0xF2);
+			debugSymbols.add4(24 + lineInfo.count * 12);
+
+
+			debugSymbolsRelocations.add4(debugSymbols.totalSize);
+			debugSymbolsRelocations.add4(function->physicalStorage);
+			debugSymbolsRelocations.add2(IMAGE_REL_AMD64_SECREL);
+
+			debugSymbols.add4(0);
+
+			debugSymbolsRelocations.add4(debugSymbols.totalSize);
+			debugSymbolsRelocations.add4(textSectionSymbolIndex);
+			debugSymbolsRelocations.add2(IMAGE_REL_AMD64_SECTION);
+
+			debugSymbols.add2(0);
+
+			debugSymbols.add2(1); // fHasColumns
+			debugSymbols.add4(code.totalSize - functionStart);
+
+			debugSymbols.add4(function->start.fileUid * 8);
+			debugSymbols.add4(lineInfo.count);
+			debugSymbols.add4(12 + lineInfo.count * 12);
+			debugSymbols.add(lineInfo.storage, lineInfo.count * sizeof(LineInfo));
+			debugSymbols.add(columnInfo.storage, columnInfo.count * sizeof(ColumnInfo));
 
 			function->state.allocator.free();
 			function->state.loopStack.free();
@@ -2548,7 +2698,42 @@ void runCoffWriter() {
 		}
 	}
 
+
 	{
+		debugSymbols.add4(0xF3);
+
+		auto files = getAllFilesNoLock();
+
+		u32 *sizePointer = debugSymbols.add4(0);
+
+		u32 totalSize = 0;
+
+		for (auto &file : files) {
+			char buffer[1024]; // @Robustness
+
+			file.offsetInStringTable = totalSize;
+
+			GetFullPathNameA(toCString(file.path) /* @Leak */, sizeof(buffer), buffer, 0);
+
+			u32 len = strlen(buffer);
+			totalSize += len + 1;
+
+			debugSymbols.addNullTerminatedString({ buffer, len });
+		}
+
+		*sizePointer = totalSize;
+
+		alignAllocator(&debugSymbols, 4);
+
+		debugSymbols.add4(0xF4);
+		debugSymbols.add4(8 * files.count);
+
+		for (auto &file : files) {
+			debugSymbols.add4(file.offsetInStringTable);
+			debugSymbols.add4(0);
+		}
+
+
 		u32 stringTableSize = sizeof(u32) + stringTable.totalSize;
 
 		struct Section {
@@ -2575,10 +2760,15 @@ void runCoffWriter() {
 		setSectionName(textSection.name, sizeof(textSection.name), ".text");
 		textSection.characteristics = IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_ALIGN_4096BYTES;
 
+		SectionHeader debugSymbolSection = {};
+		setSectionName(debugSymbolSection.name, sizeof(debugSymbolSection.name), ".debug$S");
+		debugSymbolSection.characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_DISCARDABLE;
+
 		sections.add({ &rdataSection, &rdata });
 		sections.add({ &bssSection });
 		sections.add({ &dataSection, &data, &dataRelocations });
 		sections.add({ &textSection, &code, &codeRelocations });
+		sections.add({ &debugSymbolSection, &debugSymbols, &debugSymbolsRelocations });
 
 
 

@@ -17,6 +17,8 @@ struct FileInfo { // @Platform
 	char *data;
 	u64 size;
 
+	u32 offsetInStringTable;
+
 	bool operator==(const FileInfo &other) const {
 		return fileIndex == other.fileIndex && volumeSerialNumber == other.volumeSerialNumber;
 	}
@@ -24,6 +26,8 @@ struct FileInfo { // @Platform
 
 bool loadNewFile(String file);
 FileInfo *getFileInfoByUid(u32 fileUid);
+
+Array<FileInfo> getAllFilesNoLock();
 
 #ifdef BUILD_WINDOWS
 #define CHECK_PRINTF _Printf_format_string_

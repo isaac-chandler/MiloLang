@@ -65,6 +65,11 @@ void BucketedArenaAllocator::addNullTerminatedString(String string) {
 	add1(0);
 }
 
+void BucketedArenaAllocator::addNullTerminatedString(const char *string) {
+	add(string, strlen(string));
+	add1(0);
+}
+
 void BucketedArenaAllocator::add(const void *value, u64 size) {
 	const u8 *bytes = static_cast<const u8 *>(value);
 	totalSize += size;

@@ -30,7 +30,8 @@ HDC :: *struct {
 HGLRC :: *struct {
 	unused: s32
 }
-RECT :: struct {
+
+RECT :: struct {
 	left: s32
 	top: s32
 	right: s32
@@ -259,7 +260,8 @@ RegisterClassW :: (lpWndClass: *WNDCLASSW) -> u16 #external
 ShowWindow :: (hWnd: HWND, nCmdShow: s32) -> s32 #external
 
 GetMessageW :: (lpMsg: *MSG, hWnd: HWND,  wMsgFilterMin: u32, wMsgFilterMax: u32) -> s32 #external
-PeekMessageW :: (lpMsg: *MSG, hWnd: HWND,  wMsgFilterMin: u32, wMsgFilterMax: u32, wRemoveMessage: u32) -> s32 #externalTranslateMessage :: (lpMsg: *MSG) -> s32 #external
+PeekMessageW :: (lpMsg: *MSG, hWnd: HWND,  wMsgFilterMin: u32, wMsgFilterMax: u32, wRemoveMessage: u32) -> s32 #external
+TranslateMessage :: (lpMsg: *MSG) -> s32 #external
 DispatchMessageW :: (lpMsg: *MSG) -> s32 #external
 
 GetDC :: (hWnd: HWND) -> HDC #external
