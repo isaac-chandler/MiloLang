@@ -52,7 +52,22 @@ struct TypePointer : Type {
 	Type *pointerTo;
 };
 
-struct TypeArray : Type {
+#define BLOCK_IS_ARGUMENTS 0x1
+#define BLOCK_IS_COMPLETE 0x2
+#define BLOCK_IS_LOOP 0x4
+
+struct Block {
+	Array<struct Declaration *> declarations;
+	Block *parentBlock = nullptr;
+	u64 indexInParent;
+	u64 flags = 0;
+};
+
+struct TypeStruct : Type {
+	Block members;
+};
+
+struct TypeArray : TypeStruct {
 	Type *arrayOf;
 	u64 count;
 };
@@ -75,21 +90,6 @@ struct TypeFunction : Type {
 
 	u64 argumentCount;
 	Type **argumentTypes;
-};
-
-#define BLOCK_IS_ARGUMENTS 0x1
-#define BLOCK_IS_COMPLETE 0x2
-#define BLOCK_IS_LOOP 0x4
-
-struct Block {
-	Array<struct Declaration *> declarations;
-	Block *parentBlock = nullptr;
-	u64 indexInParent;
-	u64 flags = 0;
-};
-
-struct TypeStruct : Type {
-	Block members;
 };
 
 inline Type TYPE_S8 = { 1, 1, "s8", 2, TYPE_INTEGER_IS_SIGNED, TypeFlavor::INTEGER };

@@ -3,6 +3,7 @@
 #include "Basic.h"
 #include "TypeTable.h"
 #include "Ast.h"
+#include "Parser.h" // For addDeclarationToBlock, that shouldn't be in parser
 
 BucketedArenaAllocator typeArena(1024 * 1024);
 
@@ -92,7 +93,8 @@ void addStruct(TypeStruct *struct_) {
 	}
 }
 
-TypePointer *getPointer(Type *type) {
+// Returns capacity if pointer is already in table
+TypePointer *getPointerDelayAdd(Type *type, u32 *returnSlot) {
 	u32 hash = (type->hash + 1) * POINTER_HASH_PRIME;
 	if (hash == 0) hash = 1;
 
@@ -100,6 +102,7 @@ TypePointer *getPointer(Type *type) {
 
 	for (Entry entry = entries[slot]; entry.hash; entry = entries[slot]) {
 		if (entry.hash == hash && entry.value->flavor == TypeFlavor::POINTER && static_cast<TypePointer *>(entry.value)->pointerTo == type) {
+			*returnSlot = capacity;
 			return static_cast<TypePointer *>(entry.value);
 		}
 
@@ -115,13 +118,54 @@ TypePointer *getPointer(Type *type) {
 
 	result->name.length = type->name.length + 1;
 	result->name.characters = TYPE_NEW_ARRAY(char, result->name.length);
-	
+
 	result->name.characters[0] = '*';
 	memcpy(result->name.characters + 1, type->name.characters, type->name.length);
 
-	insertIntoTable(result, slot);
+	*returnSlot = slot;
 
 	return result;
+}
+
+TypePointer *getPointer(Type *type) {
+	u32 slot;
+
+	auto result = getPointerDelayAdd(type, &slot);
+
+	if (slot != capacity) { // Returns capacity if pointer is already in table
+		insertIntoTable(result, slot);
+	}
+
+	return result;
+}
+
+// The enclosingScope for these declarations will be incorrect but that shouldn't matter @Volatile
+ExprLiteral *unsignedLiteralType;
+Declaration *countDeclaration;
+Declaration *capacityDeclaration;
+
+Declaration *createDataDeclaration(Type *type, Type **toAdd) {
+	u32 slot;
+
+	auto dataType = TYPE_NEW(ExprLiteral);
+	dataType->flavor = ExprFlavor::TYPE_LITERAL;
+	dataType->start = {};
+	dataType->end = {};
+	dataType->type = &TYPE_TYPE;
+	dataType->typeValue = getPointerDelayAdd(type, &slot);
+
+	auto dataDeclaration = TYPE_NEW(Declaration);
+	dataDeclaration->start = {};
+	dataDeclaration->end = {};
+	dataDeclaration->name = "data";
+	dataDeclaration->type = dataType;
+	dataDeclaration->initialValue = nullptr;
+	dataDeclaration->physicalStorage = 0;
+	dataDeclaration->flags |= DECLARATION_IS_STRUCT_MEMBER | DECLARATION_TYPE_IS_READY;
+
+	*toAdd = slot == capacity ? nullptr : dataType->typeValue; // Returns capacity if pointer is already in table
+
+	return dataDeclaration;
 }
 
 TypeArray *getArray(Type *type) {
@@ -149,6 +193,12 @@ TypeArray *getArray(Type *type) {
 	result->hash = hash;
 	result->count = 0;
 	result->flavor = TypeFlavor::ARRAY;
+	Type *toAdd;
+	addDeclarationToBlock(&result->members, createDataDeclaration(type, &toAdd));
+	addDeclarationToBlock(&result->members, countDeclaration);
+
+	result->members.flags |= BLOCK_IS_COMPLETE;
+
 
 	result->name.length = type->name.length + 2;
 	result->name.characters = TYPE_NEW_ARRAY(char, result->name.length);
@@ -158,6 +208,10 @@ TypeArray *getArray(Type *type) {
 	memcpy(result->name.characters + 2, type->name.characters, type->name.length);
 
 	insertIntoTable(result, slot);
+
+	if (toAdd) {
+		insertIntoTable(toAdd);
+	}
 
 	return result;
 }
@@ -188,6 +242,12 @@ TypeArray *getDynamicArray(Type *type) {
 	result->count = 0;
 	result->flavor = TypeFlavor::ARRAY;
 	result->flags |= TYPE_ARRAY_IS_DYNAMIC;
+	Type *toAdd;
+	addDeclarationToBlock(&result->members, createDataDeclaration(type, &toAdd));
+	addDeclarationToBlock(&result->members, countDeclaration);
+	addDeclarationToBlock(&result->members, capacityDeclaration);
+
+	result->members.flags |= BLOCK_IS_COMPLETE;
 
 	result->name.length = type->name.length + 4;
 	result->name.characters = TYPE_NEW_ARRAY(char, result->name.length);
@@ -199,6 +259,10 @@ TypeArray *getDynamicArray(Type *type) {
 	memcpy(result->name.characters + 4, type->name.characters, type->name.length);
 
 	insertIntoTable(result, slot);
+
+	if (toAdd) {
+		insertIntoTable(toAdd);
+	}
 
 	return result;
 }
@@ -230,6 +294,27 @@ TypeArray *getStaticArray(Type *type, u64 count) {
 	result->flavor = TypeFlavor::ARRAY;
 	result->flags |= TYPE_ARRAY_IS_FIXED;
 
+	Type *toAdd;
+	addDeclarationToBlock(&result->members, createDataDeclaration(type, &toAdd));
+
+	ExprLiteral *countLiteral = TYPE_NEW(ExprLiteral);
+	countLiteral->flavor = ExprFlavor::INT_LITERAL;
+	countLiteral->start = {};
+	countLiteral->end = {};
+	countLiteral->unsignedValue = count;
+	countLiteral->type = &TYPE_UNSIGNED_INT_LITERAL;
+
+	auto countDeclaration = TYPE_NEW(Declaration);
+	countDeclaration->start = {};
+	countDeclaration->end = {};
+	countDeclaration->name = "count";
+	countDeclaration->type = unsignedLiteralType;
+	countDeclaration->initialValue = countLiteral;
+	countDeclaration->flags |= DECLARATION_IS_STRUCT_MEMBER | DECLARATION_IS_CONSTANT | DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
+	addDeclarationToBlock(&result->members, countDeclaration);
+
+	result->members.flags |= BLOCK_IS_COMPLETE;
+
 	constexpr u64 maxCount = getDigitCount(UINT64_MAX);
 
 	result->name.characters = TYPE_NEW_ARRAY(char, type->name.length + 2 + maxCount);
@@ -247,6 +332,10 @@ TypeArray *getStaticArray(Type *type, u64 count) {
 	result->name.length = (buffer - result->name.characters) + 1 + type->name.length;
 
 	insertIntoTable(result, slot);
+
+	if (toAdd) {
+		insertIntoTable(toAdd);
+	}
 
 	return result;
 }
@@ -373,4 +462,36 @@ void setupTypeTable() {
 	insertIntoTable(&TYPE_TYPE);
 
 	TYPE_VOID_POINTER = getPointer(&TYPE_VOID);
+
+	auto u64Type = TYPE_NEW(ExprLiteral);
+	u64Type->flavor = ExprFlavor::TYPE_LITERAL;
+	u64Type->start = {};
+	u64Type->end = {};
+	u64Type->type = &TYPE_TYPE;
+	u64Type->typeValue = &TYPE_U64;
+
+	auto unsignedLiteralType = TYPE_NEW(ExprLiteral);
+	unsignedLiteralType->flavor = ExprFlavor::TYPE_LITERAL;
+	unsignedLiteralType->start = {};
+	unsignedLiteralType->end = {};
+	unsignedLiteralType->type = &TYPE_TYPE;
+	unsignedLiteralType->typeValue = &TYPE_UNSIGNED_INT_LITERAL;
+
+	countDeclaration = TYPE_NEW(Declaration);
+	countDeclaration->start = {};
+	countDeclaration->end = {};
+	countDeclaration->name = "count";
+	countDeclaration->type = u64Type;
+	countDeclaration->initialValue = nullptr;
+	countDeclaration->physicalStorage = 8;
+	countDeclaration->flags |= DECLARATION_IS_STRUCT_MEMBER | DECLARATION_TYPE_IS_READY;
+
+	capacityDeclaration = TYPE_NEW(Declaration);
+	capacityDeclaration->start = {};
+	capacityDeclaration->end = {};
+	capacityDeclaration->name = "capacity";
+	capacityDeclaration->type = u64Type;
+	capacityDeclaration->initialValue = nullptr;
+	capacityDeclaration->physicalStorage = 16;
+	capacityDeclaration->flags |= DECLARATION_IS_STRUCT_MEMBER | DECLARATION_TYPE_IS_READY;
 }

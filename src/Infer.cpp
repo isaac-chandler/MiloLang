@@ -61,7 +61,8 @@ Array<InferJob *> inferJobs;
 void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 	PROFILE_FUNC();
 	switch ((*expr)->flavor) {
-		case ExprFlavor::IDENTIFIER: {
+		case ExprFlavor::IDENTIFIER:
+		case ExprFlavor::USING: {
 			flattenTo.add(expr);
 			break;
 		}
@@ -2615,7 +2616,8 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 		auto expr = *exprPointer;
 
 		switch (expr->flavor) {
-			case ExprFlavor::IDENTIFIER: {
+			case ExprFlavor::IDENTIFIER:
+			case ExprFlavor::USING: {
 
 				auto identifier = static_cast<ExprIdentifier *>(expr);
 				if (!identifier->declaration) {
@@ -2636,7 +2638,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 									return false;
 								}
 
-								if (index < identifier->indexInBlock) {
+								if (declaration->indexInBlock < identifier->indexInBlock) {
 									identifier->declaration = declaration;
 									break;
 								}
@@ -3240,52 +3242,11 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 			case ExprFlavor::STRUCT_ACCESS: {
 				auto access = static_cast<ExprStructAccess *>(expr);
 
-				if (access->left->type->flavor == TypeFlavor::ARRAY) {
-					auto array = static_cast<TypeArray *>(access->left->type);
-
-					if (access->name == "count") {
-						if (array->flags & TYPE_ARRAY_IS_FIXED) {
-							ExprLiteral *literal = new ExprLiteral;
-							literal->flavor = ExprFlavor::INT_LITERAL;
-							literal->start = access->start;
-							literal->end = access->end;
-							literal->type = &TYPE_U64;
-							literal->unsignedValue = array->count;
-
-							*exprPointer = literal;
-							(*exprPointer)->valueOfDeclaration = expr->valueOfDeclaration;
-						}
-						else {
-							expr->type = &TYPE_U64;
-						}
-					}
-					else if (access->name == "data") {
-						if (array->flags & TYPE_ARRAY_IS_FIXED) {
-							*exprPointer = access->left;
-							insertImplicitCast(job, exprPointer, getPointer(array->arrayOf));
-						}
-						else {
-							expr->type = getPointer(array->arrayOf);
-						}
-					}
-					else if (access->name == "capacity") {
-						if (array->flags & TYPE_ARRAY_IS_DYNAMIC) {
-							expr->type = &TYPE_U64;
-						}
-						else {
-							reportError(access, "Error: %s do not have a capacity field", (array->flags & TYPE_ARRAY_IS_FIXED) ? "Static arrays" : "Arrays");
-							return false;
-						}
-					}
-					else {
-						reportError(access, "Error: Arrays do not have field '%.*s'", STRING_PRINTF(access->name));
-						return false;
-					}
-				}
-				else if (access->left->type->flavor == TypeFlavor::STRUCT) {
+				if (access->left->type->flavor == TypeFlavor::STRUCT || access->left->type->flavor == TypeFlavor::ARRAY) {
 					if (!access->declaration) {
 						auto struct_ = static_cast<TypeStruct *>(access->left->type);
-
+						
+						bool yield;
 						u64 index;
 						auto member = findDeclaration(&struct_->members, access->name, &index);
 
@@ -3321,49 +3282,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 				else if (access->left->type->flavor == TypeFlavor::POINTER) {
 					auto type = static_cast<TypePointer *>(access->left->type)->pointerTo;
 
-					if (type->flavor == TypeFlavor::ARRAY) {
-						auto array = static_cast<TypeArray *>(type);
-
-						if (access->name == "count") {
-							if (array->flags & TYPE_ARRAY_IS_FIXED) {
-								ExprLiteral *literal = new ExprLiteral;
-								literal->flavor = ExprFlavor::INT_LITERAL;
-								literal->start = access->start;
-								literal->end = access->end;
-								literal->type = &TYPE_U64;
-								literal->unsignedValue = array->count;
-
-								*exprPointer = literal;
-								(*exprPointer)->valueOfDeclaration = expr->valueOfDeclaration;
-							}
-							else {
-								expr->type = &TYPE_U64;
-							}
-						}
-						else if (access->name == "data") {
-							if (array->flags & TYPE_ARRAY_IS_FIXED) {
-								*exprPointer = access->left;
-								insertImplicitCast(job, exprPointer, getPointer(array->arrayOf));
-							}
-							else {
-								expr->type = getPointer(array->arrayOf);
-							}
-						}
-						else if (access->name == "capacity") {
-							if (array->flags & TYPE_ARRAY_IS_DYNAMIC) {
-								expr->type = &TYPE_U64;
-							}
-							else {
-								reportError(access, "Error: %s do not have a capacity field", (array->flags & TYPE_ARRAY_IS_FIXED) ? "Static arrays" : "Arrays");
-								return false;
-							}
-						}
-						else {
-							reportError(access, "Error: Arrays do not have field '%.*s'", STRING_PRINTF(access->name));
-							return false;
-						}
-					}
-					else if (type->flavor == TypeFlavor::STRUCT) {
+					if (type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::ARRAY) {
 						if (!access->declaration) {
 							auto struct_ = static_cast<TypeStruct *>(type);
 
@@ -3414,33 +3333,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 
 					auto type = static_cast<ExprLiteral *>(access->left)->typeValue;
 
-					if (type->flavor == TypeFlavor::ARRAY) {
-						auto array = static_cast<TypeArray *>(type);
-
-						if (type->flags & TYPE_ARRAY_IS_FIXED) {
-							if (access->name == "count") {
-								ExprLiteral *literal = new ExprLiteral;
-								literal->flavor = ExprFlavor::INT_LITERAL;
-								literal->start = access->start;
-								literal->end = access->end;
-								literal->type = &TYPE_U64;
-								literal->unsignedValue = array->count;
-
-								*exprPointer = literal;
-								(*exprPointer)->valueOfDeclaration = expr->valueOfDeclaration;
-							}
-							else {
-								reportError(access, "Error: Static array prototypes do not have field '%.*s'", STRING_PRINTF(access->name));
-								return false;
-							}
-						}
-						else {
-							reportError(access, "Error: %s prototypes do not have field '%.*s'",
-								(array->flags & TYPE_ARRAY_IS_DYNAMIC) ? "Dynamic array" : "Array", STRING_PRINTF(access->name));
-							return false;
-						}
-					}
-					else if (type->flavor == TypeFlavor::STRUCT) {
+					if (type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::ARRAY) {
 						if (!access->declaration) {
 							auto struct_ = static_cast<TypeStruct *>(type);
 
@@ -3455,7 +3348,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 							access->declaration = member;
 
 							if (!(access->declaration->flags & DECLARATION_IS_CONSTANT)) {
-								reportError(access, "Error: Can only access constant members of a struct through it's type");
+								reportError(access, "Error: Can only access constant members of %.*s through it's type", STRING_PRINTF(struct_->name));
 								return false;
 							}
 						}

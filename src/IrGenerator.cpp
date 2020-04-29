@@ -177,42 +177,26 @@ u64 loadAddressOf(IrState *state, Expr *expr, u64 dest) {
 
 		auto type = access->left->type;
 
-		if (type->flavor == TypeFlavor::POINTER) {
-			type = static_cast<TypePointer *>(type)->pointerTo;
-		}
-
-		u64 offset;
-
-		if (type->flavor == TypeFlavor::ARRAY) {
-			assert(!(type->flags & TYPE_ARRAY_IS_FIXED));
-
-			if (access->name == "data") {
-				offset = 0;
-			}
-			else if (access->name == "count") {
-				offset = 8;
-			}
-			else if (access->name == "capacity") {
-				offset = 16;
-			}
-			else {
-				assert(false);
-			}
-		}
-		else if (type->flavor == TypeFlavor::STRUCT) {
-			assert(type->size);
-			
-			offset = access->declaration->physicalStorage; // In the case of struct members, physicalStorage is the offset within the struct
-		}
 
 		u64 store;
-		
+
 		if (access->left->type->flavor == TypeFlavor::POINTER) {
 			store = generateIr(state, access->left, dest);
 		}
 		else {
 			store = loadAddressOf(state, access->left, dest);
 		}
+
+		if (type->flags & TYPE_ARRAY_IS_FIXED) { // The only struct access we will generate for fixed arrays are .data, which is just the address of the array
+			assert(access->name == "data");
+			return store;
+		}
+
+		if (type->flavor == TypeFlavor::POINTER) {
+			type = static_cast<TypePointer *>(type)->pointerTo;
+		}
+
+		u64 offset = access->declaration->physicalStorage; // In the case of struct members, physicalStorage is the offset within the struct
 
 		if (offset == 0) {
 			return store;
@@ -1691,6 +1675,9 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			}
 
 			return dest;
+		}
+		case ExprFlavor::USING: {
+			return DEST_NONE;
 		}
 		default:
 			assert(false);

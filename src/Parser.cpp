@@ -22,14 +22,17 @@ Block *currentBlock = nullptr;
 bool addDeclarationToBlock(Block *block, Declaration *declaration) {
 	assert(block);
 	assert(declaration);
-
-	for (auto previous : block->declarations) {
-		if (previous->name == declaration->name) {
-			reportError(declaration, "Error: Cannot redeclare variable '%.*s' within the same scope", STRING_PRINTF(declaration->name));
-			reportError(previous, "   ..: Here is the location it was declared");
+	
+	if (declaration->name.length) { // Multiple zero length names are used in the arguments block for function prototypes with unnamed arguments
+		for (auto previous : block->declarations) {
+			if (previous->name == declaration->name) {
+				reportError(declaration, "Error: Cannot redeclare variable '%.*s' within the same scope", STRING_PRINTF(declaration->name));
+				reportError(previous, "   ..: Here is the location it was declared");
+			}
 		}
 	}
 
+	declaration->indexInBlock = block->declarations.count;
 	block->declarations.add(declaration);
 	declaration->enclosingScope = block;
 
@@ -595,6 +598,58 @@ ExprBlock *parseBlock(LexerFile *lexer) {
 		else if (expectAndConsume(lexer, '}')) {
 			break;
 		}
+		else if (lexer->token.type == TokenT::USING) {
+			TokenT peek[2];
+			lexer->peekTokenTypes(2, peek);
+
+			if (peek[1] == TOKEN(':')) { // It is a declaration
+				Declaration *declaration = parseDeclaration(lexer);
+
+				if (!declaration)
+					return nullptr;
+
+				if (!addDeclarationToCurrentBlock(declaration)) {
+					return nullptr;
+				}
+
+				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_UNINITIALIZED))) { // If this declaration is constant or uninitialized don't add an initialization expression
+					ExprBinaryOperator *assign = PARSER_NEW(ExprBinaryOperator);
+					assign->start = declaration->start;
+					assign->end = declaration->end;
+					assign->flavor = ExprFlavor::BINARY_OPERATOR;
+					assign->op = TOKEN('=');
+					assign->left = makeIdentifier(declaration->start, declaration->end, declaration);
+					assign->right = nullptr;
+					assign->flags |= EXPR_ASSIGN_IS_IMPLICIT_INITIALIZER;
+
+					block->exprs.add(assign);
+				}
+
+			}
+			else {
+				auto start = lexer->token.start;
+
+				lexer->advance();
+
+				if (lexer->token.type != TokenT::IDENTIFIER) {
+					reportExpectedError(&lexer->token, "Error: Expected namespace name to import from after using");
+				}
+
+				auto using_ = new ExprIdentifier;
+				using_->flavor = ExprFlavor::USING;
+				using_->start = start;
+				using_->end = lexer->token.end;
+				using_->resolveFrom = currentBlock;
+				using_->indexInBlock = currentBlock->declarations.count;
+				using_->name = lexer->token.text;
+				
+				lexer->advance();
+
+				block->exprs.add(using_);
+			}
+
+			continue;
+		}
 		else if (lexer->token.type == TokenT::IDENTIFIER) { // This could be an expression or a declaration
 			TokenT peek;
 			lexer->peekTokenTypes(1, &peek);
@@ -956,10 +1011,9 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 					argument->end = expr->end;
 					argument->name = String(nullptr, 0ULL);
 					argument->initialValue = nullptr;
-					argument->enclosingScope = &type->arguments;
 					argument->flags |= DECLARATION_IS_ARGUMENT;
 
-					type->arguments.declarations.add(argument);
+					addDeclarationToBlock(&type->arguments, argument);
 
 					popBlock(&type->arguments);
 
@@ -980,10 +1034,9 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 				argument->end = expr->end;
 				argument->name = String(nullptr, 0ULL);
 				argument->initialValue = nullptr;
-				argument->enclosingScope = &type->arguments;
 				argument->flags |= DECLARATION_IS_ARGUMENT;
 
-				type->arguments.declarations.add(argument);
+				addDeclarationToBlock(&type->arguments, argument);
 
 
 
@@ -998,10 +1051,9 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 					argument->end = arg->end;
 					argument->name = String(nullptr, 0ULL);
 					argument->initialValue = nullptr;
-					argument->enclosingScope = &type->arguments;
 					argument->flags |= DECLARATION_IS_ARGUMENT;
 
-					type->arguments.declarations.add(argument);
+					addDeclarationToBlock(&type->arguments, argument);
 				} while (expectAndConsume(lexer, ','));
 
 				popBlockWithoutQueueing(&type->arguments);
@@ -1626,15 +1678,19 @@ Expr *parseExpr(LexerFile *lexer) {
 Declaration *parseDeclaration(LexerFile *lexer) {
 	PROFILE_FUNC();
 
-	if (lexer->token.type != TokenT::IDENTIFIER) {
-		reportExpectedError(&lexer->token, "Error: Expected declaration name");
-		return nullptr;
-	}
-
 	Declaration *declaration = PARSER_NEW(Declaration);
 	declaration->flags = 0;
 	declaration->name = lexer->token.text;
 	declaration->start = lexer->token.start;
+
+	if (expectAndConsume(lexer, TokenT::USING)) {
+		declaration->flags |= DECLARATION_IS_USING;
+	}
+
+	if (lexer->token.type != TokenT::IDENTIFIER) {
+		reportExpectedError(&lexer->token, "Error: Expected declaration name");
+		return nullptr;
+	}
 	lexer->advance();
 
 	if (!expectAndConsume(lexer, ':')) {

@@ -149,7 +149,8 @@ enum class ExprFlavor : u8 {
 	IF, 
 
 	FUNCTION_PROTOTYPE, 
-	STRUCT_DEFAULT
+	STRUCT_DEFAULT, 
+	USING
 };
 
 struct Declaration;
@@ -297,6 +298,7 @@ struct ExprIf : Expr {
 #define DECLARATION_IS_ARGUMENT 0x40
 #define DECLARATION_HAS_STORAGE 0x80
 #define DECLARATION_IS_STRUCT_MEMBER 0x100
+#define DECLARATION_IS_USING 0x200
 
 
 struct Declaration {
@@ -306,6 +308,7 @@ struct Declaration {
 	Expr *type;
 	Expr *initialValue;
 	Block *enclosingScope;
+	u64 indexInBlock;
 
 	struct InferJob *inferJob;
 
@@ -313,5 +316,5 @@ struct Declaration {
 	u64 physicalStorage;
 
 	u64 flags = 0;
-	
+
 };

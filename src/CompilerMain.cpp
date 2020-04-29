@@ -320,6 +320,7 @@ int main(int argc, char *argv[]) {
 	if (!hadError) {
 		char buffer[1024];
 		
+		// use this: https://gist.github.com/andrewrk/ffb272748448174e6cdb4958dae9f3d8
 		strcpy_s(buffer, "\"C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Community\\VC\\Tools\\MSVC\\14.25.28610\\bin\\Hostx64\\x64\\link.exe\" out.obj /debug /entry:main kernel32.lib user32.lib gdi32.lib opengl32.lib \"/libpath:C:\\Program Files (x86)\\Windows Kits\\10\\lib\\10.0.18362.0\\um\\x64\" /incremental:no /nologo");
 
 		printf("Linker command: %s\n", buffer);
