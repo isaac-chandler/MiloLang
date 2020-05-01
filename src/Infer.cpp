@@ -1942,6 +1942,9 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 						}
 
 						expr->type = &TYPE_S64;
+						auto pointer = static_cast<TypePointer *>(left->type);
+
+						addSizeDependency(job, pointer->pointerTo);
 
 						break;
 					}
@@ -1963,6 +1966,9 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 				}
 				else if (left->type->flavor == TypeFlavor::POINTER && right->type->flavor == TypeFlavor::INTEGER) {
 					trySolidifyNumericLiteralToDefault(right);
+					auto pointer = static_cast<TypePointer *>(left->type);
+
+					addSizeDependency(job, pointer->pointerTo);
 				}
 				else if (!binaryOpForFloatAndIntLiteral(exprPointer)) {
 					return false;
@@ -2267,6 +2273,9 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 
 				if (left->type->flavor == TypeFlavor::POINTER && right->type->flavor == TypeFlavor::INTEGER) {
 					trySolidifyNumericLiteralToDefault(right);
+					auto pointer = static_cast<TypePointer *>(left->type);
+
+					addSizeDependency(job, pointer->pointerTo);
 				}
 				else if (right->type != left->type) {
 					reportError(binary, "Error: Cannot %s %.*s to %.*s",
