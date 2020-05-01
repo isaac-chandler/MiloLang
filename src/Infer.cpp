@@ -61,8 +61,13 @@ Array<InferJob *> inferJobs;
 void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 	PROFILE_FUNC();
 	switch ((*expr)->flavor) {
-		case ExprFlavor::IDENTIFIER:
-		case ExprFlavor::USING: {
+		case ExprFlavor::IDENTIFIER: {
+			auto identifier = static_cast<ExprIdentifier *>(*expr);
+
+			if (identifier->structAccess) {
+				flatten(flattenTo, &identifier->structAccess);
+			}
+
 			flattenTo.add(expr);
 			break;
 		}
@@ -192,14 +197,6 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 			if (return_->value)
 				flatten(flattenTo, &return_->value);
 
-			flattenTo.add(expr);
-
-			break;
-		}
-		case ExprFlavor::STRUCT_ACCESS: {
-			ExprStructAccess *access = static_cast<ExprStructAccess *>(*expr);
-
-			flatten(flattenTo, &access->left);
 			flattenTo.add(expr);
 
 			break;
@@ -1197,22 +1194,23 @@ bool assignOpForFloatAndIntLiteral(ExprBinaryOperator *binary) {
 }
 
 bool isAssignable(Expr *expr) {
-	if (expr->flavor == ExprFlavor::IDENTIFIER ||
-		(expr->flavor == ExprFlavor::UNARY_OPERATOR && static_cast<ExprUnaryOperator *>(expr)->op == TokenT::SHIFT_LEFT) ||
+	if ((expr->flavor == ExprFlavor::UNARY_OPERATOR && static_cast<ExprUnaryOperator *>(expr)->op == TokenT::SHIFT_LEFT) ||
 		(expr->flavor == ExprFlavor::BINARY_OPERATOR && static_cast<ExprBinaryOperator *>(expr)->op == TOKEN('['))) {
 		return true;
 	}
-	else if (expr->flavor == ExprFlavor::STRUCT_ACCESS) {
-		auto access = static_cast<ExprStructAccess *>(expr);
+	else if (expr->flavor == ExprFlavor::IDENTIFIER) {
+		auto access = static_cast<ExprIdentifier *>(expr)->structAccess;
 
-		if (access->left->type->flavor == TypeFlavor::ARRAY) {
-			return !(access->left->type->flags & TYPE_ARRAY_IS_FIXED) && isAssignable(access->left);
+		if (!access) return true;
+
+		if (access->type->flavor == TypeFlavor::ARRAY) {
+			return !(access->type->flags & TYPE_ARRAY_IS_FIXED) && isAssignable(access);
 		}
-		else if (access->left->type->flavor == TypeFlavor::STRUCT) {
-			return isAssignable(access->left);
+		else if (access->type->flavor == TypeFlavor::STRUCT) {
+			return isAssignable(access);
 		}
-		else if (access->left->type->flavor == TypeFlavor::POINTER) {
-			auto pointer = static_cast<TypePointer *>(access->left->type);
+		else if (access->type->flavor == TypeFlavor::POINTER) {
+			auto pointer = static_cast<TypePointer *>(access->type);
 
 			return !(pointer->pointerTo->flags & TYPE_ARRAY_IS_FIXED);
 		}
@@ -1573,24 +1571,23 @@ bool assignOp(InferJob *job, Expr *location, Type *correct, Expr *&given) {
 }
 
 bool isAddressable(Expr *expr) {
-	if (expr->flavor == ExprFlavor::IDENTIFIER) {
-		return true;
-	}
-	else if (expr->flavor == ExprFlavor::BINARY_OPERATOR) {
+	if (expr->flavor == ExprFlavor::BINARY_OPERATOR) {
 		return static_cast<ExprBinaryOperator *>(expr)->op == TOKEN('[');
 	}
-	else if (expr->flavor == ExprFlavor::STRUCT_ACCESS) {
-		auto access = static_cast<ExprStructAccess *>(expr);
+	else if (expr->flavor == ExprFlavor::IDENTIFIER) {
+		auto access = static_cast<ExprIdentifier *>(expr)->structAccess;
 
-		if (access->left->type->flavor == TypeFlavor::POINTER) {
-			auto pointer = static_cast<TypePointer *>(access->left->type);
+		if (!access) return true;
+
+		if (access->type->flavor == TypeFlavor::POINTER) {
+			auto pointer = static_cast<TypePointer *>(access->type);
 			return !(pointer->pointerTo->flags & TYPE_ARRAY_IS_FIXED);
 		}
-		else if (access->left->type->flavor == TypeFlavor::ARRAY) {
-			return !(access->left->type->flags & TYPE_ARRAY_IS_FIXED) && isAddressable(access->left);
+		else if (access->type->flavor == TypeFlavor::ARRAY) {
+			return !(access->type->flags & TYPE_ARRAY_IS_FIXED) && isAddressable(access);
 		}
 		else {
-			return isAddressable(access->left);
+			return isAddressable(access);
 		}
 	}
 	else {
@@ -2608,6 +2605,69 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 	return true;
 }
 
+TypeStruct *getExpressionNamespace(Expr *expr, bool *onlyConstants, Expr *location) {
+	if (expr->type->flavor == TypeFlavor::STRUCT || expr->type->flavor == TypeFlavor::ARRAY) {
+		*onlyConstants = false;
+		return static_cast<TypeStruct *>(expr->type);
+	}
+	else if (expr->type->flavor == TypeFlavor::POINTER) {
+		auto type = static_cast<TypePointer *>(expr->type)->pointerTo;
+
+		if (type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::ARRAY) {
+			*onlyConstants = false;
+			return static_cast<TypeStruct *>(type);
+		}
+		else {
+			reportError(location, "Error: A %.*s does not have fields", STRING_PRINTF(expr->type->name));
+			return nullptr;
+		}
+	}
+	else if (expr->type->flavor == TypeFlavor::TYPE) {
+		if (expr->flavor != ExprFlavor::TYPE_LITERAL) {
+			reportError(location, "Error: Cannot access the fields of a non-constant type");
+			return nullptr;
+		}
+
+		auto type = static_cast<ExprLiteral *>(expr)->typeValue;
+
+		if (type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::ARRAY) {
+			*onlyConstants = true;
+			return static_cast<TypeStruct *>(type);
+		}
+		else {
+			reportError(location, "Error: A %.*s prototype does not have fields", STRING_PRINTF(type->name));
+			return nullptr;
+		}
+	}
+	else {
+		reportError(location, "Error: A %.*s does not have fields", STRING_PRINTF(expr->type->name));
+		return nullptr;
+	}
+}
+
+ExprIdentifier *pushStructAccessDown(ExprIdentifier *accesses, Expr *base, CodeLocation start, EndLocation end) {
+	auto result = new ExprIdentifier;
+	auto current = result;
+
+	while (true) {
+		*current = *accesses;
+		current->start = start;
+		current->end = end;
+
+		if (current->structAccess) {
+			current->structAccess = new ExprIdentifier;
+			current = static_cast<ExprIdentifier *>(current->structAccess);
+
+			assert(accesses->structAccess->flavor == ExprFlavor::IDENTIFIER);
+			accesses = static_cast<ExprIdentifier *>(accesses->structAccess);
+		}
+		else {
+			current->structAccess = base;
+			return result;
+		}
+	}
+}
+
 bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 	PROFILE_FUNC();
 
@@ -2616,53 +2676,104 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 		auto expr = *exprPointer;
 
 		switch (expr->flavor) {
-			case ExprFlavor::IDENTIFIER:
-			case ExprFlavor::USING: {
+			case ExprFlavor::IDENTIFIER: {
 
 				auto identifier = static_cast<ExprIdentifier *>(expr);
 				if (!identifier->declaration) {
+					if (identifier->structAccess) {
+						bool onlyConstants;
+						auto struct_ = getExpressionNamespace(identifier->structAccess, &onlyConstants, identifier);
 
-					for (; identifier->resolveFrom; identifier->resolveFrom = identifier->resolveFrom->parentBlock) {
-						if (!(identifier->resolveFrom->flags & BLOCK_IS_COMPLETE)) break;
+						if (!struct_) {
+							return false;
+						}
 
-
+						bool yield;
 						u64 index;
-						if (Declaration *declaration = findDeclaration(identifier->resolveFrom, identifier->name, &index)) {
-							if (declaration->flags & DECLARATION_IS_CONSTANT) {
-								identifier->declaration = declaration;
-								break;
-							}
-							else {
-								if (identifier->flags & EXPR_IDENTIFIER_RESOLVING_IN_OUTER_FUNCTION) {
-									reportError(identifier, "Error: Cannot refer to %s from outer function, capture is not supported", (identifier->declaration->flags & DECLARATION_IS_ARGUMENT) ? "argument" : "variable");
-									return false;
-								}
+						auto member = findDeclaration(&struct_->members, identifier->name, &index, &yield);
 
-								if (declaration->indexInBlock < identifier->indexInBlock) {
+						if (yield) {
+							return true;
+						}
+
+						if (!member) {
+							reportError(identifier, "Error: %.*s does not have member %.*s", STRING_PRINTF(struct_->name), STRING_PRINTF(identifier->name));
+							return false;
+						}
+						else if (onlyConstants & !(member->flags & DECLARATION_IS_CONSTANT)) {
+							reportError(identifier, "Error: Can only access constant members of %.*s from it's prototype", STRING_PRINTF(struct_->name));
+							return false;
+						}
+						identifier->declaration = member;
+
+						addSizeDependency(job, struct_);
+					}
+					else {
+						for (; identifier->resolveFrom; identifier->resolveFrom = identifier->resolveFrom->parentBlock) {
+							if (!(identifier->resolveFrom->flags & BLOCK_IS_COMPLETE)) break;
+
+							bool yield;
+							u64 index;
+							if (Declaration *declaration = findDeclaration(identifier->resolveFrom, identifier->name, &index, &yield, identifier->indexInBlock)) {
+								if (declaration->flags & DECLARATION_IS_CONSTANT) {
 									identifier->declaration = declaration;
 									break;
 								}
 								else {
-									reportError(identifier, "Error: Cannot refer to variable '%.*s' before it was declared", STRING_PRINTF(identifier->name));
-									reportError(identifier->declaration, "   ..: Here is the location of the declaration");
-									return false;
+									if ((identifier->flags & EXPR_IDENTIFIER_RESOLVING_ONLY_CONSTANTS) && !(identifier->flags & EXPR_VALUE_NOT_REQUIRED)) {
+										reportError(identifier, "Error: Cannot refer to %s from outside, capture is not supported", (identifier->declaration->flags & DECLARATION_IS_ARGUMENT) ? "argument" : "variable");
+										return false;
+									}
+
+									if (declaration->indexInBlock < identifier->indexInBlock) {
+										identifier->declaration = declaration;
+										break;
+									}
+									else {
+										reportError(identifier, "Error: Cannot refer to variable '%.*s' before it was declared", STRING_PRINTF(identifier->name));
+										reportError(identifier->declaration, "   ..: Here is the location of the declaration");
+										return false;
+									}
 								}
 							}
+							else if (yield) {
+								return true;
+							}
+
+							identifier->indexInBlock = identifier->resolveFrom->indexInParent;
+
+							if (identifier->resolveFrom->flags & (BLOCK_IS_ARGUMENTS | BLOCK_IS_STRUCT))
+								identifier->flags |= EXPR_IDENTIFIER_RESOLVING_ONLY_CONSTANTS;
 						}
 
-						identifier->indexInBlock = identifier->resolveFrom->indexInParent;
+						if (!identifier->resolveFrom && !identifier->declaration) { // If we have checked all the local scopes and the
+							bool yield;
+							u64 index;
+							identifier->declaration = findDeclaration(&globalBlock, identifier->name, &index, &yield);
 
-						if (identifier->resolveFrom->flags & BLOCK_IS_ARGUMENTS)
-							identifier->flags |= EXPR_IDENTIFIER_RESOLVING_IN_OUTER_FUNCTION;
-					}
-
-					if (!identifier->resolveFrom && !identifier->declaration) { // If we have checked all the local scopes and the
-						u64 index;
-						identifier->declaration = findDeclaration(&globalBlock, identifier->name, &index);
+							assert(!yield); // The global scope should never request a yield
+						}
 					}
 				}
 
 				if (identifier->declaration) {
+					if ((identifier->declaration->flags & DECLARATION_IMPORTED_BY_USING) && !(identifier->declaration->flags & DECLARATION_IS_CONSTANT)) {
+						auto current = static_cast<ExprIdentifier *>(identifier->declaration->initialValue);
+
+						if (job) {
+							while (current->structAccess) {
+								bool onlyConstants;
+								addSizeDependency(job, getExpressionNamespace(current->structAccess, &onlyConstants, current->structAccess));
+
+								current = static_cast<ExprIdentifier *>(current->structAccess);
+								assert(current->flavor == ExprFlavor::IDENTIFIER);
+							}
+						}
+
+						identifier->structAccess = pushStructAccessDown(static_cast<ExprIdentifier *>(identifier->declaration->initialValue), identifier->structAccess, identifier->start, identifier->end);
+						identifier->declaration = identifier->declaration->import;
+					}
+
 					if (identifier->flags & EXPR_IDENTIFIER_IS_BREAK_OR_CONTINUE_LABEL) {
 						// We shouldn't bother resolving types they aren't needed
 						// Replacing a constant would mean we have to check if the label
@@ -2671,6 +2782,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 
 					}
 					else {
+
 						if (identifier->declaration->flags & DECLARATION_IS_ITERATOR) {
 							auto loop = CAST_FROM_SUBSTRUCT(ExprLoop, iteratorBlock, identifier->declaration->enclosingScope);
 							assert(loop->flavor == ExprFlavor::WHILE || loop->flavor == ExprFlavor::FOR);
@@ -2685,7 +2797,6 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 						if (identifier->declaration->flags & DECLARATION_TYPE_IS_READY) {
 							if (!identifier->type) {
 								identifier->type = getDeclarationType(identifier->declaration);
-
 								addSizeDependency(job, identifier->type);
 							}
 						}
@@ -2701,6 +2812,8 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 								return true;
 							}
 						}
+
+						
 					}
 				}
 				else {
@@ -2814,7 +2927,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 				auto block = static_cast<ExprBlock *>(expr);
 
 				for (auto declaration : block->declarations.declarations) {
-					if (!(declaration->flags & DECLARATION_IS_CONSTANT)) {
+					if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_USING | DECLARATION_IMPORTED_BY_USING))) {
 						if (!(declaration->flags & DECLARATION_TYPE_IS_READY)) {
 							return true;
 						}
@@ -2823,7 +2936,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 
 				// Do two passes over the array because if the first pass added dependencies on some declarations then yielded, it would add them again next time round
 				for (auto declaration : block->declarations.declarations) {
-					if (!(declaration->flags & DECLARATION_IS_CONSTANT)) {
+					if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_USING | DECLARATION_IMPORTED_BY_USING))) {
 						addSizeDependency(job, static_cast<ExprLiteral *>(declaration->type)->typeValue);
 					}
 				}
@@ -3130,7 +3243,11 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 					for (u64 i = 0; i < call->argumentCount; i++) {
 						u64 argIndex = i;
 						if (call->argumentNames[i].length) {
-							auto argument = findDeclaration(&functionForArgumentNames->arguments, call->argumentNames[i], &argIndex);
+							bool yield;
+							auto argument = findDeclaration(&functionForArgumentNames->arguments, call->argumentNames[i], &argIndex, &yield);
+							assert(!(argument->flags & DECLARATION_IMPORTED_BY_USING));
+
+							assert(!yield); // Arguments should never yield as there are no 'using's in the arguments block
 
 							if (!argument) {
 								reportError(call->arguments[i], "Error: %.*s does not have an argument called %.*s", STRING_PRINTF(functionName), STRING_PRINTF(call->argumentNames[i]));
@@ -3235,151 +3352,6 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 					if (!assignOp(job, return_, returnType, return_->value)) {
 						return false;
 					}
-				}
-
-				break;
-			}
-			case ExprFlavor::STRUCT_ACCESS: {
-				auto access = static_cast<ExprStructAccess *>(expr);
-
-				if (access->left->type->flavor == TypeFlavor::STRUCT || access->left->type->flavor == TypeFlavor::ARRAY) {
-					if (!access->declaration) {
-						auto struct_ = static_cast<TypeStruct *>(access->left->type);
-						
-						bool yield;
-						u64 index;
-						auto member = findDeclaration(&struct_->members, access->name, &index);
-
-						if (!member) {
-							reportError(access, "Error: %.*s does not have member %.*s", STRING_PRINTF(struct_->name), STRING_PRINTF(access->name));
-							return false;
-						}
-
-						access->declaration = member;
-
-						// If we have a struct by value as the left, it should already be added as a size dependency 
-					}
-
-
-					if (access->declaration->flags & DECLARATION_TYPE_IS_READY) {
-						expr->type = static_cast<ExprLiteral *>(access->declaration->type)->typeValue;
-					}
-					else {
-						return true;
-					}
-
-					if (access->declaration->flags & DECLARATION_IS_CONSTANT) {
-						if (access->declaration->flags & DECLARATION_VALUE_IS_READY) {
-							copyLiteral(exprPointer, access->declaration->initialValue);
-						}
-						else {
-							return true;
-						}
-					}
-
-					addSizeDependency(job, expr->type);
-				}
-				else if (access->left->type->flavor == TypeFlavor::POINTER) {
-					auto type = static_cast<TypePointer *>(access->left->type)->pointerTo;
-
-					if (type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::ARRAY) {
-						if (!access->declaration) {
-							auto struct_ = static_cast<TypeStruct *>(type);
-
-							u64 index;
-							auto member = findDeclaration(&struct_->members, access->name, &index);
-
-							if (!member) {
-								reportError(access, "Error: %.*s does not have member %.*s", STRING_PRINTF(struct_->name), STRING_PRINTF(access->name));
-								return false;
-							}
-
-							access->declaration = member;
-
-							if (!(access->declaration->flags & DECLARATION_IS_CONSTANT)) {
-								addSizeDependency(job, type); // In order to know the offset to access the struct must have been sized
-							}
-						}
-
-
-						if (access->declaration->flags & DECLARATION_TYPE_IS_READY) {
-							expr->type = static_cast<ExprLiteral *>(access->declaration->type)->typeValue;
-						}
-						else {
-							return true;
-						}
-
-						if (access->declaration->flags & DECLARATION_IS_CONSTANT) {
-							if (access->declaration->flags & DECLARATION_VALUE_IS_READY) {
-								copyLiteral(exprPointer, access->declaration->initialValue);
-							}
-							else {
-								return true;
-							}
-						}
-
-						addSizeDependency(job, expr->type);
-					}
-					else {
-						reportError(access, "Error: A %.*s does not have fields", STRING_PRINTF(access->left->type->name));
-						return false;
-					}
-				}
-				else if (access->left->type->flavor == TypeFlavor::TYPE) {
-					if (access->left->flavor != ExprFlavor::TYPE_LITERAL) {
-						reportError(access, "Error: Cannot access the fields of a non-constant type");
-						return false;
-					}
-
-					auto type = static_cast<ExprLiteral *>(access->left)->typeValue;
-
-					if (type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::ARRAY) {
-						if (!access->declaration) {
-							auto struct_ = static_cast<TypeStruct *>(type);
-
-							u64 index;
-							auto member = findDeclaration(&struct_->members, access->name, &index);
-
-							if (!member) {
-								reportError(access, "Error: %.*s does not have member %.*s", STRING_PRINTF(struct_->name), STRING_PRINTF(access->name));
-								return false;
-							}
-
-							access->declaration = member;
-
-							if (!(access->declaration->flags & DECLARATION_IS_CONSTANT)) {
-								reportError(access, "Error: Can only access constant members of %.*s through it's type", STRING_PRINTF(struct_->name));
-								return false;
-							}
-						}
-
-
-						if (access->declaration->flags & DECLARATION_TYPE_IS_READY) {
-							expr->type = static_cast<ExprLiteral *>(access->declaration->type)->typeValue;
-						}
-						else {
-							return true;
-						}
-
-						assert(access->declaration->flags & DECLARATION_IS_CONSTANT);
-
-						if (access->declaration->flags & DECLARATION_VALUE_IS_READY) {
-							*exprPointer = access->declaration->initialValue;
-						}
-						else {
-							return true;
-						}
-
-						addSizeDependency(job, expr->type);
-					}
-					else {
-						reportError(access, "Error: A %.*s prototype does not have fields", STRING_PRINTF(type->name));
-						return false;
-					}
-				}
-				else {
-					reportError(access, "Error: A %.*s does not have fields", STRING_PRINTF(access->left->type->name));
-					return false;
 				}
 
 				break;
@@ -3592,17 +3564,12 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 								return false;
 							}
 						}
-						else if (value->flavor == ExprFlavor::STRUCT_ACCESS) {
+						else if (value->flavor == ExprFlavor::IDENTIFIER) {
 							if (!isAddressable(value)) {
 								reportError(value, "Error: Cannot take an address to something that has no storage");
 								return false;
 							}
 
-							auto pointer = getPointer(value->type);
-
-							unary->type = pointer;
-						}
-						else if (value->flavor == ExprFlavor::IDENTIFIER) {
 							checkedRemoveLastSizeDependency(job, value->type);
 
 							auto pointer = getPointer(value->type);
@@ -3707,10 +3674,6 @@ bool addDeclaration(Declaration *declaration) {
 	}
 
 	inferJobs.add(job);
-
-	if (inferJobs.count > 1) {
-		std::swap(inferJobs.storage[0], inferJobs.storage[inferJobs.count - 1]);
-	}
 
 	return true;
 }
@@ -3912,7 +3875,7 @@ void runInfer() {
 							}
 						}
 
-						if (!(declaration->flags & DECLARATION_TYPE_IS_READY) && declaration->type && job->typeFlattenedIndex == job->typeFlattened.count) {
+						if (!(declaration->flags & (DECLARATION_TYPE_IS_READY | DECLARATION_IS_USING)) && declaration->type && job->typeFlattenedIndex == job->typeFlattened.count) {
 							if (declaration->type->type != &TYPE_TYPE) {
 								if (declaration->type->type->flavor == TypeFlavor::FUNCTION) {
 									reportError(declaration->type, "Error: Declaration type cannot be a function, did you miss a colon?");
@@ -3936,7 +3899,7 @@ void runInfer() {
 							declaration->flags |= DECLARATION_TYPE_IS_READY;
 						}
 
-						if (declaration->type && declaration->initialValue) {
+						if (!(declaration->flags & DECLARATION_IS_USING) && declaration->type && declaration->initialValue) {
 							if (job->typeFlattenedIndex == job->typeFlattened.count && job->valueFlattenedIndex == job->valueFlattened.count) {
 								assert(declaration->initialValue->type);
 
@@ -3968,7 +3931,8 @@ void runInfer() {
 								}
 							}
 						}
-						else if (declaration->type) {
+						else if (!(declaration->flags & DECLARATION_IS_USING) && declaration->type) {
+
 							if (job->typeFlattenedIndex == job->typeFlattened.count) {
 								if (!(declaration->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_ITERATOR | DECLARATION_IS_ITERATOR_INDEX | DECLARATION_IS_ARGUMENT))) {
 									auto type = static_cast<ExprLiteral *>(declaration->type)->typeValue;
@@ -4005,45 +3969,122 @@ void runInfer() {
 						}
 						else if (declaration->initialValue) {
 							if (job->valueFlattenedIndex == job->valueFlattened.count) {
-								assert(declaration->initialValue->type);
-								
-								if (!(declaration->flags & DECLARATION_IS_CONSTANT)) {
-									trySolidifyNumericLiteralToDefault(declaration->initialValue);
-								}
+								if (declaration->flags & DECLARATION_IS_USING) {
+									bool onlyConstants;
+									auto struct_ = getExpressionNamespace(declaration->initialValue , &onlyConstants, declaration->initialValue);
 
-								if (declaration->initialValue->type == &TYPE_VOID) {
-									reportError(declaration->type, "Error: Declaration cannot have type void");
-									goto error;
-								}
-								else if (declaration->initialValue->type == &TYPE_AUTO_CAST) {
-									reportError(declaration->type, "Error: Cannot infer the type of a declaration if the value is an auto cast");
-									goto error;
-								}
+									onlyConstants |= (declaration->flags & DECLARATION_IS_CONSTANT) != 0;
 
-								declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, declaration->initialValue->type);
-
-								if ((declaration->flags &
-									(DECLARATION_IS_CONSTANT | DECLARATION_IS_ARGUMENT | DECLARATION_IS_STRUCT_MEMBER)) || declaration->enclosingScope == &globalBlock) {
-									if (!isLiteral(declaration->initialValue)) {
-										reportError(declaration->type, "Error: Declaration value must be a constant");
+									if (!struct_) {
 										goto error;
 									}
-								}
-
-								madeProgress = true;
 
 
-								inferJobs.unordered_remove(i--);
 
-								declaration->flags |= DECLARATION_VALUE_IS_READY;
-								declaration->flags |= DECLARATION_TYPE_IS_READY;
+									if (declaration->initialValue->flavor != ExprFlavor::TYPE_LITERAL) {
+										auto identifier = static_cast<ExprIdentifier *>(declaration->initialValue);
 
+										while (identifier) {
+											if (identifier->flavor != ExprFlavor::IDENTIFIER) {
+												reportError(declaration->initialValue, "Error: You can only 'using' an identifier, a struct access of an identifier or a type");
+												goto error;
+											}
 
-								if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
-									waitingOnSize.add(job);
+											identifier = static_cast<ExprIdentifier *>(identifier->structAccess);
+										}
+
+										declaration->initialValue = pushStructAccessDown(static_cast<ExprIdentifier *>(declaration->initialValue), declaration->type, declaration->start, declaration->end);
+									}
+
+									for (auto member : struct_->members.declarations) {
+										if (checkForRedeclaration(declaration->enclosingScope, member, declaration->initialValue)) {
+											if (!(member->flags & DECLARATION_IMPORTED_BY_USING)) {
+												if (!onlyConstants || (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_USING))) {
+													auto import = new Declaration;
+													import->start = member->start;
+													import->end = member->end;
+													import->name = member->name;
+													import->enclosingScope = declaration->enclosingScope;
+													import->indexInBlock = declaration->indexInBlock;
+													import->flags = member->flags;
+
+													if (member->flags & DECLARATION_IS_USING) {
+														if (onlyConstants) {
+															import->flags |= DECLARATION_IS_CONSTANT;
+														}
+
+														import->initialValue = member->initialValue;
+														import->type = declaration->initialValue;
+
+														addDeclaration(import);
+													}
+													else {
+														if (member->flags & DECLARATION_IS_CONSTANT) {
+															import->type = member->type;
+															import->initialValue = member->initialValue;
+														}
+														else {
+															import->import = member;
+															import->initialValue = declaration->initialValue;
+														}
+
+														import->flags |= DECLARATION_IMPORTED_BY_USING;
+													}
+
+													declaration->enclosingScope->declarations.add(import);
+												}
+											}
+										}
+										else {
+											goto error;
+										}
+									}
+
+									declaration->flags |= DECLARATION_USING_IS_RESOLVED;
+									inferJobs.unordered_remove(i--);
+									freeJob(job);
 								}
 								else {
-									freeJob(job);
+									assert(declaration->initialValue->type);
+
+									if (!(declaration->flags & DECLARATION_IS_CONSTANT)) {
+										trySolidifyNumericLiteralToDefault(declaration->initialValue);
+									}
+
+									if (declaration->initialValue->type == &TYPE_VOID) {
+										reportError(declaration->type, "Error: Declaration cannot have type void");
+										goto error;
+									}
+									else if (declaration->initialValue->type == &TYPE_AUTO_CAST) {
+										reportError(declaration->type, "Error: Cannot infer the type of a declaration if the value is an auto cast");
+										goto error;
+									}
+
+									declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, declaration->initialValue->type);
+
+									if ((declaration->flags &
+										(DECLARATION_IS_CONSTANT | DECLARATION_IS_ARGUMENT | DECLARATION_IS_STRUCT_MEMBER)) || declaration->enclosingScope == &globalBlock) {
+										if (!isLiteral(declaration->initialValue)) {
+											reportError(declaration->type, "Error: Declaration value must be a constant");
+											goto error;
+										}
+									}
+
+									madeProgress = true;
+
+
+									inferJobs.unordered_remove(i--);
+
+									declaration->flags |= DECLARATION_VALUE_IS_READY;
+									declaration->flags |= DECLARATION_TYPE_IS_READY;
+
+
+									if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
+										waitingOnSize.add(job);
+									}
+									else {
+										freeJob(job);
+									}
 								}
 							}
 						}
@@ -4059,7 +4100,7 @@ void runInfer() {
 							while (job->sizingIndexInMembers < struct_->members.declarations.count) {
 								auto member = struct_->members.declarations[job->sizingIndexInMembers];
 
-								if (!(member->flags & DECLARATION_IS_CONSTANT)) {
+								if (!(member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_USING | DECLARATION_IMPORTED_BY_USING))) {
 									if (!(member->flags & DECLARATION_TYPE_IS_READY))
 										break;
 

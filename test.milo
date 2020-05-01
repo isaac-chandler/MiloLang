@@ -1,141 +1,9 @@
-#load "windows.milo"
+#load "standard.milo"
 #load "gl.milo"
 
-copy_string :: (s: string) -> string {
-	memory: *u8 = allocate(string_length(s) + 1)
-	
-	buf := memory
-	
-	for s {
-		<< memory = it
-		memory += 1
-	}
-	
-	<< memory = 0
-	
-	return cast() buf
-}
-
-args: []string
-
 ListNode :: struct {
-	value: string;
-	next: *ListNode;
-}
-
-min :: (a: u64, b: u64) -> u64 {
-	if a < b 
-		return a
-	else 
-		return b
-}
-
-max :: (a: u64, b: u64) -> u64 {
-	if a > b 
-		return a
-	else 
-		return b
-}
-
-add_string :: (array: *[..] string, value: string) {
-	if (array.count >= array.capacity) {
-		array.capacity = max(array.count * 2, 4)
-		
-		array.data = reallocate(array.data, array.capacity * size_of(type_of(value)))
-	}
-	
-	array.data[array.count] = value
-	array.count += 1
-}
-
-string_length :: (s: string) -> u64 {
-	len: u64 = 0
-	while s[len] len += 1
-
-	return len
-}
-
-
-
-print_string :: (s: string) {
-	buffer: []u8
-	
-	buffer.data = cast() s
-	buffer.count = string_length(s)
-
-	print_buffer(buffer)
-}
-
-
-parse_command_line :: (cmd: string) -> [] string {
-	line := cast(*u8) copy_string(cmd)
-
-	args: [..]string
-	
-	
-	s := cast(*u8) cmd
-	
-	if ! <<s
-		return args
-	
-	if << s == '"' {
-		s += 1
-		line += 1
-		
-		add_string(*args, cast() line)
-		
-		while << s {
-			if << s == '"'
-				break;
-			
-			line += 1
-			s += 1
-		}
-	} else {
-		add_string(*args, cast() line)
-		
-		while << s {
-			if << s == ' ' || << s == '\t'
-				break;
-			
-			line += 1
-			s += 1
-		}
-	}
-	
-	<< line = 0
-	
-	line += 1
-	s += 1
-	
-	while << s == ' ' || << s == '\t' {
-		s += 1
-		line += 1
-	}
-	
-	if ! <<s
-		return args
-		
-	add_string(*args, cast() line)
-	
-	// @Incomplete
-	
-	return args
-}
-
-
-main :: () -> s32 {
-	//args.data = argv
-	//args.count = cast(u64) argc
-	init_runtime()
-
-	_main()
-
-	return 0
-}
-
-get_command_line_arguments :: () -> []string {
-	return args
+	value: string
+	next: *ListNode
 }
 
 factorial :: (n: u64) -> u64 {
@@ -169,49 +37,6 @@ get_linked_strings :: () -> ListNode {
 	b.next = null
 	
 	return a
-}
-
-u64_to_string :: (value: u64) -> string {
-	if value == 0 {
-		result := cast(*u8) allocate(2)
-		result[0] = '0'
-		result[1] = 0
-		
-		return cast() result
-	}
-
-	digitCount: u64
-	
-	remaining := value
-	
-	while remaining {
-		digitCount += 1
-		
-		remaining /= 10
-	}
-	
-	result := cast(*u8) allocate(digitCount + 1)
-	
-	result += digitCount;
-	
-	<<result = 0
-	remaining = value
-	
-	while remaining {
-		result -= 1;
-		
-		<<result = cast() (remaining % 10 + '0')
-		remaining /= 10
-	}
-	
-	return cast() result
-}
-
-print_u64 :: (num: u64) {
-	s := u64_to_string(num)
-	print_string(s)
-	
-	deallocate(cast() s)	
 }
 
 find_string :: (array: []string, s: string) {
@@ -272,20 +97,6 @@ Bmp_Dib_Header :: struct {
 	BI_BITFIELDS :: 3
 }
 
-check_gl_errors :: () {
-	while true {
-		error := glGetError()
-		
-		if !error
-			break;
-			
-		print_string("GL error: ")
-		print_u64(error)
-		print_string("\n")
-	}
-
-}
-
 load_image :: (filename: string) -> u32 {
 	success: bool
 	
@@ -307,7 +118,6 @@ load_image :: (filename: string) -> u32 {
 		deallocate(file.data)
 		return 0
 	}
-	
 	
 	if dib_header.bits_per_pixel != 32 || 
 		dib_header.compression_method != Bmp_Dib_Header.BI_BITFIELDS || 

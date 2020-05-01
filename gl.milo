@@ -1072,3 +1072,17 @@ wglSwapIntervalEXT : (s32) -> s32
 load_gl_extensions :: () {
 	wglSwapIntervalEXT = wglGetProcAddress(cast() "wglSwapIntervalEXT")
 }
+
+check_gl_errors :: () {
+	while true {
+		error := glGetError()
+		
+		if !error
+			break;
+			
+		print_string("GL error: ")
+		print_u64(error)
+		print_string("\n")
+	}
+
+}

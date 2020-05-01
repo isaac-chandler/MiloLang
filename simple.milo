@@ -1,0 +1,24 @@
+#load "standard.milo"
+
+Job :: struct {
+	title: string
+	skill: u64
+}
+
+Person :: struct {
+	name: string
+	age: u64
+	using job: Job
+}
+
+_main :: () {
+	using jim: Person
+
+	jim.name = "Jim"
+	jim.age = 31
+	
+	jim.job.title = "Co-Regional Manager"
+	
+	print_string(jim.name)
+	print_string(title)
+}

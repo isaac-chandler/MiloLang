@@ -556,7 +556,10 @@ u32 createSymbolForFunction(BucketArray<Symbol> *symbols, ExprFunction *function
 		if (function->flags & EXPR_FUNCTION_IS_EXTERNAL) {
 			u64 index;
 
-			if (Declaration *declaration = findDeclaration(&externalsBlock, function->valueOfDeclaration->name, &index)) {
+			bool yield;
+			if (Declaration *declaration = findDeclaration(&externalsBlock, function->valueOfDeclaration->name, &index, &yield)) {
+				assert(!(declaration->flags & DECLARATION_IMPORTED_BY_USING));
+
 				if (declaration->initialValue->type != function->type) {
 					reportError(function, "Error: Cannot define external function %.*s with different types, it was defined as %.*s", 
 						STRING_PRINTF(function->valueOfDeclaration->name), STRING_PRINTF(function->type->name));
@@ -568,6 +571,8 @@ u32 createSymbolForFunction(BucketArray<Symbol> *symbols, ExprFunction *function
 				return static_cast<ExprFunction *>(declaration->initialValue)->physicalStorage;
 			}
 			else {
+				assert(!yield);
+
 				externalsBlock.declarations.add(function->valueOfDeclaration);
 			}
 		}

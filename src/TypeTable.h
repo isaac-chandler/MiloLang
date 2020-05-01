@@ -31,8 +31,7 @@ enum class TypeFlavor : u8 {
 };
 
 #define TYPE_INTEGER_IS_SIGNED 0x2
-#define TYPE_IS_INTERNAL      0x4 // This means that this type should never be accessible to the user, i.e. the type of null, which is special to give it casting properties, but the program should never be able to reference it.
-#define TYPE_IS_INTERNAL      0x4 // This means that this type should never be accessible to the user, i.e. the type of null, which is special to give it casting properties, but the program should never be able to reference it.
+#define TYPE_IS_INTERNAL      0x4 // This means that this type should never be accessible to the user, i.e. integer literals, which is special to give it casting properties, but the program should never be able to reference it
 #define TYPE_ARRAY_IS_FIXED 0x8
 #define TYPE_ARRAY_IS_DYNAMIC 0x10
 #define TYPE_STRUCT_IS_UNION 0x20
@@ -55,6 +54,7 @@ struct TypePointer : Type {
 #define BLOCK_IS_ARGUMENTS 0x1
 #define BLOCK_IS_COMPLETE 0x2
 #define BLOCK_IS_LOOP 0x4
+#define BLOCK_IS_STRUCT 0x8
 
 struct Block {
 	Array<struct Declaration *> declarations;

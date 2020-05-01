@@ -172,63 +172,63 @@ u64 loadAddressOf(IrState *state, Expr *expr, u64 dest) {
 
 		dest = generateIr(state, unary->value, dest);
 	}
-	else if (expr->flavor == ExprFlavor::STRUCT_ACCESS) {
-		auto access = static_cast<ExprStructAccess *>(expr);
-
-		auto type = access->left->type;
-
-
-		u64 store;
-
-		if (access->left->type->flavor == TypeFlavor::POINTER) {
-			store = generateIr(state, access->left, dest);
-		}
-		else {
-			store = loadAddressOf(state, access->left, dest);
-		}
-
-		if (type->flags & TYPE_ARRAY_IS_FIXED) { // The only struct access we will generate for fixed arrays are .data, which is just the address of the array
-			assert(access->name == "data");
-			return store;
-		}
-
-		if (type->flavor == TypeFlavor::POINTER) {
-			type = static_cast<TypePointer *>(type)->pointerTo;
-		}
-
-		u64 offset = access->declaration->physicalStorage; // In the case of struct members, physicalStorage is the offset within the struct
-
-		if (offset == 0) {
-			return store;
-		}
-		else {
-			Ir &add = state->ir.add();
-			add.op = IrOp::ADD_CONSTANT;
-			add.dest = dest;
-			add.a = store;
-			add.b = offset;
-			add.opSize = 8;
-
-			return dest;
-		}
-	}
 	else if (expr->flavor == ExprFlavor::IDENTIFIER) {
 		auto identifier = static_cast<ExprIdentifier *>(expr);
 
-		if (identifier->declaration->enclosingScope == &globalBlock) {
-			Ir &address = state->ir.add();
-			address.op = IrOp::ADDRESS_OF_GLOBAL;
-			address.declaration = identifier->declaration;
-			address.dest = dest;
-			address.opSize = 8;
+		if (identifier->structAccess) {
+			auto type = identifier->structAccess->type;
+
+
+			u64 store;
+
+			if (identifier->structAccess->type->flavor == TypeFlavor::POINTER) {
+				store = generateIr(state, identifier->structAccess, dest);
+			}
+			else {
+				store = loadAddressOf(state, identifier->structAccess, dest);
+			}
+
+			if (type->flags & TYPE_ARRAY_IS_FIXED) { // The only struct access we will generate for fixed arrays are .data, which is just the address of the array
+				assert(identifier->name == "data");
+				return store;
+			}
+
+			if (type->flavor == TypeFlavor::POINTER) {
+				type = static_cast<TypePointer *>(type)->pointerTo;
+			}
+
+			u64 offset = identifier->declaration->physicalStorage; // In the case of struct members, physicalStorage is the offset within the struct
+
+			if (offset == 0) {
+				return store;
+			}
+			else {
+				Ir &add = state->ir.add();
+				add.op = IrOp::ADD_CONSTANT;
+				add.dest = dest;
+				add.a = store;
+				add.b = offset;
+				add.opSize = 8;
+
+				return dest;
+			}
 		}
 		else {
-			Ir &address = state->ir.add();
-			address.op = IrOp::ADDRESS_OF_LOCAL;
-			address.a = identifier->declaration->physicalStorage;
-			address.b = 0;
-			address.dest = dest;
-			address.opSize = 8;
+			if (identifier->declaration->enclosingScope == &globalBlock) {
+				Ir &address = state->ir.add();
+				address.op = IrOp::ADDRESS_OF_GLOBAL;
+				address.declaration = identifier->declaration;
+				address.dest = dest;
+				address.opSize = 8;
+			}
+			else {
+				Ir &address = state->ir.add();
+				address.op = IrOp::ADDRESS_OF_LOCAL;
+				address.a = identifier->declaration->physicalStorage;
+				address.b = 0;
+				address.dest = dest;
+				address.opSize = 8;
+			}
 		}
 	}
 	else {
@@ -303,7 +303,7 @@ IrModifyWrite readForModifyWrite(IrState *state, Expr *left, Expr *right) {
 
 	u64 dest;
 
-	if (left->flavor == ExprFlavor::IDENTIFIER) {
+	if (left->flavor == ExprFlavor::IDENTIFIER && !static_cast<ExprIdentifier *>(left)->structAccess) {
 		auto identifier = static_cast<ExprIdentifier *>(left);
 
 		if (identifier->declaration->enclosingScope == &globalBlock) {
@@ -351,7 +351,7 @@ IrModifyWrite readForModifyWrite(IrState *state, Expr *left, Expr *right) {
 }
 
 void writeForModifyWrite(IrState *state, IrModifyWrite info, Expr *left) {
-	if (left->flavor != ExprFlavor::IDENTIFIER || static_cast<ExprIdentifier *>(left)->declaration->enclosingScope == &globalBlock) {
+	if (left->flavor != ExprFlavor::IDENTIFIER || static_cast<ExprIdentifier *>(left)->structAccess || static_cast<ExprIdentifier *>(left)->declaration->enclosingScope == &globalBlock) {
 		Ir &write = state->ir.add();
 		write.op = IrOp::WRITE;
 		write.opSize = left->type->size;
@@ -799,7 +799,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				case TOKEN('='): {
 					assert(dest == DEST_NONE);
 
-					if (left->flavor == ExprFlavor::IDENTIFIER) {
+					if (left->flavor == ExprFlavor::IDENTIFIER && !static_cast<ExprIdentifier *>(left)->structAccess) {
 						auto identifier = static_cast<ExprIdentifier *>(left);
 
 						if (identifier->declaration->enclosingScope == &globalBlock) {
@@ -983,7 +983,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			auto block = static_cast<ExprBlock *>(expr);
 
 			for (auto declaration : block->declarations.declarations) {
-				if (!(declaration->flags & DECLARATION_IS_CONSTANT)) {
+				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_USING | DECLARATION_IMPORTED_BY_USING))) {
 					declaration->physicalStorage = allocateSpaceForType(state, static_cast<ExprLiteral *>(declaration->type)->typeValue);
 				}
 			}
@@ -1337,26 +1337,40 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 		case ExprFlavor::IDENTIFIER: {
 			auto identifier = static_cast<ExprIdentifier *>(expr);
 
-			if (identifier->declaration->enclosingScope == &globalBlock) {
-				if (dest == DEST_NONE) return DEST_NONE;
-
-				Ir &address = state->ir.add();
-				address.dest = dest;
-				address.opSize = 8;
-				address.op = IrOp::ADDRESS_OF_GLOBAL;
-				address.declaration = identifier->declaration;
+			if (identifier->structAccess) {
+				u64 stored = loadAddressOf(state, expr, dest);
 
 				Ir &read = state->ir.add();
 				read.op = IrOp::READ;
 				read.dest = dest;
-				read.a = dest;
+				read.a = stored;
 				read.opSize = 8;
-				read.destSize = identifier->type->size;
+				read.destSize = expr->type->size;
 
 				return dest;
 			}
 			else {
-				return identifier->declaration->physicalStorage;
+				if (identifier->declaration->enclosingScope == &globalBlock) {
+					if (dest == DEST_NONE) return DEST_NONE;
+
+					Ir &address = state->ir.add();
+					address.dest = dest;
+					address.opSize = 8;
+					address.op = IrOp::ADDRESS_OF_GLOBAL;
+					address.declaration = identifier->declaration;
+
+					Ir &read = state->ir.add();
+					read.op = IrOp::READ;
+					read.dest = dest;
+					read.a = dest;
+					read.opSize = 8;
+					read.destSize = identifier->type->size;
+
+					return dest;
+				}
+				else {
+					return identifier->declaration->physicalStorage;
+				}
 			}
 		}
 		case ExprFlavor::IF: {
@@ -1434,7 +1448,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			auto struct_ = static_cast<TypeStruct *>(expr->type);
 
 			for (auto decl : struct_->members.declarations) {
-				if (decl->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_CONSTANT)) continue;
+				if (decl->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_CONSTANT | DECLARATION_IS_USING | DECLARATION_IMPORTED_BY_USING)) continue;
 
 				if (decl->physicalStorage & 7) {
 					memberSize = my_max(static_cast<ExprLiteral *>(decl->type)->typeValue->size, memberSize);
@@ -1446,7 +1460,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			state->nextRegister += (memberSize + 7) / 8;
 
 			for (auto decl : struct_->members.declarations) {
-				if (decl->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_CONSTANT)) continue;
+				if (decl->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_CONSTANT | DECLARATION_IS_USING | DECLARATION_IMPORTED_BY_USING)) continue;
 
 				if (decl->physicalStorage & 7) {
 					generateIrForceDest(state, decl->initialValue, memberTemp);
@@ -1468,20 +1482,6 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 					generateIrForceDest(state, decl->initialValue, dest + decl->physicalStorage / 8);
 				}
 			}
-
-			return dest;
-		}
-		case ExprFlavor::STRUCT_ACCESS: {
-			if (dest == DEST_NONE) return dest;
-
-			u64 stored = loadAddressOf(state, expr, dest);
-
-			Ir &read = state->ir.add();
-			read.op = IrOp::READ;
-			read.dest = dest;
-			read.a = stored;
-			read.opSize = 8;
-			read.destSize = expr->type->size;
 
 			return dest;
 		}
@@ -1675,9 +1675,6 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			}
 
 			return dest;
-		}
-		case ExprFlavor::USING: {
-			return DEST_NONE;
 		}
 		default:
 			assert(false);

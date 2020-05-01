@@ -135,8 +135,6 @@ enum class ExprFlavor : u8 {
 	BINARY_OPERATOR, 
 	FUNCTION_CALL, 
 
-	STRUCT_ACCESS, 
-
 	FUNCTION, 
 
 	BLOCK, 
@@ -149,8 +147,7 @@ enum class ExprFlavor : u8 {
 	IF, 
 
 	FUNCTION_PROTOTYPE, 
-	STRUCT_DEFAULT, 
-	USING
+	STRUCT_DEFAULT
 };
 
 struct Declaration;
@@ -175,7 +172,7 @@ struct Expr {
 #define EXPR_HAS_STORAGE 0x4
 #define EXPR_FUNCTION_IS_EXTERNAL 0x8
 #define EXPR_ARRAY_IS_DYNAMIC 0x10
-#define EXPR_IDENTIFIER_RESOLVING_IN_OUTER_FUNCTION 0x20
+#define EXPR_IDENTIFIER_RESOLVING_ONLY_CONSTANTS 0x20
 #define EXPR_IDENTIFIER_IS_BREAK_OR_CONTINUE_LABEL 0x40
 #define EXPR_ASSIGN_IS_IMPLICIT_INITIALIZER 0x80
 // :EvaluatedBinaryLiterals
@@ -184,6 +181,7 @@ struct Expr {
 // instead of being stuck as s64. We could allow these to be constants but it would be inconsistent which binary ops are 
 // allowed as constants since we don't evaluate comparisons
 #define EXPR_WAS_EVALUATED_BINARY 0x100
+#define EXPR_VALUE_NOT_REQUIRED 0x200
 
 
 struct ExprLiteral : Expr {
@@ -223,6 +221,7 @@ struct Block;
 struct ExprIdentifier : Expr {
 	String name;
 	Block *resolveFrom;
+	Expr *structAccess;
 	u64 indexInBlock;
 
 	Declaration *declaration;
@@ -233,12 +232,6 @@ struct ExprFunctionCall : Expr {
 	u64 argumentCount;
 	Expr **arguments;
 	String *argumentNames;
-};
-
-struct ExprStructAccess : Expr {
-	Expr *left;
-	String name;
-	Declaration *declaration;
 };
 
 struct ExprBlock : Expr {
@@ -299,14 +292,21 @@ struct ExprIf : Expr {
 #define DECLARATION_HAS_STORAGE 0x80
 #define DECLARATION_IS_STRUCT_MEMBER 0x100
 #define DECLARATION_IS_USING 0x200
+#define DECLARATION_IMPORTED_BY_USING 0x400
+#define DECLARATION_USING_IS_RESOLVED 0x800
 
 
 struct Declaration {
 	CodeLocation start;
 	EndLocation end;
 	String name;
-	Expr *type;
+	union {
+		Expr *type;
+		Declaration *import;
+	};
+
 	Expr *initialValue;
+
 	Block *enclosingScope;
 	u64 indexInBlock;
 

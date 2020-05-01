@@ -6,11 +6,26 @@
 extern Block globalBlock;
 
 
-inline Declaration *findDeclaration(Block *block, String name, u64 *index) {
+inline Declaration *findDeclaration(Block *block, String name, u64 *index, bool *yield, u64 usingYieldLimit = -1) {
+	PROFILE_FUNC_DATA(block == &globalBlock ? "global" : "local");
+	if (usingYieldLimit == -1) {
+		usingYieldLimit = block->declarations.count;
+	}
+
+	*yield = false;
+
 	for (*index = 0; *index < block->declarations.count; (*index)++) {
 		auto declaration = block->declarations[*index];
-		if (declaration->name == name) {
-			return declaration;
+		if ((declaration->flags & DECLARATION_IS_USING) && !(declaration->flags & DECLARATION_USING_IS_RESOLVED) && declaration->indexInBlock < usingYieldLimit) {
+			if (block != &globalBlock) { // Optimization, don't yield if we encounter a using at global scope, since there are no outer scopes we could erroneously start resoving in
+				*yield = true;
+				return nullptr;
+			}
+		}
+		else {
+			if (declaration->name == name) {
+				return declaration;
+			}
 		}
 	}
 
@@ -26,6 +41,15 @@ struct DeclarationPack {
 		Expr *expr;
 	} data;
 };
+
+inline DeclarationPack makeDeclarationPack(Declaration *declaration) {
+	DeclarationPack result;
+	result.count = 1;
+
+	result.data.declaration = declaration;
+
+	return result;
+}
 
 
 inline DeclarationPack makeDeclarationPack(u64 count, Declaration **declarations) {
