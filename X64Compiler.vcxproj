@@ -138,6 +138,7 @@
     <ClInclude Include="src\ArraySet.h" />
     <ClInclude Include="src\Ast.h" />
     <ClInclude Include="src\Basic.h" />
+    <ClInclude Include="src\Block.h" />
     <ClInclude Include="src\BucketedArenaAllocator.h" />
     <ClInclude Include="src\CoffWriter.h" />
     <ClInclude Include="src\CompilerMain.h" />
@@ -156,6 +157,7 @@
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Profiling|x64'">Create</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="src\Block.cpp" />
     <ClCompile Include="src\BucketedArenaAllocator.cpp" />
     <ClCompile Include="src\CoffWriter.cpp" />
     <ClCompile Include="src\CompilerMain.cpp" />

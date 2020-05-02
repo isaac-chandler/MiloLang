@@ -4,9 +4,9 @@
 #include "Array.h"
 #include "Ast.h"
 #include "Lexer.h"
-#include "Infer.h"
 #include "BucketedArenaAllocator.h"
 #include "CoffWriter.h"
+#include "TypeTable.h"
 
 WorkQueue<ExprFunction *> irGeneratorQueue;
 

@@ -1,7 +1,8 @@
 #include "Basic.h"
 #include "CoffWriter.h"
 #include "BucketedArenaAllocator.h"
-#include "Infer.h"
+#include "Block.h"
+#include "TypeTable.h"
 #include "CompilerMain.h"
 
 WorkQueue<CoffJob> coffWriterQueue;
@@ -556,8 +557,7 @@ u32 createSymbolForFunction(BucketArray<Symbol> *symbols, ExprFunction *function
 		if (function->flags & EXPR_FUNCTION_IS_EXTERNAL) {
 			u64 index;
 
-			bool yield;
-			if (Declaration *declaration = findDeclaration(&externalsBlock, function->valueOfDeclaration->name, &index, &yield)) {
+			if (Declaration *declaration = findDeclarationNoYield(&externalsBlock, function->valueOfDeclaration->name, &index)) {
 				assert(!(declaration->flags & DECLARATION_IMPORTED_BY_USING));
 
 				if (declaration->initialValue->type != function->type) {
@@ -571,8 +571,6 @@ u32 createSymbolForFunction(BucketArray<Symbol> *symbols, ExprFunction *function
 				return static_cast<ExprFunction *>(declaration->initialValue)->physicalStorage;
 			}
 			else {
-				assert(!yield);
-
 				externalsBlock.declarations.add(function->valueOfDeclaration);
 			}
 		}

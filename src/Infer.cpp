@@ -5,14 +5,18 @@
 #include "Lexer.h"
 #include "IrGenerator.h"
 #include "CoffWriter.h"
+#include "TypeTable.h"
+
+u64 totalDeclarations = 0;
+u64 totalFunctions = 0;
+u64 totalTypesSized = 0;
+u64 totalInfers = 0;
 
 enum class InferType {
 	FUNCTION_BODY,
 	DECLARATION,
 	TYPE_TO_SIZE
 };
-
-Block globalBlock;
 
 ExprLiteral *inferMakeTypeLiteral(CodeLocation &start, EndLocation &end, Type *type) {
 	ExprLiteral *literal = new ExprLiteral;
@@ -33,6 +37,7 @@ struct InferJob {
 	} infer;
 
 	InferType type;
+	Block *waitingOnBlock = nullptr;
 
 	Array<Expr **> typeFlattened;
 	union {
@@ -2590,6 +2595,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 					sizeJob->infer.type->sizeJob = sizeJob;
 
 					inferJobs.add(sizeJob);
+					++totalTypesSized;
 				}
 			}
 			else {
@@ -2677,8 +2683,9 @@ ExprIdentifier *pushStructAccessDown(ExprIdentifier *accesses, Expr *base, CodeL
 	}
 }
 
-bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
+bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block ** const waitingOnBlock) {
 	PROFILE_FUNC();
+	++totalInfers;
 
 	for (; *index < flattened.count; ++ * index) {
 		auto exprPointer = flattened[*index];
@@ -2702,6 +2709,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 						auto member = findDeclaration(&struct_->members, identifier->name, &index, &yield);
 
 						if (yield) {
+							*waitingOnBlock = &struct_->members;
 							return true;
 						}
 
@@ -2746,6 +2754,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 								}
 							}
 							else if (yield) {
+								*waitingOnBlock = identifier->resolveFrom;
 								return true;
 							}
 
@@ -2755,12 +2764,18 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 								identifier->flags |= EXPR_IDENTIFIER_RESOLVING_ONLY_CONSTANTS;
 						}
 
-						if (!identifier->resolveFrom && !identifier->declaration) { // If we have checked all the local scopes and the
-							bool yield;
-							u64 index;
-							identifier->declaration = findDeclaration(&globalBlock, identifier->name, &index, &yield);
+						if (!identifier->declaration) {
+							if (!identifier->resolveFrom) { // If we have checked all the local scopes and the
+								u64 index;
+								identifier->declaration = findDeclarationNoYield(&globalBlock, identifier->name, &index);
 
-							assert(!yield); // The global scope should never request a yield
+								if (!identifier->declaration) {
+									*waitingOnBlock = &globalBlock;
+								}
+							}
+							else {
+								*waitingOnBlock = identifier->resolveFrom;
+							}
 						}
 					}
 				}
@@ -3252,11 +3267,8 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 					for (u64 i = 0; i < call->argumentCount; i++) {
 						u64 argIndex = i;
 						if (call->argumentNames[i].length) {
-							bool yield;
-							auto argument = findDeclaration(&functionForArgumentNames->arguments, call->argumentNames[i], &argIndex, &yield);
+							auto argument = findDeclarationNoYield(&functionForArgumentNames->arguments, call->argumentNames[i], &argIndex);
 							assert(!(argument->flags & DECLARATION_IMPORTED_BY_USING));
-
-							assert(!yield); // Arguments should never yield as there are no 'using's in the arguments block
 
 							if (!argument) {
 								reportError(call->arguments[i], "Error: %.*s does not have an argument called %.*s", STRING_PRINTF(functionName), STRING_PRINTF(call->argumentNames[i]));
@@ -3642,6 +3654,7 @@ InferJob *allocateJob() {
 		auto result = firstFreeInferJob;
 		firstFreeInferJob = firstFreeInferJob->nextFree;
 
+		result->waitingOnBlock = nullptr;
 		result->typeFlattened.clear();
 		result->typeFlattenedIndex = 0;
 		result->valueFlattened.clear();
@@ -3668,6 +3681,8 @@ bool addDeclaration(Declaration *declaration) {
 			return false;
 		}
 	}
+
+	++totalDeclarations;
 
 	InferJob *job = allocateJob();
 	job->type = InferType::DECLARATION;
@@ -3777,10 +3792,12 @@ void runInfer() {
 	while (true) {
 		DeclarationPack declarations = inferQueue.take();
 
-		if (!declarations.count && !declarations.data.expr) {
+		Block *changedBlock = nullptr;
+
+		if (declarations.type == DeclarationPackType::EXPRESSION && !declarations.data.expr) {
 			break;
 		}
-		else if (declarations.count == 0) {
+		else if (declarations.type == DeclarationPackType::EXPRESSION) {
 			InferJob *body = allocateJob();
 
 			if (declarations.data.expr->flavor == ExprFlavor::FUNCTION) {
@@ -3790,6 +3807,8 @@ void runInfer() {
 				if (body->infer.function->body) {
 					flatten(body->valueFlattened, &body->infer.function->body);
 				}
+
+				++totalFunctions;
 			}
 			else if (declarations.data.expr->flavor == ExprFlavor::TYPE_LITERAL) {
 				body->infer.type = static_cast<ExprLiteral *>(declarations.data.expr)->typeValue;
@@ -3800,6 +3819,7 @@ void runInfer() {
 				}
 
 				body->infer.type->sizeJob = body;
+				++totalTypesSized;
 			}
 			else {
 				assert(false);
@@ -3807,18 +3827,23 @@ void runInfer() {
 
 			inferJobs.add(body);
 		}
-		else if (declarations.count == 1) {
+		else if (declarations.type == DeclarationPackType::GLOBAL_DECLARATION) {
+			changedBlock = &globalBlock;
+
 			if (!addDeclaration(declarations.data.declaration)) {
 				goto error;
 			}
 		}
 		else {
 			//inferJobs.reserve(inferJobs.count + declarations.count); // Make sure we don't do unnecessary allocations
+			assert(declarations.type == DeclarationPackType::BLOCK);
+			changedBlock = declarations.data.block;
 
-			for (u64 i = 0; i < declarations.count; i++)
-				if (!addDeclaration(declarations.data.declarations[i])) {
+			for (auto declaration : declarations.data.block->declarations) {
+				if (!addDeclaration(declaration)) {
 					goto error;
 				}
+			}
 		}
 
 		bool madeProgress;
@@ -3830,9 +3855,12 @@ void runInfer() {
 
 				auto job = inferJobs[i];
 
+				if (job->waitingOnBlock && job->waitingOnBlock != changedBlock && !madeProgress) continue;
+				job->waitingOnBlock = nullptr;
+
 				switch (job->type) {
 					case InferType::FUNCTION_BODY: {
-						if (!inferFlattened(job, job->valueFlattened, &job->valueFlattenedIndex)) {
+						if (!inferFlattened(job, job->valueFlattened, &job->valueFlattenedIndex, &job->waitingOnBlock)) {
 							goto error;
 						}
 
@@ -3873,13 +3901,13 @@ void runInfer() {
 						auto declaration = job->infer.declaration;
 
 						if (declaration->type) {
-							if (!inferFlattened(nullptr, job->typeFlattened, &job->typeFlattenedIndex)) {
+							if (!inferFlattened(nullptr, job->typeFlattened, &job->typeFlattenedIndex, &job->waitingOnBlock)) {
 								goto error;
 							}
 						}
 
 						if (declaration->initialValue) {
-							if (!inferFlattened(job, job->valueFlattened, &job->valueFlattenedIndex)) {
+							if (!inferFlattened(job, job->valueFlattened, &job->valueFlattenedIndex, &job->waitingOnBlock)) {
 								goto error;
 							}
 						}
@@ -4024,6 +4052,7 @@ void runInfer() {
 
 														import->initialValue = member->initialValue;
 														import->type = declaration->initialValue;
+														import->flags &= ~DECLARATION_USING_IS_RESOLVED;
 
 														addDeclaration(import);
 													}
@@ -4040,7 +4069,7 @@ void runInfer() {
 														import->flags |= DECLARATION_IMPORTED_BY_USING;
 													}
 
-													declaration->enclosingScope->declarations.add(import);
+													addDeclarationToBlock(declaration->enclosingScope, import);
 												}
 											}
 										}
@@ -4049,6 +4078,9 @@ void runInfer() {
 										}
 									}
 
+									madeProgress = true;
+
+									declaration->enclosingScope->usings.unordered_remove(declaration);
 									declaration->flags |= DECLARATION_USING_IS_RESOLVED;
 									inferJobs.unordered_remove(i--);
 									freeJob(job);
@@ -4222,6 +4254,9 @@ void runInfer() {
 		// Check for undeclared identifiers
 
 		for (auto job : inferJobs) {
+			if (job->type == InferType::TYPE_TO_SIZE) continue;
+
+			if (job->type == InferType::TYPE_TO_SIZE) continue;
 			if (job->typeFlattenedIndex != job->typeFlattened.count) {
 				auto haltedOn = *job->typeFlattened[job->typeFlattenedIndex];
 
@@ -4244,6 +4279,7 @@ void runInfer() {
 		Array<Declaration *> loop;
 
 		for (auto job : inferJobs) {
+			if (job->type == InferType::TYPE_TO_SIZE) continue;
 			if (job->type == InferType::FUNCTION_BODY) continue; // A circular dependency must contain a declaration, we start from there
 
 			loop.clear();
@@ -4322,6 +4358,17 @@ void runInfer() {
 		assert(false); // @ErrorMessage
 	}
 
+	{
+		u64 totalQueued = totalDeclarations + totalFunctions + totalTypesSized;
+
+		printf(
+			"Total queued: %u\n"
+			"  %u declarations\n"
+			"  %u functions\n"
+			"  %u types\n"
+			"Total infers: %u, %.1f infers/queued",
+			totalQueued, totalDeclarations, totalFunctions, totalTypesSized, totalInfers, static_cast<float>(totalInfers) / totalQueued);
+	}
 error:;
 	irGeneratorQueue.add(nullptr);
 }

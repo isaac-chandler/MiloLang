@@ -3,6 +3,7 @@
 #include "Parser.h"
 #include "Lexer.h"
 #include "Infer.h"
+#include "TypeTable.h"
 
 BucketedArenaAllocator parserArena(1024 * 1024);
 
@@ -60,9 +61,7 @@ static void pushBlock(Block *block) {
 }
 
 static void queueBlock(Block *block) {
-	if (block->declarations.count) {
-		inferQueue.add(makeDeclarationPack(block->declarations.count, block->declarations.storage)); // Queue the entire block at once to avoid locking the mutex too much
-	}
+	inferQueue.add(makeDeclarationPack(block)); // Queue the entire block at once to avoid locking the mutex too much
 }
 
 static void popBlock(Block *block) { // This only takes the parameter to make sure we are always popping the block we think we are in debug
@@ -156,8 +155,6 @@ Declaration *makeIterator(CodeLocation &start, EndLocation &end, String name) {
 }
 
 Declaration *createDeclarationForUsing(Declaration *oldDeclaration) {
-	oldDeclaration->flags &= ~DECLARATION_IS_USING;
-
 	auto using_ = PARSER_NEW(ExprIdentifier);
 	using_->flavor = ExprFlavor::IDENTIFIER;
 	using_->start = oldDeclaration->start;
@@ -620,7 +617,7 @@ ExprBlock *parseBlock(LexerFile *lexer, ExprBlock *block) {
 					return nullptr;
 				}
 
-				assert(declaration->flags & DECLARATION_IS_USING);
+				assert(declaration->flags & DECLARATION_MARKED_AS_USING);
 				addDeclarationToCurrentBlock(createDeclarationForUsing(declaration));
 
 				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_UNINITIALIZED))) { // If this declaration is constant or uninitialized don't add an initialization expression
@@ -677,7 +674,7 @@ ExprBlock *parseBlock(LexerFile *lexer, ExprBlock *block) {
 					return nullptr;
 				}
 
-				assert(!(declaration->flags & DECLARATION_IS_USING));
+				assert(!(declaration->flags & DECLARATION_MARKED_AS_USING));
 
 				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_UNINITIALIZED))) { // If this declaration is constant or uninitialized don't add an initialization expression
 					ExprBinaryOperator *assign = PARSER_NEW(ExprBinaryOperator);
@@ -887,7 +884,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 						return nullptr;
 					}
 
-					if (declaration->flags & DECLARATION_IS_USING) {
+					if (declaration->flags & DECLARATION_MARKED_AS_USING) {
 						if (!usingBlock) {
 							usingBlock = PARSER_NEW(ExprBlock);
 						}
@@ -1304,7 +1301,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 					return nullptr;
 				}
 
-				if (declaration->flags & DECLARATION_IS_USING) {
+				if (declaration->flags & DECLARATION_MARKED_AS_USING) {
 					addDeclarationToCurrentBlock(createDeclarationForUsing(declaration));
 				}
 			}
@@ -1356,7 +1353,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 					return nullptr;
 				}
 
-				if (declaration->flags & DECLARATION_IS_USING) {
+				if (declaration->flags & DECLARATION_MARKED_AS_USING) {
 					addDeclarationToCurrentBlock(createDeclarationForUsing(declaration));
 				}
 			}
@@ -1406,7 +1403,6 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 				bool hadNamed = false;
 
-				// @Incomplete: named arguments?
 				do {
 					String name = { nullptr, 0ULL };
 
@@ -1739,7 +1735,7 @@ Declaration *parseDeclaration(LexerFile *lexer) {
 	declaration->flags = 0;
 
 	if (expectAndConsume(lexer, TokenT::USING)) {
-		declaration->flags |= DECLARATION_IS_USING;
+		declaration->flags |= DECLARATION_MARKED_AS_USING;
 	}
 
 	declaration->name = lexer->token.text;
@@ -1872,7 +1868,7 @@ void parseFile(FileInfo *file) {
 
 			Declaration *using_ = nullptr;
 
-			if (declaration->flags & DECLARATION_IS_USING) {
+			if (declaration->flags & DECLARATION_MARKED_AS_USING) {
 				
 				using_ = createDeclarationForUsing(declaration);
 			}

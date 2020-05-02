@@ -4,7 +4,7 @@
 #include "String.h"
 #include "Array.h"
 #include "BucketedArenaAllocator.h"
-#include "TypeTable.h"
+#include "Block.h"
 
 enum class IrOp : u8 {
 	ADD,
@@ -158,7 +158,7 @@ struct Expr {
 	u16 flags = 0;
 	ExprFlavor flavor;
 
-	Type *type = nullptr;
+	struct Type *type = nullptr;
 
 	Declaration *valueOfDeclaration = nullptr;
 
@@ -189,7 +189,7 @@ struct ExprLiteral : Expr {
 		u64 unsignedValue;
 		s64 signedValue;
 		double floatValue;
-		Type *typeValue;
+		struct Type *typeValue;
 	};
 };
 
@@ -280,41 +280,4 @@ struct ExprIf : Expr {
 	Expr *condition;
 	Expr *ifBody;
 	Expr *elseBody;
-};
-
-#define DECLARATION_IS_CONSTANT 0x1
-#define DECLARATION_IS_UNINITIALIZED 0x2
-#define DECLARATION_IS_ITERATOR 0x4
-#define DECLARATION_IS_ITERATOR_INDEX 0x8
-#define DECLARATION_VALUE_IS_READY 0x10
-#define DECLARATION_TYPE_IS_READY 0x20
-#define DECLARATION_IS_ARGUMENT 0x40
-#define DECLARATION_HAS_STORAGE 0x80
-#define DECLARATION_IS_STRUCT_MEMBER 0x100
-#define DECLARATION_IS_USING 0x200
-#define DECLARATION_IMPORTED_BY_USING 0x400
-#define DECLARATION_USING_IS_RESOLVED 0x800
-
-
-struct Declaration {
-	CodeLocation start;
-	EndLocation end;
-	String name;
-	union {
-		Expr *type;
-		Declaration *import;
-	};
-
-	Expr *initialValue;
-
-	Block *enclosingScope;
-	u64 indexInBlock;
-
-	struct InferJob *inferJob;
-
-	union Symbol *symbol;
-	u64 physicalStorage;
-
-	u64 flags = 0;
-
 };

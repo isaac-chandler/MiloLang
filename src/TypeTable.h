@@ -3,6 +3,7 @@
 #include "Basic.h"
 #include "String.h"
 #include "BucketedArenaAllocator.h"
+#include "Block.h"
 
 
 extern BucketedArenaAllocator typeArena;
@@ -49,18 +50,6 @@ struct Type {
 
 struct TypePointer : Type {
 	Type *pointerTo;
-};
-
-#define BLOCK_IS_ARGUMENTS 0x1
-#define BLOCK_IS_COMPLETE 0x2
-#define BLOCK_IS_LOOP 0x4
-#define BLOCK_IS_STRUCT 0x8
-
-struct Block {
-	Array<struct Declaration *> declarations;
-	Block *parentBlock = nullptr;
-	u64 indexInParent;
-	u64 flags = 0;
 };
 
 struct TypeStruct : Type {
