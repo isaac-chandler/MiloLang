@@ -2849,6 +2849,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 			case ExprFlavor::FUNCTION: {
 				auto function = static_cast<ExprFunction *>(expr);
 
+
 				if (function->returnType->flavor != ExprFlavor::TYPE_LITERAL) {
 
 					if (function->returnType->type == &TYPE_TYPE) {
@@ -3673,12 +3674,41 @@ void freeJob(InferJob *job) {
 }
 
 bool addDeclaration(Declaration *declaration) {
+	declaration->inferJob = nullptr;
+
 	if (declaration->flags & (DECLARATION_IS_ITERATOR | DECLARATION_IS_ITERATOR_INDEX))
 		return true;
 
 	if (!declaration->enclosingScope) {
 		if (!addDeclarationToBlock(&globalBlock, declaration)) {
 			return false;
+		}
+	}
+
+	if (!(declaration->flags & DECLARATION_IS_USING)) {
+		if (declaration->flags & DECLARATION_IS_CONSTANT) {
+			if (!declaration->type && declaration->initialValue->flavor == ExprFlavor::INT_LITERAL) {
+				declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, &TYPE_UNSIGNED_INT_LITERAL);
+				declaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
+				return true;
+			}
+			/*else if (!declaration->type && declaration->initialValue->flavor == ExprFlavor::FUNCTION && static_cast<ExprFunction *>(declaration->initialValue)->returnType->flavor == ExprFlavor::TYPE_LITERAL) {
+				return true;
+			}*/
+		}
+		else if (declaration->enclosingScope) {
+			if (!declaration->type && declaration->initialValue->flavor == ExprFlavor::INT_LITERAL)  {
+				declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, &TYPE_UNSIGNED_INT_LITERAL);
+				declaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
+				return true;
+			}
+			else if (declaration->type && declaration->type->flavor == ExprFlavor::TYPE_LITERAL && !declaration->initialValue && (declaration->flags & (DECLARATION_IS_ARGUMENT | DECLARATION_IS_UNINITIALIZED))) {
+				declaration->flags |= DECLARATION_TYPE_IS_READY;
+				return true;
+			}
+			/*else if (!declaration->type && declaration->initialValue->flavor == ExprFlavor::FUNCTION && static_cast<ExprFunction *>(declaration->initialValue)->returnType->flavor == ExprFlavor::TYPE_LITERAL) {
+				return true;
+			}*/
 		}
 	}
 
@@ -3786,6 +3816,375 @@ void getHaltStatus(Declaration *declaration, Declaration *next, Expr **haltedOn,
 
 Array<InferJob *> waitingOnSize;
 
+bool doInferJob(u64 *index, bool *madeProgress) {
+	InferJob *job = inferJobs[*index];
+
+	switch (job->type) {
+	case InferType::FUNCTION_BODY: {
+		auto function = job->infer.function;
+
+		if (!inferFlattened(job, job->valueFlattened, &job->valueFlattenedIndex, &job->waitingOnBlock)) {
+			return false;
+		}
+
+		if (function->type) {
+			for (auto argument : job->infer.function->arguments.declarations) {
+				addSizeDependency(job, static_cast<ExprLiteral *>(argument->type)->typeValue);
+			}
+
+			if (job->infer.function->flags & EXPR_FUNCTION_IS_EXTERNAL) {
+				assert(!job->infer.function->body);
+
+				if (!job->infer.declaration) {
+					reportError(job->infer.function, "Error: External functions must be named");
+					return false;
+				}
+
+				CoffJob coff;
+				coff.isFunction = true;
+				coff.function = job->infer.function;
+
+				coffWriterQueue.add(coff);
+
+				inferJobs.unordered_remove((*index)--);
+				freeJob(job);
+			}
+			else {
+				assert(job->infer.function->body);
+
+				if (job->valueFlattenedIndex == job->valueFlattened.count) {
+					inferJobs.unordered_remove((*index)--);
+					waitingOnSize.add(job);
+				}
+			}
+		}
+		break;
+	}
+	case InferType::DECLARATION: {
+		auto declaration = job->infer.declaration;
+
+		if (declaration->type) {
+			if (!inferFlattened(nullptr, job->typeFlattened, &job->typeFlattenedIndex, &job->waitingOnBlock)) {
+				return false;
+			}
+		}
+
+		if (declaration->initialValue) {
+			if (!inferFlattened(job, job->valueFlattened, &job->valueFlattenedIndex, &job->waitingOnBlock)) {
+				return false;
+			}
+		}
+
+		if (!(declaration->flags & (DECLARATION_TYPE_IS_READY | DECLARATION_IS_USING)) && declaration->type && job->typeFlattenedIndex == job->typeFlattened.count) {
+			if (declaration->type->type != &TYPE_TYPE) {
+				if (declaration->type->type->flavor == TypeFlavor::FUNCTION) {
+					reportError(declaration->type, "Error: Declaration type cannot be a function, did you miss a colon?");
+				}
+				else {
+					reportError(declaration->type, "Error: Declaration type must be a type, but got a %.*s", STRING_PRINTF(declaration->type->type->name));
+				}
+				return false;
+			}
+			if (declaration->type->flavor != ExprFlavor::TYPE_LITERAL) {
+				reportError(declaration->type, "Error: Declaration type must be a constant");
+				return false;
+			}
+
+			if (static_cast<ExprLiteral *>(declaration->type)->typeValue == &TYPE_VOID) {
+				reportError(declaration->type, "Error: Declaration cannot have type void");
+				return false;
+			}
+
+			*madeProgress = true;
+			declaration->flags |= DECLARATION_TYPE_IS_READY;
+		}
+
+		if (!(declaration->flags & DECLARATION_IS_USING) && declaration->type && declaration->initialValue) {
+			if (job->typeFlattenedIndex == job->typeFlattened.count && job->valueFlattenedIndex == job->valueFlattened.count) {
+				assert(declaration->initialValue->type);
+
+				Type *correct = static_cast<ExprLiteral *>(declaration->type)->typeValue;
+
+				if (!assignOp(job, declaration->initialValue, correct, declaration->initialValue)) {
+					return false;
+				}
+
+				if ((declaration->flags &
+					(DECLARATION_IS_CONSTANT | DECLARATION_IS_ARGUMENT | DECLARATION_IS_STRUCT_MEMBER)) || declaration->enclosingScope == &globalBlock) {
+					if (!isLiteral(declaration->initialValue)) {
+						reportError(declaration->type, "Error: Declaration value must be a constant");
+						return false;
+					}
+				}
+
+				*madeProgress = true;
+
+				inferJobs.unordered_remove((*index)--);
+
+				declaration->flags |= DECLARATION_VALUE_IS_READY;
+
+				if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
+					waitingOnSize.add(job);
+				}
+				else {
+					freeJob(job);
+				}
+			}
+		}
+		else if (!(declaration->flags & DECLARATION_IS_USING) && declaration->type) {
+
+			if (job->typeFlattenedIndex == job->typeFlattened.count) {
+				if (!(declaration->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_ITERATOR | DECLARATION_IS_ITERATOR_INDEX | DECLARATION_IS_ARGUMENT))) {
+					auto type = static_cast<ExprLiteral *>(declaration->type)->typeValue;
+
+					bool yield;
+					declaration->initialValue = createDefaultValue(declaration, type, &yield);
+
+					if (yield) return true;
+
+					if (!declaration->initialValue) {
+						return false;
+					}
+
+					declaration->initialValue->valueOfDeclaration = declaration;
+
+					declaration->initialValue->start = declaration->start;
+					declaration->initialValue->end = declaration->end;
+				}
+
+				*madeProgress = true;
+
+				inferJobs.unordered_remove((*index)--);
+
+				declaration->flags |= DECLARATION_VALUE_IS_READY;
+
+
+				if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
+					waitingOnSize.add(job);
+				}
+				else {
+					freeJob(job);
+				}
+			}
+		}
+		else if (declaration->initialValue) {
+			if (job->valueFlattenedIndex == job->valueFlattened.count) {
+				if (declaration->flags & DECLARATION_IS_USING) {
+					bool onlyConstants;
+					auto struct_ = getExpressionNamespace(declaration->initialValue, &onlyConstants, declaration->initialValue);
+
+					onlyConstants |= (declaration->flags & DECLARATION_IS_CONSTANT) != 0;
+
+					if (!struct_) {
+						return false;
+					}
+
+
+
+					if (declaration->initialValue->flavor != ExprFlavor::TYPE_LITERAL) {
+						auto identifier = static_cast<ExprIdentifier *>(declaration->initialValue);
+
+						while (identifier) {
+							if (identifier->flavor != ExprFlavor::IDENTIFIER) {
+								reportError(declaration->initialValue, "Error: You can only 'using' an identifier, a struct access of an identifier or a type");
+								return false;
+							}
+
+							identifier = static_cast<ExprIdentifier *>(identifier->structAccess);
+						}
+
+						declaration->initialValue = pushStructAccessDown(static_cast<ExprIdentifier *>(declaration->initialValue), declaration->type, declaration->start, declaration->end);
+					}
+
+					for (auto member : struct_->members.declarations) {
+						if (checkForRedeclaration(declaration->enclosingScope, member, declaration->initialValue)) {
+							if (!(member->flags & DECLARATION_IMPORTED_BY_USING)) {
+								if (!onlyConstants || (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_USING))) {
+									auto import = new Declaration;
+									import->start = member->start;
+									import->end = member->end;
+									import->name = member->name;
+									import->enclosingScope = declaration->enclosingScope;
+									import->indexInBlock = declaration->indexInBlock;
+									import->flags = member->flags;
+
+									if (member->flags & DECLARATION_IS_USING) {
+										if (onlyConstants) {
+											import->flags |= DECLARATION_IS_CONSTANT;
+										}
+
+										import->initialValue = member->initialValue;
+										import->type = declaration->initialValue;
+										import->flags &= ~DECLARATION_USING_IS_RESOLVED;
+
+										addDeclaration(import);
+									}
+									else {
+										if (member->flags & DECLARATION_IS_CONSTANT) {
+											import->type = member->type;
+											import->initialValue = member->initialValue;
+										}
+										else {
+											import->import = member;
+											import->initialValue = declaration->initialValue;
+										}
+
+										import->flags |= DECLARATION_IMPORTED_BY_USING;
+									}
+
+									addDeclarationToBlock(declaration->enclosingScope, import);
+								}
+							}
+						}
+						else {
+							return false;
+						}
+					}
+
+					*madeProgress = true;
+
+					declaration->enclosingScope->usings.unordered_remove(declaration);
+					declaration->flags |= DECLARATION_USING_IS_RESOLVED;
+					inferJobs.unordered_remove((*index)--);
+					freeJob(job);
+				}
+				else {
+					assert(declaration->initialValue->type);
+
+					if (!(declaration->flags & DECLARATION_IS_CONSTANT)) {
+						trySolidifyNumericLiteralToDefault(declaration->initialValue);
+					}
+
+					if (declaration->initialValue->type == &TYPE_VOID) {
+						reportError(declaration->type, "Error: Declaration cannot have type void");
+						return false;
+					}
+					else if (declaration->initialValue->type == &TYPE_AUTO_CAST) {
+						reportError(declaration->type, "Error: Cannot infer the type of a declaration if the value is an auto cast");
+						return false;
+					}
+
+					declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, declaration->initialValue->type);
+
+					if ((declaration->flags &
+						(DECLARATION_IS_CONSTANT | DECLARATION_IS_ARGUMENT | DECLARATION_IS_STRUCT_MEMBER)) || declaration->enclosingScope == &globalBlock) {
+						if (!isLiteral(declaration->initialValue)) {
+							reportError(declaration->type, "Error: Declaration value must be a constant");
+							return false;
+						}
+					}
+
+					*madeProgress = true;
+
+
+					inferJobs.unordered_remove((*index)--);
+
+					declaration->flags |= DECLARATION_VALUE_IS_READY;
+					declaration->flags |= DECLARATION_TYPE_IS_READY;
+
+
+					if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
+						waitingOnSize.add(job);
+					}
+					else {
+						freeJob(job);
+					}
+				}
+			}
+		}
+
+		break;
+	}
+	case InferType::TYPE_TO_SIZE: {
+		auto type = job->infer.type;
+
+		if (type->flavor == TypeFlavor::STRUCT) {
+			auto struct_ = static_cast<TypeStruct *>(type);
+
+			while (job->sizingIndexInMembers < struct_->members.declarations.count) {
+				auto member = struct_->members.declarations[job->sizingIndexInMembers];
+
+				if (!(member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_USING | DECLARATION_IMPORTED_BY_USING))) {
+					if (!(member->flags & DECLARATION_TYPE_IS_READY))
+						break;
+
+					auto memberType = static_cast<ExprLiteral *>(member->type)->typeValue;
+
+					if (!memberType->size)
+						break;
+
+					if (!(struct_->flags & TYPE_STRUCT_IS_PACKED)) {
+						struct_->alignment = my_max(struct_->alignment, memberType->alignment);
+					}
+
+					if (struct_->flags & TYPE_STRUCT_IS_UNION) {
+						job->runningSize = my_max(job->runningSize, memberType->size);
+
+						member->physicalStorage = 0;
+					}
+					else {
+						if (!(struct_->flags & TYPE_STRUCT_IS_PACKED)) {
+							job->runningSize = AlignPO2(job->runningSize, memberType->alignment);
+						}
+
+						member->physicalStorage = job->runningSize;
+
+						job->runningSize += memberType->size;
+					}
+				}
+
+				job->sizingIndexInMembers++;
+			}
+
+			if (job->sizingIndexInMembers == struct_->members.declarations.count) {
+				if (job->runningSize == 0) { // Empty structs are allowed, but we can't have size 0 types
+					struct_->alignment = 1;
+
+					_ReadWriteBarrier(); // Make sure we update the size after alignment, as having a non-zero size means that the size info is ready
+
+					struct_->size = 1;
+				}
+				else {
+					if (struct_->flags & TYPE_STRUCT_IS_PACKED) {
+						struct_->size = job->runningSize;
+					}
+					else {
+						struct_->size = AlignPO2(job->runningSize, struct_->alignment);
+					}
+				}
+
+				*madeProgress = true;
+				freeJob(job);
+				inferJobs.unordered_remove((*index)--);
+			}
+		}
+		else if (type->flavor == TypeFlavor::ARRAY) {
+			auto array = static_cast<TypeArray *>(type);
+
+			assert(array->flags & TYPE_ARRAY_IS_FIXED);
+
+			if (array->arrayOf->size) {
+				array->size = array->arrayOf->size * array->count;
+				array->alignment = array->arrayOf->alignment;
+
+				*madeProgress = true;
+				freeJob(job);
+				inferJobs.unordered_remove((*index)--);
+			}
+		}
+		else {
+			assert(false);
+		}
+
+		break;
+	}
+	default:
+		assert(false);
+	}
+
+	return true;
+}
+
 void runInfer() {
 	PROFILE_FUNC();
 
@@ -3809,6 +4208,16 @@ void runInfer() {
 				}
 
 				++totalFunctions;
+
+				inferJobs.add(body);
+
+				u64 index = inferJobs.count - 1;
+				bool madeProgress = false;
+				if (!doInferJob(&index, &madeProgress)) {
+					goto error;
+				}
+
+				continue;
 			}
 			else if (declarations.data.expr->flavor == ExprFlavor::TYPE_LITERAL) {
 				body->infer.type = static_cast<ExprLiteral *>(declarations.data.expr)->typeValue;
@@ -3820,12 +4229,12 @@ void runInfer() {
 
 				body->infer.type->sizeJob = body;
 				++totalTypesSized;
+
+				inferJobs.add(body);
 			}
 			else {
 				assert(false);
 			}
-
-			inferJobs.add(body);
 		}
 		else if (declarations.type == DeclarationPackType::GLOBAL_DECLARATION) {
 			changedBlock = &globalBlock;
@@ -3858,365 +4267,8 @@ void runInfer() {
 				if (job->waitingOnBlock && job->waitingOnBlock != changedBlock && !madeProgress) continue;
 				job->waitingOnBlock = nullptr;
 
-				switch (job->type) {
-					case InferType::FUNCTION_BODY: {
-						if (!inferFlattened(job, job->valueFlattened, &job->valueFlattenedIndex, &job->waitingOnBlock)) {
-							goto error;
-						}
-
-						if (job->infer.function->type) {
-							for (auto argument : job->infer.function->arguments.declarations) {
-								addSizeDependency(job, static_cast<ExprLiteral *>(argument->type)->typeValue);
-							}
-
-							if (job->infer.function->flags & EXPR_FUNCTION_IS_EXTERNAL) {
-								assert(!job->infer.function->body);
-
-								if (!job->infer.declaration) {
-									reportError(job->infer.function, "Error: External functions must be named");
-									goto error;
-								}
-
-								CoffJob coff;
-								coff.isFunction = true;
-								coff.function = job->infer.function;
-
-								coffWriterQueue.add(coff);
-
-								inferJobs.unordered_remove(i--);
-								freeJob(job);
-							}
-							else {
-								assert(job->infer.function->body);
-
-								if (job->valueFlattenedIndex == job->valueFlattened.count) {
-									inferJobs.unordered_remove(i--);
-									waitingOnSize.add(job);
-								}
-							}
-						}
-						break;
-					}
-					case InferType::DECLARATION: {
-						auto declaration = job->infer.declaration;
-
-						if (declaration->type) {
-							if (!inferFlattened(nullptr, job->typeFlattened, &job->typeFlattenedIndex, &job->waitingOnBlock)) {
-								goto error;
-							}
-						}
-
-						if (declaration->initialValue) {
-							if (!inferFlattened(job, job->valueFlattened, &job->valueFlattenedIndex, &job->waitingOnBlock)) {
-								goto error;
-							}
-						}
-
-						if (!(declaration->flags & (DECLARATION_TYPE_IS_READY | DECLARATION_IS_USING)) && declaration->type && job->typeFlattenedIndex == job->typeFlattened.count) {
-							if (declaration->type->type != &TYPE_TYPE) {
-								if (declaration->type->type->flavor == TypeFlavor::FUNCTION) {
-									reportError(declaration->type, "Error: Declaration type cannot be a function, did you miss a colon?");
-								}
-								else {
-									reportError(declaration->type, "Error: Declaration type must be a type, but got a %.*s", STRING_PRINTF(declaration->type->type->name));
-								}
-								goto error;
-							}
-							if (declaration->type->flavor != ExprFlavor::TYPE_LITERAL) {
-								reportError(declaration->type, "Error: Declaration type must be a constant");
-								goto error;
-							}
-
-							if (static_cast<ExprLiteral *>(declaration->type)->typeValue == &TYPE_VOID) {
-								reportError(declaration->type, "Error: Declaration cannot have type void");
-								goto error;
-							}
-
-							madeProgress = true;
-							declaration->flags |= DECLARATION_TYPE_IS_READY;
-						}
-
-						if (!(declaration->flags & DECLARATION_IS_USING) && declaration->type && declaration->initialValue) {
-							if (job->typeFlattenedIndex == job->typeFlattened.count && job->valueFlattenedIndex == job->valueFlattened.count) {
-								assert(declaration->initialValue->type);
-
-								Type *correct = static_cast<ExprLiteral *>(declaration->type)->typeValue;
-
-								if (!assignOp(job, declaration->initialValue, correct, declaration->initialValue)) {
-									goto error;
-								}
-
-								if ((declaration->flags &
-									(DECLARATION_IS_CONSTANT | DECLARATION_IS_ARGUMENT | DECLARATION_IS_STRUCT_MEMBER)) || declaration->enclosingScope == &globalBlock) {
-									if (!isLiteral(declaration->initialValue)) {
-										reportError(declaration->type, "Error: Declaration value must be a constant");
-										goto error;
-									}
-								}
-
-								madeProgress = true;
-
-								inferJobs.unordered_remove(i--);
-
-								declaration->flags |= DECLARATION_VALUE_IS_READY;
-
-								if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
-									waitingOnSize.add(job);
-								}
-								else {
-									freeJob(job);
-								}
-							}
-						}
-						else if (!(declaration->flags & DECLARATION_IS_USING) && declaration->type) {
-
-							if (job->typeFlattenedIndex == job->typeFlattened.count) {
-								if (!(declaration->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_ITERATOR | DECLARATION_IS_ITERATOR_INDEX | DECLARATION_IS_ARGUMENT))) {
-									auto type = static_cast<ExprLiteral *>(declaration->type)->typeValue;
-
-									bool yield;
-									declaration->initialValue = createDefaultValue(declaration, type, &yield);
-
-									if (yield) continue;
-
-									if (!declaration->initialValue) {
-										goto error;
-									}
-
-									declaration->initialValue->valueOfDeclaration = declaration;
-
-									declaration->initialValue->start = declaration->start;
-									declaration->initialValue->end = declaration->end;
-								}
-
-								madeProgress = true;
-
-								inferJobs.unordered_remove(i--);
-
-								declaration->flags |= DECLARATION_VALUE_IS_READY;
-
-
-								if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
-									waitingOnSize.add(job);
-								}
-								else {
-									freeJob(job);
-								}
-							}
-						}
-						else if (declaration->initialValue) {
-							if (job->valueFlattenedIndex == job->valueFlattened.count) {
-								if (declaration->flags & DECLARATION_IS_USING) {
-									bool onlyConstants;
-									auto struct_ = getExpressionNamespace(declaration->initialValue , &onlyConstants, declaration->initialValue);
-
-									onlyConstants |= (declaration->flags & DECLARATION_IS_CONSTANT) != 0;
-
-									if (!struct_) {
-										goto error;
-									}
-
-
-
-									if (declaration->initialValue->flavor != ExprFlavor::TYPE_LITERAL) {
-										auto identifier = static_cast<ExprIdentifier *>(declaration->initialValue);
-
-										while (identifier) {
-											if (identifier->flavor != ExprFlavor::IDENTIFIER) {
-												reportError(declaration->initialValue, "Error: You can only 'using' an identifier, a struct access of an identifier or a type");
-												goto error;
-											}
-
-											identifier = static_cast<ExprIdentifier *>(identifier->structAccess);
-										}
-
-										declaration->initialValue = pushStructAccessDown(static_cast<ExprIdentifier *>(declaration->initialValue), declaration->type, declaration->start, declaration->end);
-									}
-
-									for (auto member : struct_->members.declarations) {
-										if (checkForRedeclaration(declaration->enclosingScope, member, declaration->initialValue)) {
-											if (!(member->flags & DECLARATION_IMPORTED_BY_USING)) {
-												if (!onlyConstants || (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_USING))) {
-													auto import = new Declaration;
-													import->start = member->start;
-													import->end = member->end;
-													import->name = member->name;
-													import->enclosingScope = declaration->enclosingScope;
-													import->indexInBlock = declaration->indexInBlock;
-													import->flags = member->flags;
-
-													if (member->flags & DECLARATION_IS_USING) {
-														if (onlyConstants) {
-															import->flags |= DECLARATION_IS_CONSTANT;
-														}
-
-														import->initialValue = member->initialValue;
-														import->type = declaration->initialValue;
-														import->flags &= ~DECLARATION_USING_IS_RESOLVED;
-
-														addDeclaration(import);
-													}
-													else {
-														if (member->flags & DECLARATION_IS_CONSTANT) {
-															import->type = member->type;
-															import->initialValue = member->initialValue;
-														}
-														else {
-															import->import = member;
-															import->initialValue = declaration->initialValue;
-														}
-
-														import->flags |= DECLARATION_IMPORTED_BY_USING;
-													}
-
-													addDeclarationToBlock(declaration->enclosingScope, import);
-												}
-											}
-										}
-										else {
-											goto error;
-										}
-									}
-
-									madeProgress = true;
-
-									declaration->enclosingScope->usings.unordered_remove(declaration);
-									declaration->flags |= DECLARATION_USING_IS_RESOLVED;
-									inferJobs.unordered_remove(i--);
-									freeJob(job);
-								}
-								else {
-									assert(declaration->initialValue->type);
-
-									if (!(declaration->flags & DECLARATION_IS_CONSTANT)) {
-										trySolidifyNumericLiteralToDefault(declaration->initialValue);
-									}
-
-									if (declaration->initialValue->type == &TYPE_VOID) {
-										reportError(declaration->type, "Error: Declaration cannot have type void");
-										goto error;
-									}
-									else if (declaration->initialValue->type == &TYPE_AUTO_CAST) {
-										reportError(declaration->type, "Error: Cannot infer the type of a declaration if the value is an auto cast");
-										goto error;
-									}
-
-									declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, declaration->initialValue->type);
-
-									if ((declaration->flags &
-										(DECLARATION_IS_CONSTANT | DECLARATION_IS_ARGUMENT | DECLARATION_IS_STRUCT_MEMBER)) || declaration->enclosingScope == &globalBlock) {
-										if (!isLiteral(declaration->initialValue)) {
-											reportError(declaration->type, "Error: Declaration value must be a constant");
-											goto error;
-										}
-									}
-
-									madeProgress = true;
-
-
-									inferJobs.unordered_remove(i--);
-
-									declaration->flags |= DECLARATION_VALUE_IS_READY;
-									declaration->flags |= DECLARATION_TYPE_IS_READY;
-
-
-									if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
-										waitingOnSize.add(job);
-									}
-									else {
-										freeJob(job);
-									}
-								}
-							}
-						}
-
-						break;
-					}
-					case InferType::TYPE_TO_SIZE: {
-						auto type = job->infer.type;
-
-						if (type->flavor == TypeFlavor::STRUCT) {
-							auto struct_ = static_cast<TypeStruct *>(type);
-
-							while (job->sizingIndexInMembers < struct_->members.declarations.count) {
-								auto member = struct_->members.declarations[job->sizingIndexInMembers];
-
-								if (!(member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_USING | DECLARATION_IMPORTED_BY_USING))) {
-									if (!(member->flags & DECLARATION_TYPE_IS_READY))
-										break;
-
-									auto memberType = static_cast<ExprLiteral *>(member->type)->typeValue;
-
-									if (!memberType->size)
-										break;
-
-									if (!(struct_->flags & TYPE_STRUCT_IS_PACKED)) {
-										struct_->alignment = my_max(struct_->alignment, memberType->alignment);
-									}
-
-									if (struct_->flags & TYPE_STRUCT_IS_UNION) {
-										job->runningSize = my_max(job->runningSize, memberType->size);
-
-										member->physicalStorage = 0;
-									}
-									else {
-										if (!(struct_->flags & TYPE_STRUCT_IS_PACKED)) {
-											job->runningSize = AlignPO2(job->runningSize, memberType->alignment);
-										}
-
-										member->physicalStorage = job->runningSize;
-
-										job->runningSize += memberType->size;
-									}
-								}
-
-								job->sizingIndexInMembers++;
-							}
-
-							if (job->sizingIndexInMembers == struct_->members.declarations.count) {
-								if (job->runningSize == 0) { // Empty structs are allowed, but we can't have size 0 types
-									struct_->alignment = 1;
-
-									_ReadWriteBarrier(); // Make sure we update the size after alignment, as having a non-zero size means that the size info is ready
-
-									struct_->size = 1;
-								}
-								else {
-									if (struct_->flags & TYPE_STRUCT_IS_PACKED) {
-										struct_->size = job->runningSize;
-									}
-									else {
-										struct_->size = AlignPO2(job->runningSize, struct_->alignment);
-									}
-								}
-
-								madeProgress = true;
-								freeJob(job);
-								inferJobs.unordered_remove(i--);
-							}
-						}
-						else if (type->flavor == TypeFlavor::ARRAY) {
-							auto array = static_cast<TypeArray *>(type);
-
-							assert(array->flags & TYPE_ARRAY_IS_FIXED);
-
-							if (array->arrayOf->size) {
-								array->size = array->arrayOf->size * array->count;
-								array->alignment = array->arrayOf->alignment;
-
-								madeProgress = true;
-								freeJob(job);
-								inferJobs.unordered_remove(i--);
-							}
-						}
-						else {
-							assert(false);
-						}
-
-						break;
-					}
-					default:
-						assert(false);
+				if (!doInferJob(&i, &madeProgress)) {
+					goto error;
 				}
 			}
 		} while (madeProgress && inferJobs.count);
@@ -4352,10 +4404,13 @@ void runInfer() {
 				}
 			}
 		}
+
+		goto error;
 	}
 
 	if (waitingOnSize.count) {
-		assert(false); // @ErrorMessage
+		reportError("Error: waiting on size @Incomplete");
+		goto error;
 	}
 
 	{
@@ -4366,9 +4421,13 @@ void runInfer() {
 			"  %u declarations\n"
 			"  %u functions\n"
 			"  %u types\n"
-			"Total infers: %u, %.1f infers/queued",
+			"Total infers: %u, %.1f infers/queued\n",
 			totalQueued, totalDeclarations, totalFunctions, totalTypesSized, totalInfers, static_cast<float>(totalInfers) / totalQueued);
 	}
+	irGeneratorQueue.add(nullptr);
+	return;
 error:;
+	assert(hadError);
+
 	irGeneratorQueue.add(nullptr);
 }

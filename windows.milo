@@ -165,21 +165,21 @@ STARTF_FORCEONFEEDBACK  :: 0x0000_0040
 STARTF_FORCEOFFFEEDBACK :: 0x0000_0080
 STARTF_USESTDHANDLES    :: 0x0000_0100
 
-SW_HIDE:            u16: 0
-SW_SHOWNORMAL:      u16: 1
-SW_NORMAL:          u16: 1
-SW_SHOWMINIMIZED:   u16: 2
-SW_SHOWMAXIMIZED:   u16: 3
-SW_MAXIMIZE:        u16: 3
-SW_SHOWNOACTIVATE:  u16: 4
-SW_SHOW:            u16: 5
-SW_MINIMIZE:        u16: 6
-SW_SHOWMINNOACTIVE: u16: 7
-SW_SHOWNA:          u16: 8
-SW_RESTORE:         u16: 9
-SW_SHOWDEFAULT:     u16: 10
-SW_FORCEMINIMIZE:   u16: 11
-SW_MAX:             u16: 11
+SW_HIDE            ::  0
+SW_SHOWNORMAL      ::  1
+SW_NORMAL          ::  1
+SW_SHOWMINIMIZED   ::  2
+SW_SHOWMAXIMIZED   ::  3
+SW_MAXIMIZE        ::  3
+SW_SHOWNOACTIVATE  ::  4
+SW_SHOW            ::  5
+SW_MINIMIZE        ::  6
+SW_SHOWMINNOACTIVE ::  7
+SW_SHOWNA          ::  8
+SW_RESTORE         ::  9
+SW_SHOWDEFAULT     ::  10
+SW_FORCEMINIMIZE   ::  11
+SW_MAX             ::  11
 
 POINT :: struct {
 	x: s32
@@ -221,26 +221,26 @@ WHITENESS :: 0x00FF_0062
 
 GetStockObject :: (i: s32) -> HGDIOBJ #external
 
-WHITE_BRUSH:         s32: 0
-LTGRAY_BRUSH:        s32: 1
-GRAY_BRUSH:          s32: 2
-DKGRAY_BRUSH:        s32: 3
-BLACK_BRUSH:         s32: 4
-NULL_BRUSH:          s32: 5
-HOLLOW_BRUSH:        s32: NULL_BRUSH
-WHITE_PEN:           s32: 6
-BLACK_PEN:           s32: 7
-NULL_PEN:            s32: 8
-OEM_FIXED_FONT:      s32: 10
-ANSI_FIXED_FONT:     s32: 11
-ANSI_VAR_FONT:       s32: 12
-SYSTEM_FONT:         s32: 13
-DEVICE_DEFAULT_FONT: s32: 14
-DEFAULT_PALETTE:     s32: 15
-SYSTEM_FIXED_FONT:   s32: 16
-DEFAULT_GUI_FONT:    s32: 17
-DC_BRUSH:            s32: 18
-DC_PEN:              s32: 19
+WHITE_BRUSH         ::  0
+LTGRAY_BRUSH        ::  1
+GRAY_BRUSH          ::  2
+DKGRAY_BRUSH        ::  3
+BLACK_BRUSH         ::  4
+NULL_BRUSH          ::  5
+HOLLOW_BRUSH        ::  NULL_BRUSH
+WHITE_PEN           ::  6
+BLACK_PEN           ::  7
+NULL_PEN            ::  8
+OEM_FIXED_FONT      ::  10
+ANSI_FIXED_FONT     ::  11
+ANSI_VAR_FONT       ::  12
+SYSTEM_FONT         ::  13
+DEVICE_DEFAULT_FONT ::  14
+DEFAULT_PALETTE     ::  15
+SYSTEM_FIXED_FONT   ::  16
+DEFAULT_GUI_FONT    ::  17
+DC_BRUSH            ::  18
+DC_PEN              ::  19
 
 GetClientRect :: (hWnd: HWND, lpRect: *RECT) -> s32 #external
 

@@ -1,3 +1,4 @@
+#load "windows.milo"
 #load "gl.milo"
 #load "standard.milo"
 
@@ -168,7 +169,7 @@ _main :: () {
 	
 	GetStartupInfoW(*startup_info)
 	
-	show_command := SW_SHOWDEFAULT
+	show_command: u16 = SW_SHOWDEFAULT
 	
 	if (startup_info.dwFlags & STARTF_USESHOWWINDOW) {
 		show_command = startup_info.wShowWindow
