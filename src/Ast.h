@@ -221,6 +221,7 @@ struct Block;
 struct ExprIdentifier : Expr {
 	String name;
 	Block *resolveFrom;
+	Block *enclosingScope;
 	Expr *structAccess;
 	u64 indexInBlock;
 

@@ -124,6 +124,7 @@ ExprIdentifier *makeIdentifier(CodeLocation &start, EndLocation &end, Declaratio
 	identifier->declaration = declaration;
 	identifier->name = declaration->name;
 	identifier->resolveFrom = currentBlock;
+	identifier->enclosingScope = currentBlock;
 	identifier->indexInBlock = 0;
 	identifier->structAccess = nullptr;
 
@@ -160,6 +161,7 @@ Declaration *createDeclarationForUsing(Declaration *oldDeclaration) {
 	using_->start = oldDeclaration->start;
 	using_->end = oldDeclaration->end;
 	using_->resolveFrom = currentBlock;
+	using_->enclosingScope = currentBlock;
 	using_->indexInBlock = currentBlock->declarations.count;
 	using_->name = oldDeclaration->name;
 	using_->declaration = oldDeclaration;
@@ -457,6 +459,7 @@ Expr *parseStatement(LexerFile *lexer) {
 			identifier->name = lexer->token.text;
 			identifier->flavor = ExprFlavor::IDENTIFIER;
 			identifier->resolveFrom = currentBlock;
+			identifier->enclosingScope = currentBlock;
 			identifier->flags |= EXPR_IDENTIFIER_IS_BREAK_OR_CONTINUE_LABEL;
 			identifier->structAccess = nullptr;
 
@@ -1134,6 +1137,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		identifier->name = lexer->token.text;
 		identifier->flavor = ExprFlavor::IDENTIFIER;
 		identifier->resolveFrom = currentBlock;
+		identifier->enclosingScope = currentBlock;
 		identifier->declaration = nullptr;
 		identifier->structAccess = nullptr;
 
@@ -1483,6 +1487,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 			access->flavor = ExprFlavor::IDENTIFIER;
 			access->declaration = nullptr;
 			access->resolveFrom = nullptr;
+			access->enclosingScope = nullptr;
 			access->indexInBlock = 0;
 
 			if (lexer->token.type != TokenT::IDENTIFIER) {

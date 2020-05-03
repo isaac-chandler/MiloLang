@@ -48,6 +48,7 @@ struct Declaration {
 #define BLOCK_IS_COMPLETE 0x2
 #define BLOCK_IS_LOOP 0x4
 #define BLOCK_IS_STRUCT 0x8
+#define BLOCK_HAS_USINGS 0x10
 
 #define BLOCK_HASHTABLE_MIN_COUNT 32
 
@@ -118,6 +119,7 @@ inline void addDeclarationToBlockUnchecked(Block *block, Declaration *declaratio
 	declaration->enclosingScope = block;
 
 	if (declaration->flags & DECLARATION_IS_USING) {
+		block->flags |= BLOCK_HAS_USINGS;
 		block->usings.add(declaration);
 	}
 

@@ -2660,7 +2660,11 @@ TypeStruct *getExpressionNamespace(Expr *expr, bool *onlyConstants, Expr *locati
 	}
 }
 
-ExprIdentifier *pushStructAccessDown(ExprIdentifier *accesses, Expr *base, CodeLocation start, EndLocation end) {
+Expr *pushStructAccessDown(ExprIdentifier *accesses, Expr *base, CodeLocation start, EndLocation end) {
+	if (!accesses) {
+		return base;
+	}
+
 	auto result = new ExprIdentifier;
 	auto current = result;
 
@@ -2732,7 +2736,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 							bool yield;
 							u64 index;
 							if (Declaration *declaration = findDeclaration(identifier->resolveFrom, identifier->name, &index, &yield, identifier->indexInBlock)) {
-								if (declaration->flags & DECLARATION_IS_CONSTANT) {
+								if ((declaration->flags & DECLARATION_IS_CONSTANT) && !(declaration->flags & DECLARATION_IMPORTED_BY_USING)) {
 									identifier->declaration = declaration;
 									break;
 								}
@@ -2748,7 +2752,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 									}
 									else {
 										reportError(identifier, "Error: Cannot refer to variable '%.*s' before it was declared", STRING_PRINTF(identifier->name));
-										reportError(identifier->declaration, "   ..: Here is the location of the declaration");
+										reportError(declaration, "   ..: Here is the location of the declaration");
 										return false;
 									}
 								}
@@ -2775,6 +2779,40 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 							}
 							else {
 								*waitingOnBlock = identifier->resolveFrom;
+							}
+						}
+						
+						if (identifier->declaration) {
+							u64 index;
+							if (identifier->enclosingScope &&identifier->declaration->enclosingScope != identifier->enclosingScope && (identifier->enclosingScope->flags & BLOCK_HAS_USINGS)) {
+								if (identifier->enclosingScope->usings.count) {
+									Declaration *import = new Declaration;
+
+									import->start = identifier->declaration->start;
+									import->end = identifier->declaration->end;
+									import->name = identifier->declaration->name;
+									import->flags = identifier->declaration->flags;
+
+									if (identifier->declaration->flags & DECLARATION_IS_CONSTANT) {
+										import->type = identifier->declaration->type;
+										import->initialValue = identifier->declaration->initialValue;
+									}
+									else {
+										import->import = identifier->declaration;
+										import->initialValue = identifier->declaration->flags & DECLARATION_IMPORTED_BY_USING ? identifier->declaration->initialValue : nullptr;
+									}
+
+									import->flags |= DECLARATION_IMPORTED_BY_USING;
+									if (!addDeclarationToBlock(identifier->enclosingScope, import)) {
+										return false;
+									}
+									import->indexInBlock = 0;
+								}
+								else if (auto declaration = findDeclarationNoYield(identifier->enclosingScope, identifier->name, &index)) {
+									reportError(identifier->declaration, "Error: Cannot redeclare variable '%.*s' within the same scope", STRING_PRINTF(declaration->name));
+									reportError(declaration, "   ..: Here is the location it was declared");
+									return false;
+								}
 							}
 						}
 					}
@@ -4004,8 +4042,6 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 									import->start = member->start;
 									import->end = member->end;
 									import->name = member->name;
-									import->enclosingScope = declaration->enclosingScope;
-									import->indexInBlock = declaration->indexInBlock;
 									import->flags = member->flags;
 
 									if (member->flags & DECLARATION_IS_USING) {
@@ -4033,6 +4069,7 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 									}
 
 									addDeclarationToBlock(declaration->enclosingScope, import);
+									import->indexInBlock = declaration->indexInBlock;
 								}
 							}
 						}
