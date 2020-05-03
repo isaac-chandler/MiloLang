@@ -18,7 +18,6 @@
 #include <cinttypes>
 #include <stdarg.h>
 
-
 #undef small
 #undef min
 #undef max

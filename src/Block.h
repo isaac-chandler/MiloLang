@@ -18,6 +18,7 @@
 #define DECLARATION_IMPORTED_BY_USING 0x400
 #define DECLARATION_USING_IS_RESOLVED 0x800
 #define DECLARATION_MARKED_AS_USING   0x1000
+#define DECLARATION_IS_IMPLICIT_IMPORT 0x2000
 
 
 struct Declaration {
@@ -48,7 +49,6 @@ struct Declaration {
 #define BLOCK_IS_COMPLETE 0x2
 #define BLOCK_IS_LOOP 0x4
 #define BLOCK_IS_STRUCT 0x8
-#define BLOCK_HAS_USINGS 0x10
 
 #define BLOCK_HASHTABLE_MIN_COUNT 32
 
@@ -68,7 +68,7 @@ inline Block globalBlock;
 
 Declaration *findInBlock(Block *block, String name);
 
-inline Declaration *findDeclarationNoYield(Block *block, String name, u64 *index) {
+inline Declaration *findDeclarationIncludeImplictImports(Block *block, String name, u64 *index) {
 	if (block->table) {
 		return findInBlock(block, name);
 	}
@@ -85,16 +85,35 @@ inline Declaration *findDeclarationNoYield(Block *block, String name, u64 *index
 	return nullptr;
 }
 
+inline Declaration *findDeclarationNoYield(Block *block, String name, u64 *index) {
+	auto declaration = findDeclarationIncludeImplictImports(block, name, index);
+
+	if (!declaration)
+		return nullptr;
+
+	return declaration->flags & DECLARATION_IS_IMPLICIT_IMPORT ? nullptr : declaration;
+}
+
 inline bool checkForRedeclaration(Block *block, Declaration *declaration, struct Expr *using_) {
 	assert(block);
 	assert(declaration);
 
 	if (declaration->name.length) { // Multiple zero length names are used in the arguments block for function prototypes with unnamed arguments
 		u64 index;
-		auto previous = findDeclarationNoYield(block, declaration->name, &index);
+		auto previous = findDeclarationIncludeImplictImports(block, declaration->name, &index);
 
 		if (previous) {
-			if (using_) {
+			if (previous->flags & DECLARATION_IS_IMPLICIT_IMPORT) {
+				if (using_) {
+					reportError(using_, "Error: Attempt to import a variable that was used previously in the scope", STRING_PRINTF(declaration->name));
+					reportError(previous, "   ..: Here is the usage");
+					reportError(declaration, "   ..: Here is the location it was imported from");
+				}
+				else {
+					reportError(declaration, "Error: Attempt to redeclare a variable that was used previously in the scope");
+					reportError(previous, "   ..: Here is the usage");
+				}
+			} else if (using_) {
 				reportError(using_, "Error: Cannot import variable '%.*s' into scope, it already exists there", STRING_PRINTF(declaration->name));
 				reportError(previous, "   ..: Here is the location it was declared");
 				reportError(declaration, "   ..: Here is the location it was imported from");
@@ -119,7 +138,6 @@ inline void addDeclarationToBlockUnchecked(Block *block, Declaration *declaratio
 	declaration->enclosingScope = block;
 
 	if (declaration->flags & DECLARATION_IS_USING) {
-		block->flags |= BLOCK_HAS_USINGS;
 		block->usings.add(declaration);
 	}
 
@@ -157,4 +175,34 @@ inline Declaration *findDeclaration(Block *block, String name, u64 *index, bool 
 	*yield = false;
 
 	return findDeclarationNoYield(block, name, index);
+}
+
+inline bool addImplicitImport(Block *block, String name, CodeLocation *start, EndLocation *end) {
+	PROFILE_FUNC();
+	if (block->flags & (BLOCK_IS_ARGUMENTS | BLOCK_IS_STRUCT)) return true;
+
+	u64 index;
+	auto declaration = findDeclarationIncludeImplictImports(block, name, &index);
+
+	if (declaration) {
+		if (declaration->flags & DECLARATION_IS_IMPLICIT_IMPORT) {
+			return true; 
+		}
+		else {
+			// @Incomplete Keep track of the using that imported something so we can report if the redeclaration is from a using
+			reportError(declaration, "Error: Attempt to redeclare a variable that was used previously in the scope");
+			reportError(start, end,  "   ..: Here is the usage");
+			return false;
+		}
+	}
+	else {
+		Declaration *import = new Declaration;
+		import->name = name;
+		import->start = *start;
+		import->end = *end;
+		import->flags |= DECLARATION_IS_IMPLICIT_IMPORT;
+		addDeclarationToBlockUnchecked(block, import);
+
+		return true;
+	}
 }

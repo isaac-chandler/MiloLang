@@ -1129,8 +1129,6 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 	}
 	else if (lexer->token.type == TokenT::IDENTIFIER) {
-		bool success;
-
 		ExprIdentifier *identifier = PARSER_NEW(ExprIdentifier);
 		identifier->start = start;
 		identifier->end = end;
@@ -1274,9 +1272,18 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 	else if (expectAndConsume(lexer, TokenT::STRING)) {
 		expr = parserMakeTypeLiteral(start, end, &TYPE_STRING);
 	}
-	else if (expectAndConsume(lexer, TokenT::STRUCT)) {
+	else if (lexer->token.type == TokenT::STRUCT || lexer->token.type == TokenT::UNION) {
+		TokenT tokenType = lexer->token.type;
+		lexer->advance();
+
 		auto type = PARSER_NEW(TypeStruct);
 		type->flavor = TypeFlavor::STRUCT;
+		type->members.flags |= BLOCK_IS_STRUCT;
+
+		if (tokenType == TokenT::UNION) {
+			type->flags |= TYPE_STRUCT_IS_UNION;
+		}
+
 		pushBlock(&type->members);
 
 		type->size = 0;
@@ -1288,7 +1295,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		}
 
 		if (!expectAndConsume(lexer, '{')) {
-			reportExpectedError(&lexer->token, "Error: Expected '{' in struct definition");
+			reportExpectedError(&lexer->token, "Error: Expected '{' in %s definition", tokenType == TokenT::UNION ? "union" : "struct");
 			return nullptr;
 		}
 
@@ -1317,58 +1324,6 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 			}
 			else {
 				reportExpectedError(&lexer->token, "Error: Expected declaration in struct definition");
-			}
-		}
-
-		popBlock(&type->members);
-		expr = parserMakeTypeLiteral(start, lexer->previousTokenEnd, type);
-
-		inferQueue.add(makeDeclarationPack(expr));
-	}
-	else if (expectAndConsume(lexer, TokenT::UNION)) {
-		auto type = PARSER_NEW(TypeStruct);
-		type->flavor = TypeFlavor::STRUCT;
-		type->flags |= TYPE_STRUCT_IS_UNION;
-		pushBlock(&type->members);
-
-		type->size = 0;
-		type->alignment = 1;
-		type->hash = 0;
-
-		if (expectAndConsume(lexer, TokenT::PACK)) {
-			type->flags |= TYPE_STRUCT_IS_PACKED;
-		}
-
-		if (!expectAndConsume(lexer, '{')) {
-			reportExpectedError(&lexer->token, "Error: Expected '{' in union definition");
-			return nullptr;
-		}
-
-		while (true) {
-			if (lexer->token.type == TokenT::IDENTIFIER || lexer->token.type == TokenT::USING) {
-				auto declaration = parseDeclaration(lexer);
-
-				if (!declaration)
-					return nullptr;
-
-				declaration->flags |= DECLARATION_IS_STRUCT_MEMBER;
-
-				if (!addDeclarationToCurrentBlock(declaration)) {
-					return nullptr;
-				}
-
-				if (declaration->flags & DECLARATION_MARKED_AS_USING) {
-					addDeclarationToCurrentBlock(createDeclarationForUsing(declaration));
-				}
-			}
-			else if (expectAndConsume(lexer, ';')) {
-
-			}
-			else if (expectAndConsume(lexer, '}')) {
-				break;
-			}
-			else {
-				reportExpectedError(&lexer->token, "Error: Expected declaration in union definition");
 			}
 		}
 

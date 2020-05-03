@@ -1353,7 +1353,7 @@ Expr *createDefaultValue(Declaration *location, Type *type, bool *shouldYield) {
 		case TypeFlavor::INTEGER:
 		case TypeFlavor::POINTER: {
 			assert(false); // This should be handled by the defaultValueIsZero check
-			break;
+			return nullptr;
 		}
 		case TypeFlavor::STRUCT: {
 			Expr *literal = new Expr;
@@ -2783,34 +2783,10 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 						}
 						
 						if (identifier->declaration) {
-							u64 index;
-							if (identifier->enclosingScope &&identifier->declaration->enclosingScope != identifier->enclosingScope && (identifier->enclosingScope->flags & BLOCK_HAS_USINGS)) {
-								if (identifier->enclosingScope->usings.count) {
-									Declaration *import = new Declaration;
+							if (identifier->enclosingScope && identifier->declaration->enclosingScope != identifier->enclosingScope) {
+								assert(identifier->enclosingScope != &globalBlock);
 
-									import->start = identifier->declaration->start;
-									import->end = identifier->declaration->end;
-									import->name = identifier->declaration->name;
-									import->flags = identifier->declaration->flags;
-
-									if (identifier->declaration->flags & DECLARATION_IS_CONSTANT) {
-										import->type = identifier->declaration->type;
-										import->initialValue = identifier->declaration->initialValue;
-									}
-									else {
-										import->import = identifier->declaration;
-										import->initialValue = identifier->declaration->flags & DECLARATION_IMPORTED_BY_USING ? identifier->declaration->initialValue : nullptr;
-									}
-
-									import->flags |= DECLARATION_IMPORTED_BY_USING;
-									if (!addDeclarationToBlock(identifier->enclosingScope, import)) {
-										return false;
-									}
-									import->indexInBlock = 0;
-								}
-								else if (auto declaration = findDeclarationNoYield(identifier->enclosingScope, identifier->name, &index)) {
-									reportError(identifier->declaration, "Error: Cannot redeclare variable '%.*s' within the same scope", STRING_PRINTF(declaration->name));
-									reportError(declaration, "   ..: Here is the location it was declared");
+								if (!addImplicitImport(identifier->enclosingScope, identifier->name, &identifier->start, &identifier->end)) {
 									return false;
 								}
 							}
@@ -2990,7 +2966,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 				auto block = static_cast<ExprBlock *>(expr);
 
 				for (auto declaration : block->declarations.declarations) {
-					if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_USING | DECLARATION_IMPORTED_BY_USING))) {
+					if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_USING | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT))) {
 						if (!(declaration->flags & DECLARATION_TYPE_IS_READY)) {
 							return true;
 						}
@@ -2999,7 +2975,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 
 				// Do two passes over the array because if the first pass added dependencies on some declarations then yielded, it would add them again next time round
 				for (auto declaration : block->declarations.declarations) {
-					if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_USING | DECLARATION_IMPORTED_BY_USING))) {
+					if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_USING | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT))) {
 						addSizeDependency(job, static_cast<ExprLiteral *>(declaration->type)->typeValue);
 					}
 				}
@@ -4036,7 +4012,7 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 
 					for (auto member : struct_->members.declarations) {
 						if (checkForRedeclaration(declaration->enclosingScope, member, declaration->initialValue)) {
-							if (!(member->flags & DECLARATION_IMPORTED_BY_USING)) {
+							if (!(member->flags & (DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT))) {
 								if (!onlyConstants || (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_USING))) {
 									auto import = new Declaration;
 									import->start = member->start;
@@ -4454,11 +4430,11 @@ void runInfer() {
 		u64 totalQueued = totalDeclarations + totalFunctions + totalTypesSized;
 
 		printf(
-			"Total queued: %u\n"
-			"  %u declarations\n"
-			"  %u functions\n"
-			"  %u types\n"
-			"Total infers: %u, %.1f infers/queued\n",
+			"Total queued: %llu\n"
+			"  %llu declarations\n"
+			"  %llu functions\n"
+			"  %llu types\n"
+			"Total infers: %llu, %.1f infers/queued\n",
 			totalQueued, totalDeclarations, totalFunctions, totalTypesSized, totalInfers, static_cast<float>(totalInfers) / totalQueued);
 	}
 	irGeneratorQueue.add(nullptr);
