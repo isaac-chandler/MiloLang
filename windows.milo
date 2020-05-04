@@ -1,35 +1,21 @@
-HINSTANCE :: *struct {
-	unused: s32
-}
+HINSTANCE :: *struct {} // Use basically the same trick windows does to create a strong type
 
 
 HMODULE :: HINSTANCE
 
-HWND :: *struct {
-	unused: s32
-}
+HWND :: *struct {}
 
-HICON :: *struct {
-	unused: s32
-}
+HICON :: *struct {}
 
 HCURSOR :: HICON
 
-HBRUSH :: *struct {
-	unused: s32
-}
+HBRUSH :: *struct {}
 
-HMENU :: *struct {
-	unused: s32
-}
+HMENU :: *struct {}
 
-HDC :: *struct {
-	unused: s32
-}
+HDC :: *struct {}
 
-HGLRC :: *struct {
-	unused: s32
-}
+HGLRC :: *struct {}
 
 RECT :: struct {
 	left: s32

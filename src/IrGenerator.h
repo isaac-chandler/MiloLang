@@ -3,6 +3,6 @@
 #include "WorkQueue.h"
 #include "Ast.h"
 
-extern WorkQueue<ExprFunction *> irGeneratorQueue;
+extern MPSCWorkQueue<ExprFunction *> irGeneratorQueue;
 
 void runIrGenerator();

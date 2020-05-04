@@ -58,8 +58,6 @@ struct InferJob {
 	InferJob() : valueFlattened(20) {}
 };
 
-WorkQueue<DeclarationPack> inferQueue;
-
 Array<InferJob *> inferJobs;
 
 

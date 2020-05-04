@@ -51,6 +51,6 @@ inline DeclarationPack makeStopSignal() {
 }
 
 
-extern WorkQueue<DeclarationPack> inferQueue;
+inline MPMCWorkQueue<DeclarationPack> inferQueue;
 
 void runInfer();

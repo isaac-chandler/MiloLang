@@ -8,7 +8,7 @@
 #include "CoffWriter.h"
 #include "TypeTable.h"
 
-WorkQueue<ExprFunction *> irGeneratorQueue;
+MPSCWorkQueue<ExprFunction *> irGeneratorQueue;
 
 
 u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced = false);
@@ -398,6 +398,17 @@ void addLineMarker(IrState *state, Expr *expr) {
 	ir.op = IrOp::LINE_MARKER;
 	ir.location.start = expr->start;
 	ir.location.end = expr->end;
+}
+
+void addLineMarker(IrState *state, u32 fileUid, EndLocation end) {
+	Ir &ir = state->ir.add();
+
+	ir.op = IrOp::LINE_MARKER;
+	ir.location.start.fileUid = fileUid;
+	ir.location.start.line = end.line;
+	ir.location.start.column = end.column;
+	ir.location.start.locationInMemory = end.locationInMemory;
+	ir.location.end = end;
 }
 
 u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
@@ -1238,8 +1249,10 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				}
 			}
 		
-			if (loop->body)
+			if (loop->body) {
+				addLineMarker(state, loop->body);
 				generateIr(state, loop->body, DEST_NONE);
+			}
 
 			generateIncrement(state, loop);
 
@@ -1249,8 +1262,10 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 			state->ir[patch].b = state->ir.count;
 
-			if (loop->completedBody)
+			if (loop->completedBody) {
+				addLineMarker(state, loop->completedBody);
 				generateIr(state, loop->completedBody, DEST_NONE);
+			}
 
 			popLoop(state);
 			
@@ -1385,6 +1400,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				ifZ.a = conditionReg;
 				ifZ.opSize = 1;
 
+				addLineMarker(state, ifElse->ifBody);
 				generateIr(state, ifElse->ifBody, DEST_NONE);
 				
 				u64 patchJump = state->ir.count;
@@ -1393,6 +1409,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				
 				state->ir[patchIfZ].b = state->ir.count;
 
+				addLineMarker(state, ifElse->elseBody);
 				generateIr(state, ifElse->elseBody, DEST_NONE);
 
 				state->ir[patchJump].b = state->ir.count;
@@ -1404,6 +1421,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				ifZ.a = conditionReg;
 				ifZ.opSize = 1;
 
+				addLineMarker(state, ifElse->ifBody);
 				generateIr(state, ifElse->ifBody, DEST_NONE);
 
 				state->ir[patchIfZ].b = state->ir.count;
@@ -1415,6 +1433,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				ifNZ.a = conditionReg;
 				ifNZ.opSize = 1;
 
+				addLineMarker(state, ifElse->elseBody);
 				generateIr(state, ifElse->elseBody, DEST_NONE);
 
 				state->ir[patchIfNZ].b = state->ir.count;
@@ -1572,8 +1591,10 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			ifZ.a = conditionReg;
 			ifZ.opSize = 1;
 
-			if (loop->body)
+			if (loop->body) {
+				addLineMarker(state, loop->body);
 				generateIr(state, loop->body, DEST_NONE);
+			}
 
 			Ir &jump = state->ir.add();
 			jump.op = IrOp::GOTO;
@@ -1581,8 +1602,10 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 			state->ir[patch].b = state->ir.count;
 
-			if (loop->completedBody)
+			if (loop->completedBody) {
+				addLineMarker(state, loop->completedBody);
 				generateIr(state, loop->completedBody, DEST_NONE);
+			}
 
 			popLoop(state);
 
@@ -1735,60 +1758,15 @@ void runIrGenerator() {
 
 		generateIr(&function->state, function->body, DEST_NONE);
 
-		// @Incomplete @ErrorMessage check wether the function actually returns instead of just adding a void return
-		Ir &ret = function->state.ir.add();
-		ret.op = IrOp::RETURN;
-		ret.a = 0;
-		ret.opSize = 0;
+		//addLineMarker(&function->state, function->body->start.fileUid, function->body->end);
+
+		// @Incomplete @ErrorMessage check wether the function actually returns
 
 		CoffJob job;
 		job.function = function;
 		job.isFunction = true;
 
 		coffWriterQueue.add(job);
-
-
-
-		// @Incomplete submit for platform code gen/interpreting
-//
-//		for (u64 i = 0; i < state.ir.count; i++) {
-//			std::cout << i << ": ";
-//
-//			Ir &ir = state.ir[i];
-//
-//#define REG(reg) (reg ? "R" : "") << reg
-//
-//			switch (ir.op) {
-//			case IrOp::ADD: {
-//				std::cout << "add " << ir.opSize << REG(ir.dest) << " <- " << REG(ir.a) << ' ' << REG(ir.b) << '\n';
-//				break;
-//			}
-//			case IrOp::ADDRESS_OF_GLOBAL: {
-//				std::cout << "address_of_global " << REG(ir.dest) << " <- " << ir.declaration->name << " " << ir.declaration << '\n';
-//				break;
-//			}
-//
-//			case IrOp::ADDRESS_OF_LOCAL: {
-//				std::cout << "address_of_local " << REG(ir.dest) << " <- " << REG(ir.a) << '\n';
-//				break;
-//			}
-//			case IrOp::ADD_CONSTANT: {
-//				std::cout << "add " << ir.opSize << REG(ir.dest) << " <- " << REG(ir.a) << ' ' << ir.b << '\n';
-//				break;
-//			}
-//			case IrOp::AND: {
-//				std::cout << "and " << ir.opSize << REG(ir.dest) << " <- " << REG(ir.a) << ' ' << ir.b << '\n';
-//				break;
-//			}
-//
-//			case IrOp::CALL: {
-//
-//
-//				std::cout << "call " << ir.opSize ;
-//				break;
-//			}
-//			}
-//		}
 	}
 
 	coffWriterQueue.add({ nullptr, true });

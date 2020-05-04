@@ -11,6 +11,6 @@ struct CoffJob {
 	bool isFunction;
 };
 
-extern WorkQueue<CoffJob> coffWriterQueue;
+extern MPSCWorkQueue<CoffJob> coffWriterQueue;
 
 void runCoffWriter();

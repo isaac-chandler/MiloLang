@@ -5,7 +5,7 @@
 #include "TypeTable.h"
 #include "CompilerMain.h"
 
-WorkQueue<CoffJob> coffWriterQueue;
+MPSCWorkQueue<CoffJob> coffWriterQueue;
 
 union SymbolName {
 	char name[8];
@@ -780,6 +780,123 @@ const u32 T_64PREAL64 = 0x0641;
 const u32 T_BOOL08    = 0x0030;
 const u32 T_64PBOOL08 = 0x0630;
 
+u32 getCoffTypeIndex(Type *type) {
+	if (type == &TYPE_BOOL) {
+		return T_BOOL08;
+	}
+	else if (type == &TYPE_VOID) {
+		return T_VOID;
+	}
+	else if (type == &TYPE_F32) {
+		return T_REAL32;
+	}
+	else if (type == &TYPE_F64) {
+		return T_REAL64;
+	}
+	else if (type == &TYPE_S8) {
+		return T_INT1;
+	}
+	else if (type == &TYPE_S16) {
+		return T_INT2;
+	}
+	else if (type == &TYPE_S32) {
+		return T_INT4;
+	}
+	else if (type == &TYPE_S64) {
+		return T_INT8;
+	}
+	else if (type == &TYPE_U8) {
+		return T_UINT1;
+	}
+	else if (type == &TYPE_U16) {
+		return T_UINT2;
+	}
+	else if (type == &TYPE_U32) {
+		return T_UINT4;
+	}
+	else if (type == &TYPE_U64) {
+		return T_UINT8;
+	}
+	else if (type == &TYPE_STRING) {
+		return T_64PUCHAR;
+	}
+	else if (type->flavor == TypeFlavor::POINTER) {
+		auto pointer = static_cast<TypePointer *>(type);
+
+		auto indexOfType = getCoffTypeIndex(pointer->pointerTo);
+
+
+		// @Incomplete change 0x100 to a more concrete value
+		if (indexOfType < 0x100) {
+			return indexOfType | 0x600;
+		}
+		else {
+			return 0;
+		}
+	}
+
+	return 0;
+}
+
+#pragma pack(push, 1)
+struct PROCSYM32 {
+	u16 reclen;     // Record length
+	u16 rectyp;     // S_GPROC32, S_LPROC32, S_GPROC32_ID, S_LPROC32_ID, S_LPROC32_DPC or S_LPROC32_DPC_ID
+	u32 pParent;    // pointer to the parent
+	u32 pEnd;       // pointer to this blocks end
+	u32 pNext;      // pointer to next symbol
+	u32 len;        // Proc length
+	u32 DbgStart;   // Debug start offset
+	u32 DbgEnd;     // Debug end offset
+	u32 typind;     // Type index or ID
+	u32 off;
+	u16 seg;
+	u8  flags;      // Proc flags
+};
+
+struct FRAMEPROCSYM {
+	u16 reclen = sizeof(FRAMEPROCSYM) - 2;     // Record length
+	u16 rectyp = 0x1012;     // S_FRAMEPROC
+	u32 cbFrame;    // count of bytes of total frame of procedure
+	u32 cbPad = 0;      // count of bytes of padding in the frame
+	u32 offPad = 0;     // offset (relative to frame poniter) to where   padding starts
+	u32 cbSaveRegs = 0; // count of bytes of callee save registers
+	u32 offExHdlr = 0;  // offset of exception handler
+	u16  sectExHdlr = 0; // section id of exception handler
+
+	struct {
+		unsigned long   unused : 14;   // function uses _alloca()
+		unsigned long   encodedLocalBasePointer : 2;  // record function's local pointer explicitly.
+		unsigned long   encodedParamBasePointer : 2;  // record function's parameter pointer explicitly.
+		unsigned long   pad : 14;   // must be zero
+	} flags;
+};
+
+struct COMPILESYM3 {
+	u16 rectyp = 0x113C;     // Record type
+	struct {
+		u32 iLanguage : 8;   // language index
+		u32 unused : 24;
+	} flags;
+	u16  machine = 0xD0;    // target processor
+	u16  verFEMajor = 0; // front end major version #
+	u16  verFEMinor = 1; // front end minor version #
+	u16  verFEBuild = 1; // front end build version #
+	u16  verFEQFE = 1;   // front end QFE version #
+	u16  verMajor = 0;   // back end major version #
+	u16  verMinor = 1;   // back end minor version #
+	u16  verBuild = 1;   // back end build version #
+	u16  verQFE = 1;     // back end QFE version #
+};
+
+struct REGREL32 {
+	u16 rectyp = 0x1111;     // S_REGREL32
+	u32 off;        // offset of symbol
+	u32 typind;     // Type index or metadata token
+	u16 reg = 335; // RSP
+};
+#pragma pack(pop)
+
 void emitBasicType(BucketedArenaAllocator *debugSymbols, u32 type, const char *name) {
 	debugSymbols->add2(7 + strlen(name));
 	debugSymbols->add2(S_UDT);
@@ -821,6 +938,9 @@ void runCoffWriter() {
 	BucketedArenaAllocator stringTable(4096);
 	BucketedArenaAllocator debugSymbols(4096);
 	BucketedArenaAllocator debugSymbolsRelocations(4096);
+
+	BucketedArenaAllocator debugTypes(4096);
+
 	SectionHeader bssSection = {};
 	bssSection.virtualSize = 0;
 	BucketArray<Symbol> symbols;
@@ -850,15 +970,39 @@ void runCoffWriter() {
 	symbols.add(textSectionSymbol);
 
 	debugSymbols.add4(4);
+	debugTypes.add4(4);
+
+	{
+		debugSymbols.add4(0xF1);
+		auto subsectionSizePatch = debugSymbols.add4(0);
+		u32 subsectionOffset = debugSymbols.totalSize;
+
+		COMPILESYM3 compileFlags;
+		compileFlags.flags.iLanguage = 20; // Check noone uses this
+		compileFlags.flags.unused = 0;
+
+		const char *compilerName = "Milo Compiler 0.1.1 (Windows-x64)";
+
+		debugSymbols.add2(sizeof(compileFlags) + strlen(compilerName) + 1);
+		debugSymbols.add(&compileFlags, sizeof(compileFlags));
+
+		debugSymbols.addNullTerminatedString(compilerName);
+
+		*subsectionSizePatch = debugSymbols.totalSize - subsectionOffset;
+
+		alignAllocator(&debugSymbols, 4);
+	}
 
 	emitBasicTypeDebugInfo(&debugSymbols);
 
 	while (true) {
+
 		CoffJob job = coffWriterQueue.take();
 
 		if (!job.function)
 			break;
 		if (job.isFunction) {
+			PROFILE_ZONE("Write Function");
 			auto function = job.function;
 
 			bool success;
@@ -891,6 +1035,8 @@ void runCoffWriter() {
 			columnInfo.clear();
 
 			u32 functionStart = code.totalSize;
+
+			u32 functionPreambleEnd;
 
 			{
 				addLineInfo(&lineInfo, &columnInfo, code.totalSize - functionStart, function->start, function->end);
@@ -1028,6 +1174,8 @@ void runCoffWriter() {
 					}
 				}
 			}
+
+			functionPreambleEnd = code.totalSize - functionStart;
 
 			for (u64 index = 0; index < function->state.ir.count; index++) {
 				auto &ir = function->state.ir[index];
@@ -2334,24 +2482,14 @@ void runCoffWriter() {
 							}
 						}
 
-						code.add1(0x5F); // pop rdi
-						code.add1(0x5E); // pop rsi
+						code.add1(0xE9);
 
-						// add rsp, spaceToAllocate
-						if (spaceToAllocate < 0x80) {
-							code.add1(0x48);
-							code.add1(0x83);
-							code.add1(0xC4);
-							code.add1(static_cast<u8>(spaceToAllocate));
-						}
-						else {
-							code.add1(0x48);
-							code.add1(0x81);
-							code.add1(0xC4);
-							code.add4(static_cast<u32>(spaceToAllocate));
-						}
+						JumpPatch patch;
+						patch.opToPatch = function->state.ir.count;
+						patch.location = reinterpret_cast<s32 *>(code.add4(0));
+						patch.rip = code.totalSize;
 
-						code.add1(0xC3);
+						jumpPatches.add(patch);
 					} break;
 					case IrOp::CALL: {
 						u64 parameterOffset;
@@ -2630,40 +2768,129 @@ void runCoffWriter() {
 				}
 			}
 
+			u64 functionPostambleStart = code.totalSize;
+
+			code.add1(0x5F); // pop rdi
+			code.add1(0x5E); // pop rsi
+
+			// add rsp, spaceToAllocate
+			if (spaceToAllocate < 0x80) {
+				code.add1(0x48);
+				code.add1(0x83);
+				code.add1(0xC4);
+				code.add1(static_cast<u8>(spaceToAllocate));
+			}
+			else {
+				code.add1(0x48);
+				code.add1(0x81);
+				code.add1(0xC4);
+				code.add4(static_cast<u32>(spaceToAllocate));
+			}
+
+			code.add1(0xC3);
+
+			instructionOffsets.add(functionPostambleStart);
+
 			for (auto patch : jumpPatches) {
 				*patch.location = static_cast<s32>(static_cast<s64>(instructionOffsets[patch.opToPatch]) - static_cast<s64>(patch.rip));
 			}
 
-			debugSymbols.add4(0xF2);
-			debugSymbols.add4(24 + lineInfo.count * 12);
+			{
+				if (function->valueOfDeclaration && function->valueOfDeclaration->enclosingScope == &globalBlock) {
+					PROFILE_ZONE("Write Function Debug Symbols");
+					debugSymbols.add4(0xF1);
+					auto subsectionSizePatch = debugSymbols.add4(0);
+					u32 subsectionOffset = debugSymbols.totalSize;
+
+					
+					debugSymbols.add2(sizeof(PROCSYM32) + function->valueOfDeclaration->name.length - 1);
+					debugSymbols.add2(0x1147); // S_GPROC32_ID
+					debugSymbols.add4(0);
+					debugSymbols.add4(0);
+					debugSymbols.add4(0);
+					debugSymbols.add4(code.totalSize - functionStart);
+					debugSymbols.add4(functionPreambleEnd);
+					debugSymbols.add4(functionPostambleStart - functionStart);
+					debugSymbols.add4(0);
 
 
-			debugSymbolsRelocations.add4(debugSymbols.totalSize);
-			debugSymbolsRelocations.add4(function->physicalStorage);
-			debugSymbolsRelocations.add2(IMAGE_REL_AMD64_SECREL);
+					debugSymbolsRelocations.add4(debugSymbols.totalSize);
+					debugSymbolsRelocations.add4(function->physicalStorage);
+					debugSymbolsRelocations.add2(IMAGE_REL_AMD64_SECREL);
 
-			debugSymbols.add4(0);
+					debugSymbols.add4(0);
 
-			debugSymbolsRelocations.add4(debugSymbols.totalSize);
-			debugSymbolsRelocations.add4(textSectionSymbolIndex);
-			debugSymbolsRelocations.add2(IMAGE_REL_AMD64_SECTION);
+					debugSymbolsRelocations.add4(debugSymbols.totalSize);
+					debugSymbolsRelocations.add4(textSectionSymbolIndex);
+					debugSymbolsRelocations.add2(IMAGE_REL_AMD64_SECTION);
 
-			debugSymbols.add2(0);
+					debugSymbols.add2(0);
 
-			debugSymbols.add2(1); // fHasColumns
-			debugSymbols.add4(code.totalSize - functionStart);
+					debugSymbols.add1(0);
+					debugSymbols.addNullTerminatedString(function->valueOfDeclaration->name);
 
-			debugSymbols.add4(function->start.fileUid * 8);
-			debugSymbols.add4(lineInfo.count);
-			debugSymbols.add4(12 + lineInfo.count * 12);
-			debugSymbols.add(lineInfo.storage, lineInfo.count * sizeof(LineInfo));
-			debugSymbols.add(columnInfo.storage, columnInfo.count * sizeof(ColumnInfo));
+					FRAMEPROCSYM frame;
+					frame.cbFrame = spaceToAllocate;
+					frame.flags.unused = 0;
+					frame.flags.encodedLocalBasePointer = 1; // RSP
+					frame.flags.encodedParamBasePointer = 1; // RSP
+					frame.flags.pad = 0;
+
+					debugSymbols.add(&frame, sizeof(frame));
+
+					for (auto argument : function->arguments.declarations) {
+						REGREL32 argumentInfo;
+						argumentInfo.off = getRegisterOffset(function, argument->physicalStorage);
+						argumentInfo.typind = getCoffTypeIndex(static_cast<ExprLiteral *>(argument->type)->typeValue);
+
+						debugSymbols.add2(sizeof(argumentInfo) + 1 + argument->name.length);
+						debugSymbols.add(&argumentInfo, sizeof(argumentInfo));
+						debugSymbols.addNullTerminatedString(argument->name);
+					}
+
+					debugSymbols.add2(2); // S_PROC_ID_END
+					debugSymbols.add2(0x114f);
+
+					*subsectionSizePatch = debugSymbols.totalSize - subsectionOffset;
+
+					alignAllocator(&debugSymbols, 4);
+				}
+			}
+
+			{
+				PROFILE_ZONE("Write Function Debug Lines");
+				debugSymbols.add4(0xF2);
+				debugSymbols.add4(24 + lineInfo.count * 12);
+
+
+				debugSymbolsRelocations.add4(debugSymbols.totalSize);
+				debugSymbolsRelocations.add4(function->physicalStorage);
+				debugSymbolsRelocations.add2(IMAGE_REL_AMD64_SECREL);
+
+				debugSymbols.add4(0);
+
+				debugSymbolsRelocations.add4(debugSymbols.totalSize);
+				debugSymbolsRelocations.add4(textSectionSymbolIndex);
+				debugSymbolsRelocations.add2(IMAGE_REL_AMD64_SECTION);
+
+				debugSymbols.add2(0);
+
+				debugSymbols.add2(1); // fHasColumns
+				debugSymbols.add4(code.totalSize - functionStart);
+
+				debugSymbols.add4(function->start.fileUid * 8);
+				debugSymbols.add4(lineInfo.count);
+				debugSymbols.add4(12 + lineInfo.count * 12);
+				debugSymbols.add(lineInfo.storage, lineInfo.count * sizeof(LineInfo));
+				debugSymbols.add(columnInfo.storage, columnInfo.count * sizeof(ColumnInfo));
+			}
 
 			function->state.allocator.free();
 			function->state.loopStack.free();
 			function->state.ir.free();
 		}
 		else {
+			PROFILE_ZONE("Write Declaration");
 			auto declaration = job.declaration;
 
 			assert(declaration->enclosingScope == &globalBlock);
@@ -2703,6 +2930,7 @@ void runCoffWriter() {
 
 
 	{
+		PROFILE_ZONE("Write output");
 		debugSymbols.add4(0xF3);
 
 		auto files = getAllFilesNoLock();
@@ -2767,11 +2995,16 @@ void runCoffWriter() {
 		setSectionName(debugSymbolSection.name, sizeof(debugSymbolSection.name), ".debug$S");
 		debugSymbolSection.characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_DISCARDABLE;
 
+		SectionHeader debugTypeSection = {};
+		setSectionName(debugTypeSection.name, sizeof(debugTypeSection.name), ".debug$T");
+		debugTypeSection.characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_DISCARDABLE;
+
 		sections.add({ &rdataSection, &rdata });
 		sections.add({ &bssSection });
 		sections.add({ &dataSection, &data, &dataRelocations });
 		sections.add({ &textSection, &code, &codeRelocations });
 		sections.add({ &debugSymbolSection, &debugSymbols, &debugSymbolsRelocations });
+		sections.add({ &debugTypeSection, &debugTypes });
 
 
 

@@ -1,119 +1,93 @@
 #pragma once
 
 #include "Basic.h"
-
-#define WORK_QUEUE_MAX_PENDING 64 // Must be a power of 2
-#define WORK_QUEUE_MASK (WORK_QUEUE_MAX_PENDING - 1)
-
-#if 0
+#include "Array.h"
 #include <intrin.h>
 
-// This is an extremely slow work queue implementation, make it better later if it is a bottleneck
-
-template<typename T>
-struct SPMCQueue {
-	T jobs[WORK_QUEUE_MAX_PENDING];
-	
-	volatile u8 addLocation = 0;
-	volatile u8 takeLocation = 0;
-
-	std::condition_variable full;
-
-
-
-	void add(T job) {
-		// @Improvement, don't burn the CPU
-		if (addLocation - takeLocation == WORK_QUEUE_MAX_PENDING) ; // Only we touch addLocation so we shouldn't need to do lock stuff, tail is always increasing so this won't be invalidated
-
-		jobs[addLocation & WORK_QUEUE_MASK] = job;
-
-		_WriteBarrier(); // Don't increment the head until we've actually added the job
-
-		++addLocation;
-	}
-
-	T take(T job) {
-		while (true) {
-			u64 oldTail = takeLocation;
-
-			if (head != oldTail) {
-				if (InterlockedCompareExchange64()
-			}
-		}
-
-
-	}
-
-};
-#endif
-
-struct WorkQueueAdd {
-	volatile u64 &head;
-	volatile u64 &tail;
-
-	WorkQueueAdd(volatile u64 &head, volatile u64 &tail) : head(head), tail(tail) {}
-
-	inline bool operator()() const { return tail + WORK_QUEUE_MAX_PENDING > head; }
-};
-
-struct WorkQueueTake {
-	volatile u64 &head;
-	volatile u64 &tail;
-
-	WorkQueueTake(volatile u64 &head, volatile u64 &tail) : head(head), tail(tail) {}
-
-	inline bool operator()() const { return tail < head; }
-};
-
-
 template <typename T> 
-class WorkQueue {
+class MPSCWorkQueue {
 public:
-	T jobs[WORK_QUEUE_MAX_PENDING];
-	volatile u64 head = 0;
-	volatile u64 tail = 0;
+	Array<T> input;
+	Array<T> output;
+	u64 outputCursor = 0;
 
-	std::mutex mutex;
-
-	std::condition_variable empty;
-	std::condition_variable overflow;
+	std::mutex inputLock;
+	
+	volatile bool empty = true;
 
 	void add(T job) {
 		PROFILE_FUNC();
-		std::unique_lock<std::mutex> lock(mutex);
+		std::unique_lock<std::mutex> lock(inputLock);
 
-		overflow.wait(lock, WorkQueueAdd(head, tail));
-
-		//overflow.wait(lock, [&head, &tail]() {
-		//	return tail + WORK_QUEUE_MAX_PENDING > head;
-		//	});
-		
-
-		jobs[head++ & WORK_QUEUE_MASK] = job;
-		
-		empty.notify_one();
+		input.add(job);
+		_ReadWriteBarrier();
+		empty = false;
 	}
 
 	T take() {
 		PROFILE_FUNC();
-		std::unique_lock<std::mutex> lock(mutex);
+		if (outputCursor >= output.count) {
+			while (empty) {}
 
-		empty.wait(lock, WorkQueueTake(head, tail));
+			std::unique_lock<std::mutex> lock(inputLock);
 
+			output.clear();
+			outputCursor = 0;
+			std::swap(input, output);
+			empty = true;
+		}
 
-		//empty.wait(lock, [&head, &tail]() {
-		//	return tail < head;
-		//	});
+		return output[outputCursor++];
+	}
+};
 
-		T job = jobs[tail++ & WORK_QUEUE_MASK];
+template <typename T>
+class MPMCWorkQueue {
+public:
+	Array<T> input;
+	Array<T> output;
+	volatile s64 outputCursor = 0;
 
-		overflow.notify_one();
+	std::mutex inputLock;
 
-		return job;
+	volatile bool empty = true;
+
+	void add(T job) {
+		PROFILE_FUNC();
+		std::unique_lock<std::mutex> lock(inputLock);
+
+		input.add(job);
+		_ReadWriteBarrier();
+		empty = false;
 	}
 
-	void clear() {
-		head = 0;
-		tail = 0;
+	T take() {
+		PROFILE_FUNC();
+
+		u64 index;
+
+		while ((index = _InterlockedExchangeAdd64(&outputCursor, 1) ) > output.count) {}
+
+		if (index == output.count) {
+			while (empty) {}
+
+			std::unique_lock<std::mutex> lock(inputLock);
+
+			output.clear();
+			index = 0;
+			std::swap(input.storage, output.storage);
+			std::swap(input.capacity, output.capacity);
+
+			_ReadWriteBarrier();
+
+			std::swap(input.count, output.count);
+			empty = true;
+
+			_ReadWriteBarrier();
+
+			outputCursor = 1;
+		}
+
+		return output[index];
 	}
 };
