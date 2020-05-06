@@ -770,7 +770,259 @@ void insertImplicitCast(InferJob *job, Expr **castFrom, Type *castTo) {
 	doConstantCast(castFrom);
 }
 
-bool tryAutoCast(InferJob *job, Expr **cast, Type *castTo) {
+// Passing null for location means that an error shouldn't be reported, and null should be returned if the expression doesn't have a namespace
+TypeStruct *getExpressionNamespace(Expr *expr, bool *onlyConstants, Expr *location) {
+	if (expr->type->flavor == TypeFlavor::STRUCT || expr->type->flavor == TypeFlavor::ARRAY) {
+		*onlyConstants = false;
+		return static_cast<TypeStruct *>(expr->type);
+	}
+	else if (expr->type->flavor == TypeFlavor::POINTER) {
+		auto type = static_cast<TypePointer *>(expr->type)->pointerTo;
+
+		if (type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::ARRAY) {
+			*onlyConstants = false;
+			return static_cast<TypeStruct *>(type);
+		}
+		else {
+			if (location)
+				reportError(location, "Error: A %.*s does not have fields", STRING_PRINTF(expr->type->name));
+			return nullptr;
+		}
+	}
+	else if (expr->type->flavor == TypeFlavor::TYPE) {
+		if (expr->flavor != ExprFlavor::TYPE_LITERAL) {
+			if (location)
+				reportError(location, "Error: Cannot access the fields of a non-constant type");
+			return nullptr;
+		}
+
+		auto type = static_cast<ExprLiteral *>(expr)->typeValue;
+
+		if (type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::ARRAY) {
+			*onlyConstants = true;
+			return static_cast<TypeStruct *>(type);
+		}
+		else {
+			if (location)
+				reportError(location, "Error: A %.*s prototype does not have fields", STRING_PRINTF(type->name));
+			return nullptr;
+		}
+	}
+	else {
+		if (location)
+			reportError(location, "Error: A %.*s does not have fields", STRING_PRINTF(expr->type->name));
+		return nullptr;
+	}
+}
+
+void copyLiteral(Expr **exprPointer, Expr *expr) {
+	switch (expr->flavor) {
+	case ExprFlavor::FUNCTION: // Functions are unique
+	case ExprFlavor::STRUCT_DEFAULT: // Struct defaults have no mutable data
+	case ExprFlavor::STRING_LITERAL: // Don't duplicate string literals this will bloat the binary
+	case ExprFlavor::ARRAY: { // Don't duplicate array literals this will bloat the binary
+		*exprPointer = expr;
+		break;
+	}
+	case ExprFlavor::FLOAT_LITERAL:
+	case ExprFlavor::TYPE_LITERAL:
+	case ExprFlavor::INT_LITERAL: {
+		ExprLiteral *newLiteral = new ExprLiteral;
+		*newLiteral = *static_cast<ExprLiteral *>(expr);
+		newLiteral->start = (*exprPointer)->start;
+		newLiteral->end = (*exprPointer)->end;
+
+		*exprPointer = newLiteral;
+
+		break;
+	}
+	}
+}
+
+
+Expr *pushStructAccessDown(ExprIdentifier *accesses, Expr *base, CodeLocation start, EndLocation end) {
+	if (!accesses) {
+		return base;
+	}
+
+	auto result = new ExprIdentifier;
+	auto current = result;
+
+	while (true) {
+		*current = *accesses;
+		current->start = start;
+		current->end = end;
+
+		if (current->structAccess) {
+			current->structAccess = new ExprIdentifier;
+			current = static_cast<ExprIdentifier *>(current->structAccess);
+
+			assert(accesses->structAccess->flavor == ExprFlavor::IDENTIFIER);
+			accesses = static_cast<ExprIdentifier *>(accesses->structAccess);
+		}
+		else {
+			current->structAccess = base;
+			return result;
+		}
+	}
+}
+
+bool inferIdentifier(InferJob *job, Expr **exprPointer, ExprIdentifier *identifier, bool *yield) {
+	*yield = false;
+
+	if ((identifier->declaration->flags & DECLARATION_IMPORTED_BY_USING) && !(identifier->declaration->flags & DECLARATION_IS_CONSTANT)) {
+		auto current = static_cast<ExprIdentifier *>(identifier->declaration->initialValue);
+
+		if (job) {
+			while (current->structAccess) {
+				bool onlyConstants;
+				addSizeDependency(job, getExpressionNamespace(current->structAccess, &onlyConstants, current->structAccess));
+
+				current = static_cast<ExprIdentifier *>(current->structAccess);
+				assert(current->flavor == ExprFlavor::IDENTIFIER);
+			}
+		}
+
+		identifier->structAccess = pushStructAccessDown(static_cast<ExprIdentifier *>(identifier->declaration->initialValue), identifier->structAccess, identifier->start, identifier->end);
+		identifier->declaration = identifier->declaration->import;
+	}
+
+
+
+	if (identifier->flags & EXPR_IDENTIFIER_IS_BREAK_OR_CONTINUE_LABEL) {
+		// We shouldn't bother resolving types they aren't needed
+		// Replacing a constant would mean we have to check if the label
+		// is still an identifier when we infer break/continue and if we did that it would be a bad error message
+		// so we are done
+
+	}
+	else {
+
+		if (identifier->declaration->flags & DECLARATION_IS_ITERATOR) {
+			auto loop = CAST_FROM_SUBSTRUCT(ExprLoop, iteratorBlock, identifier->declaration->enclosingScope);
+			assert(loop->flavor == ExprFlavor::WHILE || loop->flavor == ExprFlavor::FOR);
+
+			if (loop->flavor == ExprFlavor::WHILE) {
+				reportError(identifier, "Error: Cannot use while loop label as a variable, it has no storage");
+				reportError(identifier->declaration, "   ..: Here is the location of the loop");
+				return false;
+			}
+		}
+
+		if (identifier->declaration->flags & DECLARATION_TYPE_IS_READY) {
+			if (!identifier->type) {
+				identifier->type = getDeclarationType(identifier->declaration);
+				addSizeDependency(job, identifier->type);
+			}
+		}
+		else {
+			*yield = true;
+			return false;
+		}
+
+		if (identifier->declaration->flags & DECLARATION_IS_CONSTANT) {
+			if (identifier->declaration->flags & DECLARATION_VALUE_IS_READY) {
+				copyLiteral(exprPointer, identifier->declaration->initialValue);
+			}
+			else {
+				*yield = true;
+				return false;
+			}
+		}
+
+
+	}
+
+	return true;
+}
+
+bool tryUsingConversion(InferJob *job, Type *correct, Expr **exprPointer, bool *yield) {
+	*yield = false;
+	auto given = *exprPointer;
+
+	if (correct == given->type) {
+		return true;
+	}
+
+	bool onlyConstants = false;
+	auto struct_ = getExpressionNamespace(given, &onlyConstants, nullptr);
+
+
+	if (!struct_)
+		return false;
+
+	if (struct_->members.usings.count) {
+		*yield = true;
+		return false;
+	}
+
+
+	Declaration *found = nullptr;
+	for (auto member : struct_->members.declarations) {
+		if (member->flags & DECLARATION_MARKED_AS_USING) {
+			if (!(member->flags & DECLARATION_TYPE_IS_READY)) {
+				*yield = true;
+				return false;
+			}
+
+			if (getDeclarationType(member) == correct) {
+				found = member;
+				break;
+			}
+			else if (given->type->flavor == TypeFlavor::POINTER && !(member->flags & DECLARATION_IS_CONSTANT) && getPointer(getDeclarationType(member)) == correct) {
+				found = member;
+				break;
+			}
+		}
+	}
+
+	if (!found)
+		return false;
+
+	if ((found->flags & DECLARATION_IS_CONSTANT) && !(found->flags & DECLARATION_VALUE_IS_READY)) {
+		*yield = true;
+		return false;
+	}
+
+	auto identifier = new ExprIdentifier;
+	identifier->start = given->start;
+	identifier->end = given->end;
+	identifier->flavor = ExprFlavor::IDENTIFIER;
+	identifier->name = found->name;
+	identifier->resolveFrom = nullptr;
+	identifier->enclosingScope = nullptr;
+	identifier->structAccess = given;
+	identifier->indexInBlock = 0;
+	identifier->declaration = found;
+
+	Expr *expr = identifier;
+
+	if (!inferIdentifier(job, &expr, identifier, yield)) {
+		assert(false); // This shouldn't fail
+	}
+
+	if (getDeclarationType(found) != correct) {
+		assert(given->type->flavor == TypeFlavor::POINTER && !(found->flags & DECLARATION_IS_CONSTANT) && getPointer(getDeclarationType(found)) == correct);
+
+		auto unary = new ExprUnaryOperator;
+
+		unary->start = given->start;
+		unary->end = given->end;
+		unary->flavor = ExprFlavor::UNARY_OPERATOR;
+		unary->op = TOKEN('*');
+		unary->value = expr;
+		unary->type = correct;
+
+		expr = unary;
+	}
+
+	expr->valueOfDeclaration = given->valueOfDeclaration;
+	*exprPointer = expr;
+
+	return true;
+}
+bool tryAutoCast(InferJob *job, Expr **cast, Type *castTo, bool *yield) {
+	*yield = false;
 	auto castExpr = *cast;
 	assert(castExpr->type->flavor == TypeFlavor::AUTO_CAST);
 	assert(castExpr->flavor == ExprFlavor::BINARY_OPERATOR);
@@ -790,12 +1042,17 @@ bool tryAutoCast(InferJob *job, Expr **cast, Type *castTo) {
 	autoCast->type = castTo;
 	autoCast->left = inferMakeTypeLiteral(autoCast->start, autoCast->end, castTo);
 
+	if (!tryUsingConversion(job, castTo, &autoCast->right, yield)) {
+		if (*yield) {
+			return false;
+		}
+	}
+
 	if (!isValidCast(castTo, castFrom)) {
 		return false;
 	}
 
 	addSizeDependency(job, castTo);
-
 	doConstantCast(cast);
 
 	return true;
@@ -1099,16 +1356,21 @@ bool assignOpForInteger(InferJob *job, ExprBinaryOperator *binary) {
 	return true;
 }
 
-bool binaryOpForAutoCast(InferJob *job, ExprBinaryOperator *binary) {
+bool binaryOpForAutoCast(InferJob *job, ExprBinaryOperator *binary, bool *yield) {
 	auto &left = binary->left;
 	auto &right = binary->right;
 
 	if (left->type->flavor == TypeFlavor::AUTO_CAST) {
 		trySolidifyNumericLiteralToDefault(right);
 
-		if (!tryAutoCast(job, &left, right->type)) {
-			reportError(binary, "Error: Cannot cast from %.*s to %.*s", STRING_PRINTF(static_cast<ExprBinaryOperator *>(left)->right->type->name), STRING_PRINTF(right->type->name));
-			return false;
+		if (!tryAutoCast(job, &left, right->type, yield)) {
+			if (*yield) {
+				return false;
+			}
+			else {
+				reportError(binary, "Error: Cannot cast from %.*s to %.*s", STRING_PRINTF(static_cast<ExprBinaryOperator *>(left)->right->type->name), STRING_PRINTF(right->type->name));
+				return false;
+			}
 		}
 
 		return true;
@@ -1116,9 +1378,14 @@ bool binaryOpForAutoCast(InferJob *job, ExprBinaryOperator *binary) {
 	else if (right->type->flavor == TypeFlavor::AUTO_CAST) {
 		trySolidifyNumericLiteralToDefault(left);
 
-		if (!tryAutoCast(job, &right, left->type)) {
-			reportError(binary, "Error: Cannot cast from %.*s to %.*s", STRING_PRINTF(static_cast<ExprBinaryOperator *>(right)->right->type->name), STRING_PRINTF(left->type->name));
-			return false;
+		if (!tryAutoCast(job, &right, left->type, yield)) {
+			if (*yield) {
+				return false;
+			}
+			else {
+				reportError(binary, "Error: Cannot cast from %.*s to %.*s", STRING_PRINTF(static_cast<ExprBinaryOperator *>(right)->right->type->name), STRING_PRINTF(left->type->name));
+				return false;
+			}
 		}
 
 		return true;
@@ -1127,14 +1394,15 @@ bool binaryOpForAutoCast(InferJob *job, ExprBinaryOperator *binary) {
 	return true;
 }
 
-bool assignOpForAutoCast(InferJob *job, ExprBinaryOperator *binary) {
+bool assignOpForAutoCast(InferJob *job, ExprBinaryOperator *binary, bool *yield) {
 	auto &right = binary->right;
 
 	if (right->type->flavor == TypeFlavor::AUTO_CAST) {
 		auto &left = binary->left;
 
-		if (!tryAutoCast(job, &right, left->type)) {
-			reportError(binary, "Error: Cannot cast from %.*s to %.*s", STRING_PRINTF(static_cast<ExprBinaryOperator *>(right)->right->type->name), STRING_PRINTF(left->type->name));
+		if (!tryAutoCast(job, &right, left->type, yield)) {
+			if (!*yield)
+				reportError(binary, "Error: Cannot cast from %.*s to %.*s", STRING_PRINTF(static_cast<ExprBinaryOperator *>(right)->right->type->name), STRING_PRINTF(left->type->name));
 			return false;
 		}
 
@@ -1415,7 +1683,8 @@ Expr *createDefaultValue(Declaration *location, Type *type, bool *shouldYield) {
 	}
 }
 
-bool assignOp(InferJob *job, Expr *location, Type *correct, Expr *&given) {
+bool assignOp(InferJob *job, Expr *location, Type *correct, Expr *&given, bool *yield) {
+	*yield = false;
 	if (correct != given->type) {
 		if (correct->flavor == given->type->flavor) {
 			switch (correct->flavor) {
@@ -1513,8 +1782,19 @@ bool assignOp(InferJob *job, Expr *location, Type *correct, Expr *&given) {
 							insertImplicitCast(job, &given, correct);
 						}
 						else {
-							reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
-							return false;
+							if (!tryUsingConversion(job, correct, &given, yield)) {
+								if (*yield) {
+									return false;
+								}
+							}
+							else {
+								addSizeDependency(job, given->type);
+							}
+
+							if (correct != given->type) {
+								reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
+								return false;
+							}
 						}
 					}
 
@@ -1526,8 +1806,18 @@ bool assignOp(InferJob *job, Expr *location, Type *correct, Expr *&given) {
 					return false;
 				}
 				case TypeFlavor::STRUCT: {
+					if (!tryUsingConversion(job, correct, &given, yield)) {
+						if (*yield) {
+							return false;
+						}
+					}
+					else {
+						addSizeDependency(job, given->type);
+					}
+
 					if (correct != given->type) {
 						reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
+						return false;
 					}
 
 					break;
@@ -1538,8 +1828,9 @@ bool assignOp(InferJob *job, Expr *location, Type *correct, Expr *&given) {
 		}
 		else {
 			if (given->type->flavor == TypeFlavor::AUTO_CAST) {
-				if (!tryAutoCast(job, &given, correct)) {
-					reportError(location, "Error: Cannot cast from %.*s to %.*s", STRING_PRINTF(static_cast<ExprBinaryOperator *>(given)->right->type->name), STRING_PRINTF(correct->name));
+				if (!tryAutoCast(job, &given, correct, yield)) {
+					if (!yield)
+						reportError(location, "Error: Cannot cast from %.*s to %.*s", STRING_PRINTF(static_cast<ExprBinaryOperator *>(given)->right->type->name), STRING_PRINTF(correct->name));
 					return false;
 				}
 			}
@@ -1560,6 +1851,15 @@ bool assignOp(InferJob *job, Expr *location, Type *correct, Expr *&given) {
 				}
 				else if ((given->type == TYPE_VOID_POINTER && correct->flavor == TypeFlavor::FUNCTION) || (given->type->flavor == TypeFlavor::FUNCTION && correct == TYPE_VOID_POINTER)) {
 					insertImplicitCast(job, &given, correct);
+				}
+
+				if (!tryUsingConversion(job, correct, &given, yield)) {
+					if (*yield) {
+						return false;
+					}
+				}
+				else {
+					addSizeDependency(job, given->type);
 				}
 
 				if (correct != given->type) {
@@ -1598,29 +1898,6 @@ bool isAddressable(Expr *expr) {
 	}
 }
 
-void copyLiteral(Expr **exprPointer, Expr *expr) {
-	switch (expr->flavor) {
-	case ExprFlavor::FUNCTION: // Functions are unique
-	case ExprFlavor::STRUCT_DEFAULT: // Struct defaults have no mutable data
-	case ExprFlavor::STRING_LITERAL: // Don't duplicate string literals this will bloat the binary
-	case ExprFlavor::ARRAY: { // Don't duplicate array literals this will bloat the binary
-		*exprPointer = expr;
-		break;
-	}
-	case ExprFlavor::FLOAT_LITERAL:
-	case ExprFlavor::TYPE_LITERAL:
-	case ExprFlavor::INT_LITERAL: {
-		ExprLiteral *newLiteral = new ExprLiteral;
-		*newLiteral = *static_cast<ExprLiteral *>(expr);
-		newLiteral->start = (*exprPointer)->start;
-		newLiteral->end = (*exprPointer)->end;
-
-		*exprPointer = newLiteral;
-
-		break;
-	}
-	}
-}
 
 bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 	*yield = false;
@@ -1683,9 +1960,15 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 			Type *castTo = static_cast<ExprLiteral *>(left)->typeValue;
 			trySolidifyNumericLiteralToDefault(right);
 
-			if (!isValidCast(castTo, right->type)) {
-				reportError(binary, "Error: Cannot cast from %.*s to %.*s", STRING_PRINTF(right->type->name), STRING_PRINTF(castTo->name));
-				return false;
+			if (!tryUsingConversion(job, castTo, &right, yield)) {
+				if (*yield) {
+					return false;
+				}
+
+				if (!isValidCast(castTo, right->type)) {
+					reportError(binary, "Error: Cannot cast from %.*s to %.*s", STRING_PRINTF(right->type->name), STRING_PRINTF(castTo->name));
+					return false;
+				}
 			}
 
 			expr->type = castTo;
@@ -1806,7 +2089,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 				}
 			}
 			else {
-				if (!binaryOpForAutoCast(job, binary)) {
+				if (!binaryOpForAutoCast(job, binary, yield)) {
 					return false;
 				}
 				else if (!binaryOpForFloatAndIntLiteral(exprPointer)) {
@@ -1885,7 +2168,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 				}
 			}
 			else {
-				if (!binaryOpForAutoCast(job, binary)) {
+				if (!binaryOpForAutoCast(job, binary, yield)) {
 					return false;
 				}
 				else if (!binaryOpForFloatAndIntLiteral(exprPointer)) {
@@ -1964,7 +2247,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 				}
 			}
 			else {
-				if (!binaryOpForAutoCast(job, binary)) {
+				if (!binaryOpForAutoCast(job, binary, yield)) {
 					return false;
 				}
 				else if (left->type->flavor == TypeFlavor::POINTER && right->type->flavor == TypeFlavor::INTEGER) {
@@ -2037,7 +2320,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 				}
 			}
 			else {
-				if (!binaryOpForAutoCast(job, binary)) {
+				if (!binaryOpForAutoCast(job, binary, yield)) {
 					return false;
 				}
 
@@ -2098,7 +2381,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 				}
 			}
 			else {
-				if (!binaryOpForAutoCast(job, binary)) {
+				if (!binaryOpForAutoCast(job, binary, yield)) {
 					return false;
 				}
 
@@ -2163,7 +2446,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 				}
 			}
 			else {
-				if (!binaryOpForAutoCast(job, binary)) {
+				if (!binaryOpForAutoCast(job, binary, yield)) {
 					return false;
 				}
 				else if (!binaryOpForFloatAndIntLiteral(exprPointer)) {
@@ -2195,8 +2478,14 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 				assert(false);
 			}
 			else {
-				if (!assignOp(job, binary, left->type, binary->right)) {
-					return false;
+				bool yield;
+				if (!assignOp(job, binary, left->type, binary->right, &yield)) {
+					if (yield) {
+						return true;
+					}
+					else {
+						return false;
+					}
 				}
 
 				assert(binary->left->type == binary->right->type);
@@ -2267,7 +2556,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 				}
 			}
 			else {
-				if (!assignOpForAutoCast(job, binary)) {
+				if (!assignOpForAutoCast(job, binary, yield)) {
 					return false;
 				}
 				else if (!assignOpForFloatAndIntLiteral(binary)) {
@@ -2375,7 +2664,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 				}
 			}
 			else {
-				if (!assignOpForAutoCast(job, binary)) {
+				if (!assignOpForAutoCast(job, binary, yield)) {
 					return false;
 				}
 
@@ -2445,7 +2734,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 				}
 			}
 			else {
-				if (!assignOpForAutoCast(job, binary)) {
+				if (!assignOpForAutoCast(job, binary, yield)) {
 					return false;
 				}
 
@@ -2519,7 +2808,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 				}
 			}
 			else {
-				if (!assignOpForAutoCast(job, binary)) {
+				if (!assignOpForAutoCast(job, binary, yield)) {
 					assert(false);
 				}
 				else if (!assignOpForFloatAndIntLiteral(binary)) {
@@ -2617,74 +2906,6 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 
 	return true;
 }
-
-TypeStruct *getExpressionNamespace(Expr *expr, bool *onlyConstants, Expr *location) {
-	if (expr->type->flavor == TypeFlavor::STRUCT || expr->type->flavor == TypeFlavor::ARRAY) {
-		*onlyConstants = false;
-		return static_cast<TypeStruct *>(expr->type);
-	}
-	else if (expr->type->flavor == TypeFlavor::POINTER) {
-		auto type = static_cast<TypePointer *>(expr->type)->pointerTo;
-
-		if (type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::ARRAY) {
-			*onlyConstants = false;
-			return static_cast<TypeStruct *>(type);
-		}
-		else {
-			reportError(location, "Error: A %.*s does not have fields", STRING_PRINTF(expr->type->name));
-			return nullptr;
-		}
-	}
-	else if (expr->type->flavor == TypeFlavor::TYPE) {
-		if (expr->flavor != ExprFlavor::TYPE_LITERAL) {
-			reportError(location, "Error: Cannot access the fields of a non-constant type");
-			return nullptr;
-		}
-
-		auto type = static_cast<ExprLiteral *>(expr)->typeValue;
-
-		if (type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::ARRAY) {
-			*onlyConstants = true;
-			return static_cast<TypeStruct *>(type);
-		}
-		else {
-			reportError(location, "Error: A %.*s prototype does not have fields", STRING_PRINTF(type->name));
-			return nullptr;
-		}
-	}
-	else {
-		reportError(location, "Error: A %.*s does not have fields", STRING_PRINTF(expr->type->name));
-		return nullptr;
-	}
-}
-
-Expr *pushStructAccessDown(ExprIdentifier *accesses, Expr *base, CodeLocation start, EndLocation end) {
-	if (!accesses) {
-		return base;
-	}
-
-	auto result = new ExprIdentifier;
-	auto current = result;
-
-	while (true) {
-		*current = *accesses;
-		current->start = start;
-		current->end = end;
-
-		if (current->structAccess) {
-			current->structAccess = new ExprIdentifier;
-			current = static_cast<ExprIdentifier *>(current->structAccess);
-
-			assert(accesses->structAccess->flavor == ExprFlavor::IDENTIFIER);
-			accesses = static_cast<ExprIdentifier *>(accesses->structAccess);
-		}
-		else {
-			current->structAccess = base;
-			return result;
-		}
-	}
-}
-
 bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block ** const waitingOnBlock) {
 	PROFILE_FUNC();
 	++totalInfers;
@@ -2793,63 +3014,14 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 				}
 
 				if (identifier->declaration) {
-					if ((identifier->declaration->flags & DECLARATION_IMPORTED_BY_USING) && !(identifier->declaration->flags & DECLARATION_IS_CONSTANT)) {
-						auto current = static_cast<ExprIdentifier *>(identifier->declaration->initialValue);
-
-						if (job) {
-							while (current->structAccess) {
-								bool onlyConstants;
-								addSizeDependency(job, getExpressionNamespace(current->structAccess, &onlyConstants, current->structAccess));
-
-								current = static_cast<ExprIdentifier *>(current->structAccess);
-								assert(current->flavor == ExprFlavor::IDENTIFIER);
-							}
-						}
-
-						identifier->structAccess = pushStructAccessDown(static_cast<ExprIdentifier *>(identifier->declaration->initialValue), identifier->structAccess, identifier->start, identifier->end);
-						identifier->declaration = identifier->declaration->import;
-					}
-
-					if (identifier->flags & EXPR_IDENTIFIER_IS_BREAK_OR_CONTINUE_LABEL) {
-						// We shouldn't bother resolving types they aren't needed
-						// Replacing a constant would mean we have to check if the label
-						// is still an identifier when we infer break/continue and if we did that it would be a bad error message
-						// so we are done
-
-					}
-					else {
-
-						if (identifier->declaration->flags & DECLARATION_IS_ITERATOR) {
-							auto loop = CAST_FROM_SUBSTRUCT(ExprLoop, iteratorBlock, identifier->declaration->enclosingScope);
-							assert(loop->flavor == ExprFlavor::WHILE || loop->flavor == ExprFlavor::FOR);
-
-							if (loop->flavor == ExprFlavor::WHILE) {
-								reportError(identifier, "Error: Cannot use while loop label as a variable, it has no storage");
-								reportError(identifier->declaration, "   ..: Here is the location of the loop");
-								return false;
-							}
-						}
-
-						if (identifier->declaration->flags & DECLARATION_TYPE_IS_READY) {
-							if (!identifier->type) {
-								identifier->type = getDeclarationType(identifier->declaration);
-								addSizeDependency(job, identifier->type);
-							}
-						}
-						else {
+					bool yield;
+					if (!inferIdentifier(job, exprPointer, identifier, &yield)) {
+						if (yield) {
 							return true;
 						}
-
-						if (identifier->declaration->flags & DECLARATION_IS_CONSTANT) {
-							if (identifier->declaration->flags & DECLARATION_VALUE_IS_READY) {
-								copyLiteral(exprPointer, identifier->declaration->initialValue);
-							}
-							else {
-								return true;
-							}
+						else {
+							return false;
 						}
-
-						
 					}
 				}
 				else {
@@ -3052,12 +3224,14 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 					}
 
 					if (loop->forBegin->type == &TYPE_AUTO_CAST) {
-						if (!tryAutoCast(job, &loop->forBegin, loop->forEnd->type))
-							return false;
+						bool yield;
+						if (!tryAutoCast(job, &loop->forBegin, loop->forEnd->type, &yield))
+							return yield;
 					}
 					else if (loop->forEnd->type == &TYPE_AUTO_CAST) {
-						if (!tryAutoCast(job, &loop->forEnd, loop->forBegin->type))
-							return false;
+						bool yield;
+						if (!tryAutoCast(job, &loop->forEnd, loop->forBegin->type, &yield))
+							return yield;
 					}
 
 
@@ -3338,9 +3512,9 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 				for (u64 i = 0; i < call->argumentCount; i++) {
 					Type *correct = function->argumentTypes[i];
 
-
-					if (!assignOp(job, call->arguments[i], correct, call->arguments[i])) { // @Incomplete: Give function call specific error messages instead of general type conversion errors
-						return false;
+					bool yield;
+					if (!assignOp(job, call->arguments[i], correct, call->arguments[i], &yield)) { // @Incomplete: Give function call specific error messages instead of general type conversion errors
+						return yield;
 					}
 				}
 
@@ -3383,8 +3557,9 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 						return false;
 					}
 
-					if (!assignOp(job, return_, returnType, return_->value)) {
-						return false;
+					bool yield;
+					if (!assignOp(job, return_, returnType, return_->value, &yield)) {
+						return yield;
 					}
 				}
 
@@ -3917,8 +4092,9 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 
 				Type *correct = static_cast<ExprLiteral *>(declaration->type)->typeValue;
 
-				if (!assignOp(job, declaration->initialValue, correct, declaration->initialValue)) {
-					return false;
+				bool yield;
+				if (!assignOp(job, declaration->initialValue, correct, declaration->initialValue, &yield)) {
+					return true;
 				}
 
 				if ((declaration->flags &

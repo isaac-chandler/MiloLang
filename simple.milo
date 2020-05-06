@@ -1,19 +1,41 @@
 #load "standard.milo"
 
-
-
-_main :: () {
-
-	test :: struct {
-		s :: "Hello there world"
-	}
-	
-	x := s
-	print_string(x)
-	
-	using a: test
+Job :: struct {
+	title: string
+	experience: u64
 }
 
-s :: "Hello world"
+Person :: struct {
+	first_name: string
+	last_name: string
+	age: u64
+	
+	using job: *Job
+}
+
+print_job :: (job: *Job) {
+	print_string(job.title)
+	print_string(", ")
+	print_u64(job.experience)
+	print_string(" years experience")
+}
+
+_main :: () {
+	jim: Person
+	
+	
+	jim.first_name = "Jim"
+	jim.last_name = "Halpert"
+	jim.age = 30
+	
+	job: Job
+	
+	job.title = "Co-regional Manager"
+	job.experience = 4
+	
+	jim.job = *job
+	
+	print_job(jim)
+}
 
 

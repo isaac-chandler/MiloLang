@@ -400,18 +400,9 @@ void addLineMarker(IrState *state, Expr *expr) {
 	ir.location.end = expr->end;
 }
 
-void addLineMarker(IrState *state, u32 fileUid, EndLocation end) {
-	Ir &ir = state->ir.add();
-
-	ir.op = IrOp::LINE_MARKER;
-	ir.location.start.fileUid = fileUid;
-	ir.location.start.line = end.line;
-	ir.location.start.column = end.column;
-	ir.location.start.locationInMemory = end.locationInMemory;
-	ir.location.end = end;
-}
 
 u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
+	PROFILE_FUNC();
 	if (dest != DEST_NONE && expr->type->size > 8 && !destWasForced) {
 		// @Hack when ir generation was originally written it wasn't designed for large types, the dest register is often used for intermediates which may be larger than the final value
 		// so if we are going to write a large value we should write it somewhere other than where they requested to be safe
@@ -1723,7 +1714,7 @@ u64 generateIrForceDest(IrState *state, Expr *expr, u64 dest) {
 }
 
 void runIrGenerator() {
-
+	PROFILE_FUNC();
 	while (true) {
 
 		ExprFunction *function = irGeneratorQueue.take();
