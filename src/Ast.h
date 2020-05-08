@@ -5,6 +5,7 @@
 #include "Array.h"
 #include "BucketedArenaAllocator.h"
 #include "Block.h"
+#include "TypeTable.h"
 
 enum class IrOp : u8 {
 	ADD,
@@ -147,7 +148,9 @@ enum class ExprFlavor : u8 {
 	IF, 
 
 	FUNCTION_PROTOTYPE, 
-	STRUCT_DEFAULT
+	STRUCT_DEFAULT, 
+	ENUM, 
+	ENUM_INCREMENT
 };
 
 struct Declaration;
@@ -228,6 +231,10 @@ struct ExprIdentifier : Expr {
 	Declaration *declaration;
 };
 
+struct ExprEnumIncrement : Expr {
+	Declaration *previous;
+};
+
 struct ExprFunctionCall : Expr {
 	Expr *function;
 	u64 argumentCount;
@@ -281,4 +288,9 @@ struct ExprIf : Expr {
 	Expr *condition;
 	Expr *ifBody;
 	Expr *elseBody;
+};
+
+struct ExprEnum : Expr {
+	TypeEnum struct_;
+	Expr *integerType;
 };

@@ -7,6 +7,7 @@
 #include "CoffWriter.h"
 #include "TypeTable.h"
 
+
 u64 totalDeclarations = 0;
 u64 totalFunctions = 0;
 u64 totalTypesSized = 0;
@@ -226,6 +227,18 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 
 			break;
 		}
+		case ExprFlavor::ENUM_INCREMENT: {
+			flattenTo.add(expr);
+			break;
+		}
+		case ExprFlavor::ENUM: {
+			auto enum_ = static_cast<ExprEnum *>(*expr);
+
+			flatten(flattenTo, &enum_->integerType);
+
+			flattenTo.add(expr);
+			break;
+		}
 		default:
 			assert(false);
 	}
@@ -265,7 +278,104 @@ void trySolidifyNumericLiteralToDefault(Expr *expr) {
 
 // @Incomplete more specific handling so we can print the bounds that were violated
 bool boundsCheckImplicitConversion(Expr *location, Type *convertTo, ExprLiteral *convertFrom) {
-	if (convertFrom->type == &TYPE_UNSIGNED_INT_LITERAL) {
+	if (convertFrom->type->flags & TYPE_INTEGER_IS_SIGNED) {
+		if (convertTo == &TYPE_U64) {
+			if (convertFrom->signedValue < 0) {
+				reportError(location, "Error: Integer literal too small for u64 (min: 0, given: %" PRIi64 ")", convertFrom->signedValue);
+				return false;
+			}
+			return true;
+		}
+		else if (convertTo == &TYPE_U32) {
+			if (convertFrom->signedValue < 0) {
+				reportError(location, "Error: Integer literal too small for u32 (min: 0, given: %" PRIi64 ")", convertFrom->signedValue);
+				return false;
+			}
+			if (convertFrom->signedValue > static_cast<s64>(UINT32_MAX)) {
+				reportError(location, "Error: Integer literal too large for u32 (max: %" PRIu32 ", given: %" PRIu64 ")", UINT32_MAX, convertFrom->unsignedValue);
+
+				return false;
+			}
+
+			return true;
+		}
+		else if (convertTo == &TYPE_U16) {
+			if (convertFrom->signedValue < 0) {
+				reportError(location, "Error: Integer literal too small for u16 (min: 0, given: %" PRIi64 ")", convertFrom->signedValue);
+				return false;
+			}
+			if (convertFrom->unsignedValue > static_cast<s64>(UINT16_MAX)) {
+				reportError(location, "Error: Integer literal too large for u16 (max: %" PRIu16 ", given: %" PRIu64 ")", UINT16_MAX, convertFrom->unsignedValue);
+
+				return false;
+			}
+
+			return true;
+		}
+		else if (convertTo == &TYPE_U8) {
+			if (convertFrom->signedValue < 0) {
+				reportError(location, "Error: Integer literal too small for u8 (min: 0, given: %" PRIi64 ")", convertFrom->signedValue);
+				return false;
+			}
+			if (convertFrom->unsignedValue > static_cast<s64>(UINT8_MAX)) {
+				reportError(location, "Error: Integer literal too large for u8 (max: %" PRIu8 ", given: %" PRIu64 ")", UINT16_MAX, convertFrom->unsignedValue);
+
+				return false;
+			}
+
+			return true;
+		}
+		if (convertTo == &TYPE_S64) {
+			return true;
+		}
+		else if (convertTo == &TYPE_S32) {
+			if (convertFrom->signedValue > INT32_MAX) {
+				reportError(location, "Error: Integer literal too large for s32 (max: %" PRIi32 ", given: %" PRIi64 ")", INT32_MAX, convertFrom->signedValue);
+
+				return false;
+			}
+			else if (convertFrom->signedValue < INT32_MIN) {
+				reportError(location, "Error: Integer literal too small for s32 (min: %" PRIi32 ", given: %" PRIi64 ")", INT32_MIN, convertFrom->signedValue);
+
+				return false;
+			}
+
+			return true;
+		}
+		else if (convertTo == &TYPE_S16) {
+			if (convertFrom->signedValue > INT16_MAX) {
+				reportError(location, "Error: Integer literal too large for s16 (max: %" PRIi16 ", given: %" PRIi64 ")", INT16_MAX, convertFrom->signedValue);
+
+				return false;
+			}
+			else if (convertFrom->signedValue < INT16_MIN) {
+				reportError(location, "Error: Integer literal too small for s16 (min: %" PRIi16 ", given: %" PRIi64 ")", INT16_MIN, convertFrom->signedValue);
+
+				return false;
+			}
+
+			return true;
+		}
+		else if (convertTo == &TYPE_S8) {
+			if (convertFrom->signedValue > INT8_MAX) {
+				reportError(location, "Error: Integer literal too large for s8 (max: %" PRIi8 ", given: %" PRIi64 ")", INT8_MAX, convertFrom->signedValue);
+
+				return false;
+			}
+			else if (convertFrom->signedValue < INT16_MIN) {
+				reportError(location, "Error: Integer literal too small for s8 (min: %" PRIi8 ", given: %" PRIi64 ")", INT8_MIN, convertFrom->signedValue);
+
+				return false;
+			}
+
+			return true;
+		}
+		else {
+			assert(false);
+			return false;
+		}
+	}
+	else {
 		if (convertTo == &TYPE_U64) {
 			return true;
 		}
@@ -326,59 +436,6 @@ bool boundsCheckImplicitConversion(Expr *location, Type *convertTo, ExprLiteral 
 		else if (convertTo == &TYPE_S8) {
 			if (convertFrom->unsignedValue > static_cast<u64>(INT8_MAX)) {
 				reportError(location, "Error: Integer literal too large for s8 (max: %" PRIi8 ", given: %" PRIu64 ")", INT8_MAX, convertFrom->unsignedValue);
-
-				return false;
-			}
-
-			return true;
-		}
-		else {
-			assert(false);
-			return false;
-		}
-	}
-	else {
-		assert(convertFrom->type == &TYPE_SIGNED_INT_LITERAL);
-
-		if (convertTo == &TYPE_S64) {
-			return true;
-		}
-		else if (convertTo == &TYPE_S32) {
-			if (convertFrom->signedValue > INT32_MAX) {
-				reportError(location, "Error: Integer literal too large for s32 (max: %" PRIi32 ", given: %" PRIi64 ")", INT32_MAX, convertFrom->signedValue);
-
-				return false;
-			}
-			else if (convertFrom->signedValue < INT32_MIN) {
-				reportError(location, "Error: Integer literal too small for s32 (min: %" PRIi32 ", given: %" PRIi64 ")", INT32_MIN, convertFrom->signedValue);
-
-				return false;
-			}
-
-			return true;
-		}
-		else if (convertTo == &TYPE_S16) {
-			if (convertFrom->signedValue > INT16_MAX) {
-				reportError(location, "Error: Integer literal too large for s16 (max: %" PRIi16 ", given: %" PRIi64 ")", INT16_MAX, convertFrom->signedValue);
-
-				return false;
-			}
-			else if (convertFrom->signedValue < INT16_MIN) {
-				reportError(location, "Error: Integer literal too small for s16 (min: %" PRIi16 ", given: %" PRIi64 ")", INT16_MIN, convertFrom->signedValue);
-
-				return false;
-			}
-
-			return true;
-		}
-		else if (convertTo == &TYPE_S8) {
-			if (convertFrom->signedValue > INT8_MAX) {
-				reportError(location, "Error: Integer literal too large for s8 (max: %" PRIi8 ", given: %" PRIi64 ")", INT8_MAX, convertFrom->signedValue);
-
-				return false;
-			}
-			else if (convertFrom->signedValue < INT16_MIN) {
-				reportError(location, "Error: Integer literal too small for s8 (min: %" PRIi8 ", given: %" PRIi64 ")", INT8_MIN, convertFrom->signedValue);
 
 				return false;
 			}
@@ -557,7 +614,7 @@ InferJob *allocateJob();
 
 bool isValidCast(Type *to, Type *from) {
 	if (to->flavor == from->flavor) {
-		if (from->flavor == TypeFlavor::AUTO_CAST || from->flavor == TypeFlavor::VOID) {
+		if (from->flavor == TypeFlavor::AUTO_CAST || from->flavor == TypeFlavor::VOID || from->flavor == TypeFlavor::NAMESPACE) {
 			return false;
 		}
 
@@ -583,17 +640,20 @@ bool isValidCast(Type *to, Type *from) {
 	if (from->flavor == TypeFlavor::BOOL) {
 		return to->flavor == TypeFlavor::INTEGER;
 	}
-	else if (from->flavor == TypeFlavor::AUTO_CAST || from->flavor == TypeFlavor::TYPE || from->flavor == TypeFlavor::VOID || from->flavor == TypeFlavor::STRUCT) {
+	else if (from->flavor == TypeFlavor::AUTO_CAST || from->flavor == TypeFlavor::TYPE || from->flavor == TypeFlavor::VOID || from->flavor == TypeFlavor::STRUCT || from->flavor == TypeFlavor::NAMESPACE) {
 		return false;
 	}
 	else if (from->flavor == TypeFlavor::FLOAT) {
+		return to->flavor == TypeFlavor::INTEGER;
+	}
+	else if (from->flavor == TypeFlavor::ENUM) {
 		return to->flavor == TypeFlavor::INTEGER;
 	}
 	else if (from->flavor == TypeFlavor::FUNCTION) {
 		return to->flavor == TypeFlavor::BOOL || (to->flavor == TypeFlavor::INTEGER && to->size == 8) || to == TYPE_VOID_POINTER;
 	}
 	else if (from->flavor == TypeFlavor::INTEGER) {
-		return to->flavor == TypeFlavor::BOOL || to->flavor == TypeFlavor::FLOAT || (from->size == 8 && (to->flavor == TypeFlavor::FUNCTION || to->flavor == TypeFlavor::POINTER));
+		return to->flavor == TypeFlavor::NAMESPACE || to->flavor == TypeFlavor::BOOL || to->flavor == TypeFlavor::FLOAT || (from->size == 8 && (to->flavor == TypeFlavor::FUNCTION || to->flavor == TypeFlavor::POINTER));
 	}
 	else if (from->flavor == TypeFlavor::POINTER) {
 		return to->flavor == TypeFlavor::BOOL || (to->flavor == TypeFlavor::INTEGER && to->size == 8) ||
@@ -661,7 +721,7 @@ void doConstantCast(Expr **cast) {
 		auto old = static_cast<ExprLiteral *>(expr);
 
 
-		if (castTo->flavor == TypeFlavor::INTEGER) {
+		if (castTo->flavor == TypeFlavor::INTEGER || castTo->flavor == TypeFlavor::ENUM) {
 			auto newLiteral = new ExprLiteral;
 			newLiteral->start = binary->start;
 			newLiteral->end = old->end;
@@ -798,7 +858,7 @@ TypeStruct *getExpressionNamespace(Expr *expr, bool *onlyConstants, Expr *locati
 
 		auto type = static_cast<ExprLiteral *>(expr)->typeValue;
 
-		if (type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::ARRAY) {
+		if (type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::ARRAY || type->flavor == TypeFlavor::NAMESPACE || type->flavor == TypeFlavor::ENUM) {
 			*onlyConstants = true;
 			return static_cast<TypeStruct *>(type);
 		}
@@ -1513,32 +1573,6 @@ bool isLiteral(Expr *expr) {
 		|| expr->flavor == ExprFlavor::TYPE_LITERAL || expr->flavor == ExprFlavor::STRING_LITERAL || expr->flavor == ExprFlavor::FUNCTION || (expr->flavor == ExprFlavor::ARRAY && arrayIsLiteral(static_cast<ExprArray *>(expr))) || expr->flavor == ExprFlavor::STRUCT_DEFAULT;
 }
 
-
-bool hasDefaultValue(Type *type) {
-	switch (type->flavor) {
-		case TypeFlavor::BOOL:
-		case TypeFlavor::FLOAT:
-		case TypeFlavor::FUNCTION:
-		case TypeFlavor::INTEGER:
-		case TypeFlavor::POINTER:
-		case TypeFlavor::STRING:
-		case TypeFlavor::STRUCT: {
-			return true;
-		}
-		case TypeFlavor::ARRAY: {
-			if (type->flags & TYPE_ARRAY_IS_FIXED) {
-				return hasDefaultValue(static_cast<TypeArray *>(type)->arrayOf);
-			}
-			else {
-				return true;
-			}
-		}
-		default: {
-			return false;
-		}
-	}
-}
-
 bool defaultValueIsZero(Type *type, bool *yield) {
 	*yield = false;
 
@@ -1565,7 +1599,7 @@ bool defaultValueIsZero(Type *type, bool *yield) {
 			auto struct_ = static_cast<TypeStruct *>(type);
 
 			for (auto member : struct_->members.declarations) {
-				if (member->flags & DECLARATION_IS_CONSTANT) continue;
+				if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IS_USING)) continue;
 
 				if (member->flags & DECLARATION_IS_UNINITIALIZED) return false;
 
@@ -1586,6 +1620,9 @@ bool defaultValueIsZero(Type *type, bool *yield) {
 			}
 
 			return true;
+		}
+		case TypeFlavor::ENUM: {
+			return type->flags & TYPE_ENUM_IS_FLAGS ? true : false;
 		}
 		default: {
 			return false;
@@ -1674,6 +1711,11 @@ Expr *createDefaultValue(Declaration *location, Type *type, bool *shouldYield) {
 		}
 		case TypeFlavor::TYPE: {
 			reportError(location, "Error: There is no default value for a type");
+			return nullptr;
+		}
+		case TypeFlavor::ENUM: {
+			// Enum flags will be handled by the defaultIsZero case
+			reportError(location, "Error: Enums do not have a default value");
 			return nullptr;
 		}
 		default: {
@@ -1822,6 +1864,12 @@ bool assignOp(InferJob *job, Expr *location, Type *correct, Expr *&given, bool *
 
 					break;
 				}
+				case TypeFlavor::ENUM: {
+					if (correct != given->type) {
+						reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
+						return false;
+					}
+				}
 				default:
 					assert(false);
 			}
@@ -1841,6 +1889,17 @@ bool assignOp(InferJob *job, Expr *location, Type *correct, Expr *&given, bool *
 					literal->flavor = ExprFlavor::FLOAT_LITERAL;
 					literal->floatValue = static_cast<double>(literal->unsignedValue);
 					literal->type = correct;
+				}
+				else if (correct->flavor == TypeFlavor::INTEGER && given->type->flavor == TypeFlavor::ENUM && given->flavor == ExprFlavor::INT_LITERAL) {
+					if (!boundsCheckImplicitConversion(location, correct, static_cast<ExprLiteral *>(given))) {
+						return false;
+					}
+
+					insertImplicitCast(job, &given, correct);
+				}
+				else if (correct->flavor == TypeFlavor::ENUM && (correct->flags & TYPE_ENUM_IS_FLAGS) &&
+					given->type->flavor == TypeFlavor::INTEGER && given->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(given)->unsignedValue == 0) {
+					insertImplicitCast(job, &given, correct);
 				}
 				else if (correct->flavor == TypeFlavor::FLOAT && given->type == &TYPE_SIGNED_INT_LITERAL) {
 					auto literal = static_cast<ExprLiteral *>(given);
@@ -1940,6 +1999,17 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 
 	if (right && right->type->flavor == TypeFlavor::VOID) {
 		reportError(right, "Error: Cannot operate on a value of type void");
+		return false;
+	}
+
+	if (left && left->type->flavor == TypeFlavor::NAMESPACE) {
+		reportError(left, "Error: Cannot operate on a namespace");
+		return false;
+	}
+
+
+	if (right && right->type->flavor == TypeFlavor::NAMESPACE) {
+		reportError(right, "Error: Cannot operate on a namespace");
 		return false;
 	}
 
@@ -2079,6 +2149,12 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 						reportError(binary, "Error: Cannot compare structs");
 						return false;
 					}
+					case TypeFlavor::ENUM: {
+						if (left->type != right->type) {
+							reportError(binary, "Error: Cannot compare %.*s to %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
+							return false;
+						}
+					}
 					case TypeFlavor::TYPE: {
 						// @Incomplete make this work
 						assert(false);
@@ -2094,6 +2170,14 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 				}
 				else if (!binaryOpForFloatAndIntLiteral(exprPointer)) {
 					return false;
+				}
+				else if (left->type->flavor == TypeFlavor::ENUM && (left->type->flags & TYPE_ENUM_IS_FLAGS) &&
+					right->type->flavor == TypeFlavor::INTEGER && right->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(right)->unsignedValue == 0) {
+					insertImplicitCast(job, &right, left->type);
+				}
+				else if (right->type->flavor == TypeFlavor::ENUM && (right->type->flags & TYPE_ENUM_IS_FLAGS) &&
+					left->type->flavor == TypeFlavor::INTEGER && left->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(left)->unsignedValue == 0) {
+					insertImplicitCast(job, &left, right->type);
 				}
 
 				if (right->type != left->type) {
@@ -2161,6 +2245,10 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 					}
 					case TypeFlavor::STRUCT: {
 						reportError(binary, "Error: Cannot compare structs");
+						return false;
+					}
+					case TypeFlavor::ENUM: {
+						reportError(binary, "Error: Cannot compare enums");
 						return false;
 					}
 					default:
@@ -2242,6 +2330,10 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 						reportError(binary, "Error: Cannot %s structs", binary->op == TOKEN('+') ? "add" : "subtract");
 						return false;
 					}
+					case TypeFlavor::ENUM: {
+						reportError(binary, "Error: Cannot %s enums", binary->op == TOKEN('+') ? "add" : "subtract");
+						return false;
+					}
 					default:
 						assert(false);
 				}
@@ -2315,6 +2407,20 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 						reportError(binary, "Error: Cannot '%s' structs", opName);
 						return false;
 					}
+					case TypeFlavor::ENUM: {
+						if (left->type->flags & right->type->flags & TYPE_ENUM_IS_FLAGS) {
+							if (left->type != right->type) {
+								reportError(binary, "Error: Cannot '%s' %.*s and %.*s", opName, STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
+								return false;
+							}
+						}
+						else {
+							reportError(binary, "Error: Cannot '%s' enums", opName);
+							return false;
+						}
+						
+						break;
+					}
 					default:
 						assert(false);
 				}
@@ -2322,6 +2428,14 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 			else {
 				if (!binaryOpForAutoCast(job, binary, yield)) {
 					return false;
+				}
+				else if (left->type->flavor == TypeFlavor::ENUM && (left->type->flags & TYPE_ENUM_IS_FLAGS) &&
+					right->type->flavor == TypeFlavor::INTEGER && right->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(right)->unsignedValue == 0) {
+					insertImplicitCast(job, &right, left->type);
+				}
+				else if (right->type->flavor == TypeFlavor::ENUM && (right->type->flags & TYPE_ENUM_IS_FLAGS) &&
+					left->type->flavor == TypeFlavor::INTEGER && left->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(left)->unsignedValue == 0) {
+					insertImplicitCast(job, &left, right->type);
 				}
 
 				if (right->type != left->type) {
@@ -2374,6 +2488,10 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 					}
 					case TypeFlavor::STRUCT: {
 						reportError(binary, "Error: Cannot shift structs");
+						return false;
+					}
+					case TypeFlavor::ENUM: {
+						reportError(binary, "Error: Cannot shift enums");
 						return false;
 					}
 					default:
@@ -2439,6 +2557,10 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 					}
 					case TypeFlavor::STRUCT: {
 						reportError(binary, "Error: Cannot %s structs", opName);
+						return false;
+					}
+					case TypeFlavor::ENUM: {
+						reportError(binary, "Error: Cannot %s enums", opName);
 						return false;
 					}
 					default:
@@ -2551,6 +2673,10 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 						reportError(binary, "Error: Cannot %s structs", binary->op == TokenT::PLUS_EQUALS ? "add" : "subtract");
 						return false;
 					}
+					case TypeFlavor::ENUM: {
+						reportError(binary, "Error: Cannot %s enums", binary->op == TokenT::PLUS_EQUALS ? "add" : "subtract");
+						return false;
+					}
 					default:
 						assert(false);
 				}
@@ -2659,6 +2785,20 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 						reportError(binary, "Error: Cannot '%s' structs", opName);
 						return false;
 					}
+					case TypeFlavor::ENUM: {
+						if (left->type->flags & right->type->flags & TYPE_ENUM_IS_FLAGS) {
+							if (left->type != right->type) {
+								reportError(binary, "Error: Cannot '%s' %.*s and %.*s", opName, STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
+								return false;
+							}
+						}
+						else {
+							reportError(binary, "Error: Cannot '%s' enums", opName);
+							return false;
+						}
+
+						break;
+					}
 					default:
 						assert(false);
 				}
@@ -2666,6 +2806,10 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 			else {
 				if (!assignOpForAutoCast(job, binary, yield)) {
 					return false;
+				}
+				else if (left->type->flavor == TypeFlavor::ENUM && (left->type->flags & TYPE_ENUM_IS_FLAGS) &&
+					right->type->flavor == TypeFlavor::INTEGER && right->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(right)->unsignedValue == 0) {
+					insertImplicitCast(job, &right, left->type);
 				}
 
 				if (right->type != left->type) {
@@ -2727,6 +2871,10 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 					}
 					case TypeFlavor::STRUCT: {
 						reportError(binary, "Error: Cannot shift structs");
+						return false;
+					}
+					case TypeFlavor::ENUM: {
+						reportError(binary, "Error: Cannot shift enums");
 						return false;
 					}
 					default:
@@ -2801,6 +2949,10 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 					}
 					case TypeFlavor::STRUCT: {
 						reportError(binary, "Error: Cannot '%s' structs", opName);
+						return false;
+					}
+					case TypeFlavor::ENUM: {
+						reportError(binary, "Error: Cannot '%s' enums", opName);
 						return false;
 					}
 					default:
@@ -3105,6 +3257,10 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 				}
 				else if (function->returnType->flavor != ExprFlavor::TYPE_LITERAL) {
 					reportError(function->returnType, "Error: Function return type must be a constant");
+					return false;
+				}
+				else if (static_cast<ExprLiteral *>(function->returnType)->typeValue->flavor == TypeFlavor::NAMESPACE) {
+					reportError(function->returnType, "Error: Function return type cannot be a namespace");
 					return false;
 				}
 
@@ -3651,8 +3807,17 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 
 							unary->type = value->type;
 						}
+						else if (value->type->flavor == TypeFlavor::ENUM) {
+							if (value->type->flags & TYPE_ENUM_IS_FLAGS) {
+								unary->type = value->type;
+							}
+							else {
+								reportError(unary, "Error: Cannot invert an enum");
+								return false;
+							}
+						}
 						else {
-							reportError(value, "Error: Cannot invert a %.*s", STRING_PRINTF(value->type->name));
+							reportError(unary, "Error: Cannot invert a %.*s", STRING_PRINTF(value->type->name));
 							return false;
 						}
 					}
@@ -3719,6 +3884,10 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 							reportError(value, "Error: Cannot take the type of an auto casted value");
 							return false;
 						}
+						else if (value->type->flavor == TypeFlavor::NAMESPACE) {
+							reportError(value, "Error: Cannot take the type of a namespace");
+							return false;
+						}
 
 						auto literal = new ExprLiteral;
 						literal->flavor = ExprFlavor::TYPE_LITERAL;
@@ -3754,6 +3923,11 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 					case TOKEN('*'): {
 						if (value->flavor == ExprFlavor::TYPE_LITERAL) {
 							auto literal = static_cast<ExprLiteral *>(value);
+
+							if (literal->typeValue->flavor == TypeFlavor::NAMESPACE) {
+								reportError(unary, "Error: Cannot take a pointer to a namespace");
+								return false;
+							}
 
 							*exprPointer = inferMakeTypeLiteral(unary->start, value->end, getPointer(literal->typeValue));
 							(*exprPointer)->valueOfDeclaration = expr->valueOfDeclaration;
@@ -3807,6 +3981,69 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 						reportError(loop->whileCondition, "Error: Cannot convert %.*s to bool", STRING_PRINTF(loop->whileCondition->type->name));
 						return false;
 					}
+				}
+
+				break;
+			}
+			case ExprFlavor::ENUM: {
+				auto enum_ = static_cast<ExprEnum *>(expr);
+
+				if (enum_->struct_.integerType) {
+					*exprPointer = inferMakeTypeLiteral(enum_->start, enum_->end, &enum_->struct_);
+				}
+				else {
+					if (enum_->integerType->type != &TYPE_TYPE) {
+						reportError(enum_->integerType, "Error: enum type must be a type");
+						return false;
+					}
+					else if (enum_->integerType->flavor != ExprFlavor::TYPE_LITERAL) {
+						reportError(enum_->integerType, "Error: enum type must be a constant");
+						return false;
+					}
+					else if (static_cast<ExprLiteral *>(enum_->integerType)->typeValue->flavor != TypeFlavor::INTEGER) {
+						reportError(enum_->integerType, "Error: enum type must be an integer");
+						return false;
+					}
+					else if ((static_cast<ExprLiteral *>(enum_->integerType)->typeValue->flags & TYPE_INTEGER_IS_SIGNED) && (enum_->struct_.flags & TYPE_ENUM_IS_FLAGS)) {
+						reportError(enum_->integerType, "Error: enum_flags cannot have a signed type");
+						return false;
+					}
+
+					enum_->struct_.integerType = static_cast<ExprLiteral *>(enum_->integerType)->typeValue;
+					enum_->struct_.alignment = enum_->struct_.integerType->alignment;
+					enum_->struct_.size = enum_->struct_.integerType->size;
+					enum_->struct_.flags |= enum_->struct_.integerType->flags & TYPE_INTEGER_IS_SIGNED;
+
+					auto literal = inferMakeTypeLiteral(enum_->start, enum_->end, &enum_->struct_);
+
+					literal->valueOfDeclaration = enum_->valueOfDeclaration;
+
+					literal->typeValue->name = literal->valueOfDeclaration ? literal->valueOfDeclaration->name : (enum_->struct_.flags & TYPE_ENUM_IS_FLAGS ? "(enum_flags)" : "(enum)");
+
+					*exprPointer = literal;
+				}
+				break;
+			}
+			case ExprFlavor::ENUM_INCREMENT: {
+				auto increment = static_cast<ExprEnumIncrement *>(expr);
+
+				if (increment->previous->flags & DECLARATION_VALUE_IS_READY) {
+					auto value = static_cast<ExprLiteral *>(increment->previous->initialValue);
+
+					assert(value->flavor == ExprFlavor::INT_LITERAL);
+					assert(value->type->flavor == TypeFlavor::ENUM);
+
+					auto literal = new ExprLiteral;
+					literal->flavor = ExprFlavor::INT_LITERAL;
+					literal->start = increment->start;
+					literal->end = increment->end;
+					literal->type = value->type->flags & TYPE_INTEGER_IS_SIGNED ? &TYPE_SIGNED_INT_LITERAL : &TYPE_UNSIGNED_INT_LITERAL;
+					literal->unsignedValue = value->type->flags & TYPE_ENUM_IS_FLAGS ? value->unsignedValue * 2 : value->unsignedValue + 1;
+
+					*exprPointer = literal;
+				}
+				else {
+					return true;
 				}
 
 				break;
@@ -4082,6 +4319,11 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 				return false;
 			}
 
+			if (static_cast<ExprLiteral *>(declaration->type)->typeValue->flavor == TypeFlavor::NAMESPACE) {
+				reportError(declaration->type, "Error: Declaration type cannot be a namespace");
+				return false;
+			}
+
 			*madeProgress = true;
 			declaration->flags |= DECLARATION_TYPE_IS_READY;
 		}
@@ -4092,9 +4334,25 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 
 				Type *correct = static_cast<ExprLiteral *>(declaration->type)->typeValue;
 
+				if (declaration->flags & DECLARATION_IS_ENUM_VALUE) {
+					assert(correct->flavor == TypeFlavor::ENUM);
+
+					if (declaration->initialValue->type == &TYPE_SIGNED_INT_LITERAL || declaration->initialValue->type == &TYPE_UNSIGNED_INT_LITERAL) {
+						assert(declaration->initialValue->flavor == ExprFlavor::INT_LITERAL);
+						
+						if (!boundsCheckImplicitConversion(declaration->initialValue, static_cast<TypeEnum *>(correct)->integerType, static_cast<ExprLiteral *>(declaration->initialValue))) {
+							reportError(CAST_FROM_SUBSTRUCT(ExprEnum, struct_, static_cast<TypeEnum *>(correct))->integerType, "   ..: Here is the enum type declaration");
+							
+							return false;
+						}
+
+						declaration->initialValue->type = correct;
+					}
+				}
+
 				bool yield;
 				if (!assignOp(job, declaration->initialValue, correct, declaration->initialValue, &yield)) {
-					return true;
+					return yield;
 				}
 
 				if ((declaration->flags &
@@ -4248,6 +4506,10 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 					}
 					else if (declaration->initialValue->type == &TYPE_AUTO_CAST) {
 						reportError(declaration->type, "Error: Cannot infer the type of a declaration if the value is an auto cast");
+						return false;
+					}
+					else if (declaration->initialValue->type->flavor == TypeFlavor::NAMESPACE) {
+						reportError(declaration->type, "Error: Declaration type cannot be a namespace");
 						return false;
 					}
 
@@ -4412,6 +4674,10 @@ void runInfer() {
 
 				if (body->infer.type->flavor == TypeFlavor::STRUCT) {
 					body->infer.type->name = declarations.data.expr->valueOfDeclaration ? declarations.data.expr->valueOfDeclaration->name : "(struct)";
+					addStruct(static_cast<TypeStruct *>(body->infer.type));
+				}
+				else {
+					assert(false);
 				}
 
 				body->infer.type->sizeJob = body;

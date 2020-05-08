@@ -46,7 +46,9 @@ static const Keyword keywords[] = {
 	{"completed", TokenT::COMPLETED},  // @Incomplete Change this keyword because people will almost certainly want to call a variable completed
 	{"remove", TokenT::REMOVE}, 
 	{"#pack", TokenT::PACK}, 
-	{"using", TokenT::USING}
+	{"using", TokenT::USING},
+	{"enum", TokenT::ENUM}, 
+	{"enum_flags", TokenT::ENUM_FLAGS}
 };
 
 void BigInt::zero() {

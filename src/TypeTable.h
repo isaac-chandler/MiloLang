@@ -28,7 +28,9 @@ enum class TypeFlavor : u8 {
 	AUTO_CAST,
 	STRING,
 	ARRAY, 
-	STRUCT
+	STRUCT, 
+	ENUM, 
+	NAMESPACE
 };
 
 #define TYPE_INTEGER_IS_SIGNED 0x2
@@ -37,6 +39,7 @@ enum class TypeFlavor : u8 {
 #define TYPE_ARRAY_IS_DYNAMIC 0x10
 #define TYPE_STRUCT_IS_UNION 0x20
 #define TYPE_STRUCT_IS_PACKED 0x40
+#define TYPE_ENUM_IS_FLAGS 0x80
 
 struct Type {
 	u64 size;
@@ -54,6 +57,10 @@ struct TypePointer : Type {
 
 struct TypeStruct : Type {
 	Block members;
+};
+
+struct TypeEnum : TypeStruct {
+	Type *integerType;
 };
 
 struct TypeArray : TypeStruct {
@@ -110,6 +117,8 @@ inline Type TYPE_AUTO_CAST = { 0, 0, "<auto cast>", 59, TYPE_IS_INTERNAL, TypeFl
 inline Type TYPE_STRING = { 8, 8, "string", 61, 0, TypeFlavor::STRING };
 
 inline Type *TYPE_VOID_POINTER;
+
+void addStruct(TypeStruct *struct_);
 
 TypePointer *getPointer(Type *type);
 

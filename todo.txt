@@ -1,9 +1,18 @@
-using at global scope
-
 enums
  - Do we allow signed enums?
  - flag enums -> allow bitwise operators, |, &, ~ (do not allow signed)
- - 
+ - array of names
+ - array of values
+ - is_indexable -> do the enum values go in order from 0..N, so the names array can be indexed directly with the enum value
+ - largest_value
+ - smallest_value 
+
+ABI/calling convention
+ - multiple return values
+ - varargs (represent with arrays?)
+ - arguments by value are immutable?
+ 
+#must
 
 multiple return values
  - Named return values
@@ -41,6 +50,10 @@ performance
 #if
  - Syntax if both blocks checked, type checking only happens for chosen block
 
+defer
+
+switch if
+ - #complete
 
 remove hardcoded linker path
  - 
@@ -60,6 +73,8 @@ debug info
 improve external function interface
  - don't hardcode lib files to link with
  
+change completed keyword
+ 
 llvm
 
 runtime type information
@@ -75,6 +90,7 @@ predefined constant variables
  - Marks a struct member of type "type" as the tag for the struct, if the struct tag is compared to a type in an if statement, in the body of the if statement the struct will be implicitly casted to the tag
  - Alternatively mark the if statement as #tag instead of a struct member
  - Make it work using box type?
+ - Work with switch if
  
 utf8 identifiers?
 

@@ -1332,6 +1332,150 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 		inferQueue.add(makeDeclarationPack(expr));
 	}
+	else if (lexer->token.type == TokenT::ENUM || lexer->token.type == TokenT::ENUM_FLAGS) {
+		auto enum_ = PARSER_NEW(ExprEnum);
+		enum_->start = start;
+		enum_->flavor = ExprFlavor::ENUM;
+
+		enum_->struct_.size = 0;
+		enum_->struct_.alignment = 0;
+		enum_->struct_.flavor = TypeFlavor::ENUM;
+		enum_->struct_.members.flags |= BLOCK_IS_STRUCT;
+		enum_->struct_.integerType = nullptr;
+
+		if (lexer->token.type == TokenT::ENUM_FLAGS) {
+			enum_->struct_.flags |= TYPE_ENUM_IS_FLAGS;
+		}
+
+		lexer->advance();
+
+		if (lexer->token.type != TOKEN('{')) {
+			enum_->integerType = parseExpr(lexer);
+
+			if (!enum_->integerType) {
+				return nullptr;
+			}
+		}
+		else {
+			enum_->integerType = parserMakeTypeLiteral(start, end, &TYPE_U64); // @Incomplete is u64 the correct default
+		}
+
+		pushBlock(&enum_->struct_.members);
+
+		auto members = PARSER_NEW(TypeStruct);
+		members->flavor = TypeFlavor::NAMESPACE;
+		members->size = 0;
+		members->alignment = 0;
+		members->flags |= TYPE_IS_INTERNAL;
+		members->name = "members";
+		members->members.flags |= BLOCK_IS_STRUCT;
+
+
+		auto membersDeclaration = PARSER_NEW(Declaration);
+		membersDeclaration->start = lexer->token.start;
+		membersDeclaration->end = lexer->token.end;
+		membersDeclaration->name = "members";
+		membersDeclaration->type = parserMakeTypeLiteral(lexer->token.start, lexer->token.end, &TYPE_TYPE);
+		membersDeclaration->initialValue = parserMakeTypeLiteral(lexer->token.start, lexer->token.end, members);
+		membersDeclaration->flags |= DECLARATION_IS_CONSTANT | DECLARATION_MARKED_AS_USING;
+		membersDeclaration->inferJob = nullptr;
+
+		addDeclarationToCurrentBlock(membersDeclaration);
+		addDeclarationToCurrentBlock(createDeclarationForUsing(membersDeclaration));
+
+
+		auto integer = PARSER_NEW(Declaration);
+		integer->name = "integer";
+		integer->start = lexer->token.start;
+		integer->end = lexer->token.end;
+		integer->type = parserMakeTypeLiteral(lexer->token.start, lexer->token.end, &TYPE_TYPE);
+		integer->initialValue = enum_->integerType;
+		integer->flags |= DECLARATION_IS_CONSTANT;
+		integer->inferJob = nullptr;
+
+		addDeclarationToCurrentBlock(integer);
+
+		pushBlock(&members->members);
+
+
+		if (!expectAndConsume(lexer, TOKEN('{'))) {
+			reportExpectedError(&lexer->token, "Error: Expected '{' to start enum block");
+		}
+
+
+		while (true) {
+			if (lexer->token.type == TOKEN(';')) {
+				lexer->advance();
+				continue;
+			}
+			else if (lexer->token.type == TOKEN('}')) {
+				lexer->advance();
+				break;
+			}
+			else if (lexer->token.type == TokenT::IDENTIFIER) {
+				auto declaration = PARSER_NEW(Declaration);
+				declaration->name = lexer->token.text;
+				declaration->start = lexer->token.start;
+				declaration->type = enum_;
+				declaration->inferJob = nullptr;
+				declaration->flags |= DECLARATION_IS_CONSTANT | DECLARATION_IS_ENUM_VALUE;
+
+				if (declaration->name == "members" || declaration->name == "integer") {
+					reportError(&lexer->token, "Error: enum name conflicts with enum data declaration '%.*s'", STRING_PRINTF(declaration->name));
+					return nullptr;
+				}
+
+				lexer->advance();
+
+				if (expectAndConsume(lexer, TOKEN(':'))) {
+					if (!expectAndConsume(lexer, TOKEN(':'))) {
+						reportError(&lexer->token, "Error: enums must only declare their values with a :: declaration");
+						return nullptr;
+					}
+
+					declaration->initialValue = parseExpr(lexer);
+
+					if (!declaration->initialValue)
+						return nullptr;
+
+					declaration->end = lexer->previousTokenEnd;
+				}
+				else {
+					declaration->end = lexer->previousTokenEnd;
+
+					if (currentBlock->declarations.count == 0) {
+						declaration->initialValue = makeIntegerLiteral(declaration->start, declaration->end, enum_->struct_.flags & TYPE_ENUM_IS_FLAGS ? 1 : 0, &TYPE_UNSIGNED_INT_LITERAL);
+					}
+					else {
+						auto increment = PARSER_NEW(ExprEnumIncrement);
+						increment->start = declaration->start;
+						increment->end = declaration->end;
+						increment->flavor = ExprFlavor::ENUM_INCREMENT;
+						increment->previous = currentBlock->declarations[currentBlock->declarations.count - 1];
+
+						declaration->initialValue = increment;
+					}
+
+				}
+
+				declaration->initialValue->valueOfDeclaration = declaration;
+
+				if (!addDeclarationToCurrentBlock(declaration)) {
+					return nullptr;
+				}
+			}
+			else {
+				reportExpectedError(&lexer->token, "Error: Expected enum declaration name");
+			}
+		}
+		popBlock(&members->members);
+
+		enum_->end = lexer->previousTokenEnd;
+
+		popBlock(&enum_->struct_.members);
+
+		expr = enum_;
+	}
 	else {
 		if (lexer->token.type == TokenT::DOUBLE_DASH) {
 			reportError(&lexer->token, "Error: '--' is not supported as an operator");
@@ -1821,22 +1965,62 @@ void parseFile(FileInfo *file) {
 			}
 
 			declaration->enclosingScope = nullptr;
+			declaration->indexInBlock = 0;
 
 			assert(currentBlock == nullptr);
 
 			_ReadWriteBarrier();
 
-			Declaration *using_ = nullptr;
+			assert(!(declaration->flags & DECLARATION_MARKED_AS_USING));
 
-			if (declaration->flags & DECLARATION_MARKED_AS_USING) {
+			inferQueue.add(makeDeclarationPack(declaration));			
+		}
+		else if (lexer.token.type == TokenT::USING) {
+			TokenT peek[2];
+			lexer.peekTokenTypes(2, peek);
+
+			if (peek[1] == TOKEN(':')) { // It is a declaration
+				Declaration *declaration = parseDeclaration(&lexer);
+
+				if (!declaration)
+					break;
+
+				_ReadWriteBarrier();
+
+				inferQueue.add(makeDeclarationPack(declaration));
+
+				assert(declaration->flags & DECLARATION_MARKED_AS_USING);
 				
-				using_ = createDeclarationForUsing(declaration);
+				inferQueue.add(makeDeclarationPack(createDeclarationForUsing(declaration)));
+
+				
 			}
+			else {
+				auto start = lexer.token.start;
 
-			inferQueue.add(makeDeclarationPack(declaration));
+				lexer.advance();
 
-			if (using_) {
-				inferQueue.add(makeDeclarationPack(using_));
+				auto using_ = parseExpr(&lexer);
+
+				if (!using_)
+					break;
+
+
+				auto declaration = PARSER_NEW(Declaration);
+
+				declaration->start = start;
+				declaration->end = using_->end;
+				declaration->name = { nullptr, 0ULL };
+				declaration->type = nullptr;
+				declaration->initialValue = using_;
+				declaration->physicalStorage = 0;
+				declaration->flags |= DECLARATION_IS_USING;
+				declaration->enclosingScope = nullptr;
+				declaration->indexInBlock = 0;
+
+				_ReadWriteBarrier();
+
+				inferQueue.add(makeDeclarationPack(declaration));
 			}
 		}
 		else if (lexer.token.type == TokenT::LOAD) {

@@ -1,5 +1,11 @@
 #load "standard.milo"
 
+Job_Status :: enum_flags {
+	EMPLOYED
+	HOLIDAY
+	SUSPENDED
+}
+
 Job :: struct {
 	title: string
 	experience: u64
@@ -10,6 +16,7 @@ Person :: struct {
 	last_name: string
 	age: u64
 	
+	job_status : Job_Status
 	using job: *Job
 }
 
@@ -21,19 +28,24 @@ print_job :: (job: *Job) {
 }
 
 _main :: () {
+	using Job_Status
+
 	jim: Person
-	
 	
 	jim.first_name = "Jim"
 	jim.last_name = "Halpert"
 	jim.age = 30
+	
 	
 	job: Job
 	
 	job.title = "Co-regional Manager"
 	job.experience = 4
 	
+	print_u64(Job_Status.SUSPENDED)
+	
 	jim.job = *job
+	jim.job_status |= EMPLOYED
 	
 	print_job(jim)
 }

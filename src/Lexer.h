@@ -103,7 +103,9 @@ enum class TokenT : u8 {
 	COMPLETED, 
 	REMOVE, 
 	PACK, 
-	USING
+	USING, 
+	ENUM, 
+	ENUM_FLAGS
 };
 
 struct Token {
