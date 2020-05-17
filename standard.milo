@@ -49,15 +49,33 @@ copy_string :: (s: string) -> string {
 
 args: []string
 
-add_string :: (array: *[..] string, value: string) {
-	if (array.count >= array.capacity) {
+memory_copy :: (dst: *void, src: *void, count: u64) {
+	a : *u8 = dst
+	b: *u8 = src
+	
+	for i: 0 .. count {
+		a[i] = b[i]
+		a += 1
+		b += 1
+	}
+}
+
+
+array_add_generic :: (array: *[..]u8, value: *void, size: u64) {
+	if array.count >= array.capacity {
 		array.capacity = max(array.count * 2, 4)
 		
-		array.data = reallocate(array.data, array.capacity * size_of(type_of(value)))
+		array.data = reallocate(array.data, array.capacity * size)
 	}
 	
-	array.data[array.count] = value
+	
+	
+	memory_copy(array.data + array.count * size, value, size)
 	array.count += 1
+}
+
+add_string :: (array: *[..]string, value: string) {
+	array_add_generic(cast() array, *value, size_of(type_of(value)))
 }
 
 

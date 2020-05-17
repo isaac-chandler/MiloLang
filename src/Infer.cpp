@@ -3933,7 +3933,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 							(*exprPointer)->valueOfDeclaration = expr->valueOfDeclaration;
 						}
 						else if (value->flavor == ExprFlavor::BINARY_OPERATOR) {
-							auto binary = static_cast<ExprBinaryOperator *>(expr);
+							auto binary = static_cast<ExprBinaryOperator *>(value);
 
 							if (binary->op == TOKEN('[')) {
 								checkedRemoveLastSizeDependency(job, value->type);
@@ -4064,6 +4064,10 @@ bool checkForUndeclaredIdentifier(Expr *haltedOn) {
 		if (!identifier->declaration) {
 			reportError(identifier, "Error: Could not find a declaration for '%.*s'", STRING_PRINTF(identifier->name));
 
+			if (identifier->name == "float") {
+				reportError(&identifier->start, "   ..: Did you mean 'f32'?");
+			}
+
 			return true;
 		}
 	}
@@ -4111,7 +4115,7 @@ bool addDeclaration(Declaration *declaration) {
 
 	if (!(declaration->flags & DECLARATION_IS_USING)) {
 		if (declaration->flags & DECLARATION_IS_CONSTANT) {
-			if (!declaration->type && declaration->initialValue->flavor == ExprFlavor::INT_LITERAL) {
+			if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::INT_LITERAL) {
 				declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, &TYPE_UNSIGNED_INT_LITERAL);
 				declaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
 				return true;
@@ -4121,7 +4125,7 @@ bool addDeclaration(Declaration *declaration) {
 			}*/
 		}
 		else if (declaration->enclosingScope) {
-			if (!declaration->type && declaration->initialValue->flavor == ExprFlavor::INT_LITERAL)  {
+			if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::INT_LITERAL)  {
 				declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, &TYPE_UNSIGNED_INT_LITERAL);
 				declaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
 				return true;

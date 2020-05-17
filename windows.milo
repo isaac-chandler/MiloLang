@@ -288,6 +288,9 @@ WM_CHILDACTIVATE   :: 0x0022
 WM_QUEUESYNC       :: 0x0023
 WM_GETMINMAXINFO   :: 0x0024
 
+WM_KEYDOWN :: 0x100
+WM_KEYUP   :: 0x101
+
 DestroyWindow :: (hWnd: HWND) -> s32 #external
 PostQuitMessage :: (nExitCode: s32) #external
 

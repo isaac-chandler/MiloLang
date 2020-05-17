@@ -149,6 +149,31 @@ load_image :: (filename: string) -> u32 {
 	return texture
 }
 
+left_is_down:  bool
+right_is_down: bool
+
+SPEED :: 15.0
+
+x: f32 = 100.0
+
+Rectangle :: struct {
+	x: f32
+	y: f32
+	width: f32
+	height: f32
+}
+
+Entity :: struct {
+	using rectangle: Rectangle
+	texture_handle: u32
+}
+
+
+
+array_add_entity :: (array: *[..]Entity, value: Entity) {
+	array_add_generic(cast() array, *value, size_of(type_of(value)))
+}
+
 _main :: () {
 /*
 	for get_strings() {
@@ -158,6 +183,8 @@ _main :: () {
 		//}
 	}
 	*/
+	
+	entities: [..]Entity
 	
 	performance_counter_frequency: s64
 	
@@ -182,6 +209,9 @@ _main :: () {
 	
 	window_class.style = CS_OWNDC | CS_VREDRAW | CS_HREDRAW
 	window_class.lpfnWndProc = (hwnd: HWND, uMsg: u32, wParam: u64, lParam: s64) -> s64 {
+		VK_LEFT :: 0x25
+		VK_RIGHT :: 0x27
+	
 		if uMsg == WM_CLOSE {
 			DestroyWindow(hwnd)
 		} else if uMsg == WM_DESTROY {
@@ -198,6 +228,18 @@ _main :: () {
 			
 			window_width = client_rect.right - client_rect.left
 			window_height = client_rect.bottom - client_rect.top
+		} else if uMsg == WM_KEYDOWN {
+			if wParam == VK_LEFT
+				left_is_down = true
+			else if wParam == VK_RIGHT
+				right_is_down = true
+				
+		} else if uMsg == WM_KEYUP {
+			if wParam == VK_LEFT
+				left_is_down = false
+			else if wParam == VK_RIGHT
+				right_is_down = false
+				
 		} else {
 			return DefWindowProcW(hwnd, uMsg, wParam, lParam)
 		}
@@ -264,6 +306,23 @@ _main :: () {
 	glEnable(GL_TEXTURE_2D)
 	texture := load_image("Invaders/Spaceship.bmp")
 	
+	{
+		player: Entity
+	
+		player.x = 100
+		player.texture_handle = texture
+	
+		array_add_entity(*entities, player)
+	}
+	
+	player := entities.data
+	
+	player.y = 100
+	player.width = 128
+	player.height = 128
+	
+	
+	
 	glEnable(GL_BLEND)
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 	
@@ -301,23 +360,32 @@ _main :: () {
 		glLoadIdentity()
 		glOrtho(0, 1280, 0, 720, -5, 5)
 		
-		glBindTexture(GL_TEXTURE_2D, texture)
 		glBegin(GL_QUADS)
 		
-		glTexCoord2f(0, 0)
-		glVertex2f(100, 100)
 		
+		for entity: entities {
+			glBindTexture(GL_TEXTURE_2D, player.texture_handle)
 		
-		glTexCoord2f(1, 0)
-		glVertex2f(228, 100)
+			glTexCoord2f(0, 0)
+			glVertex2f(entity.x, entity.y)
+			
+			
+			glTexCoord2f(1, 0)
+			glVertex2f(entity.x + entity.width, entity.y)
+			
+			
+			glTexCoord2f(1, 1)
+			glVertex2f(entity.x + entity.width, entity.y + entity.height)
+			
+			
+			glTexCoord2f(0, 1)
+			glVertex2f(entity.x, entity.y + entity.height)
+		}
 		
-		
-		glTexCoord2f(1, 1)
-		glVertex2f(228, 228)
-		
-		
-		glTexCoord2f(0, 1)
-		glVertex2f(100, 228)
+		if left_is_down
+			player.x -= SPEED
+		else if right_is_down
+			player.y += SPEED
 		
 		glEnd()
 		

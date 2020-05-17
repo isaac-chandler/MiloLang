@@ -145,6 +145,7 @@
     <ClInclude Include="src\Infer.h" />
     <ClInclude Include="src\IrGenerator.h" />
     <ClInclude Include="src\Lexer.h" />
+    <ClInclude Include="src\LinkCommand.h" />
     <ClInclude Include="src\Parser.h" />
     <ClInclude Include="src\String.h" />
     <ClInclude Include="src\TypeTable.h" />
