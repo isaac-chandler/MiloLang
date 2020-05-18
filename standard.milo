@@ -55,8 +55,6 @@ memory_copy :: (dst: *void, src: *void, count: u64) {
 	
 	for i: 0 .. count {
 		a[i] = b[i]
-		a += 1
-		b += 1
 	}
 }
 

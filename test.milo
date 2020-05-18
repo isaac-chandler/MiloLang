@@ -305,11 +305,13 @@ _main :: () {
 	
 	glEnable(GL_TEXTURE_2D)
 	texture := load_image("Invaders/Spaceship.bmp")
-	
 	{
 		player: Entity
 	
 		player.x = 100
+		player.y = 100
+		player.width = 128
+		player.height = 128
 		player.texture_handle = texture
 	
 		array_add_entity(*entities, player)
@@ -317,9 +319,6 @@ _main :: () {
 	
 	player := entities.data
 	
-	player.y = 100
-	player.width = 128
-	player.height = 128
 	
 	
 	
@@ -385,7 +384,7 @@ _main :: () {
 		if left_is_down
 			player.x -= SPEED
 		else if right_is_down
-			player.y += SPEED
+			player.x += SPEED
 		
 		glEnd()
 		
