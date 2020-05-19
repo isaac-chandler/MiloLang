@@ -211,7 +211,7 @@ Expr *parseStatement(LexerFile *lexer) {
 				assert(lexer->token.type == TOKEN(':'));
 
 				Declaration *it_index = makeIterator(lexer->token.start, lexer->token.end, "it_index");
-				it->flags |= DECLARATION_IS_ITERATOR_INDEX;
+				it_index->flags |= DECLARATION_IS_ITERATOR_INDEX;
 
 				if (!addDeclarationToBlock(&loop->iteratorBlock, it_index)) {
 					return nullptr;
@@ -238,7 +238,7 @@ Expr *parseStatement(LexerFile *lexer) {
 				}
 
 				Declaration *it_index = makeIterator(lexer->token.start, lexer->token.end, lexer->token.text);
-				it->flags |= DECLARATION_IS_ITERATOR_INDEX;
+				it_index->flags |= DECLARATION_IS_ITERATOR_INDEX;
 
 				if (!addDeclarationToBlock(&loop->iteratorBlock, it_index)) {
 					return nullptr;
@@ -1853,6 +1853,10 @@ Declaration *parseDeclaration(LexerFile *lexer) {
 
 	if (!expectAndConsume(lexer, ':')) {
 		reportExpectedError(&lexer->token, "Error: Expected ':' after declaration name");
+
+		if (lexer->token.type == TOKEN('(')) {
+			reportError(&lexer->token, "   ..: To declare a function use the syntax f :: (arguments) -> return { ... }");
+		}
 		return nullptr;
 	}
 

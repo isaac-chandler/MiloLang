@@ -745,7 +745,7 @@ decimalPoint:
 exponentSign:
 	c = readCharacter(lexer, &endOfFile, true);
 
-	digit = getDigitForBase(c, exponentBase);
+	digit = getDigitForBase(c, 10);
 
 	if (digit >= 0) {
 		goto exponent;
@@ -766,7 +766,7 @@ exponentSign:
 exponentDigit:
 	c = readCharacter(lexer, &endOfFile, true);
 
-	digit = getDigitForBase(c, exponentBase);
+	digit = getDigitForBase(c, 10);
 
 	if (digit >= 0) {
 		goto exponent;
@@ -781,7 +781,7 @@ exponentDigit:
 exponent:
 	c = readCharacter(lexer, &endOfFile, true);
 
-	digit = getDigitForBase(c, exponentBase);
+	digit = getDigitForBase(c, 10);
 
 	if (digit >= 0) {
 		goto exponent;
@@ -1715,7 +1715,7 @@ decimalPoint:
 exponentSign:
 	c = readCharacter(this, &endOfFile);
 
-	digit = getDigitForBase(c, exponentBase);
+	digit = getDigitForBase(c, 10);
 
 	if (digit >= 0) {
 		exponentIsNegative = false;
@@ -1744,7 +1744,7 @@ exponentSign:
 exponentDigit:
 	c = readCharacter(this, &endOfFile);
 
-	digit = getDigitForBase(c, exponentBase);
+	digit = getDigitForBase(c, 10);
 
 	if (digit >= 0) {
 		exponent *= exponentBase;
@@ -1765,7 +1765,7 @@ exponentDigit:
 exponent:
 	c = readCharacter(this, &endOfFile);
 
-	digit = getDigitForBase(c, exponentBase);
+	digit = getDigitForBase(c, 10);
 
 	if (digit >= 0) {
 		exponent *= exponentBase;
@@ -1776,7 +1776,7 @@ exponent:
 			if (exponent > 1074) {
 				token.end = location;
 				token.type = TokenT::INVALID;
-				reportError(&location, "Error: Expected float literal exponent to small, the minimum is -1074");
+				reportError(&location, "Error: Float literal exponent too small, the minimum is -1074");
 				return;
 			}
 		}
@@ -1785,7 +1785,7 @@ exponent:
 			if (exponent > 1023) {
 				token.end = location;
 				token.type = TokenT::INVALID;
-				reportError(&location, "Error: Expected float literal exponent to large, the minimum is 1023");
+				reportError(&location, "Error: Float literal exponent to large, the minimum is 1023");
 				return;
 			}
 		}

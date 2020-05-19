@@ -20,11 +20,11 @@ random_u32 :: (rng: *Random_State) -> u32 {
     rng.state = oldstate * 6364136223846793005 + (rng.inc | 1)
 	
     // Calculate output function (XSH RR), uses old state for max ILP
-    xorshifted := ((oldstate >> 18) ^ oldstate) >> 27
-    rot := oldstate >> 59
+    xorshifted := cast(u32) (((oldstate >> 18) ^ oldstate) >> 27)
+    rot := cast(u32) (oldstate >> 59)
     return (xorshifted >> rot) | (xorshifted << ((-rot) & 31))
 }
 
 random_f32 :: (rng: *Random_State) -> f32 {
-	return cast() random_u32(rng) * 1.0p-32
+	return cast(f32) random_u32(rng) * 0x1p-32
 }

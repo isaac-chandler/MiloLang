@@ -1,6 +1,7 @@
 #load "windows.milo"
 #load "gl.milo"
 #load "standard.milo"
+#load "random/random.milo"	
 
 ListNode :: struct {
 	value: string
@@ -22,8 +23,8 @@ test :: () {
 get_strings :: () -> [] string {
 	a: [..] string
 
-	add_string(*a, "Test1")
-	add_string(*a, "Test2")
+	array_add_string(*a, "Test1")
+	array_add_string(*a, "Test2")
 
 	return a
 }
@@ -190,21 +191,21 @@ Particle_System :: struct {
 	x: f32
 	y: f32
 	texture_handle: u32
+	active: bool
 }
 
 
-
-
+make_particle_system_active :: (
 
 array_add_entity :: (array: *[..]Entity, value: Entity) -> *Entity {
 	return array_add_generic(cast() array, *value, size_of(type_of(value)))
 }
 
 array_remove_entity :: (array: *[]Entity, value: *Entity) {
-	array_remove_generic(cast() array, value, size_of(Entity)
+	array_remove_generic(cast() array, value, size_of(Entity))
 }
 
-set_gl_color(color: Vector4) {
+set_gl_color :: (color: Vector4) {
 	glColor4f(color.r, color.g, color.b, color.a)
 }
 
@@ -219,8 +220,8 @@ _main :: () {
 	*/
 	
 	entities: [..]Entity
-	enabled_particle_systems: [..]Particle_System
-	disabled_particles_systems: [..]Particle_System
+	active_particle_systems: [..]*Particle_System
+	all_particles_systems: [..]Particle_System
 	
 	performance_counter_frequency: s64
 	
@@ -344,6 +345,8 @@ _main :: () {
 	glEnable(GL_TEXTURE_2D)
 	texture := load_image("Invaders/Spaceship.bmp")
 	{	
+		entity: Entity = --
+	
 		entity.x = 100
 		entity.y = 100
 		entity.width = 128

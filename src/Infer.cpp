@@ -1817,11 +1817,20 @@ bool assignOp(InferJob *job, Expr *location, Type *correct, Expr *&given, bool *
 				}
 				case TypeFlavor::POINTER: {
 					if (given->type != correct) {
+						auto givenPointer = static_cast<TypePointer *>(given->type)->pointerTo;
+						auto correctPointer = static_cast<TypePointer *>(correct)->pointerTo;
+
 						if (correct == TYPE_VOID_POINTER) {
 							insertImplicitCast(job, &given, correct);
 						}
 						else if (given->type == TYPE_VOID_POINTER) {
 							insertImplicitCast(job, &given, correct);
+						}
+						else if (givenPointer->flavor == TypeFlavor::ARRAY && correctPointer->flavor == TypeFlavor::ARRAY && 
+							(givenPointer->flags & TYPE_ARRAY_IS_DYNAMIC) && !(correctPointer->flags & (TYPE_ARRAY_IS_FIXED | TYPE_ARRAY_IS_DYNAMIC))) {
+							if (static_cast<TypeArray *>(givenPointer)->arrayOf == static_cast<TypeArray *>(correctPointer)->arrayOf) {
+								insertImplicitCast(job, &given, correct);
+							}
 						}
 						else {
 							if (!tryUsingConversion(job, correct, &given, yield)) {
@@ -2315,7 +2324,6 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 							return false;
 						}
 
-						expr->type = &TYPE_S64;
 						auto pointer = static_cast<TypePointer *>(left->type);
 
 						addSizeDependency(job, pointer->pointerTo);
@@ -2357,7 +2365,10 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 				}
 			}
 
-			if (!expr->type) { // it is already set to s64 for pointer subtraction
+			if (right->type->flavor == TypeFlavor::POINTER) {
+				expr->type = &TYPE_S64;
+			}
+			else { // it is already set to s64 for pointer subtraction
 				expr->type = left->type;
 			}
 
@@ -3762,9 +3773,8 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 									literal->signedValue = -literal->signedValue;
 									*exprPointer = value;
 								}
-								else {
-									reportError(value, "Error: Cannot negate an unsigned integer");
-									return false;
+								else { // @Incomplete: should we allow negation of unsigned numbers, its useful for soeme bit twiddling but feels weird
+									unary->type = value->type;
 								}
 
 							}

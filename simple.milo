@@ -50,4 +50,12 @@ _main :: () {
 	print_job(jim)
 }
 
+array_cast_test :: () {
+	func_taking_array :: (array: *[]s64) {}
+	
+	dynamic_array: [..]s64
+	
+	func_taking_array(*dynamic_array)
+}
+
 
