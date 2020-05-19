@@ -1,0 +1,30 @@
+// Adapted from PCG random minimal C implementation: https://www.pcg-random.org/download.html
+
+// *Really* minimal PCG32 code / (c) 2014 M.E. O'Neill / pcg-random.org
+// Licensed under Apache License 2.0 (NO WARRANTY, etc. see website)
+
+Random_State :: struct {
+	state: u64  
+	inc: u64
+}
+
+create_random :: (state: u64, inc: u64) {
+	rng: Random_State = --
+	rng.state = state
+	rng.inc = inc
+}
+
+random_u32 :: (rng: *Random_State) -> u32 {
+    oldstate := rng.state
+    // Advance internal state
+    rng.state = oldstate * 6364136223846793005 + (rng.inc | 1)
+	
+    // Calculate output function (XSH RR), uses old state for max ILP
+    xorshifted := ((oldstate >> 18) ^ oldstate) >> 27
+    rot := oldstate >> 59
+    return (xorshifted >> rot) | (xorshifted << ((-rot) & 31))
+}
+
+random_f32 :: (rng: *Random_State) -> f32 {
+	return cast() random_u32(rng) * 1.0p-32
+}

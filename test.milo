@@ -163,15 +163,49 @@ Rectangle :: struct {
 	height: f32
 }
 
+Vector4 :: union {
+	using xyzw : struct {
+		x: f32
+		y: f32
+		z: f32
+		w: f32
+	}
+	
+	using rgba : struct {
+		r: f32
+		g: f32
+		b: f32
+		a: f32
+	} = --
+	
+	elements: [4]f32 = --
+}
+
 Entity :: struct {
 	using rectangle: Rectangle
 	texture_handle: u32
 }
 
+Particle_System :: struct {
+	x: f32
+	y: f32
+	texture_handle: u32
+}
 
 
-array_add_entity :: (array: *[..]Entity, value: Entity) {
-	array_add_generic(cast() array, *value, size_of(type_of(value)))
+
+
+
+array_add_entity :: (array: *[..]Entity, value: Entity) -> *Entity {
+	return array_add_generic(cast() array, *value, size_of(type_of(value)))
+}
+
+array_remove_entity :: (array: *[]Entity, value: *Entity) {
+	array_remove_generic(cast() array, value, size_of(Entity)
+}
+
+set_gl_color(color: Vector4) {
+	glColor4f(color.r, color.g, color.b, color.a)
 }
 
 _main :: () {
@@ -185,6 +219,8 @@ _main :: () {
 	*/
 	
 	entities: [..]Entity
+	enabled_particle_systems: [..]Particle_System
+	disabled_particles_systems: [..]Particle_System
 	
 	performance_counter_frequency: s64
 	
@@ -302,23 +338,20 @@ _main :: () {
 	load_gl_extensions()
 	wglSwapIntervalEXT(1)
 	
+	player: *Entity
+	
 	
 	glEnable(GL_TEXTURE_2D)
 	texture := load_image("Invaders/Spaceship.bmp")
-	{
-		player: Entity
+	{	
+		entity.x = 100
+		entity.y = 100
+		entity.width = 128
+		entity.height = 128
+		entity.texture_handle = texture
 	
-		player.x = 100
-		player.y = 100
-		player.width = 128
-		player.height = 128
-		player.texture_handle = texture
-	
-		array_add_entity(*entities, player)
+		player = array_add_entity(*entities, entity)
 	}
-	
-	player := entities.data
-	
 	
 	
 	

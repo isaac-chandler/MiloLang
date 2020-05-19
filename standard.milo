@@ -58,22 +58,52 @@ memory_copy :: (dst: *void, src: *void, count: u64) {
 	}
 }
 
+get_array_pointer :: (data: *u8, index: u64, size: u64) -> *void {
+	return data + index * size
+}
 
-array_add_generic :: (array: *[..]u8, value: *void, size: u64) {
+array_add_generic :: (array: *[..]u8, value: *void, size: u64) -> *void {
 	if array.count >= array.capacity {
 		array.capacity = max(array.count * 2, 4)
 		
 		array.data = reallocate(array.data, array.capacity * size)
 	}
 	
+	dest := get_array_pointer(array.data, count, size)
 	
-	
-	memory_copy(array.data + array.count * size, value, size)
+	memory_copy(dest, value, size)
 	array.count += 1
+	
+	return dest
 }
 
-add_string :: (array: *[..]string, value: string) {
-	array_add_generic(cast() array, *value, size_of(type_of(value)))
+add_string :: (array: *[..]string, value: string) -> *string {
+	return array_add_generic(cast() array, *value, size_of(type_of(value)))
+}
+
+panic :: () {
+	print_string("Panic")
+	
+	ExitProcess(1)
+}
+
+assert :: (value: bool) {
+	if !value
+		panic()
+}
+
+array_remove_generic(array: *[]u8, value: *void, size: u64) {
+	assert(value >= array.data)
+	assert(value < get_array_pointer(array.data, array.count, size)
+	assert((value - array.data) % size == 0)
+	
+	array.count -= 1
+	
+	end := get_array_pointer(array.data, array.count, size)
+	
+	if value != end
+		memory_copy(value, end, size)
+	
 }
 
 
