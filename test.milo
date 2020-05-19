@@ -195,14 +195,14 @@ Particle_System :: struct {
 }
 
 
-make_particle_system_active :: (
+make_particle_system_active :: () {}
 
 array_add_entity :: (array: *[..]Entity, value: Entity) -> *Entity {
 	return array_add_generic(cast() array, *value, size_of(type_of(value)))
 }
 
-array_remove_entity :: (array: *[]Entity, value: *Entity) {
-	array_remove_generic(cast() array, value, size_of(Entity))
+array_remove_entity_by_pointer :: (array: *[]Entity, value: *Entity) {
+	array_remove_generic_by_pointer(cast() array, value, size_of(Entity))
 }
 
 set_gl_color :: (color: Vector4) {
