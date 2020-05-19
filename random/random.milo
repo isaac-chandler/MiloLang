@@ -8,10 +8,12 @@ Random_State :: struct {
 	inc: u64
 }
 
-create_random :: (state: u64, inc: u64) {
+create_random :: (state: u64, inc: u64) -> Random_State {
 	rng: Random_State = --
 	rng.state = state
 	rng.inc = inc
+	
+	return rng
 }
 
 random_u32 :: (rng: *Random_State) -> u32 {
@@ -27,4 +29,8 @@ random_u32 :: (rng: *Random_State) -> u32 {
 
 random_f32 :: (rng: *Random_State) -> f32 {
 	return cast(f32) random_u32(rng) * 0x1p-32
+}
+
+random_bilateral :: (rng: *Random_State) -> f32 {
+	return random_f32(rng) * 2 - 1
 }

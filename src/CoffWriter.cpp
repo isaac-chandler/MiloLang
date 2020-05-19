@@ -708,7 +708,16 @@ bool writeValue(BucketedArenaAllocator *data, BucketedArenaAllocator *dataReloca
 		}
 	}
 	else if (value->flavor == ExprFlavor::INT_LITERAL) {
-		data->add(&static_cast<ExprLiteral *>(value)->unsignedValue, type->size);
+		if (!isStandardSize(type->size)) {
+			assert(static_cast<ExprLiteral *>(value)->unsignedValue == 0);
+
+			auto zero = data->allocateUnaligned(type->size);
+
+			memset(zero, 0, type->size);
+		}
+		else {
+			data->add(&static_cast<ExprLiteral *>(value)->unsignedValue, type->size);
+		}
 	}
 	else {
 		assert(false);
@@ -1093,7 +1102,7 @@ void runCoffWriter() {
 
 				if (type->flavor == TypeFlavor::FLOAT) {
 					if (type->size == 4) {
-						code.add2(0xF3);
+						code.add1(0xF3);
 					}
 					else if (type->size == 8) {
 						code.add1(0xF2);
@@ -1970,7 +1979,7 @@ void runCoffWriter() {
 					} break;
 					case IrOp::LESS: {
 						if (ir.flags & IR_FLOAT_OP) {
-							setConditionFloat(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_L);
+							setConditionFloat(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_B);
 						}
 						else {
 							if (ir.flags & IR_SIGNED_OP) {
@@ -1983,7 +1992,7 @@ void runCoffWriter() {
 					} break;
 					case IrOp::GREATER: {
 						if (ir.flags & IR_FLOAT_OP) {
-							setConditionFloat(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_G);
+							setConditionFloat(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_A);
 						}
 						else {
 							if (ir.flags & IR_SIGNED_OP) {
@@ -1996,7 +2005,7 @@ void runCoffWriter() {
 					} break;
 					case IrOp::LESS_EQUAL: {
 						if (ir.flags & IR_FLOAT_OP) {
-							setConditionFloat(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_LE);
+							setConditionFloat(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_BE);
 						}
 						else {
 							if (ir.flags & IR_SIGNED_OP) {
@@ -2009,7 +2018,7 @@ void runCoffWriter() {
 					} break;
 					case IrOp::GREATER_EQUAL: {
 						if (ir.flags & IR_FLOAT_OP) {
-							setConditionFloat(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_GE);
+							setConditionFloat(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_AE);
 						}
 						else {
 							if (ir.flags & IR_SIGNED_OP) {
