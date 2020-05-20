@@ -231,16 +231,8 @@ rng: Random_State
 create_particle :: (using particle_system: *Particle_System, delta: f32) {
 	particle: Particle
 	
-	x_rel: f32
-	y_rel: f32
-	
-	if relative {
-		x_rel = relative.x
-		y_rel = relative.y
-	}
-	
-	particle.x = x_rel + x + random_bilateral(*rng) * spawn_radius
-	particle.y = y_rel + y + random_bilateral(*rng) * spawn_radius
+	particle.x = x + random_bilateral(*rng) * spawn_radius
+	particle.y = y + random_bilateral(*rng) * spawn_radius
 	particle.width = spawn_size
 	particle.height = spawn_size
 	
@@ -284,6 +276,9 @@ update_particle_system :: (using particle_system: *Particle_System, delta: f32) 
 }
 
 draw_particle_system :: (using particle_system: *Particle_System) {
+	glPushMatrix()
+	glTranslate2f(relative.x, relative.y)
+
 	if particle_system.texture_handle {
 		glBindTexture(GL_TEXTURE_2D, particle_system.texture_handle)
 		
@@ -312,6 +307,8 @@ draw_particle_system :: (using particle_system: *Particle_System) {
 		
 		glEnable(GL_TEXTURE_2D)
 	}
+	
+	glPopMatrix()
 }
 
 active_particle_systems: [..]*Particle_System
