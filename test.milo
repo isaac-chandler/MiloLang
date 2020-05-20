@@ -121,7 +121,7 @@ Rectangle :: struct {
 }
 
 Vector2 :: union {
-	using xy: struct {
+	using _xy: struct {
 		x: f32
 		y: f32
 	}
@@ -129,15 +129,33 @@ Vector2 :: union {
 	elements: [2]f32 = --
 }
 
+Vector3 :: union {
+	using _xyz: struct {
+		x: f32
+		y: f32
+		z: f32
+	}
+	
+	using _rgb: struct {
+		r: f32
+		g: f32
+		b: f32
+	} = --
+	
+	elements: [3]f32 = --
+	
+	xy: Vector2 = --
+}
+
 Vector4 :: union {
-	using xyzw : struct {
+	using _xyzw: struct {
 		x: f32
 		y: f32
 		z: f32
 		w: f32
 	}
 	
-	using rgba : struct {
+	using _rgba: struct {
 		r: f32
 		g: f32
 		b: f32
@@ -146,6 +164,7 @@ Vector4 :: union {
 	
 	elements: [4]f32 = --
 	
+	xyz: Vector3 = --
 	xy: Vector2 = --
 }
 
