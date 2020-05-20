@@ -9,6 +9,7 @@
 #include "UTF.h"
 #include "Lexer.h"
 #include "TypeTable.h"
+#include "Find.h"
 
 #if BUILD_WINDOWS
 bool doColorPrint = false; // False by default, set at startup if color can be enabled
@@ -34,7 +35,7 @@ bool loadNewFile(String file) {
 
 	if (!GetFileInformationByHandle(handle, &fileInfo)) {
 		reportError("Error: failed to read file information for file: %.*s", STRING_PRINTF(file));
-		return false; 
+		return false;
 	}
 
 	if (fileInfo.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) { // Are there any other attributes we should check for?
@@ -274,7 +275,7 @@ int main(int argc, char *argv[]) {
 
 	auto start = std::chrono::high_resolution_clock::now();
 
-	
+
 
 	if (!hadError && loadNewFile(String(input))) {
 		setupTypeTable();
@@ -312,37 +313,51 @@ int main(int argc, char *argv[]) {
 		coffWriter.join();
 
 
-	std::cout << "It took me " << (std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::duration<double>(
-		std::chrono::high_resolution_clock::now() - start)).count() / 1000.0) << "ms\n";
+		std::cout << "It took me " << (std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::duration<double>(
+			std::chrono::high_resolution_clock::now() - start)).count() / 1000.0) << "ms\n";
 	}
-	
+
 #if BUILD_WINDOWS
+	wchar_t buffer[1024];
+
+	{
+		PROFILE_ZONE("Find linker");
+
+		Find_Result result = find_visual_studio_and_windows_sdk();
+
+		if (!result.vs_exe_path) {
+			reportError("Couldn't find linker");
+			return 1;
+		}
+		else if (!result.windows_sdk_um_library_path) {
+			reportError("Couldn't find libraries");
+			return 1;
+		}
+
+		_snwprintf(buffer, 1024, L"\"%s\\link.exe\" out.obj /debug /entry:main kernel32.lib user32.lib gdi32.lib opengl32.lib \"/libpath:%s\" /incremental:no /nologo", result.vs_exe_path, result.windows_sdk_um_library_path);
+	}
+
 	if (!hadError) {
-		char buffer[1024];
-		
-		// use this: https://gist.github.com/andrewrk/ffb272748448174e6cdb4958dae9f3d8
-		strcpy_s(buffer, 
-#include "LinkCommand.h"
-		);
+		fwprintf(stdout, L"Linker command: %s\n", buffer);
 
-		printf("Linker command: %s\n", buffer);
-
-		STARTUPINFOA startup = {};
-		startup.cb = sizeof(STARTUPINFOA);
+		STARTUPINFOW startup = {};
+		startup.cb = sizeof(STARTUPINFOW);
 
 		PROCESS_INFORMATION info;
 
-		if (!CreateProcessA(NULL, buffer, NULL, NULL, false, 0, NULL, NULL, &startup, &info)) {
+		if (!CreateProcessW(NULL, buffer, NULL, NULL, false, 0, NULL, NULL, &startup, &info)) {
 			std::cout << "Failed to run linker command" << std::endl;
 		}
 
 		CloseHandle(info.hThread);
-
-		WaitForSingleObject(info.hProcess, INFINITE);
+		{
+			PROFILE_ZONE("Wait for linker");
+			WaitForSingleObject(info.hProcess, INFINITE);
+		}
 		CloseHandle(info.hProcess);
 	}
 #else
-// @Platform
+	// @Platform
 #error "Non windows builds are not supported" 
 #endif
 
