@@ -9,58 +9,13 @@ ListNode :: struct {
 }
 
 factorial :: (n: u64) -> u64 {
-	return 10000000 // Haha! you have resolved the wrong function
-}
-
-test :: () {
-	a : *u8
-	b : *u8
-
-	for a .. b
-		factorial(it_index) // dummy code
-}
-
-get_strings :: () -> [] string {
-	a: [..] string
-
-	array_add_string(*a, "Test1")
-	array_add_string(*a, "Test2")
-
-	return a
-}
-
-get_linked_strings :: () -> ListNode {
-	a: ListNode
-	a.value = "LinkedTest1"
-	a.next = allocate(size_of(ListNode))
+	total: u64 = 1
 	
-	b := a.next
-	b.value = "LinkedTest2"
-	b.next = null
-	
-	return a
-}
-
-find_string :: (array: []string, s: string) {
-	for array {
-		if it == s {
-			index := u64_to_string(it_index)
-			
-			print_string(index)
-			print_string(": found ")
-			print_string(s)
-			print_string("\n")
-			
-			deallocate(cast() index)
-			
-			break
-		}
-	} completed {
-		print_string("Couldn't find ")
-		print_string(s)
-		print_string("\n")
+	for 2 .. n + 1 {
+		total *= it
 	}
 	
+	return total
 }
 
 should_quit: bool
@@ -676,12 +631,4 @@ _main :: () {
 	ReleaseDC(window_handle, device_context)
 	
 	ExitProcess(0)
-}
-
-factorial2 :: (n: u64) -> u64 {
-	total: u64 = 1
-	
-	for 2 .. n + 1 total *= it
-	
-	return total
 }

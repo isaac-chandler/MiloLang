@@ -107,3 +107,57 @@ remove_test :: () {
 	print_u64_array(array)
 
 }
+
+
+
+get_strings :: () -> [] string {
+	a: [..] string
+
+	array_add_string(*a, "Test1")
+	array_add_string(*a, "Test2")
+
+	return a
+}
+
+get_linked_strings :: () -> ListNode {
+	a: ListNode
+	a.value = "LinkedTest1"
+	a.next = allocate(size_of(ListNode))
+	
+	b := a.next
+	b.value = "LinkedTest2"
+	b.next = null
+	
+	return a
+}
+
+find_string :: (array: []string, s: string) {
+	for array {
+		if it == s {
+			index := u64_to_string(it_index)
+			
+			print_string(index)
+			print_string(": found ")
+			print_string(s)
+			print_string("\n")
+			
+			deallocate(cast() index)
+			
+			break
+		}
+	} completed {
+		print_string("Couldn't find ")
+		print_string(s)
+		print_string("\n")
+	}
+	
+}
+
+
+test :: () {
+	a : *u8
+	b : *u8
+
+	for a .. b
+		factorial(it_index) // dummy code
+}
