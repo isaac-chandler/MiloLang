@@ -1,4 +1,5 @@
 #load "standard.milo"
+#load "random/random.milo"
 
 Job_Status :: enum_flags {
 	EMPLOYED
@@ -27,7 +28,7 @@ print_job :: (job: *Job) {
 	print_string(" years experience")
 }
 
-_main :: () {
+using_test :: () {
 	using Job_Status
 
 	jim: Person
@@ -50,6 +51,26 @@ _main :: () {
 	print_job(jim)
 }
 
+_main :: () {
+	random_test()
+}
+
+random_test :: () {
+	rng := create_random(546, 6306)
+	
+	for 10 {
+		rand := random_u32(*rng)
+		
+		print_u64(rand)
+		
+		print_string(" ")
+		
+		print_u64(cast() (cast(f32) rand * 0x1p-32 * 1000))
+		
+		print_string("\n")
+	}
+}
+
 array_cast_test :: () {
 	func_taking_array :: (array: *[]s64) {}
 	
@@ -58,4 +79,31 @@ array_cast_test :: () {
 	func_taking_array(*dynamic_array)
 }
 
+print_u64_array :: (array: []u64) {
+	for array {
+		print_string("\n[")
+		print_u64(it_index)
+		print_string("] = ")
+		print_u64(it)
+	}
+}
 
+remove_test :: () {
+	storage: [10]u64
+	
+	array: []u64 = storage
+	
+	for * array {
+		<< it = it_index * it_index
+	}
+	
+	print_u64_array(array)
+	
+	for array {
+		if it == 9
+			remove
+	}
+	
+	print_u64_array(array)
+
+}

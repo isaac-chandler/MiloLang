@@ -13,6 +13,8 @@ create_random :: (state: u64, inc: u64) -> Random_State {
 	rng.state = state
 	rng.inc = inc
 	
+	random_u32(*rng) // Do one iteration otherwise for small input state, the output will be small
+	
 	return rng
 }
 

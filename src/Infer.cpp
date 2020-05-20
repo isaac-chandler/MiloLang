@@ -111,7 +111,7 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 		case ExprFlavor::REMOVE: {
 			auto continue_ = static_cast<ExprBreakOrContinue *>(*expr);
 
-			if (continue_->flavor == ExprFlavor::REMOVE || continue_->label) {
+			if (continue_->label) {
 				flatten(flattenTo, &continue_->label);
 			}
 
@@ -1915,7 +1915,7 @@ bool assignOp(InferJob *job, Expr *location, Type *correct, Expr *&given, bool *
 					auto literal = static_cast<ExprLiteral *>(given);
 
 					literal->flavor = ExprFlavor::FLOAT_LITERAL;
-					literal->floatValue = static_cast<double>(literal->unsignedValue);
+					literal->floatValue = static_cast<double>(literal->signedValue);
 					literal->type = correct;
 				}
 				else if ((given->type == TYPE_VOID_POINTER && correct->flavor == TypeFlavor::FUNCTION) || (given->type->flavor == TypeFlavor::FUNCTION && correct == TYPE_VOID_POINTER)) {
@@ -4115,6 +4115,19 @@ void freeJob(InferJob *job) {
 }
 
 bool addDeclaration(Declaration *declaration) {
+	if (declaration->name == "__remove" && !declaration->enclosingScope) {
+		if (!(declaration->flags & DECLARATION_IS_CONSTANT)) {
+			reportError(declaration, "Declaration for __remove must be a constant");
+			return false;
+		}
+		else if (!declaration->initialValue || declaration->initialValue->flavor != ExprFlavor::FUNCTION) {
+			reportError(declaration, "__remove must be a function");
+			return false;
+		}
+
+		removeFunction = static_cast<ExprFunction *>(declaration->initialValue);
+	}
+
 	declaration->inferJob = nullptr;
 
 	if (declaration->flags & (DECLARATION_IS_ITERATOR | DECLARATION_IS_ITERATOR_INDEX))
@@ -4478,7 +4491,9 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 										import->type = declaration->initialValue;
 										import->flags &= ~DECLARATION_USING_IS_RESOLVED;
 
-										addDeclaration(import);
+										if (!addDeclaration(import)) {
+											return false;
+										}
 									}
 									else {
 										if (member->flags & DECLARATION_IS_CONSTANT) {
@@ -4883,7 +4898,7 @@ void runInfer() {
 		goto error;
 	}
 
-	{
+	if (!hadError) {
 		u64 totalQueued = totalDeclarations + totalFunctions + totalTypesSized;
 
 		printf(

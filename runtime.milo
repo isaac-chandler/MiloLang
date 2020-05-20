@@ -1,0 +1,14 @@
+// This file is required by the compiler to correctly run!
+
+// The function called to remove an item from an array when a remove statement is encountered
+__remove :: (array: *[]u8, value: *u8, size: u64) -> *u8 {
+	array.count -= 1
+	
+	end := array.data + array.count * size
+	
+	if value != end
+		for i: 0 .. size
+			value[i] = end[i]
+			
+	return value - size
+}

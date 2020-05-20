@@ -1039,6 +1039,57 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 			return DEST_NONE;
 		}
+		case ExprFlavor::REMOVE: {
+			auto remove = static_cast<ExprBreakOrContinue *>(expr);
+
+			if (!removeFunction) {
+				reportError(expr, "Internal Compiler Error: Removing something before __remove is declared");
+				exit(1); // @Cleanup Forceful exit since we don't have good error handling here and its an internal compiler error
+			}
+
+			assert(remove->refersTo->forBegin->type->flavor == TypeFlavor::ARRAY);
+			assert(!(remove->refersTo->forBegin->type->flags & TYPE_ARRAY_IS_FIXED));
+
+			u64 function = generateIr(state, removeFunction, state->nextRegister++);
+
+			FunctionCall *argumentInfo = static_cast<FunctionCall *>(state->allocator.allocate(sizeof(FunctionCall) + sizeof(argumentInfo->args[0]) * 3));
+			argumentInfo->argCount = 3;
+
+			u64 callAuxStorage = 4;
+
+			u64 sizeReg = state->nextRegister++;
+
+			Ir &size = state->ir.add();
+			size.op = IrOp::IMMEDIATE;
+			size.dest = sizeReg;
+			size.a = static_cast<TypeArray *>(remove->refersTo->forBegin->type)->arrayOf->size;
+			size.opSize = 8;
+
+
+			argumentInfo->args[0].number = remove->refersTo->arrayPointer;
+			argumentInfo->args[0].type = TYPE_VOID_POINTER;
+			argumentInfo->args[1].number = remove->refersTo->irPointer;
+			argumentInfo->args[1].type = TYPE_VOID_POINTER;
+			argumentInfo->args[2].number = sizeReg;
+			argumentInfo->args[2].type = &TYPE_U64;
+
+			argumentInfo->returnType = TYPE_VOID_POINTER;
+
+			if (4 > state->callAuxStorage) {
+				state->callAuxStorage = 4;
+			}
+
+			Ir &ir = state->ir.add();
+			ir.op = IrOp::CALL;
+			ir.a = function;
+			ir.arguments = argumentInfo;
+			ir.dest = remove->refersTo->irPointer;
+			ir.opSize = TYPE_VOID_POINTER->size;
+
+
+
+			return DEST_NONE;
+		}
 		case ExprFlavor::INT_LITERAL: {
 			if (dest == DEST_NONE) return DEST_NONE;
 
@@ -1115,18 +1166,16 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				loop->irPointer = itReg;
 			}
 
-			u64 arrayPointer;
-
 			if (loop->forBegin->type->flavor == TypeFlavor::ARRAY) {
 				auto begin = loop->forBegin;
 
-				arrayPointer = loadAddressOf(state, begin, state->nextRegister++);
+				loop->arrayPointer = loadAddressOf(state, begin, state->nextRegister++);
 
 				if (loop->forBegin->type->flags & TYPE_ARRAY_IS_FIXED) {
 					Ir &set = state->ir.add();
 					set.op = IrOp::SET;
 					set.dest = loop->irPointer;
-					set.a = arrayPointer;
+					set.a = loop->arrayPointer;
 					set.opSize = 8;
 					set.destSize = 8;
 				}
@@ -1134,16 +1183,9 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 					Ir &read = state->ir.add();
 					read.op = IrOp::READ;
 					read.dest = loop->irPointer;
-					read.a = arrayPointer;
+					read.a = loop->arrayPointer;
 					read.opSize = 8;
 					read.destSize = 8;
-
-					Ir &add = state->ir.add();
-					add.op = IrOp::ADD_CONSTANT;
-					add.dest = arrayPointer;
-					add.a = arrayPointer;
-					add.b = 8;
-					add.opSize = 8;
 				}
 			}
 			else {
@@ -1196,10 +1238,17 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 					immediate.opSize = 8;
 				}
 				else {
+					Ir &add = state->ir.add();
+					add.op = IrOp::ADD_CONSTANT;
+					add.dest = compareDest;
+					add.a = loop->arrayPointer;
+					add.b = 8;
+					add.opSize = 8;
+
 					Ir &read = state->ir.add();
 					read.op = IrOp::READ;
 					read.dest = compareDest;
-					read.a = arrayPointer;
+					read.a = compareDest;
 					read.opSize = 8;
 					read.destSize = 8;
 				}

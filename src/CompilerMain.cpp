@@ -275,9 +275,7 @@ int main(int argc, char *argv[]) {
 
 	auto start = std::chrono::high_resolution_clock::now();
 
-
-
-	if (!hadError && loadNewFile(String(input))) {
+	if (!hadError && loadNewFile("runtime.milo") && loadNewFile(String(input))) {
 		setupTypeTable();
 
 		std::thread infer(runInfer);

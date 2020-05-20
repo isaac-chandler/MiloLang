@@ -2089,6 +2089,7 @@ void runCoffWriter() {
 								code.add1(0x48);
 							}
 
+							code.add1(0x0F);
 							code.add1(0x2C);
 							writeRSPRegisterByte(&code, function, RAX, ir.a);
 							storeFromIntRegister(&code, function, ir.destSize, ir.dest, RAX);
@@ -2259,6 +2260,9 @@ void runCoffWriter() {
 									code.add1(0x48);
 								}
 
+								code.add1(0x0F);
+								code.add1(0x2C);
+
 
 								writeRSPRegisterByte(&code, function, RAX, ir.a);
 								storeFromIntRegister(&code, function, ir.destSize, ir.dest, RAX);
@@ -2363,8 +2367,6 @@ void runCoffWriter() {
 								code.add1(0x09);
 								code.add1(0xC8);
 
-								code.add1(0x0F);
-
 								if (ir.destSize == 8) {
 									code.add1(0xF2);
 								}
@@ -2372,6 +2374,7 @@ void runCoffWriter() {
 									code.add1(0xF3);
 								}
 
+								code.add1(0x0F);
 								code.add1(0x2A);
 								code.add1(0xC0);
 
@@ -2392,6 +2395,8 @@ void runCoffWriter() {
 								storeFromFloatRegister(&code, function, ir.destSize, ir.dest, 0);
 							}
 							else if (ir.opSize == 4) {
+								loadIntoIntRegister(&code, function, 4, RAX, ir.a);
+
 								if (ir.destSize == 8) {
 									code.add1(0xF2);
 								}
@@ -2403,7 +2408,7 @@ void runCoffWriter() {
 
 								code.add1(0x0F);
 								code.add1(0x2A);
-								writeRSPRegisterByte(&code, function, 0, ir.a);
+								code.add1(0xC0);
 								storeFromFloatRegister(&code, function, ir.destSize, ir.dest, 0);
 							}
 							else {

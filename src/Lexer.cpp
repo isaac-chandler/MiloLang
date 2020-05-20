@@ -1719,7 +1719,7 @@ exponentSign:
 
 	if (digit >= 0) {
 		exponentIsNegative = false;
-		exponent *= exponentBase;
+		exponent *= 10;
 		exponent += static_cast<u64>(digit);
 		goto exponent;
 	}
@@ -1747,7 +1747,7 @@ exponentDigit:
 	digit = getDigitForBase(c, 10);
 
 	if (digit >= 0) {
-		exponent *= exponentBase;
+		exponent *= 10;
 		exponent += static_cast<u64>(digit);
 
 		goto exponent;
@@ -1768,7 +1768,7 @@ exponent:
 	digit = getDigitForBase(c, 10);
 
 	if (digit >= 0) {
-		exponent *= exponentBase;
+		exponent *= 10;
 		exponent += static_cast<u64>(digit);
 
 

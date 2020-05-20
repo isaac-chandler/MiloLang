@@ -228,8 +228,8 @@ Particle_System :: struct {
 
 rng: Random_State
 
-create_particle :: (using particle_system: *Particle_System) {
-	particle: Particle = --
+create_particle :: (using particle_system: *Particle_System, delta: f32) {
+	particle: Particle
 	
 	x_rel: f32
 	y_rel: f32
@@ -246,12 +246,72 @@ create_particle :: (using particle_system: *Particle_System) {
 	
 	particle.location_step.x = spawn_mean_velocity.x + random_bilateral(*rng) * spawn_velocity_range.x
 	particle.location_step.y = spawn_mean_velocity.y + random_bilateral(*rng) * spawn_velocity_range.y
+
 	
 	particle.current_color = spawn_color
 	
-	particle.lifetime = particle_system.spawn_lifetime
+	particle.lifetime = spawn_lifetime
 	
-	array_add_generic(cast() *particles, *particle, size_of(type_of(particle)))
+	update_particle(*particle, delta)
+	
+	array_add_generic(cast() *particles, *particle, size_of(Particle))
+}
+
+update_particle :: (using particle: *Particle, delta: f32) {
+	particle.lifetime -= delta
+
+	
+	particle.x      += delta * particle.location_step.x
+	particle.y      += delta * particle.location_step.y
+	particle.width  += delta * particle.location_step.width
+	particle.height += delta * particle.location_step.height
+	
+	particle.current_color.r += delta * particle.color_step.r
+	particle.current_color.g += delta * particle.color_step.g
+	particle.current_color.b += delta * particle.color_step.b
+	particle.current_color.a += delta * particle.color_step.a
+}
+
+update_particle_system :: (using particle_system: *Particle_System, delta: f32) {
+	for * particle: particles {
+		update_particle(particle, delta)
+		
+		if particle.lifetime <= 0 {
+			remove
+			continue
+		}
+	}
+}
+
+draw_particle_system :: (using particle_system: *Particle_System) {
+	if particle_system.texture_handle {
+		glBindTexture(GL_TEXTURE_2D, particle_system.texture_handle)
+		
+		glBegin(GL_QUADS)
+		
+		for * particle : particles {
+			set_gl_color(particle.current_color)
+		
+			textured_quad(particle)
+		}
+		
+		glEnd()
+		
+	} else {
+		glDisable(GL_TEXTURE_2D)
+		
+		glBegin(GL_QUADS)
+		
+		for * particle : particles {
+			set_gl_color(particle.current_color)
+		
+			untextured_quad(particle)
+		}
+		
+		glEnd()
+		
+		glEnable(GL_TEXTURE_2D)
+	}
 }
 
 active_particle_systems: [..]*Particle_System
@@ -267,7 +327,7 @@ make_particle_system_inactive :: (particle_system: *Particle_System) {
 	if particle_system.active {
 		for * system: active_particle_systems {
 			if << system == particle_system {
-				array_remove_generic_by_pointer(cast() *active_particle_systems, system, size_of(type_of(<<system)))
+				remove
 				break
 			}
 		} completed {
@@ -275,6 +335,7 @@ make_particle_system_inactive :: (particle_system: *Particle_System) {
 			panic()
 		}
 	
+		particle_system.particles.count = 0
 		particle_system.active = false
 	}
 }
@@ -307,6 +368,33 @@ make_vector4 :: (x: f32, y: f32, z: f32, w: f32) -> Vector4 {
 	vector.w = w
 	
 	return vector
+}
+
+untextured_quad :: (using rectangle: *Rectangle) {
+	glVertex2f(x, y)
+	
+	glVertex2f(x + width, y)
+	
+	glVertex2f(x + width, y + height)
+	
+	glVertex2f(x, y + height)
+}
+
+textured_quad :: (using rectangle: *Rectangle) {
+	glTexCoord2f(0, 0)
+	glVertex2f(x, y)
+	
+	
+	glTexCoord2f(1, 0)
+	glVertex2f(x + width, y)
+	
+	
+	glTexCoord2f(1, 1)
+	glVertex2f(x + width, y + height)
+	
+	
+	glTexCoord2f(0, 1)
+	glVertex2f(x, y + height)
 }
 
 _main :: () {
@@ -463,14 +551,14 @@ _main :: () {
 		particle_system: Particle_System
 		
 		particle_system.relative = player
-		particle_system.x = -64
+		particle_system.x = 44
 		particle_system.y = 64
-		particle_system.spawn_rate = 10
-		particle_system.spawn_size = 8
+		particle_system.spawn_rate = 3000
+		particle_system.spawn_size = 4
 		particle_system.spawn_radius = 5
-		particle_system.spawn_mean_velocity = make_vector2(-10, 0)
-		particle_system.spawn_velocity_range = make_vector2(4, 4)
-		particle_system.spawn_lifetime = 5
+		particle_system.spawn_mean_velocity = make_vector2(-20, 0)
+		particle_system.spawn_velocity_range = make_vector2(-10, 200)
+		particle_system.spawn_lifetime = 0.1
 		particle_system.spawn_color = make_vector4(0.9, 0.5, 0.07, 1)
 		
 		left_particles = array_add_generic(cast() *all_particle_systems, *particle_system, size_of(Particle_System))
@@ -481,14 +569,14 @@ _main :: () {
 		particle_system: Particle_System
 		
 		particle_system.relative = player
-		particle_system.x = 64
+		particle_system.x = 84
 		particle_system.y = 64
-		particle_system.spawn_rate = 10
-		particle_system.spawn_size = 8
+		particle_system.spawn_rate = 3000
+		particle_system.spawn_size = 4
 		particle_system.spawn_radius = 5
-		particle_system.spawn_mean_velocity = make_vector2(10, 0)
-		particle_system.spawn_velocity_range = make_vector2(4, 4)
-		particle_system.spawn_lifetime = 5
+		particle_system.spawn_mean_velocity = make_vector2(20, 0)
+		particle_system.spawn_velocity_range = make_vector2(10, 200)
+		particle_system.spawn_lifetime = 0.1
 		particle_system.spawn_color = make_vector4(0.9, 0.5, 0.07, 1)
 		
 		right_particles = array_add_generic(cast() *all_particle_systems, *particle_system, size_of(Particle_System))
@@ -535,53 +623,49 @@ _main :: () {
 		
 		if left_is_down {
 			player.x -= SPEED
-			make_particle_system_active(left_particles)
-		} else {
-			make_particle_system_inactive(left_particles)
-		}
-		
-		if right_is_down {
-			player.x += SPEED
 			make_particle_system_active(right_particles)
 		} else {
 			make_particle_system_inactive(right_particles)
 		}
 		
+		if right_is_down {
+			player.x += SPEED
+			make_particle_system_active(left_particles)
+		} else {
+			make_particle_system_inactive(left_particles)
+		}
+		
+		glBlendFunc(GL_ONE, GL_ONE)
+		
+		for * particle_system: all_particle_systems {	
+			update_particle_system(particle_system, delta)
+			draw_particle_system(particle_system)
+		}
+		
 		for particle_system: active_particle_systems {
 			particle_system.spawn_progress += delta * particle_system.spawn_rate
 			
-			while particle_system.spawn_progress > 1 {
-				particle_system.spawn_progress -= 1
-				
-				create_particle(particle_system)
+			create_count := cast(s64)particle_system.spawn_progress
+			
+			particle_system.spawn_progress -= cast() create_count
+			
+			for create_count {
+				create_particle(particle_system, (delta * cast() it) / cast() create_count)
 			}
 		}
 		
 		
-		for * particle_system: all_particle_systems {
-			
-		}
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 		
 		glBegin(GL_QUADS)
 		
+		set_gl_color(make_vector4(1, 1, 1, 1))
 		
-		for entity: entities {
-			glBindTexture(GL_TEXTURE_2D, player.texture_handle)
 		
-			glTexCoord2f(0, 0)
-			glVertex2f(entity.x, entity.y)
-			
-			
-			glTexCoord2f(1, 0)
-			glVertex2f(entity.x + entity.width, entity.y)
-			
-			
-			glTexCoord2f(1, 1)
-			glVertex2f(entity.x + entity.width, entity.y + entity.height)
-			
-			
-			glTexCoord2f(0, 1)
-			glVertex2f(entity.x, entity.y + entity.height)
+		for * entity: entities {
+			glBindTexture(GL_TEXTURE_2D, entity.texture_handle)
+		
+			textured_quad(entity)
 		}
 		
 		glEnd()

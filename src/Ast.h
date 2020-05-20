@@ -104,6 +104,7 @@ struct Ir {
 struct Loop {
 	struct ExprLoop *loop;
 	u64 start;
+
 	Array<u64> endPatches;
 };
 
@@ -276,6 +277,7 @@ struct ExprLoop : Expr {
 	Expr *completedBody;
 
 	u64 irPointer;
+	u64 arrayPointer;
 	Block iteratorBlock;
 };
 
