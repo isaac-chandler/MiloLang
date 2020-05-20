@@ -522,6 +522,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 							return dest;
 						}
+						case TypeFlavor::ENUM:
 						case TypeFlavor::INTEGER: {
 							if (right->type->flavor == TypeFlavor::POINTER) {
 								return rightReg;

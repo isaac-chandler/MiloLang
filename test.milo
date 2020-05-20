@@ -345,7 +345,7 @@ _main :: () {
 	window_class: WNDCLASSW
 	
 	window_class.style = CS_OWNDC | CS_VREDRAW | CS_HREDRAW
-	window_class.lpfnWndProc = (hwnd: HWND, uMsg: u32, wParam: u64, lParam: s64) -> s64 {
+	window_class.lpfnWndProc = (hwnd: HWND, uMsg: MSG.Message, wParam: u64, lParam: s64) -> s64 {
 		VK_LEFT :: 0x25
 		VK_RIGHT :: 0x27
 	
@@ -508,7 +508,7 @@ _main :: () {
 	while !should_quit {
 		message: MSG = --
 		
-		while PeekMessageW(*message, null, 0, 0, PM_REMOVE) {
+		while PeekMessageW(*message, null) {
 			if (message.message == WM_QUIT) {
 				should_quit = true
 				break

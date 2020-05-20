@@ -1,11 +1,35 @@
 enums
  - Do we allow signed enums?
- - flag enums -> allow bitwise operators, |, &, ~ (do not allow signed)
  - array of names
  - array of values
  - is_indexable -> do the enum values go in order from 0..N, so the names array can be indexed directly with the enum value
  - largest_value
  - smallest_value 
+ 
+make remove work in ir generator
+
+currently this doesn't do what you'd expect
+	A :: struct {
+		a := "A"
+	}
+
+	B :: struct {
+		b := "B"
+		using included: A
+	}
+
+	print_b :: (b: *B) {
+		print_string(b.b)
+	}
+
+	main :: () {
+		b: B
+		a : *A = *b
+		
+		// ...
+		
+		print_b(cast(*B) a) // Prints "A" because a cast from 'base class' to 'sub class' just does a pointer conversion instead of paying attention to the using
+	}
 
 ABI/calling convention
  - multiple return values

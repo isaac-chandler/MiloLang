@@ -647,13 +647,14 @@ bool isValidCast(Type *to, Type *from) {
 		return to->flavor == TypeFlavor::INTEGER;
 	}
 	else if (from->flavor == TypeFlavor::ENUM) {
-		return to->flavor == TypeFlavor::INTEGER;
+		return to->flavor == TypeFlavor::INTEGER || to->flavor == TypeFlavor::BOOL;
 	}
 	else if (from->flavor == TypeFlavor::FUNCTION) {
 		return to->flavor == TypeFlavor::BOOL || (to->flavor == TypeFlavor::INTEGER && to->size == 8) || to == TYPE_VOID_POINTER;
 	}
 	else if (from->flavor == TypeFlavor::INTEGER) {
-		return to->flavor == TypeFlavor::NAMESPACE || to->flavor == TypeFlavor::BOOL || to->flavor == TypeFlavor::FLOAT || (from->size == 8 && (to->flavor == TypeFlavor::FUNCTION || to->flavor == TypeFlavor::POINTER));
+		return to->flavor == TypeFlavor::ENUM || to->flavor == TypeFlavor::BOOL || to->flavor == TypeFlavor::FLOAT || 
+			(from->size == 8 && (to->flavor == TypeFlavor::FUNCTION || to->flavor == TypeFlavor::POINTER));
 	}
 	else if (from->flavor == TypeFlavor::POINTER) {
 		return to->flavor == TypeFlavor::BOOL || (to->flavor == TypeFlavor::INTEGER && to->size == 8) ||
@@ -2163,6 +2164,8 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 							reportError(binary, "Error: Cannot compare %.*s to %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
 							return false;
 						}
+
+						break;
 					}
 					case TypeFlavor::TYPE: {
 						// @Incomplete make this work
