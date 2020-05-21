@@ -4758,31 +4758,35 @@ void runInfer() {
 			}
 		} while (madeProgress && inferJobs.count);
 
-		for (u64 i = 0; i < waitingOnSize.count; i++) {
-			auto job = waitingOnSize[i];
+		{
+			PROFILE_ZONE("Check size dependencies");
 
-			for (u64 j = 0; j < job->sizeDependencies.count; j++) {
-				auto depend = job->sizeDependencies[j];
+			for (u64 i = 0; i < waitingOnSize.count; i++) {
+				auto job = waitingOnSize[i];
 
-				if (depend->size) {
-					job->sizeDependencies.unordered_remove(j--);
-				}
-			}
+				for (u64 j = 0; j < job->sizeDependencies.count; j++) {
+					auto depend = job->sizeDependencies[j];
 
-			if (job->sizeDependencies.count == 0) {
-				waitingOnSize.unordered_remove(i--);
-
-				if (job->type == InferType::DECLARATION) {
-					CoffJob coffJob;
-					coffJob.declaration = job->infer.declaration;
-					coffJob.isFunction = false;
-					coffWriterQueue.add(coffJob);
-				}
-				else if (job->type == InferType::FUNCTION_BODY) {
-					irGeneratorQueue.add(job->infer.function);
+					if (depend->size) {
+						job->sizeDependencies.unordered_remove(j--);
+					}
 				}
 
-				freeJob(job);
+				if (job->sizeDependencies.count == 0) {
+					waitingOnSize.unordered_remove(i--);
+
+					if (job->type == InferType::DECLARATION) {
+						CoffJob coffJob;
+						coffJob.declaration = job->infer.declaration;
+						coffJob.isFunction = false;
+						coffWriterQueue.add(coffJob);
+					}
+					else if (job->type == InferType::FUNCTION_BODY) {
+						irGeneratorQueue.add(job->infer.function);
+					}
+
+					freeJob(job);
+				}
 			}
 		}
 	}
@@ -4898,6 +4902,7 @@ void runInfer() {
 		goto error;
 	}
 
+	irGeneratorQueue.add(nullptr);
 	if (!hadError) {
 		u64 totalQueued = totalDeclarations + totalFunctions + totalTypesSized;
 
@@ -4909,7 +4914,6 @@ void runInfer() {
 			"Total infers: %llu, %.1f infers/queued\n",
 			totalQueued, totalDeclarations, totalFunctions, totalTypesSized, totalInfers, static_cast<float>(totalInfers) / totalQueued);
 	}
-	irGeneratorQueue.add(nullptr);
 	return;
 error:;
 	assert(hadError);

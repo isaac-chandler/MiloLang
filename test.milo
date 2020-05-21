@@ -163,7 +163,7 @@ Particle :: struct {
 }
 
 Particle_System :: struct {
-	relative: *Entity
+	relative: *Rectangle
 	x: f32
 	y: f32
 	texture_handle: u32
@@ -180,6 +180,10 @@ Particle_System :: struct {
 	spawn_color: Vector4
 	
 	particles: [..]Particle
+}
+
+Bullet :: struct {
+	using rectangle: Rectangle
 }
 
 rng: Random_State
@@ -321,30 +325,36 @@ make_vector4 :: (x: f32, y: f32, z: f32, w: f32) -> Vector4 {
 }
 
 untextured_quad :: (using rectangle: *Rectangle) {
-	glVertex2f(x, y)
+	halfWidth := width * 0.5
+	halfHeight := height * 0.5
+
+	glVertex2f(x - halfWidth, y - halfHeight)
 	
-	glVertex2f(x + width, y)
+	glVertex2f(x + halfWidth, y - halfHeight)
 	
-	glVertex2f(x + width, y + height)
+	glVertex2f(x + halfWidth, y + halfHeight)
 	
-	glVertex2f(x, y + height)
+	glVertex2f(x - halfWidth, y + halfHeight)
 }
 
 textured_quad :: (using rectangle: *Rectangle) {
+	halfWidth := width * 0.5
+	halfHeight := height * 0.5
+	
 	glTexCoord2f(0, 0)
-	glVertex2f(x, y)
+	glVertex2f(x - halfWidth, y - halfHeight)
 	
 	
 	glTexCoord2f(1, 0)
-	glVertex2f(x + width, y)
+	glVertex2f(x + halfWidth, y - halfHeight)
 	
 	
 	glTexCoord2f(1, 1)
-	glVertex2f(x + width, y + height)
+	glVertex2f(x + halfWidth, y + halfHeight)
 	
 	
 	glTexCoord2f(0, 1)
-	glVertex2f(x, y + height)
+	glVertex2f(x - halfWidth, y + halfHeight)
 }
 
 _main :: () {
@@ -490,8 +500,8 @@ _main :: () {
 	{	
 		entity: Entity = --
 	
-		entity.x = 100
-		entity.y = 100
+		entity.x = cast(f32) window_width * 0.5
+		entity.y = 150
 		entity.width = 128
 		entity.height = 128
 		entity.texture_handle = texture
@@ -506,8 +516,8 @@ _main :: () {
 		particle_system: Particle_System
 		
 		particle_system.relative = player
-		particle_system.x = 44
-		particle_system.y = 64
+		particle_system.x = -20
+		particle_system.y = 0
 		particle_system.spawn_rate = 3000
 		particle_system.spawn_size = 4
 		particle_system.spawn_radius = 5
@@ -524,8 +534,8 @@ _main :: () {
 		particle_system: Particle_System
 		
 		particle_system.relative = player
-		particle_system.x = 84
-		particle_system.y = 64
+		particle_system.x = 20
+		particle_system.y = 0
 		particle_system.spawn_rate = 3000
 		particle_system.spawn_size = 4
 		particle_system.spawn_radius = 5
