@@ -109,7 +109,7 @@ left_is_down:  bool
 right_is_down: bool
 space_is_down: bool
 
-SPEED :: 15.0
+PLAYER_SPEED :: 15.0
 
 x: f32 = 100.0
 
@@ -151,6 +151,12 @@ Vector4 :: union {
 
 Entity :: struct {
 	using rectangle: Rectangle
+	
+	Flags :: enum_flags u64 {
+		DRAW_RECTANGLE
+	}
+	
+	flags: Flags
 	texture_handle: u32
 }
 
@@ -163,7 +169,7 @@ Particle :: struct {
 }
 
 Particle_System :: struct {
-	relative: *Rectangle
+	relative: u64
 	x: f32
 	y: f32
 	texture_handle: u32
@@ -180,10 +186,6 @@ Particle_System :: struct {
 	spawn_color: Vector4
 	
 	particles: [..]Particle
-}
-
-Bullet :: struct {
-	using rectangle: Rectangle
 }
 
 rng: Random_State
@@ -234,8 +236,10 @@ update_particle_system :: (using particle_system: *Particle_System, delta: f32) 
 }
 
 draw_particle_system :: (using particle_system: *Particle_System) {
+	
+
 	glPushMatrix()
-	glTranslatef(relative.x, relative.y, 0)
+	glTranslatef(entities[relative].x, entities[relative].y, 0)
 
 	if particle_system.texture_handle {
 		glBindTexture(GL_TEXTURE_2D, particle_system.texture_handle)
@@ -269,19 +273,23 @@ draw_particle_system :: (using particle_system: *Particle_System) {
 	glPopMatrix()
 }
 
-active_particle_systems: [..]*Particle_System
+active_particle_systems: [..]u64
 
-make_particle_system_active :: (particle_system: *Particle_System) {
+make_particle_system_active :: (index: u64) {
+	particle_system := *all_particle_systems[index]
+
 	if !particle_system.active {
-		array_add_generic(cast() *active_particle_systems, *particle_system, size_of(type_of(particle_system)))
+		array_add_generic(cast() *active_particle_systems, *index, size_of(type_of(index)))
 		particle_system.active = true
 	}
 }
 
-make_particle_system_inactive :: (particle_system: *Particle_System) {
+make_particle_system_inactive :: (index: u64) {
+	particle_system := *all_particle_systems[index]
+
 	if particle_system.active {
-		for * system: active_particle_systems {
-			if << system == particle_system {
+		for system: active_particle_systems {
+			if system == index {
 				remove
 				break
 			}
@@ -325,37 +333,73 @@ make_vector4 :: (x: f32, y: f32, z: f32, w: f32) -> Vector4 {
 }
 
 untextured_quad :: (using rectangle: *Rectangle) {
-	halfWidth := width * 0.5
-	halfHeight := height * 0.5
+	half_width := width * 0.5
+	half_height := height * 0.5
 
-	glVertex2f(x - halfWidth, y - halfHeight)
+	glVertex2f(x - half_width, y - half_height)
 	
-	glVertex2f(x + halfWidth, y - halfHeight)
+	glVertex2f(x + half_width, y - half_height)
 	
-	glVertex2f(x + halfWidth, y + halfHeight)
+	glVertex2f(x + half_width, y + half_height)
 	
-	glVertex2f(x - halfWidth, y + halfHeight)
+	glVertex2f(x - half_width, y + half_height)
 }
 
 textured_quad :: (using rectangle: *Rectangle) {
-	halfWidth := width * 0.5
-	halfHeight := height * 0.5
+	half_width := width * 0.5
+	half_height := height * 0.5
 	
 	glTexCoord2f(0, 0)
-	glVertex2f(x - halfWidth, y - halfHeight)
+	glVertex2f(x - half_width, y - half_height)
 	
 	
 	glTexCoord2f(1, 0)
-	glVertex2f(x + halfWidth, y - halfHeight)
+	glVertex2f(x + half_width, y - half_height)
 	
 	
 	glTexCoord2f(1, 1)
-	glVertex2f(x + halfWidth, y + halfHeight)
+	glVertex2f(x + half_width, y + half_height)
 	
 	
 	glTexCoord2f(0, 1)
-	glVertex2f(x - halfWidth, y + halfHeight)
+	glVertex2f(x - half_width, y + half_height)
 }
+
+create_bullet :: (x: f32, y: f32) {
+	bullet: Entity = --
+	
+	bullet.flags = 0
+	bullet.x = x
+	bullet.y = y
+	bullet.width = 10
+	bullet.height = 30
+	
+	particles: Particle_System
+	particles.relative = entities.count
+	
+	array_add_entity(*entities, bullet)
+	
+	particles.x = 0
+	particles.y = 0
+	particles.texture_handle = 0
+	particles.spawn_rate = 100
+	particles.spawn_lifetime = 1
+	particles.spawn_color = make_vector4(0.6, 0.6, 0.6, 1)
+	particles.spawn_radius = 4
+	particles.spawn_size = 4
+	particles.spawn_mean_velocity = make_vector2(0, -15)
+	particles.spawn_velocity_range = make_vector2(0, 5)
+	
+	
+}
+
+
+entities: [..]Entity
+all_particle_systems: [..]Particle_System
+
+FIRE_COOLDOWN :: 0.5
+
+time_to_fire: f32 = 0
 
 _main :: () {
 	rng = create_random(1, 1)
@@ -368,8 +412,9 @@ _main :: () {
 	}
 	*/
 	
-	entities: [..]Entity
-	all_particle_systems: [..]Particle_System
+	null_entity: Entity
+	
+	array_add_entity(*entities, null_entity)
 	
 	performance_counter_frequency: s64
 	
@@ -492,7 +537,7 @@ _main :: () {
 	load_gl_extensions()
 	wglSwapIntervalEXT(1)
 	
-	player: *Entity
+	player_index: u64
 	
 	
 	glEnable(GL_TEXTURE_2D)
@@ -504,18 +549,20 @@ _main :: () {
 		entity.y = 150
 		entity.width = 128
 		entity.height = 128
+		entity.flags = Entity.Flags.DRAW_RECTANGLE
 		entity.texture_handle = texture
 	
-		player = array_add_entity(*entities, entity)
+		player_index = entities.count
+		array_add_entity(*entities, entity)
 	}
 	
-	left_particles: *Particle_System
-	right_particles: *Particle_System
+	left_particles: u64
+	right_particles: u64
 	
 	{
 		particle_system: Particle_System
 		
-		particle_system.relative = player
+		particle_system.relative = player_index
 		particle_system.x = -20
 		particle_system.y = 0
 		particle_system.spawn_rate = 3000
@@ -526,14 +573,15 @@ _main :: () {
 		particle_system.spawn_lifetime = 0.25
 		particle_system.spawn_color = make_vector4(0.9, 0.5, 0.07, 1)
 		
-		left_particles = array_add_generic(cast() *all_particle_systems, *particle_system, size_of(Particle_System))
+		left_particles = all_particle_systems.count 
 		
+		array_add_generic(cast() *all_particle_systems, *particle_system, size_of(Particle_System))
 	}
 
 	{
 		particle_system: Particle_System
 		
-		particle_system.relative = player
+		particle_system.relative = player_index
 		particle_system.x = 20
 		particle_system.y = 0
 		particle_system.spawn_rate = 3000
@@ -544,7 +592,8 @@ _main :: () {
 		particle_system.spawn_lifetime = 0.25
 		particle_system.spawn_color = make_vector4(0.9, 0.5, 0.07, 1)
 		
-		right_particles = array_add_generic(cast() *all_particle_systems, *particle_system, size_of(Particle_System))
+		right_particles = all_particle_systems.count
+		array_add_generic(cast() *all_particle_systems, *particle_system, size_of(Particle_System))
 		
 	}
 	
@@ -585,19 +634,26 @@ _main :: () {
 		glLoadIdentity()
 		glOrtho(0, 1280, 0, 720, -5, 5)
 		
+		player := *entities[player_index]
 		
 		if left_is_down {
-			player.x -= SPEED
+			player.x -= PLAYER_SPEED
 			make_particle_system_active(right_particles)
 		} else {
 			make_particle_system_inactive(right_particles)
 		}
 		
 		if right_is_down {
-			player.x += SPEED
+			player.x += PLAYER_SPEED
 			make_particle_system_active(left_particles)
 		} else {
 			make_particle_system_inactive(left_particles)
+		}
+		
+		if player.x < player.width * 0.5 {
+			player.x = player.width * 0.5
+		} else if player.x > cast() window_width - player.width * 0.5 {
+			player.x = cast() window_width - player.width * 0.5
 		}
 		
 		glBlendFunc(GL_ONE, GL_ONE)
@@ -607,7 +663,9 @@ _main :: () {
 			draw_particle_system(particle_system)
 		}
 		
-		for particle_system: active_particle_systems {
+		for index: active_particle_systems {
+			particle_system := *all_particle_systems[index]
+		
 			particle_system.spawn_progress += delta * particle_system.spawn_rate
 			
 			while particle_system.spawn_progress > 1 {
@@ -629,6 +687,17 @@ _main :: () {
 		
 			textured_quad(entity)
 		}
+		
+		time_to_fire -= delta
+		
+		if space_is_down && time_to_fire <= 0 {
+			time_to_fire += FIRE_COOLDOWN
+			
+			//create_bullet()
+		}
+		
+		if time_to_fire < 0
+			time_to_fire = 0
 		
 		glEnd()
 		
