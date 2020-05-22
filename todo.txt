@@ -5,9 +5,8 @@ enums
  - is_indexable -> do the enum values go in order from 0..N, so the names array can be indexed directly with the enum value
  - largest_value
  - smallest_value 
- 
-make remove work in ir generator
 
+// Maybe this if fine
 currently this doesn't do what you'd expect
 	A :: struct {
 		a := "A"
@@ -72,7 +71,7 @@ performance
  
 
 #if
- - Syntax if both blocks checked, type checking only happens for chosen block
+ - Syntax of both blocks checked, type checking only happens for chosen block
 
 defer
 
@@ -112,11 +111,11 @@ predefined constant variables
  
 #tag
  - Marks a struct member of type "type" as the tag for the struct, if the struct tag is compared to a type in an if statement, in the body of the if statement the struct will be implicitly casted to the tag
- - Alternatively mark the if statement as #tag instead of a struct member
+ - Alternatively mark the if statement as #tag instead of a struct member <-- Probably this
  - Make it work using box type?
  - Work with switch if
  
 utf8 identifiers?
 
-run ir
+run ir at compile time
 
