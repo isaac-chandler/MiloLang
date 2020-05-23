@@ -683,9 +683,19 @@ _main :: () {
 		
 		
 		for * entity: entities {
-			glBindTexture(GL_TEXTURE_2D, entity.texture_handle)
-		
-			textured_quad(entity)
+			if entity.flags & Entity.Flags.DRAW_RECTANGLE {
+				if entity.texture_handle {
+					glBindTexture(GL_TEXTURE_2D, entity.texture_handle)
+				
+					textured_quad(entity)	
+				} else {
+					glDisable(GL_TEXTURE_2D)
+					
+					untextured_quad(entity)
+					
+					glEnable(GL_TEXTURE_2D)
+				}
+			}
 		}
 		
 		time_to_fire -= delta
