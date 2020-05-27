@@ -1606,7 +1606,7 @@ bool defaultValueIsZero(Type *type, bool *yield) {
 
 				if (!(member->flags & DECLARATION_VALUE_IS_READY)) {
 					*yield = true;
-					return true;
+					return false;
 				}
 
 				assert(member->initialValue);
@@ -1633,7 +1633,6 @@ bool defaultValueIsZero(Type *type, bool *yield) {
 
 Expr *createDefaultValue(Declaration *location, Type *type, bool *shouldYield) {
 	*shouldYield = false;
-
 	bool yield;
 
 	if (defaultValueIsZero(type, &yield)) {
@@ -3877,6 +3876,8 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 						if (!type->typeValue->size) {
 							return true;
 						}
+
+						assert(type->typeValue->size);
 
 						auto literal = new ExprLiteral;
 						literal->flavor = ExprFlavor::INT_LITERAL;

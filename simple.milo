@@ -1,6 +1,23 @@
 #load "standard.milo"
 #load "random/random.milo"
 
+
+ListNode :: struct {
+	value: string
+	next: *ListNode
+}
+
+factorial :: (n: u64) -> u64 {
+	total: u64 = 1
+	
+	for 2 .. n + 1 {
+		total *= it
+	}
+	
+	return total
+}
+
+
 Job_Status :: enum_flags {
 	EMPLOYED
 	HOLIDAY

@@ -1,0 +1,112 @@
+#load "standard.milo"
+#load "bitmap.milo"
+
+ITERATIONS :: 256
+
+width :: 8192
+height :: 8192	
+
+x_min :: -0.77
+x_max :: -0.702
+y_min :: 0.184
+y_max :: 0.252
+
+mandelbrot:: (c_re: f32, c_im: f32) -> u64 {
+	z_re := c_re
+	z_im := c_im
+
+	for 0 .. ITERATIONS {
+		if z_re * z_re + z_im * z_im > 4
+			return cast() it
+			
+		new_z_re := z_re * z_re - z_im * z_im + c_re
+		new_z_im := 2 * z_re * z_im + c_im
+		
+		z_re = new_z_re
+		z_im = new_z_im
+	}
+	
+	return ITERATIONS
+}
+
+Job :: struct {
+	data: *u8
+	
+	start_row: s64
+	end_row: s64
+}
+
+thread_proc :: (data: *void) -> u32 {
+	job: *Job = data
+	
+	for y: job.start_row .. job.end_row {
+		for x: 0 .. width {
+			count := mandelbrot(cast(f32) x / width * (x_max - x_min) + x_min, cast(f32) y / height * (y_max - y_min) + y_min)
+		
+			if count == ITERATIONS {
+				job.data[0] = 143
+				job.data[1] = 63
+				job.data[2] = 20
+			} else {
+				job.data[0] = cast() count
+				job.data[1] = cast() count
+				job.data[2] = cast() count
+			}
+			job.data += 3
+		}
+	}
+	
+	return 0
+}
+
+THREAD_COUNT :: 4
+
+_main :: () {
+	assert(height % THREAD_COUNT == 0)
+
+	file: []u8
+	
+	file.count = size_of(Bmp_File_Header) + size_of(Bmp_Dib_Header) + width * height * 3
+	file.data = allocate(file.count)
+	
+	file_header: Bmp_File_Header
+	
+	file_header.file_size = cast() file.count
+	file_header.offset_to_image = size_of(Bmp_File_Header) + size_of(Bmp_Dib_Header);
+	
+	<<cast(*type_of(file_header)) file.data = file_header
+	
+	dib_header: Bmp_Dib_Header;
+	
+	dib_header.width = width
+	dib_header.height = height
+	dib_header.image_size = 3 * width * height;
+	
+	<< cast(*type_of(dib_header)) (file.data + size_of(type_of(file_header))) = dib_header
+	
+	jobs: [THREAD_COUNT]Job
+	
+	threads: [THREAD_COUNT]Thread
+	
+	image := file
+	image.data += file_header.offset_to_image
+	image.count -= file_header.offset_to_image
+	
+	
+	for * jobs {
+		it.start_row = height / THREAD_COUNT * cast()it_index
+		it.end_row = height / THREAD_COUNT * cast()(it_index + 1)
+		
+		it.data = image.data + it.start_row * width * 3
+	}
+	
+	for * threads {
+		<<it = create_thread(thread_proc, *jobs[it_index])
+	}
+	
+	for * threads {
+		wait_for_thread(it)
+	}
+	
+	write_entire_file("mandelbrot.bmp", file)	
+}

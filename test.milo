@@ -1,22 +1,8 @@
 #load "windows.milo"
 #load "gl.milo"
 #load "standard.milo"
-#load "random/random.milo"	
-
-ListNode :: struct {
-	value: string
-	next: *ListNode
-}
-
-factorial :: (n: u64) -> u64 {
-	total: u64 = 1
-	
-	for 2 .. n + 1 {
-		total *= it
-	}
-	
-	return total
-}
+#load "random/random.milo"
+#load "bitmap.milo"
 
 should_quit: bool
 
@@ -24,35 +10,6 @@ window_width: s32 = 1280
 window_height: s32 = 720
 
 counter_scale: f32
-
-Bmp_File_Header :: struct #pack {
-	header: [2]u8
-	file_size: u32
-	reserved1: u16
-	reserved2: u16
-	offset_to_image: u32
-}
-
-Bmp_Dib_Header :: struct {
-	header_size: u32
-	width: s32
-	height: s32
-	color_plane_count: u16
-	bits_per_pixel: u16
-	compression_method: u32
-	image_size: u32
-	horizontal_resolution: u32
-	vertical_resolution: u32
-	palette_color_count: u32
-	important_color_count: u32
-	red_mask: u32
-	green_mask: u32
-	blue_mask: u32
-	alpha_mask: u32
-	
-	BI_RGB       :: 0
-	BI_BITFIELDS :: 3
-}
 
 load_image :: (filename: string) -> u32 {
 	success: bool
@@ -71,13 +28,13 @@ load_image :: (filename: string) -> u32 {
 	file_header := cast(*Bmp_File_Header)file.data
 	dib_header := cast(*Bmp_Dib_Header)(file.data + size_of(Bmp_File_Header))
 	
-	if file_header.header[0] != 'B' || file_header.header[1] != 'M' || file_header.file_size != file.count {
+	if file_header.header != Bmp_File_Header.EXPECTED_HEADER || file_header.file_size != file.count {
 		deallocate(file.data)
 		return 0
 	}
 	
 	if dib_header.bits_per_pixel != 32 || 
-		dib_header.compression_method != Bmp_Dib_Header.BI_BITFIELDS || 
+		dib_header.compression_method != Bmp_Dib_Header.Compression.BI_BITFIELDS || 
 		dib_header.alpha_mask != 0xFF000000 ||
 		dib_header.red_mask   != 0x00FF0000 ||
 		dib_header.green_mask != 0x0000FF00 ||
@@ -120,35 +77,6 @@ Rectangle :: struct {
 	height: f32
 }
 
-Vector2 :: union {
-	using xy: struct {
-		x: f32
-		y: f32
-	}
-	
-	elements: [2]f32 = --
-}
-
-Vector4 :: union {
-	using xyzw : struct {
-		x: f32
-		y: f32
-		z: f32
-		w: f32
-	}
-	
-	using rgba : struct {
-		r: f32
-		g: f32
-		b: f32
-		a: f32
-	} = --
-	
-	elements: [4]f32 = --
-	
-	xy: Vector2 = --
-}
-
 Entity :: struct {
 	using rectangle: Rectangle
 	
@@ -158,6 +86,8 @@ Entity :: struct {
 	
 	flags: Flags
 	texture_handle: u32
+	
+	occupied: bool
 }
 
 Particle :: struct {
@@ -174,6 +104,7 @@ Particle_System :: struct {
 	y: f32
 	texture_handle: u32
 	active: bool
+	occupied: bool
 	
 	spawn_progress: f32
 	spawn_rate: f32	
@@ -233,6 +164,17 @@ update_particle_system :: (using particle_system: *Particle_System, delta: f32) 
 			continue
 		}
 	}
+	
+	if particle_system.active {
+		particle_system.spawn_progress += delta * particle_system.spawn_rate
+		
+		while particle_system.spawn_progress > 1 {
+			particle_system.spawn_progress -= 1
+			create_particle(particle_system)
+		}
+	} else {
+		
+	}
 }
 
 draw_particle_system :: (using particle_system: *Particle_System) {
@@ -273,37 +215,20 @@ draw_particle_system :: (using particle_system: *Particle_System) {
 	glPopMatrix()
 }
 
-active_particle_systems: [..]u64
-
-make_particle_system_active :: (index: u64) {
-	particle_system := *all_particle_systems[index]
-
-	if !particle_system.active {
-		array_add_generic(cast() *active_particle_systems, *index, size_of(type_of(index)))
-		particle_system.active = true
-	}
-}
-
-make_particle_system_inactive :: (index: u64) {
-	particle_system := *all_particle_systems[index]
-
-	if particle_system.active {
-		for system: active_particle_systems {
-			if system == index {
-				remove
-				break
-			}
-		} completed {
-			print_string("Tried to decativate a particle system that wasn't in the active set\n")
-			panic()
+add_entity :: (entity: *Entity) -> u64 {
+	for * entities {
+		if !entity.occupied {
+			<<it = <<entity
+			it.occupied = true
+			
+			return it_index
 		}
-	
-		particle_system.active = false
 	}
-}
-
-array_add_entity :: (array: *[..]Entity, value: Entity) -> *Entity {
-	return array_add_generic(cast() array, *value, size_of(type_of(value)))
+	
+	array_add_generic(cast() *entities, entity, size_of(Entity))
+	entities[entities.count - 1].occupied = false
+	
+	return entities.count - 1
 }
 
 array_remove_entity_by_pointer :: (array: *[]Entity, value: *Entity) {
@@ -365,19 +290,24 @@ textured_quad :: (using rectangle: *Rectangle) {
 	glVertex2f(x - half_width, y + half_height)
 }
 
+Bullet :: struct {
+	entity: u32
+	particle_system: u32
+}
+
 create_bullet :: (x: f32, y: f32) {
-	bullet: Entity = --
+	entity: Entity = --
 	
-	bullet.flags = 0
-	bullet.x = x
-	bullet.y = y
-	bullet.width = 10
-	bullet.height = 30
+	entity.flags = 0
+	entity.x = x
+	entity.y = y
+	entity.width = 10
+	entity.height = 30
 	
 	particles: Particle_System
 	particles.relative = entities.count
 	
-	array_add_entity(*entities, bullet)
+	add_entity(*entity)
 	
 	particles.x = 0
 	particles.y = 0
@@ -390,12 +320,14 @@ create_bullet :: (x: f32, y: f32) {
 	particles.spawn_mean_velocity = make_vector2(0, -15)
 	particles.spawn_velocity_range = make_vector2(0, 5)
 	
+	make_particle_system_active(all_particle_systems.count)
 	
+	array_add_generic(cast() *all_particle_systems, *particles, size_of(Particle_System))
 }
 
 
 entities: [..]Entity
-all_particle_systems: [..]Particle_System
+particle_systems: [..]Particle_System
 
 FIRE_COOLDOWN :: 0.5
 
@@ -414,7 +346,7 @@ _main :: () {
 	
 	null_entity: Entity
 	
-	array_add_entity(*entities, null_entity)
+	add_entity(*null_entity)
 	
 	performance_counter_frequency: s64
 	
@@ -552,8 +484,7 @@ _main :: () {
 		entity.flags = Entity.Flags.DRAW_RECTANGLE
 		entity.texture_handle = texture
 	
-		player_index = entities.count
-		array_add_entity(*entities, entity)
+		player_index = add_entity(*entity)
 	}
 	
 	left_particles: u64
@@ -658,20 +589,11 @@ _main :: () {
 		
 		glBlendFunc(GL_ONE, GL_ONE)
 		
-		for * particle_system: all_particle_systems {	
+		for * particle_system: particle_systems {
+			if !particle_system.occupied continue;
+			
 			update_particle_system(particle_system, delta)
 			draw_particle_system(particle_system)
-		}
-		
-		for index: active_particle_systems {
-			particle_system := *all_particle_systems[index]
-		
-			particle_system.spawn_progress += delta * particle_system.spawn_rate
-			
-			while particle_system.spawn_progress > 1 {
-				particle_system.spawn_progress -= 1
-				create_particle(particle_system)
-			}
 		}
 		
 		
@@ -683,7 +605,9 @@ _main :: () {
 		
 		
 		for * entity: entities {
-			if entity.flags & Entity.Flags.DRAW_RECTANGLE {
+			if !entity.occupied continue
+		
+			if entity.flags & Entity.Flags.DRAW_RECTANGLE {			
 				if entity.texture_handle {
 					glBindTexture(GL_TEXTURE_2D, entity.texture_handle)
 				

@@ -1,5 +1,49 @@
 #load "windows.milo"
 
+Vector2 :: union {
+	using _xy: struct {
+		x: f32
+		y: f32
+	}
+	
+	elements: [2]f32 = --
+}
+
+
+Vector3 :: union {
+	using _xyz: struct {
+		x: f32
+		y: f32
+		z: f32
+	}
+	
+	elements: [3]f32 = --
+	
+	xy: Vector2 = --
+}
+
+Vector4 :: union {
+	using xyzw : struct {
+		x: f32
+		y: f32
+		z: f32
+		w: f32
+	}
+	
+	using rgba : struct {
+		r: f32
+		g: f32
+		b: f32
+		a: f32
+	} = --
+	
+	elements: [4]f32 = --
+	
+	xyz: Vector3 = --
+	xy: Vector2 = --
+}
+
+
 min :: (a: u64, b: u64) -> u64 {
 	if a < b 
 		return a
@@ -111,14 +155,14 @@ array_remove_string_by_pointer :: (array: *[]string, value: *string) {
 }
 
 
-main :: () -> s32 {
+main :: () {
 	//args.data = argv
 	//args.count = cast(u64) argc
 	init_runtime()
 
 	_main()
-
-	return 0
+	
+	ExitProcess(0)
 }
 
 get_command_line_arguments :: () -> []string {

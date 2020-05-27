@@ -499,6 +499,7 @@ CreateFileW :: (lpFileName: *u16, dwDesiredAccess: Access_Flags, dwShareMode: Fi
 GetFileSizeEx :: (hFile: HANDLE, lpFileSize: *s64) -> s32 #external
 
 ReadFile :: (hFile: HANDLE, lpBuffer: *void, nNumberOfBytesToRead: u32, lpNumberOfBytesRead: *u32, lpOverlapped: *OVERLAPPED = null) -> s32 #external
+WriteFile :: (hFile: HANDLE, lpBuffer: *void, nNumberOfBytesToWrite: u32, lpNumberOfBytesWritten: *u32, lpOverlapped: *OVERLAPPED = null) -> s32 #external
 
 INVALID_HANDLE_VALUE :: cast(HANDLE) -1
 
@@ -584,7 +585,6 @@ read_entire_file :: (file: string, success: *bool) -> []u8 {
 	handle := CreateFileW(filename, GENERIC_READ, 0, null, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN)
 	
 	if handle == INVALID_HANDLE_VALUE {
-		print_string("A");
 		<<success = false
 	} else {
 	
@@ -603,7 +603,6 @@ read_entire_file :: (file: string, success: *bool) -> []u8 {
 				}
 				
 				if !ReadFile(handle, remaining.data, cast() bytes_to_read, *bytes_read) || bytes_read != bytes_to_read {
-					print_string("B");
 					<<success = false
 					result.count = 0
 					deallocate(result.data)
@@ -615,7 +614,6 @@ read_entire_file :: (file: string, success: *bool) -> []u8 {
 				remaining.data += bytes_to_read
 			}
 		} else {
-			print_string("C");
 			<<success = false
 		}
 		
@@ -626,4 +624,84 @@ read_entire_file :: (file: string, success: *bool) -> []u8 {
 	return result
 }
 
+write_entire_file :: (file: string, data: []u8) -> bool {
+	result: []u8 = --
+	
+	filename := create_wide_string(file)
+	
+	handle := CreateFileW(filename, GENERIC_WRITE, 0, null, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN)
+	
+	if handle == INVALID_HANDLE_VALUE {
+		return false
+	} else {
+		while data {
+			bytes_written: u32
+			
+			bytes_to_write := data.count
+			
+			if (bytes_to_write > 0xFFFF_FFFF) {
+				bytes_to_write = 0xFFFF_FFFF
+			}
+			
+			if !WriteFile(handle, data.data, cast() bytes_to_write, *bytes_written) || bytes_written != bytes_to_write {
+				CloseHandle(handle)
+				
+				return false
+			}
+			
+			data.count -= bytes_to_write
+			data.data += bytes_to_write
+		}
+		
+		CloseHandle(handle)
+	}
+	
+	return true
+}
 
+ThreadProc :: (*void) -> u32
+
+Create_Thread_Flags :: enum_flags u32 {
+	CREATE_SUSPENDED :: 0x4
+	STACK_SIZE_PARAM_IS_A_RESERVATION :: 0x1_0000
+}
+
+using Create_Thread_Flags.members
+
+
+
+CreateThread :: (lpThreadAttributes: *SECURITY_ATTRIBUTES = null, dwStackSize: u64 = 0, lpStartAddress: ThreadProc, lpParameter: *void = null, dwCreationFlags: Create_Thread_Flags = 0, lpThreadId: *u32 = null) -> HANDLE #external
+
+INFINITE :: 0xFFFF_FFFF
+
+Wait_Result :: enum u32 {
+	WAIT_ABANDONED :: 0x80
+	WAIT_OBJECT_0 :: 0
+	WAIT_TIMEOUT :: 0x102
+	WAIT_FAILED :: 0xFFFF_FFFF
+}
+
+using Wait_Result.members
+
+WaitForSingleObject :: (hHandle: HANDLE, dwMilliseconds: u32 = INFINITE) -> Wait_Result #external
+
+Thread :: struct {
+	handle: HANDLE
+	id: u32
+}
+
+create_thread :: (procedure: ThreadProc, data: *void = null) -> Thread {
+	thread: Thread = --
+	
+	thread.handle = CreateThread(null, 0, procedure, data, 0, *thread.id)
+	
+	return thread
+}
+
+wait_for_thread :: (thread: *Thread) {
+	WaitForSingleObject(thread.handle)
+}
+
+close_thread :: (thread: *Thread) {
+	CloseHandle(thread.handle)
+}

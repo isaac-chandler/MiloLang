@@ -1,0 +1,49 @@
+Bmp_File_Header :: struct #pack {
+	EXPECTED_HEADER :: 0x4D42 // BM
+
+	header: u16 = EXPECTED_HEADER
+	file_size: u32
+	reserved1: u16
+	reserved2: u16
+	offset_to_image: u32
+}
+
+Bmp_Dib_Header :: struct {
+	header_size: u32 = size_of(Bmp_Dib_Header)
+	width: s32
+	height: s32
+	color_plane_count: u16 = 1
+	bits_per_pixel: u16 = 24
+	compression_method := Compression.BI_RGB
+	image_size: u32
+	horizontal_resolution: u32
+	vertical_resolution: u32
+	palette_color_count: u32
+	important_color_count: u32
+	red_mask: u32
+	green_mask: u32
+	blue_mask: u32
+	alpha_mask: u32
+	color_space: u32 = 0x57696E20 // "Win "
+	red_endpoint: Vector3
+	green_endpoint: Vector3
+	blue_endpoint: Vector3
+	red_gamma: u32
+	green_gamma: u32
+	blue_gamma: u32
+	
+	
+	Compression :: enum u32 {
+		BI_RGB            :: 0
+		BI_RLE8           :: 1
+		BI_RLE4           :: 2
+		BI_BITFIELDS      :: 3
+		BI_JPEG           :: 4
+		BI_PNG            :: 5
+		BI_ALPHABITFIELDS :: 6
+		BI_CMYK           :: 11
+		BI_CMYKRLE8       :: 12
+		BI_CMYK_RLE4      :: 13
+	}
+}
+
