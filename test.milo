@@ -65,8 +65,10 @@ load_image :: (filename: string) -> u32 {
 left_is_down:  bool
 right_is_down: bool
 space_is_down: bool
+shift_is_down: bool
 
-PLAYER_SPEED :: 15.0
+PLAYER_SPEED :: 10.0
+BULLET_SPEED :: 400.0
 
 x: f32 = 100.0
 
@@ -83,6 +85,8 @@ Entity :: struct {
 	Flags :: enum_flags u64 {
 		DRAW_RECTANGLE
 	}
+	
+	color: Vector4
 	
 	flags: Flags
 	texture_handle: u32
@@ -217,7 +221,7 @@ draw_particle_system :: (using particle_system: *Particle_System) {
 
 add_entity :: (entity: *Entity) -> u64 {
 	for * entities {
-		if !entity.occupied {
+		if !it.occupied {
 			<<it = <<entity
 			it.occupied = true
 			
@@ -226,13 +230,33 @@ add_entity :: (entity: *Entity) -> u64 {
 	}
 	
 	array_add_generic(cast() *entities, entity, size_of(Entity))
-	entities[entities.count - 1].occupied = false
+	entities[entities.count - 1].occupied = true
 	
 	return entities.count - 1
 }
 
-array_remove_entity_by_pointer :: (array: *[]Entity, value: *Entity) {
-	array_remove_generic_by_pointer(cast() array, value, size_of(Entity))
+remove_entity :: (index: u64) {
+	entities[index].occupied = false
+}
+
+remove_particle_system :: (index: u64) {
+	particle_systems[index].occupied = false
+}
+
+add_particle_system :: (particle_system: *Particle_System) -> u64 {
+	for * particle_systems {
+		if !it.occupied {
+			<<it = <<particle_system
+			it.occupied = true
+			
+			return it_index
+		}
+	}
+	
+	array_add_generic(cast() *particle_systems, particle_system, size_of(Particle_System))
+	particle_systems[particle_systems.count - 1].occupied = true
+	
+	return particle_systems.count - 1
 }
 
 set_gl_color :: (color: Vector4) {
@@ -291,45 +315,51 @@ textured_quad :: (using rectangle: *Rectangle) {
 }
 
 Bullet :: struct {
-	entity: u32
-	particle_system: u32
+	entity: u64
+	particle_system: u64
+	velocity: Vector2
 }
 
 create_bullet :: (x: f32, y: f32) {
-	entity: Entity = --
+	bullet: Bullet = --
+
+	entity: Entity
 	
-	entity.flags = 0
+	//entity.flags = Entity.Flags.DRAW_RECTANGLE entity.color = make_vector4(1, 0, 1, 1)
 	entity.x = x
 	entity.y = y
 	entity.width = 10
-	entity.height = 30
+	entity.height = 40
 	
 	particles: Particle_System
-	particles.relative = entities.count
 	
-	add_entity(*entity)
+	bullet.entity = add_entity(*entity)
 	
+	particles.relative = bullet.entity
 	particles.x = 0
-	particles.y = 0
+	particles.y = entity.height * 0.5
 	particles.texture_handle = 0
-	particles.spawn_rate = 100
-	particles.spawn_lifetime = 1
-	particles.spawn_color = make_vector4(0.6, 0.6, 0.6, 1)
+	particles.spawn_rate = 1000
+	particles.spawn_lifetime = 0.06
+	particles.spawn_color = make_vector4(0.45, 0.45, 0.45, 1)
 	particles.spawn_radius = 4
 	particles.spawn_size = 4
-	particles.spawn_mean_velocity = make_vector2(0, -15)
-	particles.spawn_velocity_range = make_vector2(0, 5)
+	particles.spawn_mean_velocity = make_vector2(0, -600)
+	particles.spawn_velocity_range = make_vector2(0, 200)
+	particles.active = true
 	
-	make_particle_system_active(all_particle_systems.count)
+	bullet.particle_system = add_particle_system(*particles)
+	bullet.velocity = make_vector2(0, BULLET_SPEED)
 	
-	array_add_generic(cast() *all_particle_systems, *particles, size_of(Particle_System))
+	array_add_generic(cast() *bullets, *bullet, size_of(Bullet))
 }
 
 
 entities: [..]Entity
 particle_systems: [..]Particle_System
+bullets: [..]Bullet
 
-FIRE_COOLDOWN :: 0.5
+FIRE_COOLDOWN :: 0.3
 
 time_to_fire: f32 = 0
 
@@ -374,6 +404,7 @@ _main :: () {
 		VK_SPACE :: 0x20
 		VK_LEFT :: 0x25
 		VK_RIGHT :: 0x27
+		VK_SHIFT :: 0x10
 	
 		if uMsg == WM_CLOSE {
 			DestroyWindow(hwnd)
@@ -391,6 +422,12 @@ _main :: () {
 			
 			window_width = client_rect.right - client_rect.left
 			window_height = client_rect.bottom - client_rect.top
+			
+			print_u64(cast() window_width)
+			print_string("x")
+			print_u64(cast() window_height)
+			print_string("\n----------\n")
+			
 		} else if uMsg == WM_KEYDOWN {
 			if wParam == VK_LEFT
 				left_is_down = true
@@ -398,6 +435,8 @@ _main :: () {
 				right_is_down = true
 			else if wParam == VK_SPACE
 				space_is_down = true
+			else if wParam == VK_SHIFT
+				shift_is_down = true
 				
 		} else if uMsg == WM_KEYUP {
 			if wParam == VK_LEFT
@@ -406,6 +445,8 @@ _main :: () {
 				right_is_down = false
 			else if wParam == VK_SPACE
 				space_is_down = false
+			else if wParam == VK_SHIFT
+				shift_is_down = false
 				
 		} else {
 			return DefWindowProcW(hwnd, uMsg, wParam, lParam)
@@ -425,7 +466,19 @@ _main :: () {
 	}
 	
 	
-	window_handle := CreateWindowExW(lpClassName = class_name, lpWindowName = create_wide_string("Test Window"), dwStyle = WS_OVERLAPPEDWINDOW ^ WS_THICKFRAME, nWidth = window_width, nHeight = window_height, hInstance = instance)
+	window_style := WS_OVERLAPPEDWINDOW ^ WS_THICKFRAME ^ WS_MAXIMIZEBOX
+	
+	window_rect: RECT
+	
+	window_rect.top = 0
+	window_rect.bottom = window_height
+	window_rect.left = 0
+	window_rect.right = window_width
+	
+	AdjustWindowRectEx(*window_rect, window_style ^ WS_OVERLAPPED | WS_TILED)
+	
+	window_handle := CreateWindowExW(lpClassName = class_name, lpWindowName = create_wide_string("Test Window"), dwStyle = WS_OVERLAPPEDWINDOW ^ WS_THICKFRAME ^ WS_MAXIMIZEBOX, 
+		nWidth = window_rect.right - window_rect.left, nHeight = window_rect.bottom - window_rect.top, hInstance = instance)
 	
 	if window_handle == null {
 		print_string("Failed to open window\n")
@@ -483,6 +536,7 @@ _main :: () {
 		entity.height = 128
 		entity.flags = Entity.Flags.DRAW_RECTANGLE
 		entity.texture_handle = texture
+		entity.color = make_vector4(1, 1, 1, 1)
 	
 		player_index = add_entity(*entity)
 	}
@@ -504,9 +558,7 @@ _main :: () {
 		particle_system.spawn_lifetime = 0.25
 		particle_system.spawn_color = make_vector4(0.9, 0.5, 0.07, 1)
 		
-		left_particles = all_particle_systems.count 
-		
-		array_add_generic(cast() *all_particle_systems, *particle_system, size_of(Particle_System))
+		left_particles = add_particle_system(*particle_system)
 	}
 
 	{
@@ -523,8 +575,7 @@ _main :: () {
 		particle_system.spawn_lifetime = 0.25
 		particle_system.spawn_color = make_vector4(0.9, 0.5, 0.07, 1)
 		
-		right_particles = all_particle_systems.count
-		array_add_generic(cast() *all_particle_systems, *particle_system, size_of(Particle_System))
+		right_particles = add_particle_system(*particle_system)
 		
 	}
 	
@@ -556,6 +607,9 @@ _main :: () {
 		QueryPerformanceCounter(*current_time)
 		
 		delta := cast() (current_time - last_time) * counter_scale
+		
+		if shift_is_down
+			delta *= 0.05
 	
 		glViewport(0, 0, window_width, window_height)
 		glClearColor(0, 0.1, 0.2, 0)
@@ -567,24 +621,50 @@ _main :: () {
 		
 		player := *entities[player_index]
 		
+		particle_systems[right_particles].active = left_is_down
+		particle_systems[left_particles].active = right_is_down
+		
 		if left_is_down {
 			player.x -= PLAYER_SPEED
-			make_particle_system_active(right_particles)
-		} else {
-			make_particle_system_inactive(right_particles)
 		}
 		
 		if right_is_down {
 			player.x += PLAYER_SPEED
-			make_particle_system_active(left_particles)
-		} else {
-			make_particle_system_inactive(left_particles)
 		}
 		
 		if player.x < player.width * 0.5 {
 			player.x = player.width * 0.5
 		} else if player.x > cast() window_width - player.width * 0.5 {
 			player.x = cast() window_width - player.width * 0.5
+		}
+		
+		
+		time_to_fire -= delta
+		
+		if space_is_down && time_to_fire <= 0 {
+			time_to_fire += FIRE_COOLDOWN
+			
+			create_bullet(player.x - 13, player.y + player.height * 0.5 - 30)
+			create_bullet(player.x + 13, player.y + player.height * 0.5 - 30)
+		}
+		
+		if time_to_fire < 0
+			time_to_fire = 0
+		
+		
+		for * bullet : bullets {
+			entity := *entities[bullet.entity]
+		
+			entity.x += bullet.velocity.x * delta
+			entity.y += bullet.velocity.y * delta
+			
+			if entity.y - entity.height * 0.5 > cast() window_height {
+				
+				remove_particle_system(bullet.particle_system)
+				remove_entity(bullet.entity)
+			
+				remove
+			}
 		}
 		
 		glBlendFunc(GL_ONE, GL_ONE)
@@ -601,37 +681,37 @@ _main :: () {
 		
 		glBegin(GL_QUADS)
 		
-		set_gl_color(make_vector4(1, 1, 1, 1))
-		
 		
 		for * entity: entities {
 			if !entity.occupied continue
 		
-			if entity.flags & Entity.Flags.DRAW_RECTANGLE {			
+			if entity.flags & Entity.Flags.DRAW_RECTANGLE {		
+				
+			
 				if entity.texture_handle {
 					glBindTexture(GL_TEXTURE_2D, entity.texture_handle)
 				
+					set_gl_color(entity.color)
 					textured_quad(entity)	
 				} else {
+					glEnd()
 					glDisable(GL_TEXTURE_2D)
 					
+					glBegin(GL_QUADS)
+				
+					set_gl_color(entity.color)
 					untextured_quad(entity)
+					
+					glEnd()
+					glBegin(GL_QUADS)
 					
 					glEnable(GL_TEXTURE_2D)
 				}
 			}
 		}
 		
-		time_to_fire -= delta
-		
-		if space_is_down && time_to_fire <= 0 {
-			time_to_fire += FIRE_COOLDOWN
-			
-			//create_bullet()
-		}
-		
-		if time_to_fire < 0
-			time_to_fire = 0
+		// print_u64(cast() (delta * 1000_000))
+		// print_string("\n")
 		
 		glEnd()
 		
@@ -639,6 +719,10 @@ _main :: () {
 		
 		last_time = current_time
 	}
+	
+	glFinish()
+	
+	wglMakeCurrent(null, null)
 	
 	wglDeleteContext(gl_context)
 	ReleaseDC(window_handle, device_context)

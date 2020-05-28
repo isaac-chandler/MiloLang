@@ -265,6 +265,8 @@ BeginPaint :: (hWnd: HWND, lpPaint: *PAINTSTRUCT) -> HDC #external
 
 EndPaint :: (hWnd: HWND, lpPaint: *PAINTSTRUCT) -> s32 #external
 
+AdjustWindowRect :: (lpRect: *RECT, dwStyle: Window_Style, bMenu: bool = false) -> s32 #external
+AdjustWindowRectEx :: (lpRect: *RECT, dwStyle: Window_Style, bMenu: bool = false, dwSyleEx: Window_Style_Ex = 0) -> s32 #external
 
 PatBlt :: (hdc: HDC, x: s32, y: s32, w: s32, h: s32, rop: u32) -> s32 #external
 
