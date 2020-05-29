@@ -3775,7 +3775,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 									literal->signedValue = -literal->signedValue;
 									*exprPointer = value;
 								}
-								else { // @Incomplete: should we allow negation of unsigned numbers, its useful for soeme bit twiddling but feels weird
+								else { // @Incomplete: should we allow negation of unsigned numbers, its useful for some bit twiddling but feels weird
 									unary->type = value->type;
 								}
 
@@ -3788,6 +3788,9 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 								auto literal = static_cast<ExprLiteral *>(value);
 								literal->floatValue = -literal->floatValue;
 								*exprPointer = value;
+							}
+							else {
+								unary->type = value->type;
 							}
 						}
 						else {
@@ -4153,7 +4156,7 @@ bool addDeclaration(Declaration *declaration) {
 		}
 		else if (declaration->enclosingScope) {
 			if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::INT_LITERAL)  {
-				declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, &TYPE_UNSIGNED_INT_LITERAL);
+				declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, declaration->initialValue->type);
 				declaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
 				return true;
 			}

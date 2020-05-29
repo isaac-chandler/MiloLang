@@ -1466,6 +1466,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 			}
 			else {
 				reportExpectedError(&lexer->token, "Error: Expected enum declaration name");
+				return nullptr;
 			}
 		}
 		popBlock(&members->members);

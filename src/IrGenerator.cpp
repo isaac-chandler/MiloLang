@@ -1086,7 +1086,12 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			ir.dest = remove->refersTo->irPointer;
 			ir.opSize = TYPE_VOID_POINTER->size;
 
-
+			Ir &sub = state->ir.add();
+			sub.op = IrOp::ADD_CONSTANT;
+			sub.dest = remove->refersTo->iteratorBlock.declarations[1]->physicalStorage;
+			sub.a = remove->refersTo->iteratorBlock.declarations[1]->physicalStorage;
+			sub.b = static_cast<u64>(-1LL);
+			sub.opSize = 8;
 
 			return DEST_NONE;
 		}

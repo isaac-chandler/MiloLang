@@ -2515,20 +2515,22 @@ void runCoffWriter() {
 							parameterOffset = 0;
 						}
 
-						u64 parameterSpace = my_min(4, ir.arguments->argCount + parameterOffset);
+						u64 parameterSpace = my_max(4, ir.arguments->argCount + parameterOffset);
+
+						u64 largeStorage = parameterSpace;
 
 						for (u64 i = 0; i < ir.arguments->argCount; i++) {
 							u64 size = ir.arguments->args[i].type->size;
 							u64 reg = ir.arguments->args[i].number;
 
 							if (!isStandardSize(size)) {
-								if (parameterSpace & 1) {
-									++parameterSpace; // Align to 16 bytes
+								if (largeStorage & 1) {
+									++largeStorage; // Align to 16 bytes
 								}
 
 								code.add1(0x48);
 								code.add1(0x8D);
-								writeRSPOffsetByte(&code, RDI, parameterSpace * 8);
+								writeRSPOffsetByte(&code, RDI, largeStorage * 8);
 
 								if (reg == 0) {
 									if (size % 8 == 0) {
@@ -2573,11 +2575,11 @@ void runCoffWriter() {
 									}
 								}
 
-								parameterSpace += (size + 7) / 8;
+								largeStorage += (size + 7) / 8;
 							}
 						}
 
-						parameterSpace = my_min(4, ir.arguments->argCount + parameterOffset);
+						largeStorage = parameterSpace;
 
 						constexpr int intRegisters[4] = { RCX, RDX, 8, 9 };
 
@@ -2592,16 +2594,16 @@ void runCoffWriter() {
 									loadIntoIntRegister(&code, function, type->size, intRegisters[i + parameterOffset], ir.arguments->args[i].number);
 								}
 								else {
-									if (parameterSpace & 1) {
-										++parameterSpace; // Align to 16 bytes
+									if (largeStorage & 1) {
+										++largeStorage; // Align to 16 bytes
 									}
 
-									code.add1(0x48);
+									code.add1(intRegisters[i + parameterOffset] >= 8 ? 0x4C : 0x48);
 									code.add1(0x8D);
-									writeRSPOffsetByte(&code, intRegisters[i + parameterOffset], parameterSpace * 8);
+									writeRSPOffsetByte(&code, intRegisters[i + parameterOffset] & 7, largeStorage * 8);
 
-									u64 size = ir.arguments->args[i].type->size;
-									parameterSpace += (size + 7) / 8;
+									u64 size = type->size;
+									largeStorage += (size + 7) / 8;
 								}
 							}
 						}
@@ -2613,15 +2615,15 @@ void runCoffWriter() {
 								loadIntoIntRegister(&code, function, ir.arguments->args[i].type->size, RAX, ir.arguments->args[i].number);
 							}
 							else {
-								if (parameterSpace & 1) {
-									++parameterSpace; // Align to 16 bytes
+								if (largeStorage & 1) {
+									++largeStorage; // Align to 16 bytes
 								}
 
 								code.add1(0x48);
 								code.add1(0x8D);
-								writeRSPOffsetByte(&code, RAX, parameterSpace * 8);
+								writeRSPOffsetByte(&code, RAX, largeStorage * 8);
 
-								parameterSpace += (size + 7) / 8;
+								largeStorage += (largeStorage + 7) / 8;
 							}
 
 							code.add1(0x48);
@@ -2637,7 +2639,7 @@ void runCoffWriter() {
 								writeRSPRegisterByte(&code, function, RCX, ir.dest);
 							}
 							else {
-								writeRSPOffsetByte(&code, RCX, parameterSpace * 8);
+								writeRSPOffsetByte(&code, RCX, largeStorage * 8);
 							}
 						}
 
