@@ -250,7 +250,7 @@ CW_USEDEFAULT :: cast(s32) 0x80000000
 GetStartupInfoW :: (lpStartupInfo: *STARTUPINFOW) #external
 
 
-CreateWindowExW :: (dwExStyle: Window_Style_Ex = 0, lpClassName: *u16, lpWindowName: *u16, dwStyle := Window_Style.WS_OVERLAPPEDWINDOW, X: s32 = CW_USEDEFAULT, Y: s32 = CW_USEDEFAULT, nWidth: s32, nHeight: s32, hWndParent: HWND = null, hMenu: HMENU = null, hInstance: HINSTANCE, lpParam: *void = null) -> HWND #external
+CreateWindowExW :: (dwExStyle: Window_Style_Ex = 0, lpClassName: *u16, lpWindowName: *u16, dwStyle := Window_Style.WS_OVERLAPPEDWINDOW, X: s32 = CW_USEDEFAULT, Y: s32 = CW_USEDEFAULT, nWidth: s32, nHeight: s32, hWndParent: HWND = null, hMenu: HMENU = null, hInstance: HINSTANCE, lpParam := null) -> HWND #external
 
 PAINTSTRUCT :: struct {
 	hdc: HDC
@@ -314,7 +314,7 @@ GetStdHandle :: (nStdHandle: u32) -> HANDLE #external
 GetModuleHandleW :: (lpModuleName: *u8) -> HMODULE #external
 
 
-WriteConsoleA :: (hConsoleOutput: HANDLE, lpBuffer: *void, nNumberOfCharactersToWrite: u32, lpNumberOfCharactersWritten: *u32 = null, lpReserved: *void = null) -> s32 #external
+WriteConsoleA :: (hConsoleOutput: HANDLE, lpBuffer: *void, nNumberOfCharactersToWrite: u32, lpNumberOfCharactersWritten: *u32 = null, lpReserved := null) -> s32 #external
 
 
 RegisterClassW :: (lpWndClass: *WNDCLASSW) -> u16 #external
@@ -672,7 +672,7 @@ using Create_Thread_Flags.members
 
 
 
-CreateThread :: (lpThreadAttributes: *SECURITY_ATTRIBUTES = null, dwStackSize: u64 = 0, lpStartAddress: ThreadProc, lpParameter: *void = null, dwCreationFlags: Create_Thread_Flags = 0, lpThreadId: *u32 = null) -> HANDLE #external
+CreateThread :: (lpThreadAttributes: *SECURITY_ATTRIBUTES = null, dwStackSize: u64 = 0, lpStartAddress: ThreadProc, lpParameter := null, dwCreationFlags: Create_Thread_Flags = 0, lpThreadId: *u32 = null) -> HANDLE #external
 
 INFINITE :: 0xFFFF_FFFF
 
@@ -692,7 +692,7 @@ Thread :: struct {
 	id: u32
 }
 
-create_thread :: (procedure: ThreadProc, data: *void = null) -> Thread {
+create_thread :: (procedure: ThreadProc, data := null) -> Thread {
 	thread: Thread = --
 	
 	thread.handle = CreateThread(null, 0, procedure, data, 0, *thread.id)
