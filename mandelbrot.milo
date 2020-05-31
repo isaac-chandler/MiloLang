@@ -11,7 +11,7 @@ x_max :: -0.702
 y_min :: 0.184
 y_max :: 0.252
 
-mandelbrot:: (c_re: f32, c_im: f32) -> u64 {
+mandelbrot:: (c_re: f32, c_im: f32) -> #must u64 {
 	z_re := c_re
 	z_im := c_im
 

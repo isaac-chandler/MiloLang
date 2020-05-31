@@ -44,21 +44,21 @@ Vector4 :: union {
 }
 
 
-min :: (a: u64, b: u64) -> u64 {
+min :: (a: u64, b: u64) -> #must u64 {
 	if a < b 
 		return a
 	else 
 		return b
 }
 
-max :: (a: u64, b: u64) -> u64 {
+max :: (a: u64, b: u64) -> #must u64 {
 	if a > b 
 		return a
 	else 
 		return b
 }
 
-string_length :: (s: string) -> u64 {
+string_length :: (s: string) -> #must u64 {
 	len: u64 = 0
 	while s[len] len += 1
 
@@ -76,7 +76,7 @@ print_string :: (s: string) {
 	print_buffer(buffer)
 }
 
-copy_string :: (s: string) -> string {
+copy_string :: (s: string) -> #must string {
 	memory: *u8 = allocate(string_length(s) + 1)
 	
 	buf := memory
@@ -169,7 +169,7 @@ get_command_line_arguments :: () -> []string {
 	return args
 }
 
-s64_to_string :: (value: s64) -> string {
+s64_to_string :: (value: s64) -> #must string {
 	if value == 0 {
 		result := cast(*u8) allocate(2)
 		result[0] = '0'
@@ -220,7 +220,7 @@ s64_to_string :: (value: s64) -> string {
 	return cast() result
 }
 
-u64_to_string :: (value: u64) -> string {
+u64_to_string :: (value: u64) -> #must string {
 	if value == 0 {
 		result := cast(*u8) allocate(2)
 		result[0] = '0'

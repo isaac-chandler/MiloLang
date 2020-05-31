@@ -360,11 +360,11 @@ HeapReAlloc :: (hHeap: HANDLE, dwFlags: u32, lpMem: *void, dwBytes: u64) -> *voi
 
 HeapFree :: (hHeap: HANDLE, dwFlags: u32, lpMem: *void) -> s32 #external
 
-allocate :: (size: u64) -> *void {
+allocate :: (size: u64) -> #must *void {
 	return HeapAlloc(process_heap, 0, size)
 }
 
-reallocate :: (block: *void, size: u64) -> *void {
+reallocate :: (block: *void, size: u64) -> #must *void {
 	if block == null
 		return allocate(size)
 	else
@@ -390,6 +390,8 @@ print_buffer :: (buffer: []u8) {
 SwapBuffers :: (Arg1: HDC) -> s32 #external
 
 wglCreateContext :: (Arg1: HDC) -> HGLRC #external
+
+GetTickCount :: () -> u32 #external
 
 wglMakeCurrent :: (hdc: HDC, hglrc: HGLRC) -> s32 #external
 
@@ -558,7 +560,7 @@ File_Flag :: enum_flags u32 {
 using File_Flag.members
 
 // @Incomplete, only converts ascii to UTF16, not UTF8
-create_wide_string :: (s: string) -> *u16 {
+create_wide_string :: (s: string) -> #must *u16 {
 	result: *u16 = allocate((string_length(s) + 1) * size_of(u16))
 	
 	buffer := result
@@ -577,7 +579,7 @@ create_wide_string :: (s: string) -> *u16 {
 }
 
 // @Incomplete add multiple return values 
-read_entire_file :: (file: string, success: *bool) -> []u8 {
+read_entire_file :: (file: string, success: *bool) -> #must []u8 {
 	<<success = true
 
 	result: []u8 = --
@@ -692,7 +694,7 @@ Thread :: struct {
 	id: u32
 }
 
-create_thread :: (procedure: ThreadProc, data := null) -> Thread {
+create_thread :: (procedure: ThreadProc, data := null) -> #must Thread {
 	thread: Thread = --
 	
 	thread.handle = CreateThread(null, 0, procedure, data, 0, *thread.id)

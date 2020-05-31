@@ -498,7 +498,7 @@ Expr *parseStatement(LexerFile *lexer) {
 		lexer->advance();
 
 
-		if (expectAndConsume(lexer, ';')) {
+		if (expectAndConsume(lexer, ';') || lexer->token.type == TOKEN('}')) {
 			return_->value = nullptr;
 		}
 		else {
@@ -577,6 +577,9 @@ Expr *parseStatement(LexerFile *lexer) {
 					reportError(expr, "Error: Can only have an assignment or function call expression at statement level");
 				}
 				return nullptr;
+			}
+			else {
+				expr->flags |= EXPR_FUNCTION_CALL_IS_STATEMENT_LEVEL;
 			}
 
 			return expr;
@@ -741,6 +744,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 	if (expectAndConsume(lexer, '(')) {
 		end = lexer->token.end;
 
+
 		if (expectAndConsume(lexer, ')')) { // This is a function with no arguments
 			if (lexer->token.type == TOKEN('{')) { // It also returns void
 				ExprFunction *function = PARSER_NEW(ExprFunction);
@@ -786,6 +790,8 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 				expr = function;
 			}
 			else if (expectAndConsume(lexer, TokenT::ARROW)) {
+				bool must = expectAndConsume(lexer, TokenT::MUST);
+
 				Expr *returnType = parseExpr(lexer);
 
 				if (lexer->token.type == TOKEN('{')) { // This is a function value
@@ -796,6 +802,9 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 					function->returnType = returnType;
 					function->arguments.flags |= BLOCK_IS_ARGUMENTS;
 					pushBlock(&function->arguments);
+
+					if (must)
+						function->flags |= EXPR_FUNCTION_IS_MUST;
 
 					function->body = parseBlock(lexer);
 
@@ -823,6 +832,9 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 					function->body = nullptr;
 					function->flags |= EXPR_FUNCTION_IS_EXTERNAL;
 
+					if (must)
+						function->flags |= EXPR_FUNCTION_IS_MUST;
+
 					pushBlock(&function->arguments);
 					popBlock(&function->arguments);
 
@@ -832,6 +844,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 					expr = function;
 				}
 				else { // This is a function type
+
 					ExprFunction *type = PARSER_NEW(ExprFunction);
 					type->flavor = ExprFlavor::FUNCTION_PROTOTYPE;
 					type->start = start;
@@ -841,6 +854,11 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 					pushBlock(&type->arguments);
 					popBlock(&type->arguments);
+
+					if (must) {
+						reportError(type, "Error: A function prototype cannot have its return type marked as #must");
+						return nullptr;
+					}
 
 					expr = type;
 				}
@@ -940,6 +958,11 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 					expr = function;
 				}
 				else if (expectAndConsume(lexer, TokenT::ARROW)) {
+					bool must = expectAndConsume(lexer, TokenT::MUST);
+
+					if (must)
+						function->flags |= EXPR_FUNCTION_IS_MUST;
+
 					Expr *returnType = parseExpr(lexer);
 					if (!returnType) {
 						return nullptr;
@@ -990,6 +1013,11 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 						function->end = lexer->previousTokenEnd;
 						function->returnType = returnType;
 						function->type = &TYPE_TYPE;
+
+						if (must) {
+							reportError(function, "Error: A function prototype cannot have its return type marked as #must");
+							return nullptr;
+						}
 
 
 						if (usingBlock) {

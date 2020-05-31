@@ -3211,6 +3211,11 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 					return false;
 				}
 
+				if (static_cast<ExprLiteral *>(function->returnType)->typeValue == &TYPE_VOID && (function->flags & EXPR_FUNCTION_IS_MUST)) {
+					reportError(function, "Error: A void return cannot be marked as #must");
+					return false;
+				}
+
 				bool argumentsInferred = true;
 
 				for (auto argument : function->arguments.declarations) {
@@ -3589,9 +3594,12 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 
 				if (call->function->flavor == ExprFlavor::FUNCTION) {
 					functionForArgumentNames = static_cast<ExprFunction *>(call->function);
-				}
-				else if (call->function->valueOfDeclaration && call->function->valueOfDeclaration->initialValue && call->function->valueOfDeclaration->initialValue->flavor == ExprFlavor::FUNCTION) {
-					functionForArgumentNames = static_cast<ExprFunction *>(call->function->valueOfDeclaration->initialValue);
+
+					if ((call->flags & EXPR_FUNCTION_CALL_IS_STATEMENT_LEVEL) && (functionForArgumentNames->flags & EXPR_FUNCTION_IS_MUST)) {
+						reportError(call, "Error: Cannot ignore the return value of the function call, it was marked as #must");
+						reportError(functionForArgumentNames, "   ..: Here is the function");
+						return false;
+					}
 				}
 
 				bool hasNamedArguments = false;
@@ -3613,7 +3621,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 				}
 
 				if (hasNamedArguments && !functionForArgumentNames) {
-					reportError(call, "Error: Cannot use named arguments with an unknown function"); // @Improvement better message
+					reportError(call, "Error: Cannot use named arguments with a non-constant function"); // @Improvement better message
 					return false;
 				}
 

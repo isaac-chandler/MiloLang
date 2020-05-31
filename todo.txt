@@ -52,6 +52,8 @@ string representation
    - can have separate display behaviour (when printing and debugging)
  - string literals implicitly convert to C-strings
    - is it worth having implict conversion to utf16 C-strings (windows wide strings) and utf32 C-strings
+   
+ - utf16 and utf32 string types?
  
 error if non-void functions don't have all control paths return
 
@@ -78,9 +80,6 @@ defer
 switch if
  - #complete
 
-remove hardcoded linker path
- - 
-
 runtime manipulation of type values
  - ==, !=
  - get runtime type info (shouldn't require a constant type)
@@ -95,8 +94,9 @@ debug info
  
 improve external function interface
  - don't hardcode lib files to link with
+ - separate function types for external functions (so our calling convention doesn't need to be C-compatible)
  
-change completed keyword
+change completed keyword (its ugly and completed is something you want to call an identifer)
  
 llvm
 
@@ -110,8 +110,7 @@ predefined constant variables
  - BUILD_WINDOWS, BUILD_LINUX, etc...
  
 #tag
- - Marks a struct member of type "type" as the tag for the struct, if the struct tag is compared to a type in an if statement, in the body of the if statement the struct will be implicitly casted to the tag
- - Alternatively mark the if statement as #tag instead of a struct member <-- Probably this
+ - Mark an if statement as #tag, if a struct member is compared to a type, the struct will imlicitly convert to that type in the if body
  - Make it work using box type?
  - Work with switch if
  

@@ -1,0 +1,39 @@
+
+// Slow square root implementation
+sqrt :: (val: f32) -> f32 {
+	if val <= 0
+		return 0
+
+	low: f32 = --
+	high: f32 = --
+	
+	if val < 1 {
+		low = val
+		high = 1
+	} else {
+		low = 1
+		high = val
+	}
+	
+	for 23 { // I think 23 is the number of iterations to get perfect precision for f32 @Audit
+		mid := (low + high) * 0.5
+		
+		if mid * mid >= val {
+			high = mid
+		} else {
+			low = mid
+		}
+	}
+	
+	return low
+}
+
+// very approximate square root - 2 significant figures at best, not thoroughly tested, use at your own risk
+approximate_sqrt :: (val: f32) -> f32 {
+	i := <<cast(*u32) *val
+	
+	
+	i = (i >> 1) +  0x1fbd1df5
+	
+	return <<cast(*f32) *i
+}

@@ -3,6 +3,7 @@
 #load "standard.milo"
 #load "random/random.milo"
 #load "bitmap.milo"
+#load "math.milo"
 
 should_quit: bool
 
@@ -100,11 +101,12 @@ Entity :: struct {
 
 Enemy :: struct {
 	entity: u64
-	fire_cooldown: f32
+	cooldown: f32
 	
 	State :: enum u8 {
 		LEFT
 		RIGHT
+		DEAD
 	}
 	
 	state: State = State.LEFT
@@ -119,12 +121,20 @@ Particle :: struct {
 }
 
 Particle_System :: struct {
+
 	relative: u64
 	x: f32
 	y: f32
 	texture_handle: u32
 	active: bool
 	occupied: bool
+	
+	Mode :: enum u8 {
+		NORMAL 
+		EXPLOSION
+	}
+	
+	mode := Mode.NORMAL
 	
 	spawn_progress: f32
 	spawn_rate: f32	
@@ -151,6 +161,41 @@ create_particle :: (using particle_system: *Particle_System) {
 	
 	particle.location_step.x = spawn_mean_velocity.x + random_bilateral(*rng) * spawn_velocity_range.x
 	particle.location_step.y = spawn_mean_velocity.y + random_bilateral(*rng) * spawn_velocity_range.y
+
+	
+	particle.current_color = spawn_color
+	
+	particle.lifetime = spawn_lifetime
+	
+	array_add_generic(cast() *particles, *particle, size_of(Particle))
+}
+
+create_explosion_particle :: (using particle_system: *Particle_System) {
+	particle: Particle
+	
+	xDir := approximate_sqrt(random_f32(*rng)) * 1.2 - 0.1 // Cheese to deal with the circle approximation
+	
+	if random_u32(*rng) & 1 {
+		xDir = -xDir
+	}
+	
+	yDir := approximate_sqrt(1 - xDir * xDir) * 1.2 - 0.1 // Cheese to deal with the circle approximation
+	
+	if random_u32(*rng) & 1 {
+		yDir = -yDir
+	}
+	
+	spawn_distance := random_f32(*rng) * spawn_radius
+	
+	particle.x = x + spawn_distance * xDir
+	particle.y = y + spawn_distance * yDir
+	particle.width = spawn_size
+	particle.height = spawn_size
+	
+	spawn_velocity := spawn_mean_velocity.x + random_bilateral(*rng) * spawn_velocity_range.x
+	
+	particle.location_step.x = spawn_velocity * xDir
+	particle.location_step.y = spawn_velocity * yDir
 
 	
 	particle.current_color = spawn_color
@@ -188,12 +233,17 @@ update_particle_system :: (using particle_system: *Particle_System, delta: f32) 
 	if particle_system.active {
 		particle_system.spawn_progress += delta * particle_system.spawn_rate
 		
-		while particle_system.spawn_progress > 1 {
-			particle_system.spawn_progress -= 1
-			create_particle(particle_system)
+		if particle_system.mode == Particle_System.Mode.NORMAL {
+			while particle_system.spawn_progress > 1 {
+				particle_system.spawn_progress -= 1
+				create_particle(particle_system)
+			}
+		} else {
+			while particle_system.spawn_progress > 1 {
+				particle_system.spawn_progress -= 1
+				create_explosion_particle(particle_system)
+			}
 		}
-	} else {
-		
 	}
 }
 
@@ -337,6 +387,12 @@ Bullet :: struct {
 	enemy: bool
 }
 
+Explosion :: struct {
+	particle_system: u64
+	emission_time: f32 = 0.1
+	lifetime: f32 = 0.4
+}
+
 create_bullet :: (x: f32, y: f32, vy: f32, color: Vector4, enemy: bool) {
 	bullet: Bullet = --
 
@@ -395,7 +451,7 @@ create_enemy :: (texture_handle: u32) {
 
 
 	enemy: Enemy
-	enemy.fire_cooldown = ENEMY_FIRE_SPEED * random_f32(*rng)
+	enemy.cooldown = ENEMY_FIRE_SPEED * random_f32(*rng)
 	enemy.state = cast() (random_u32(*rng) & 1)
 	
 	enemy.entity = add_entity(*entity)
@@ -403,13 +459,38 @@ create_enemy :: (texture_handle: u32) {
 	array_add_generic(cast() *enemies, *enemy, size_of(Enemy))
 }
 
+create_explosion :: (x: f32, y: f32) {
+	explosion: Explosion
+	
+	particles: Particle_System
+	
+	particles.x = x
+	particles.y = y
+	
+	particles.texture_handle = 0
+	particles.spawn_rate = 30000
+	particles.spawn_lifetime = 0.3
+	particles.spawn_color = make_vector4(0.9, 0.5, 0.07, 1)
+	particles.spawn_radius = 30
+	particles.spawn_size = 4
+	particles.spawn_mean_velocity = make_vector2(300, 0)
+	particles.spawn_velocity_range = make_vector2(30, 0)
+	particles.active = true
+	particles.mode = Particle_System.Mode.EXPLOSION
+		
+	explosion.particle_system = add_particle_system(*particles)
+	
+	array_add_generic(cast() *explosions, *explosion, size_of(Explosion))
+}
+
 
 entities: [..]Entity
 particle_systems: [..]Particle_System
 bullets: [..]Bullet
 enemies: [..]Enemy
+explosions: [..]Explosion
 
-FIRE_COOLDOWN :: 0.3
+FIRE_COOLDOWN :: 0.6
 
 time_to_fire: f32 = 0
 
@@ -420,8 +501,14 @@ intersect :: (a: Rectangle, b: Rectangle) -> bool {
 			 a.y - a.height * 0.5 > b.y + b.height * 0.5)
 }
 
+gl_context: HGLRC
+
 _main :: () {
-	rng = create_random(1, 1)
+	rand_seed: s64
+	
+	QueryPerformanceCounter(*rand_seed)
+
+	rng = create_random(cast(u64) rand_seed, GetTickCount())
 	
 	null_entity: Entity
 	
@@ -456,6 +543,9 @@ _main :: () {
 		VK_SHIFT :: 0x10
 	
 		if uMsg == WM_CLOSE {
+			glFinish()
+			wglDeleteContext(gl_context)
+
 			DestroyWindow(hwnd)
 		} else if uMsg == WM_DESTROY {
 			PostQuitMessage(0)
@@ -511,7 +601,7 @@ _main :: () {
 	if RegisterClassW(*window_class) == 0 {
 		print_string("Failed to register window class\n")
 		print_string(u64_to_string(GetLastError()))
-		return;
+		return
 	}
 	
 	
@@ -532,7 +622,7 @@ _main :: () {
 	if window_handle == null {
 		print_string("Failed to open window\n")
 		print_string(u64_to_string(GetLastError()))
-		return;
+		return
 	}
 	
 	device_context := GetDC(window_handle)
@@ -547,22 +637,22 @@ _main :: () {
 	
 	if found_format == 0 {
 		print_string("Could not find a pixel format\n")
-		return;
+		return
 	}
 	
 	used_format: PIXELFORMATDESCRIPTOR
 	
 	if !SetPixelFormat(device_context, found_format, *used_format) {
 		print_string("Failed to set pixel format")
-		return;
+		return
 	}
 	
 	
-	gl_context := wglCreateContext(device_context)
+	gl_context = wglCreateContext(device_context)
 	
 	if !gl_context {
 		print_string("Failed to create gl context")
-		return;
+		return
 	}
 	
 	wglMakeCurrent(device_context, gl_context)
@@ -630,7 +720,7 @@ _main :: () {
 	
 	hex_texture := load_image("Invaders/Hex.bmp")
 	
-	for 5 create_enemy(hex_texture)
+	for 10 create_enemy(hex_texture)
 	
 	glEnable(GL_BLEND)
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
@@ -722,10 +812,20 @@ _main :: () {
 		for * enemy : enemies {
 			entity := *entities[enemy.entity]
 			
+			enemy.cooldown -= delta
+			
 			if enemy.state == Enemy.State.LEFT {
 				entity.x -= ENEMY_SPEED * delta
 			} else if enemy.state == Enemy.State.RIGHT {
 				entity.x += ENEMY_SPEED * delta
+			} else if enemy.state == Enemy.State.DEAD {
+				if enemy.cooldown < 0 {
+					remove_entity(enemy.entity)
+				
+					remove
+				}
+				
+				continue
 			}
 			
 			if entity.x < entity.width * 0.5 {
@@ -736,10 +836,9 @@ _main :: () {
 				enemy.state = Enemy.State.LEFT
 			}
 			
-			enemy.fire_cooldown -= delta
 			
-			if enemy.fire_cooldown < 0 {
-				enemy.fire_cooldown += ENEMY_FIRE_SPEED
+			if enemy.cooldown < 0 {
+				enemy.cooldown += ENEMY_FIRE_SPEED
 				
 				create_bullet(entity.x, entity.y - entity.height * 0.5, -ENEMY_BULLET_SPEED, make_vector4(0.45, 0.15, 0.15, 1), enemy = true)
 			}
@@ -761,9 +860,7 @@ _main :: () {
 			}
 		}
 		
-		for * enemy : enemies {
-			hit := false
-		
+		for * enemy : enemies {		
 			for * bullet : bullets {
 				if !bullet.enemy {
 					if (intersect(entities[enemy.entity], entities[bullet.entity])) {
@@ -773,14 +870,14 @@ _main :: () {
 					
 						remove;
 						
-						hit = true
+						if enemy.state != Enemy.State.DEAD {
+							enemy.state = Enemy.State.DEAD
+							enemy.cooldown = 0.05
+							
+							create_explosion(entities[enemy.entity].x, entities[enemy.entity].y)
+						}
 					}
 				}
-			}
-			
-			if hit {
-				remove_entity(enemy.entity)
-				remove
 			}
 		}
 		
@@ -792,6 +889,8 @@ _main :: () {
 						remove_entity(bullet.entity)
 					
 						remove;
+						
+						create_explosion(player.x, player.y)
 						
 						dummy: Entity
 						dummy.x = player.x
@@ -810,6 +909,19 @@ _main :: () {
 						break
 					}
 				}
+			}
+		}
+		
+		for * explosion : explosions {
+			explosion.emission_time -= delta
+			explosion.lifetime -= delta
+			
+			particle_systems[explosion.particle_system].active = explosion.emission_time > 0
+			
+			if explosion.lifetime <= 0 {
+				remove_particle_system(explosion.particle_system)
+			
+				remove
 			}
 		}
 		
@@ -854,6 +966,11 @@ _main :: () {
 			}
 		}
 		
+		if (cast() (delta * 1000_000) > 20_000) {
+			print_u64(cast() (delta * 1000_000))
+			print_string("\n")
+		}
+		
 		// print_u64(cast() (delta * 1000_000))
 		// print_string("\n")
 		
@@ -861,12 +978,7 @@ _main :: () {
 		
 		last_time = current_time
 	}
-	
-	glFinish()
-	
-	wglMakeCurrent(null, null)
-	
-	wglDeleteContext(gl_context)
+
 	ReleaseDC(window_handle, device_context)
 	
 	ExitProcess(0)

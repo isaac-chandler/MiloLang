@@ -186,6 +186,8 @@ struct Expr {
 // allowed as constants since we don't evaluate comparisons
 #define EXPR_WAS_EVALUATED_BINARY 0x100
 #define EXPR_VALUE_NOT_REQUIRED 0x200
+#define EXPR_FUNCTION_IS_MUST 0x400
+#define EXPR_FUNCTION_CALL_IS_STATEMENT_LEVEL 0x800
 
 
 struct ExprLiteral : Expr {
