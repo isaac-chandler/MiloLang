@@ -35,11 +35,11 @@ ABI/calling convention
  - varargs (represent with arrays?)
  - arguments by value are immutable?
  
-#must
 
 multiple return values
  - Named return values
  - Return values are declarations
+ - Make #must work with multiple returns
  - ABI
    - 
  
