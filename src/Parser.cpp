@@ -155,14 +155,14 @@ Declaration *makeIterator(CodeLocation &start, EndLocation &end, String name) {
 	return declaration;
 }
 
-Declaration *createDeclarationForUsing(Declaration *oldDeclaration) {
+Declaration *createDeclarationForUsing(Declaration *oldDeclaration, Block *block) {
 	auto using_ = PARSER_NEW(ExprIdentifier);
 	using_->flavor = ExprFlavor::IDENTIFIER;
 	using_->start = oldDeclaration->start;
 	using_->end = oldDeclaration->end;
-	using_->resolveFrom = currentBlock;
-	using_->enclosingScope = currentBlock;
-	using_->indexInBlock = currentBlock->declarations.count;
+	using_->resolveFrom = block;
+	using_->enclosingScope = block;
+	using_->indexInBlock = block->declarations.count;
 	using_->name = oldDeclaration->name;
 	using_->declaration = oldDeclaration;
 	using_->structAccess = nullptr;
@@ -443,9 +443,9 @@ Expr *parseStatement(LexerFile *lexer) {
 	}
 	else if (lexer->token.type == TokenT::CONTINUE || lexer->token.type == TokenT::BREAK || lexer->token.type == TokenT::REMOVE) {
 		ExprBreakOrContinue *continue_ = PARSER_NEW(ExprBreakOrContinue);
-		continue_->flavor = 
-			lexer->token.type == TokenT::CONTINUE ? ExprFlavor::CONTINUE : 
-			(lexer->token.type == TokenT::REMOVE  ? ExprFlavor::REMOVE : ExprFlavor::BREAK);
+		continue_->flavor =
+			lexer->token.type == TokenT::CONTINUE ? ExprFlavor::CONTINUE :
+			(lexer->token.type == TokenT::REMOVE ? ExprFlavor::REMOVE : ExprFlavor::BREAK);
 
 
 		continue_->start = lexer->token.start;
@@ -559,7 +559,7 @@ Expr *parseStatement(LexerFile *lexer) {
 				auto binary = static_cast<ExprBinaryOperator *>(expr);
 
 				if (expr->flavor == ExprFlavor::UNARY_OPERATOR && unary->op == TOKEN('+') &&
-					unary->value->flavor == ExprFlavor::UNARY_OPERATOR && static_cast<ExprUnaryOperator *>(unary->value)->op == TOKEN('+') && 
+					unary->value->flavor == ExprFlavor::UNARY_OPERATOR && static_cast<ExprUnaryOperator *>(unary->value)->op == TOKEN('+') &&
 					unary->start.locationInMemory + 1 == unary->value->start.locationInMemory) {
 
 					reportError(expr, "Error: '++' is not supported");
@@ -570,7 +570,7 @@ Expr *parseStatement(LexerFile *lexer) {
 
 					reportError(expr, "Error: '++' is not supported");
 				}
-				else if(lexer->token.type == TokenT::DOUBLE_DASH) {
+				else if (lexer->token.type == TokenT::DOUBLE_DASH) {
 					reportError(&lexer->token, "Error: '--' is not supported as an operator");
 				}
 				else {
@@ -624,7 +624,7 @@ ExprBlock *parseBlock(LexerFile *lexer, ExprBlock *block) {
 				}
 
 				assert(declaration->flags & DECLARATION_MARKED_AS_USING);
-				addDeclarationToCurrentBlock(createDeclarationForUsing(declaration));
+				addDeclarationToCurrentBlock(createDeclarationForUsing(declaration, currentBlock));
 
 				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_UNINITIALIZED))) { // If this declaration is constant or uninitialized don't add an initialization expression
 					ExprBinaryOperator *assign = PARSER_NEW(ExprBinaryOperator);
@@ -646,7 +646,7 @@ ExprBlock *parseBlock(LexerFile *lexer, ExprBlock *block) {
 				lexer->advance();
 
 				auto using_ = parseExpr(lexer);
-				
+
 				if (!using_)
 					return nullptr;
 
@@ -655,7 +655,7 @@ ExprBlock *parseBlock(LexerFile *lexer, ExprBlock *block) {
 
 				declaration->start = start;
 				declaration->end = using_->end;
-				declaration->name = {nullptr, 0ULL};
+				declaration->name = { nullptr, 0ULL };
 				declaration->type = nullptr;
 				declaration->initialValue = using_;
 				declaration->physicalStorage = 0;
@@ -734,366 +734,187 @@ ExprStringLiteral *makeStringLiteral(CodeLocation &start, EndLocation &end, Stri
 	return literal;
 }
 
+bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *usingBlock) {
+	bool must = false;
+	bool hadReturnType = false;
 
-Expr *parsePrimaryExpr(LexerFile *lexer) {
-	CodeLocation start = lexer->token.start;
+	if (expectAndConsume(lexer, TokenT::ARROW)) {
+		hadReturnType = true;
+		must = expectAndConsume(lexer, TokenT::MUST);
+
+		function->returnType = parseExpr(lexer);
+	}
+	else {
+		function->returnType = parserMakeTypeLiteral(lexer->token.start, lexer->token.end, &TYPE_VOID);
+	}
+
+
+	if (lexer->token.type == TOKEN('{')) {
+		function->flavor = ExprFlavor::FUNCTION;
+		function->end = lexer->previousTokenEnd;
+		pushBlock(&function->arguments);
+
+		function->body = parseBlock(lexer, usingBlock);
+		if (!function->body) {
+			return false;
+		}
+
+		popBlock(&function->arguments);
+
+		_ReadWriteBarrier();
+		inferQueue.add(makeDeclarationPack(function));
+	}
+	else if (lexer->token.type == TokenT::EXTERNAL) {
+		lexer->advance();
+
+		function->flavor = ExprFlavor::FUNCTION;
+		function->end = lexer->previousTokenEnd;
+
+		if (usingBlock) {
+			reportError(function, "Error: External functions cannot 'using' their parameters");
+			return false;
+		}
+
+
+		function->body = nullptr;
+		function->flags |= EXPR_FUNCTION_IS_EXTERNAL;
+
+		pushBlock(&function->arguments); // @Cleanup: These functions deal with properly setting up the blocks parent and queueing the block for infer even if we don't need to 
+		popBlock(&function->arguments);
+
+		_ReadWriteBarrier();
+		inferQueue.add(makeDeclarationPack(function));
+	}
+	else { // This is a function type
+		function->end = lexer->previousTokenEnd;
+
+		if (!hadReturnType) {
+			reportError(function, "Error: A function prototype must have a return type");
+			return false;
+		}
+
+		function->flavor = ExprFlavor::FUNCTION_PROTOTYPE;
+		function->type = &TYPE_TYPE;
+
+		pushBlock(&function->arguments);
+		popBlock(&function->arguments);
+
+		if (must) {
+			reportError(function, "Error: A function prototype cannot have its return type marked as #must");
+			return false;
+		}
+
+
+		if (usingBlock) {
+			reportError(function, "Error: Function prototypes cannot 'using' their parameters");
+			return false;
+		}
+
+		for (u64 i = 0; i < function->arguments.declarations.count; i++) {
+			auto declaration = function->arguments.declarations[i];
+
+			if (declaration->initialValue) {
+				reportError(declaration, "Error: A function prototype cannot have a default value");
+				return false;
+			}
+
+			assert(declaration->type);
+		}
+	}
+
+	return true;
+}
+
+Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 	EndLocation end = lexer->token.end;
-
 	Expr *expr = nullptr;
 
-	if (expectAndConsume(lexer, '(')) {
-		end = lexer->token.end;
+	TokenT peek;
 
+	lexer->peekTokenTypes(1, &peek);
 
-		if (expectAndConsume(lexer, ')')) { // This is a function with no arguments
-			if (lexer->token.type == TOKEN('{')) { // It also returns void
-				ExprFunction *function = PARSER_NEW(ExprFunction);
-				function->flavor = ExprFlavor::FUNCTION;
-				function->start = start;
-				function->end = lexer->previousTokenEnd;
-				function->arguments.flags |= BLOCK_IS_ARGUMENTS;
-				function->returnType = parserMakeTypeLiteral(function->start, function->end, &TYPE_VOID);
-				pushBlock(&function->arguments);
+	if (expectAndConsume(lexer, ')')) { // This is a function with no arguments
+		ExprFunction *function = PARSER_NEW(ExprFunction);
+		function->start = start;
+		function->arguments.flags |= BLOCK_IS_ARGUMENTS;
 
-				function->body = parseBlock(lexer);
-				if (!function->body) {
-					return nullptr;
+		if (!parseFunctionPostfix(lexer, function, nullptr))
+			return false;
+
+		expr = function;
+	}
+	else if ((lexer->token.type == TokenT::IDENTIFIER && peek == TOKEN(':')) || lexer->token.type == TokenT::USING) { // This is an argument declaration
+		ExprFunction *function = PARSER_NEW(ExprFunction);
+		function->flavor = ExprFlavor::FUNCTION;
+		function->start = start;
+		function->arguments.flags |= BLOCK_IS_ARGUMENTS;
+
+		ExprBlock *usingBlock = nullptr;
+
+		do {
+			Declaration *declaration = parseDeclaration(lexer);
+			if (!declaration) {
+				return nullptr;
+			}
+
+			declaration->flags |= DECLARATION_IS_ARGUMENT;
+
+			if (declaration->flags & DECLARATION_IS_CONSTANT) {
+				reportError(declaration, "Error: Cannot have a constant default argument");
+				return nullptr;
+			}
+
+			if (declaration->flags & DECLARATION_IS_UNINITIALIZED) {
+				reportError(declaration, "Error: Cannot have an uninitialized default argument");
+				return nullptr;
+			}
+
+			if (!addDeclarationToBlock(&function->arguments, declaration)) {
+				return nullptr;
+			}
+
+			if (declaration->flags & DECLARATION_MARKED_AS_USING) {
+				if (!usingBlock) {
+					usingBlock = PARSER_NEW(ExprBlock);
 				}
 
-				popBlock(&function->arguments);
-
-				_ReadWriteBarrier();
-				inferQueue.add(makeDeclarationPack(function));
-
-				expr = function;
+				addDeclarationToBlock(&usingBlock->declarations, createDeclarationForUsing(declaration, &function->arguments));
 			}
-			else if (lexer->token.type == TokenT::EXTERNAL) {
-				lexer->advance();
+		} while (expectAndConsume(lexer, ','));
 
-				ExprFunction *function = PARSER_NEW(ExprFunction);
-				function->flavor = ExprFlavor::FUNCTION;
-				function->start = start;
-				function->end = lexer->previousTokenEnd;
-				function->arguments.flags |= BLOCK_IS_ARGUMENTS;
-				function->returnType = parserMakeTypeLiteral(function->start, function->end, &TYPE_VOID);
+		if (!expectAndConsume(lexer, ')')) {
+			reportExpectedError(&lexer->token, "Error: Expected a ')' after function arguments");
+			return nullptr;
+		}
 
+		if (!parseFunctionPostfix(lexer, function, usingBlock))
+			return nullptr;
 
-				function->body = nullptr;
-				function->flags |= EXPR_FUNCTION_IS_EXTERNAL;
+		expr = function;
+	}
+	else {
+	notDeclaration:
+		// This is one or more expressions in parentheses
 
-				pushBlock(&function->arguments); // @Cleanup: These functions deal with properly setting up the blocks parent and queueing the block for infer even if we don't need to 
-				popBlock(&function->arguments);
+		expr = parseExpr(lexer);
+		if (!expr) {
+			return nullptr;
+		}
 
-				_ReadWriteBarrier();
-				inferQueue.add(makeDeclarationPack(function));
-
-				expr = function;
-			}
-			else if (expectAndConsume(lexer, TokenT::ARROW)) {
-				bool must = expectAndConsume(lexer, TokenT::MUST);
-
+		if (expectAndConsume(lexer, ')')) { // It was a single expression in parentheses
+			if (expectAndConsume(lexer, TokenT::ARROW)) { // This is a function type since it has a return value
 				Expr *returnType = parseExpr(lexer);
-
-				if (lexer->token.type == TOKEN('{')) { // This is a function value
-					ExprFunction *function = PARSER_NEW(ExprFunction);
-					function->flavor = ExprFlavor::FUNCTION;
-					function->start = start;
-					function->end = lexer->previousTokenEnd;
-					function->returnType = returnType;
-					function->arguments.flags |= BLOCK_IS_ARGUMENTS;
-					pushBlock(&function->arguments);
-
-					if (must)
-						function->flags |= EXPR_FUNCTION_IS_MUST;
-
-					function->body = parseBlock(lexer);
-
-					if (!function->body) {
-						return nullptr;
-					}
-
-					popBlock(&function->arguments);
-
-					_ReadWriteBarrier();
-					inferQueue.add(makeDeclarationPack(function));
-
-					expr = function;
-				}
-				else if (lexer->token.type == TokenT::EXTERNAL) { // This is a function value
-					lexer->advance();
-
-					ExprFunction *function = PARSER_NEW(ExprFunction);
-					function->flavor = ExprFlavor::FUNCTION;
-					function->start = start;
-					function->end = lexer->previousTokenEnd;
-					function->returnType = returnType;
-					function->arguments.flags |= BLOCK_IS_ARGUMENTS;
-
-					function->body = nullptr;
-					function->flags |= EXPR_FUNCTION_IS_EXTERNAL;
-
-					if (must)
-						function->flags |= EXPR_FUNCTION_IS_MUST;
-
-					pushBlock(&function->arguments);
-					popBlock(&function->arguments);
-
-					_ReadWriteBarrier();
-					inferQueue.add(makeDeclarationPack(function));
-
-					expr = function;
-				}
-				else { // This is a function type
-
-					ExprFunction *type = PARSER_NEW(ExprFunction);
-					type->flavor = ExprFlavor::FUNCTION_PROTOTYPE;
-					type->start = start;
-					type->end = lexer->previousTokenEnd;
-					type->returnType = returnType;
-					type->type = &TYPE_TYPE;
-
-					pushBlock(&type->arguments);
-					popBlock(&type->arguments);
-
-					if (must) {
-						reportError(type, "Error: A function prototype cannot have its return type marked as #must");
-						return nullptr;
-					}
-
-					expr = type;
-				}
-			}
-			else {
-				reportExpectedError(&lexer->token, "Error: Expected a return type after function arguments");
-				return nullptr;
-			}
-		}
-		else if (lexer->token.type == TokenT::IDENTIFIER || lexer->token.type == TokenT::USING) { // There is an identifier after the function name, this could be an expression or argument delcaration
-			TokenT peek;
-
-			lexer->peekTokenTypes(1, &peek);
-
-			if (peek == TOKEN(':') || lexer->token.type == TokenT::USING) { // This is an argument declaration
-				ExprFunction *function = PARSER_NEW(ExprFunction);
-				function->flavor = ExprFlavor::FUNCTION;
-				function->start = start;
-				function->arguments.flags |= BLOCK_IS_ARGUMENTS;
-
-				pushBlock(&function->arguments);
-
-				ExprBlock *usingBlock = nullptr;
-
-				do {
-					Declaration *declaration = parseDeclaration(lexer);
-					if (!declaration) {
-						return nullptr;
-					}
-
-					declaration->flags |= DECLARATION_IS_ARGUMENT;
-
-					if (declaration->flags & DECLARATION_IS_CONSTANT) {
-						reportError(declaration, "Error: Cannot have a constant default argument");
-						return nullptr;
-					}
-
-					if (declaration->flags & DECLARATION_IS_UNINITIALIZED) {
-						reportError(declaration, "Error: Cannot have an uninitialized default argument");
-						return nullptr;
-					}
-
-					if (!addDeclarationToBlock(&function->arguments, declaration)) {
-						return nullptr;
-					}
-
-					if (declaration->flags & DECLARATION_MARKED_AS_USING) {
-						if (!usingBlock) {
-							usingBlock = PARSER_NEW(ExprBlock);
-						}
-
-						addDeclarationToBlock(&usingBlock->declarations, createDeclarationForUsing(declaration));
-					}
-				} while (expectAndConsume(lexer, ','));
-
-				if (!expectAndConsume(lexer, ')')) {
-					reportExpectedError(&lexer->token, "Error: Expected a ')' after function arguments");
+				end = lexer->previousTokenEnd;
+				if (!returnType) {
 					return nullptr;
 				}
 
-				if (lexer->token.type == TOKEN('{')) {
-					function->end = lexer->previousTokenEnd;
-					function->returnType = parserMakeTypeLiteral(function->start, function->end, &TYPE_VOID);
-
-					function->body = parseBlock(lexer, usingBlock);
-					if (!function->body) {
-						return nullptr;
-					}
-
-					popBlock(&function->arguments);
-
-					_ReadWriteBarrier();
-					inferQueue.add(makeDeclarationPack(function));
-
-					expr = function;
-				}
-				else if (lexer->token.type == TokenT::EXTERNAL) {
-					lexer->advance();
-
-					function->end = lexer->previousTokenEnd;
-					function->returnType = parserMakeTypeLiteral(function->start, function->end, &TYPE_VOID);
-
-					if (usingBlock) {
-						reportError(function, "Error: External functions cannot 'using' their parameters");
-						return nullptr;
-					}
-
-					function->body = nullptr;
-					function->flags |= EXPR_FUNCTION_IS_EXTERNAL;
-
-					popBlock(&function->arguments);
-
-
-					_ReadWriteBarrier();
-					inferQueue.add(makeDeclarationPack(function));
-
-					expr = function;
-				}
-				else if (expectAndConsume(lexer, TokenT::ARROW)) {
-					bool must = expectAndConsume(lexer, TokenT::MUST);
-
-					if (must)
-						function->flags |= EXPR_FUNCTION_IS_MUST;
-
-					Expr *returnType = parseExpr(lexer);
-					if (!returnType) {
-						return nullptr;
-					}
-
-					if (lexer->token.type == TOKEN('{')) {
-						function->end = lexer->previousTokenEnd;
-						function->returnType = returnType;
-
-						function->body = parseBlock(lexer, usingBlock);
-						if (!function->body) {
-							return nullptr;
-						}
-
-						popBlock(&function->arguments);
-
-						_ReadWriteBarrier();
-						inferQueue.add(makeDeclarationPack(function));
-
-						expr = function;
-					}
-					else if (lexer->token.type == TokenT::EXTERNAL) {
-						lexer->advance();
-
-						function->end = lexer->previousTokenEnd;
-						function->returnType = returnType;
-
-						if (usingBlock) {
-							reportError(function, "Error: External functions cannot 'using' their parameters");
-							return nullptr;
-						}
-
-						function->body = nullptr;
-						function->flags |= EXPR_FUNCTION_IS_EXTERNAL;
-
-						popBlock(&function->arguments);
-
-
-						_ReadWriteBarrier();
-						inferQueue.add(makeDeclarationPack(function));
-
-						expr = function;
-					}
-					else {
-						popBlock(&function->arguments);
-
-						function->flavor = ExprFlavor::FUNCTION_PROTOTYPE;
-						function->end = lexer->previousTokenEnd;
-						function->returnType = returnType;
-						function->type = &TYPE_TYPE;
-
-						if (must) {
-							reportError(function, "Error: A function prototype cannot have its return type marked as #must");
-							return nullptr;
-						}
-
-
-						if (usingBlock) {
-							reportError(function, "Error: Function prototypes cannot 'using' their parameters");
-							return nullptr;
-						}
-
-						for (u64 i = 0; i < function->arguments.declarations.count; i++) {
-							auto declaration = function->arguments.declarations[i];
-
-							if (declaration->initialValue) {
-								reportError(declaration, "Error: A function prototype cannot have a default value");
-								return nullptr;
-							}
-
-							assert(declaration->type);
-						}
-
-						expr = function;
-					}
-				}
-				else {
-					reportExpectedError(&lexer->token, "Error: Expected a function body or return type");
-					return nullptr;
-				}
-			}
-			else {
-				goto notDeclaration;
-			}
-		}
-		else {
-		notDeclaration:
-			// This is one or more expressions in parentheses
-
-			expr = parseExpr(lexer);
-			if (!expr) {
-				return nullptr;
-			}
-
-			if (expectAndConsume(lexer, ')')) { // It was a single expression in parentheses
-				if (expectAndConsume(lexer, TokenT::ARROW)) { // This is a function type since it has a return value
-					Expr *returnType = parseExpr(lexer);
-					end = lexer->previousTokenEnd;
-					if (!returnType) {
-						return nullptr;
-					}
-
-					auto type = PARSER_NEW(ExprFunction);
-					type->flavor = ExprFlavor::FUNCTION_PROTOTYPE;
-					type->returnType = returnType;
-					type->start = start;
-					type->end = end;
-					type->type = &TYPE_TYPE;
-
-					pushBlock(&type->arguments);
-
-					auto argument = PARSER_NEW(Declaration);
-					argument->type = expr;
-					argument->start = expr->start;
-					argument->end = expr->end;
-					argument->name = String(nullptr, 0ULL);
-					argument->initialValue = nullptr;
-					argument->flags |= DECLARATION_IS_ARGUMENT;
-
-					addDeclarationToBlock(&type->arguments, argument);
-
-					popBlock(&type->arguments);
-
-					expr = type;
-				}
-				else {
-					// We have put the bracketed expression in expr so we are done
-				}
-			}
-			else if (expectAndConsume(lexer, ',')) { // This is a function type since there are multiple comma separated values in parentheses
-				auto *type = PARSER_NEW(ExprFunction);
+				auto type = PARSER_NEW(ExprFunction);
+				type->flavor = ExprFlavor::FUNCTION_PROTOTYPE;
+				type->returnType = returnType;
+				type->start = start;
+				type->end = end;
+				type->type = &TYPE_TYPE;
 
 				pushBlock(&type->arguments);
 
@@ -1107,54 +928,91 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 				addDeclarationToBlock(&type->arguments, argument);
 
-
-
-				do {
-					Expr *arg = parseExpr(lexer);
-					if (!arg)
-						return nullptr;
-
-					argument = PARSER_NEW(Declaration);
-					argument->type = arg;
-					argument->start = arg->start;
-					argument->end = arg->end;
-					argument->name = String(nullptr, 0ULL);
-					argument->initialValue = nullptr;
-					argument->flags |= DECLARATION_IS_ARGUMENT;
-
-					addDeclarationToBlock(&type->arguments, argument);
-				} while (expectAndConsume(lexer, ','));
-
-				popBlockWithoutQueueing(&type->arguments);
-
-				if (!expectAndConsume(lexer, ')')) {
-					reportExpectedError(&lexer->token, "Error: Expected a ')' after function arguments");
-					return nullptr;
-				}
-
-				if (!expectAndConsume(lexer, TokenT::ARROW)) { // Even though this is unambiguously a function type, still require a return type to be given for consistency
-					reportExpectedError(&lexer->token, "Error: Expected a return type after function arguments");
-					return nullptr;
-				}
-
-				Expr *returnType = parseExpr(lexer);
-				if (!returnType)
-					return nullptr;
-
-				type->flavor = ExprFlavor::FUNCTION_PROTOTYPE;
-				type->returnType = returnType;
-				type->start = start;
-				type->end = lexer->previousTokenEnd;
-				type->type = &TYPE_TYPE;
+				popBlock(&type->arguments);
 
 				expr = type;
 			}
 			else {
-				reportExpectedError(&lexer->token, "Error: Expected a ')'");
-				return nullptr;
+				// We have put the bracketed expression in expr so we are done
 			}
 		}
+		else if (expectAndConsume(lexer, ',')) { // This is a function type since there are multiple comma separated values in parentheses
+			auto *type = PARSER_NEW(ExprFunction);
 
+			pushBlock(&type->arguments);
+
+			auto argument = PARSER_NEW(Declaration);
+			argument->type = expr;
+			argument->start = expr->start;
+			argument->end = expr->end;
+			argument->name = String(nullptr, 0ULL);
+			argument->initialValue = nullptr;
+			argument->flags |= DECLARATION_IS_ARGUMENT;
+
+			addDeclarationToBlock(&type->arguments, argument);
+
+
+			do {
+				Expr *arg = parseExpr(lexer);
+				if (!arg)
+					return nullptr;
+
+				argument = PARSER_NEW(Declaration);
+				argument->type = arg;
+				argument->start = arg->start;
+				argument->end = arg->end;
+				argument->name = String(nullptr, 0ULL);
+				argument->initialValue = nullptr;
+				argument->flags |= DECLARATION_IS_ARGUMENT;
+
+				addDeclarationToBlock(&type->arguments, argument);
+			} while (expectAndConsume(lexer, ','));
+
+			popBlockWithoutQueueing(&type->arguments);
+
+			if (!expectAndConsume(lexer, ')')) {
+				reportExpectedError(&lexer->token, "Error: Expected a ')' after function arguments");
+				return nullptr;
+			}
+
+			if (!expectAndConsume(lexer, TokenT::ARROW)) { // Even though this is unambiguously a function type, still require a return type to be given for consistency
+				reportExpectedError(&lexer->token, "Error: Expected a return type after function arguments");
+				return nullptr;
+			}
+
+			Expr *returnType = parseExpr(lexer);
+			if (!returnType)
+				return nullptr;
+
+			type->flavor = ExprFlavor::FUNCTION_PROTOTYPE;
+			type->returnType = returnType;
+			type->start = start;
+			type->end = lexer->previousTokenEnd;
+			type->type = &TYPE_TYPE;
+
+			expr = type;
+		}
+		else {
+			reportExpectedError(&lexer->token, "Error: Expected a ')'");
+			return nullptr;
+		}
+	}
+
+	return expr;
+}
+
+
+Expr *parsePrimaryExpr(LexerFile *lexer) {
+	CodeLocation start = lexer->token.start;
+	EndLocation end = lexer->token.end;
+
+	Expr *expr = nullptr;
+
+	if (expectAndConsume(lexer, '(')) {
+		expr = parseFunctionOrParentheses(lexer, start);
+
+		if (!expr)
+			return nullptr;
 	}
 	else if (lexer->token.type == TokenT::IDENTIFIER) {
 		ExprIdentifier *identifier = PARSER_NEW(ExprIdentifier);
@@ -1341,7 +1199,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 				}
 
 				if (declaration->flags & DECLARATION_MARKED_AS_USING) {
-					addDeclarationToCurrentBlock(createDeclarationForUsing(declaration));
+					addDeclarationToCurrentBlock(createDeclarationForUsing(declaration, currentBlock));
 				}
 			}
 			else if (expectAndConsume(lexer, ';')) {
@@ -1409,7 +1267,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		membersDeclaration->inferJob = nullptr;
 
 		addDeclarationToCurrentBlock(membersDeclaration);
-		addDeclarationToCurrentBlock(createDeclarationForUsing(membersDeclaration));
+		addDeclarationToCurrentBlock(createDeclarationForUsing(membersDeclaration, currentBlock));
 
 
 		auto integer = PARSER_NEW(Declaration);
@@ -2006,7 +1864,7 @@ void parseFile(FileInfo *file) {
 
 			assert(!(declaration->flags & DECLARATION_MARKED_AS_USING));
 
-			inferQueue.add(makeDeclarationPack(declaration));			
+			inferQueue.add(makeDeclarationPack(declaration));
 		}
 		else if (lexer.token.type == TokenT::USING) {
 			TokenT peek[2];
@@ -2023,10 +1881,10 @@ void parseFile(FileInfo *file) {
 				inferQueue.add(makeDeclarationPack(declaration));
 
 				assert(declaration->flags & DECLARATION_MARKED_AS_USING);
-				
-				inferQueue.add(makeDeclarationPack(createDeclarationForUsing(declaration)));
 
-				
+				inferQueue.add(makeDeclarationPack(createDeclarationForUsing(declaration, currentBlock)));
+
+
 			}
 			else {
 				auto start = lexer.token.start;
