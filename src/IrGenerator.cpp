@@ -417,19 +417,8 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 		case ExprFlavor::BINARY_OPERATOR: {
 
 			auto binary = static_cast<ExprBinaryOperator *>(expr);
-			if (dest == DEST_NONE) {
-				if (binaryOpHasSideEffects(binary->op)) {
-					// We have to do the op anyway
-				}
-				else {
-					if (binary->op != TokenT::CAST) {
-						generateIr(state, binary->left, dest);
-						generateIr(state, binary->right, dest);
-					}
 
-					return DEST_NONE;
-				}
-			}
+			assert(dest != DEST_NONE || binaryOpHasSideEffects(binary->op));
 
 			auto left = binary->left;
 			auto right = binary->right;
@@ -583,11 +572,11 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 					assert(false);
 				}
 				case TOKEN('['): {
-					dest = loadAddressForArrayDereference(state, binary, state->nextRegister++);
+					u64 address = loadAddressForArrayDereference(state, binary, dest);
 
 					Ir &read = state->ir.add();
 					read.op = IrOp::READ;
-					read.a = dest;
+					read.a = address;
 					read.dest = dest;
 					read.opSize = 8;
 					read.destSize = binary->type->size;
@@ -599,11 +588,9 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 					assert(left->type == right->type);
 
 					if (left->type->flavor == TypeFlavor::STRING) {
-						u64 leftReg = generateIr(state, left, dest);
+						u64 leftReg = generateIr(state, left, state->nextRegister++);
 
-						u64 temp = state->nextRegister++;
-
-						u64 rightReg = generateIr(state, right, temp);
+						u64 rightReg = generateIr(state, right, state->nextRegister++);
 
 						Ir &ir = state->ir.add();
 
@@ -614,11 +601,9 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 						ir.opSize = right->type->size;
 					}
 					else {
-						u64 leftReg = generateIr(state, left, dest);
+						u64 leftReg = generateIr(state, left, state->nextRegister++);
 
-						u64 temp = state->nextRegister++;
-
-						u64 rightReg = generateIr(state, right, temp);
+						u64 rightReg = generateIr(state, right, state->nextRegister++);
 
 						Ir &ir = state->ir.add();
 
@@ -643,11 +628,9 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				case TokenT::LESS_EQUAL:
 				case TOKEN('>'):
 				case TOKEN('<'): {
-					u64 leftReg = generateIr(state, left, dest);
+					u64 leftReg = generateIr(state, left, state->nextRegister++);
 
-					u64 temp = state->nextRegister++;
-
-					u64 rightReg = generateIr(state, right, temp);
+					u64 rightReg = generateIr(state, right, state->nextRegister++);
 
 					Ir &ir = state->ir.add();
 
@@ -672,7 +655,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 					if (left->type->flavor == TypeFlavor::POINTER) {
 						auto pointer = static_cast<TypePointer *>(left->type);
 
-						u64 leftReg = generateIr(state, left, dest);
+						u64 leftReg = generateIr(state, left, state->nextRegister++);
 
 						u64 temp = state->nextRegister++;
 
@@ -696,8 +679,6 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 							div.flags |= IR_SIGNED_OP;
 						}
 						else {
-							
-
 							if (right->type->size != 8) {
 								convertNumericType(state, (right->type->flags & TYPE_INTEGER_IS_SIGNED) ? &TYPE_S64 : &TYPE_U64, temp, right->type, rightReg);
 								rightReg = temp;
@@ -724,11 +705,9 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 						}
 					}
 					else {
-						u64 leftReg = generateIr(state, left, dest);
+						u64 leftReg = generateIr(state, left, state->nextRegister++);
 
-						u64 temp = state->nextRegister++;
-
-						u64 rightReg = generateIr(state, right, temp);
+						u64 rightReg = generateIr(state, right, state->nextRegister++);
 
 						Ir &ir = state->ir.add();
 
@@ -749,11 +728,9 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				case TOKEN('^'):
 				case TokenT::SHIFT_LEFT:
 				case TokenT::SHIFT_RIGHT: {
-					u64 leftReg = generateIr(state, left, dest);
+					u64 leftReg = generateIr(state, left, state->nextRegister++);
 
-					u64 temp = state->nextRegister++;
-
-					u64 rightReg = generateIr(state, right, temp);
+					u64 rightReg = generateIr(state, right, state->nextRegister++);
 
 					Ir &ir = state->ir.add();
 
@@ -774,11 +751,9 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				case TOKEN('*'):
 				case TOKEN('/'):
 				case TOKEN('%'): {
-					u64 leftReg = generateIr(state, left, dest);
+					u64 leftReg = generateIr(state, left, state->nextRegister++);
 
-					u64 temp = state->nextRegister++;
-
-					u64 rightReg = generateIr(state, right, temp);
+					u64 rightReg = generateIr(state, right, state->nextRegister++);
 
 					Ir &ir = state->ir.add();
 
@@ -904,21 +879,31 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				}
 				case TokenT::LOGIC_AND:
 				case TokenT::LOGIC_OR: {
-					if (dest == DEST_NONE) dest = state->nextRegister++;
+					assert(dest != DEST_NONE);
+					
+					u64 temp = state->nextRegister++;
 
-					generateIrForceDest(state, left, dest);
+
+					generateIrForceDest(state, left, temp);
 					
 					u64 patch = state->ir.count;
 
 					Ir &branch = state->ir.add();
 					branch.op = binary->op == TokenT::LOGIC_AND ? IrOp::IF_Z_GOTO : IrOp::IF_NZ_GOTO;
-					branch.a = dest;
+					branch.a = temp;
 					branch.opSize = 1;
 
 					addLineMarker(state, right);
-					generateIrForceDest(state, right, dest);
+					generateIrForceDest(state, right, temp);
 
 					state->ir[patch].b = state->ir.count;
+
+					Ir &set = state->ir.add();
+					set.op = IrOp::SET;
+					set.dest = dest;
+					set.a = temp;
+					set.destSize = 1;
+					set.opSize = 1;
 
 					return dest;
 				}

@@ -33,7 +33,7 @@ approximate_sqrt :: (val: f32) -> f32 {
 	i := <<cast(*u32) *val
 	
 	
-	i = (i >> 1) +  0x1fbd1df5
+	i = 0x1fbd1df5 + (i >> 1)
 	
 	return <<cast(*f32) *i
 }
