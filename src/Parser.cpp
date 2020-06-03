@@ -180,7 +180,7 @@ Declaration *createDeclarationForUsing(Declaration *oldDeclaration, Block *block
 	return declaration;
 }
 
-Expr *parseStatement(LexerFile *lexer) {
+Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 	if (lexer->token.type == TokenT::FOR) {
 		ExprLoop *loop = PARSER_NEW(ExprLoop);
 		loop->flavor = ExprFlavor::FOR;
@@ -295,7 +295,7 @@ Expr *parseStatement(LexerFile *lexer) {
 			loop->end = lexer->previousTokenEnd;
 
 			pushBlock(&loop->iteratorBlock);
-			loop->body = parseStatement(lexer);
+			loop->body = parseStatement(lexer, false);
 
 			if (!loop->body)
 				return nullptr;
@@ -312,7 +312,7 @@ Expr *parseStatement(LexerFile *lexer) {
 
 			}
 			else {
-				loop->completedBody = parseStatement(lexer);
+				loop->completedBody = parseStatement(lexer, false);
 
 				if (!loop->completedBody)
 					return nullptr;
@@ -370,7 +370,7 @@ Expr *parseStatement(LexerFile *lexer) {
 			loop->end = lexer->previousTokenEnd;
 
 			pushBlock(&loop->iteratorBlock);
-			loop->body = parseStatement(lexer);
+			loop->body = parseStatement(lexer, false);
 
 			if (!loop->body)
 				return nullptr;
@@ -387,7 +387,7 @@ Expr *parseStatement(LexerFile *lexer) {
 
 			}
 			else {
-				loop->completedBody = parseStatement(lexer);
+				loop->completedBody = parseStatement(lexer, false);
 
 				if (!loop->completedBody)
 					return nullptr;
@@ -418,7 +418,7 @@ Expr *parseStatement(LexerFile *lexer) {
 		else {
 			ifElse->end = lexer->previousTokenEnd;
 
-			ifElse->ifBody = parseStatement(lexer);
+			ifElse->ifBody = parseStatement(lexer, false);
 
 			if (!ifElse->ifBody)
 				return nullptr;
@@ -429,7 +429,7 @@ Expr *parseStatement(LexerFile *lexer) {
 				ifElse->elseBody = nullptr;
 			}
 			else {
-				ifElse->elseBody = parseStatement(lexer);
+				ifElse->elseBody = parseStatement(lexer, false);
 
 				if (!ifElse->elseBody)
 					return nullptr;
@@ -499,13 +499,12 @@ Expr *parseStatement(LexerFile *lexer) {
 
 
 		if (expectAndConsume(lexer, ';') || lexer->token.type == TOKEN('}')) {
-			return_->value = nullptr;
+			return_->returns.count = 0;
 		}
 		else {
-			return_->value = parseExpr(lexer);
-
-			if (!return_->value)
+			if (!parseArguments(lexer, &return_->returns, "returns"))
 				return nullptr;
+
 		}
 
 		return_->end = lexer->previousTokenEnd;
@@ -528,6 +527,84 @@ Expr *parseStatement(LexerFile *lexer) {
 
 		CodeLocation start = lexer->token.start;
 		EndLocation end = lexer->token.end;
+
+		if (expectAndConsume(lexer, ',')) {
+			auto comma = PARSER_NEW(ExprCommaAssignment);
+
+			comma->flavor = ExprFlavor::COMMA_ASSIGNMENT;
+
+			Array<Expr *> exprs;
+			exprs.add(expr);
+
+			while (true) {
+				comma->start = lexer->token.start;
+				comma->end = lexer->token.end;
+
+				if (expectAndConsume(lexer, '=')) {
+					comma->call = static_cast<ExprFunctionCall *>(parseExpr(lexer));
+				}
+				else if (expectAndConsume(lexer, ':')) {
+					if (!allowDeclarations) {
+						reportError(&lexer->token, "Error: Cannot have a declaration here");
+						return nullptr;
+					}
+
+					comma->flags |= EXPR_COMMA_ASSIGNMENT_IS_DECLARATION;
+					comma->end = lexer->token.end;
+
+					if (!expectAndConsume(lexer, '=')) {
+						reportExpectedError(&lexer->token, "Error: Expected = after : in multi declaration");
+						return nullptr;
+					}
+
+					comma->call = static_cast<ExprFunctionCall *>(parseExpr(lexer));
+					
+					for (auto expr : exprs) {
+						if (expr->flavor != ExprFlavor::IDENTIFIER) {
+							reportError(expr, "Error: Multi-declarations must only assign to identifiers");
+							return nullptr;
+						}
+
+						auto identifier = static_cast<ExprIdentifier *>(expr);
+
+						auto declaration = PARSER_NEW(Declaration);
+
+						declaration->start = identifier->start;
+						declaration->end = identifier->end;
+						declaration->name = identifier->name;
+						declaration->flags |= DECLARATION_IS_IN_COMPOUND;
+						declaration->type = nullptr;
+						declaration->initialValue = nullptr;
+						declaration->physicalStorage = 0;
+
+						if (!addDeclarationToCurrentBlock(declaration)) {
+							return nullptr;
+						}
+					}
+				}
+				else {
+					expr = parseExpr(lexer);
+
+					if (!expr)
+						return nullptr;
+
+					exprs.add(expr);
+				}
+			}
+
+			if (comma->call->flavor != ExprFlavor::FUNCTION_CALL) {
+				reportError(comma->call, "Error: Multi assignments can only have a function call on the right");
+				return nullptr;
+			}
+
+			comma->call->flags |= EXPR_FUNCTION_CALL_IS_IN_COMMA_ASSIGNMENT;
+
+
+			comma->exprCount = exprs.count;
+			comma->left = exprs.storage;
+
+			return comma;
+		}
 
 #define MODIFY_ASSIGN(type)                                                      \
 		else if (expectAndConsume(lexer, type)) {                                \
@@ -699,7 +776,7 @@ ExprBlock *parseBlock(LexerFile *lexer, ExprBlock *block) {
 			}
 		}
 
-		Expr *expr = parseStatement(lexer);
+		Expr *expr = parseStatement(lexer, true);
 
 		if (!expr)
 			return nullptr;
@@ -748,6 +825,8 @@ void addVoidReturn(CodeLocation &start, EndLocation &end, ExprFunction *function
 }
 
 bool parseFunctionReturnTypes(LexerFile *lexer, ExprFunction *function) {
+	pushBlock(&function->returns);
+
 	if (expectAndConsume(lexer, TokenT::ARROW)) {
 		auto returnType = PARSER_NEW(Declaration);
 
@@ -836,6 +915,7 @@ bool parseFunctionReturnTypes(LexerFile *lexer, ExprFunction *function) {
 						return false;
 					}
 
+					popBlock(&function->returns);
 					return true;
 				}
 			}
@@ -873,6 +953,8 @@ bool parseFunctionReturnTypes(LexerFile *lexer, ExprFunction *function) {
 			}
 		}
 	}
+
+	popBlock(&function->returns);
 
 	return true;
 }
@@ -919,6 +1001,11 @@ bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *u
 		function->body = nullptr;
 		function->flags |= EXPR_FUNCTION_IS_EXTERNAL;
 
+		if (function->returns.declarations.count != 1) {
+			reportError(function, "Error: External functions cannot have multiple return values");
+			return false;
+		}
+
 		pushBlock(&function->arguments); // @Cleanup: These functions deal with properly setting up the blocks parent and queueing the block for infer even if we don't need to 
 		popBlock(&function->arguments);
 
@@ -951,15 +1038,19 @@ bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *u
 			return false;
 		}
 
-		for (u64 i = 0; i < function->arguments.declarations.count; i++) {
-			auto declaration = function->arguments.declarations[i];
-
+		for (auto declaration : function->arguments.declarations) {
 			if (declaration->initialValue) {
-				reportError(declaration, "Error: A function prototype cannot have a default value");
+				reportError(declaration, "Error: A function prototype cannot have a default argument");
 				return false;
 			}
+		}
 
-			assert(declaration->type);
+
+		for (auto declaration : function->returns.declarations) {
+			if (declaration->initialValue) {
+				reportError(declaration, "Error: A function prototype cannot have a default return value");
+				return false;
+			}
 		}
 	}
 
@@ -1093,6 +1184,13 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 					return nullptr;
 				}
 
+				for (auto declaration : type->returns.declarations) {
+					if (declaration->initialValue) {
+						reportError(declaration, "Error: A function prototype cannot have a default return value");
+						return false;
+					}
+				}
+
 
 				expr = type;
 			}
@@ -1171,6 +1269,13 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 				return nullptr;
 			}
 
+			for (auto declaration : type->returns.declarations) {
+				if (declaration->initialValue) {
+					reportError(declaration, "Error: A function prototype cannot have a default return value");
+					return false;
+				}
+			}
+
 			expr = type;
 		}
 		else {
@@ -1182,6 +1287,56 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 	return expr;
 }
 
+bool parseArguments(LexerFile *lexer, Arguments *args, const char *message) {
+	Array<Expr *> arguments;
+	Array<String> names;
+
+	bool hadNamed = false;
+
+	do {
+		String name = { nullptr, 0ULL };
+
+		if (lexer->token.type == TokenT::IDENTIFIER) {
+			TokenT peek;
+
+			lexer->peekTokenTypes(1, &peek);
+
+			if (peek == TOKEN('=')) {
+				hadNamed = true;
+				name = lexer->token.text;
+
+				lexer->advance();
+
+				assert(lexer->token.type == TOKEN('='));
+
+				lexer->advance();
+			}
+			else {
+				goto unnamed;
+			}
+		}
+		else {
+		unnamed:
+
+			if (hadNamed) {
+				reportError(&lexer->token, "Error: Cannot have unnamed %s after named %s", message, message);
+				return false;
+			}
+		}
+
+		Expr *argument = parseExpr(lexer);
+
+		if (!argument)
+			return false;
+
+		arguments.add(argument);
+		names.add(name);
+	} while (expectAndConsume(lexer, ',')); // @Incomple: We currently don't allow trailing comma in function calls, should we?
+
+	args->count = arguments.count;
+	args->values = arguments.storage;
+	args->names = names.storage;
+}
 
 Expr *parsePrimaryExpr(LexerFile *lexer) {
 	CodeLocation start = lexer->token.start;
@@ -1565,64 +1720,19 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 			call->end = lexer->token.end;
 
 			if (expectAndConsume(lexer, ')')) {
-				call->argumentCount = 0;
-				call->arguments = nullptr;
+				call->arguments.count = 0;
+				call->arguments.values = nullptr;
 			}
 			else {
-				Array<Expr *> arguments;
-				Array<String> names;
-
-				bool hadNamed = false;
-
-				do {
-					String name = { nullptr, 0ULL };
-
-					if (lexer->token.type == TokenT::IDENTIFIER) {
-						TokenT peek;
-
-						lexer->peekTokenTypes(1, &peek);
-
-						if (peek == TOKEN('=')) {
-							hadNamed = true;
-							name = lexer->token.text;
-
-							lexer->advance();
-
-							assert(lexer->token.type == TOKEN('='));
-
-							lexer->advance();
-						}
-						else {
-							goto unnamed;
-						}
-					}
-					else {
-					unnamed:
-
-						if (hadNamed) {
-							reportError(&lexer->token, "Error: Cannot have unnamed arguments after named arguments");
-						}
-					}
-
-					Expr *argument = parseExpr(lexer);
-
-					if (!argument)
-						return nullptr;
-
-					arguments.add(argument);
-					names.add(name);
-				} while (expectAndConsume(lexer, ',')); // @Incomple: We currently don't allow trailing comma in function calls, should we?
-
+				if (!parseArguments(lexer, &call->arguments, "arguments"))
+					return nullptr;
+			
 				call->end = lexer->token.end;
 
 				if (!expectAndConsume(lexer, ')')) {
 					reportExpectedError(&lexer->token, "Error: Expected ')' after function arguments");
-					return nullptr;
+					return false;
 				}
-
-				call->argumentCount = arguments.count;
-				call->arguments = arguments.storage;
-				call->argumentNames = names.storage;
 			}
 
 			expr = call;

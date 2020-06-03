@@ -55,6 +55,9 @@ multiple return values
 varargs
  - 
  
+Make comma assignments work for things other than function calls
+ - i.e. a, b = b, a to do a swap thats not gross
+
 string representation
  - same memory as []u8 but a different type (allow casting?)
    - different types convey intent
@@ -127,3 +130,5 @@ utf8 identifiers?
 
 run ir at compile time
 
+function polymorhpism
+struct polymorhpism

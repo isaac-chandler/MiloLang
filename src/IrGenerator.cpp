@@ -400,6 +400,77 @@ void addLineMarker(IrState *state, Expr *expr) {
 	ir.location.end = expr->end;
 }
 
+void generateCall(IrState *state, ExprFunctionCall *call, u64 dest, ExprCommaAssignment *comma) {
+	auto type = static_cast<TypeFunction *>(call->function->type);
+
+	FunctionCall *argumentInfo = static_cast<FunctionCall *>(state->allocator.allocate(sizeof(FunctionCall) + sizeof(argumentInfo->args[0]) * (call->arguments.count + type->returnCount - 1)));
+	argumentInfo->argCount = call->arguments.count;
+
+	for (u64 i = 1; i < type->returnCount; i++) {
+		if (comma && i < comma->exprCount; i++) {
+			u64 address = loadAddressOf(state, comma->left[i], state->nextRegister++);
+
+			argumentInfo->args[call->arguments.count + i - 1].number = address;
+			argumentInfo->args[call->arguments.count + i - 1].type = TYPE_VOID_POINTER;
+		}
+	}
+
+	u64 function = generateIr(state, call->function, state->nextRegister++);
+
+	
+	u64 paramOffset;
+
+	if (!isStandardSize(type->returnTypes[0]->size)) {
+		paramOffset = 1;
+	}
+	else {
+		paramOffset = 0;
+	}
+
+	u64 callAuxStorage = my_max(4, type->argumentCount + paramOffset);
+
+	for (u64 i = 0; i < call->arguments.count; i++) {
+		argumentInfo->args[i].number = generateIr(state, call->arguments.values[i], state->nextRegister++);
+		argumentInfo->args[i].type = call->arguments.values[i]->type;
+
+		if (!isStandardSize(call->arguments.values[i]->type->size)) {
+
+			if (callAuxStorage & 1) {
+				++callAuxStorage; // Make sure it is aligned by 16 bytes 
+			}
+
+			callAuxStorage += (call->arguments.values[i]->type->size + 7) / 8;
+		}
+	}
+
+	argumentInfo->returnType = call->type;
+
+	u64 returnSize = 0;
+
+	if (dest == 0) {
+		returnSize = (call->type->size + 7) / 8;
+	}
+	else if (!isStandardSize(call->type->size)) {
+		callAuxStorage += (call->type->size + 7) / 8;
+	}
+
+	for (u64 i = comma ? comma->exprCount : 1; i < type->returnCount; i++) {
+		returnSize = my_max(returnSize, (type->returnTypes[i]->size + 7) / 8);
+	}
+
+	if (callAuxStorage > state->callAuxStorage) {
+		state->callAuxStorage = callAuxStorage;
+	}
+
+	state->callAuxStorage += returnSize;
+
+	Ir &ir = state->ir.add();
+	ir.op = IrOp::CALL;
+	ir.a = function;
+	ir.arguments = argumentInfo;
+	ir.dest = dest;
+	ir.opSize = call->type->size;
+}
 
 u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 	PROFILE_FUNC();
@@ -1329,54 +1400,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 			auto call = static_cast<ExprFunctionCall *>(expr);
 
-			u64 function = generateIr(state, call->function, state->nextRegister++);
-
-			FunctionCall *argumentInfo = static_cast<FunctionCall *>(state->allocator.allocate(sizeof(FunctionCall) + sizeof(argumentInfo->args[0]) * call->argumentCount));
-			argumentInfo->argCount = call->argumentCount;
-
-			u64 paramOffset;
-
-			auto type = static_cast<TypeFunction *>(call->function->type);
-
-			if (!isStandardSize(type->returnTypes->size)) {
-				paramOffset = 1;
-			}
-			else {
-				paramOffset = 0;
-			}
-
-			u64 callAuxStorage = my_max(4, type->argumentCount + paramOffset);
-
-			for (u64 i = 0; i < call->argumentCount; i++) {
-				argumentInfo->args[i].number = generateIr(state, call->arguments[i], state->nextRegister++);
-				argumentInfo->args[i].type = call->arguments[i]->type;
-
-				if (!isStandardSize(call->arguments[i]->type->size)) {
-
-					if (callAuxStorage & 1) {
-						++callAuxStorage; // Make sure it is aligned by 16 bytes 
-					}
-
-					callAuxStorage += (call->arguments[i]->type->size + 7) / 8;
-				}
-			}
-
-			argumentInfo->returnType = call->type;
-
-			if (dest == 0 && !isStandardSize(call->type->size)) {
-				callAuxStorage += (call->type->size + 7) / 8;
-			}
-
-			if (callAuxStorage > state->callAuxStorage) {
-				state->callAuxStorage = callAuxStorage;
-			}
-
-			Ir &ir = state->ir.add();
-			ir.op = IrOp::CALL;
-			ir.a = function;
-			ir.arguments = argumentInfo;
-			ir.dest = dest;
-			ir.opSize = call->type->size;
+			generateCall(state, call, dest, nullptr);
 
 			return dest;
 		}
@@ -1641,6 +1665,15 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			popLoop(state);
 
 			return DEST_NONE;
+		}
+		case ExprFlavor::COMMA_ASSIGNMENT: {
+			assert(dest == DEST_NONE);
+
+			auto comma = static_cast<ExprCommaAssignment *>(expr);
+
+			
+
+			break;
 		}
 		case ExprFlavor::ARRAY: {
 			if (dest == DEST_NONE) return DEST_NONE;

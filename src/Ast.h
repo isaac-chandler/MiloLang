@@ -151,7 +151,9 @@ enum class ExprFlavor : u8 {
 	FUNCTION_PROTOTYPE, 
 	STRUCT_DEFAULT, 
 	ENUM, 
-	ENUM_INCREMENT
+	ENUM_INCREMENT, 
+
+	COMMA_ASSIGNMENT
 };
 
 struct Declaration;
@@ -186,8 +188,10 @@ struct Expr {
 // allowed as constants since we don't evaluate comparisons
 #define EXPR_WAS_EVALUATED_BINARY 0x100
 #define EXPR_VALUE_NOT_REQUIRED 0x200
-#define EXPR_FUNCTION_IS_MUST 0x400
-#define EXPR_FUNCTION_CALL_IS_STATEMENT_LEVEL 0x800
+#define EXPR_FUNCTION_CALL_IS_STATEMENT_LEVEL 0x400
+#define EXPR_COMMA_ASSIGNMENT_IS_DECLARATION 0x800
+#define EXPR_FUNCTION_CALL_IS_IN_COMMA_ASSIGNMENT 0x1000
+
 
 
 struct ExprLiteral : Expr {
@@ -238,11 +242,16 @@ struct ExprEnumIncrement : Expr {
 	Declaration *previous;
 };
 
+struct Arguments {
+	u64 count;
+	Expr **values;
+	String *names;
+
+};
+
 struct ExprFunctionCall : Expr {
 	Expr *function;
-	u64 argumentCount;
-	Expr **arguments;
-	String *argumentNames;
+	Arguments arguments;
 };
 
 struct ExprBlock : Expr {
@@ -264,7 +273,7 @@ struct ExprFunction : Expr {
 
 struct ExprReturn : Expr {
 	ExprFunction *returnsFrom;
-	Expr *value;
+	Arguments returns;
 };
 
 struct ExprLoop : Expr {
@@ -297,4 +306,11 @@ struct ExprIf : Expr {
 struct ExprEnum : Expr {
 	TypeEnum struct_;
 	Expr *integerType;
+};
+
+struct ExprCommaAssignment : Expr {
+	u64 exprCount;
+	Expr **left;
+
+	ExprFunctionCall *call;
 };

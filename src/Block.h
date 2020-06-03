@@ -22,6 +22,7 @@
 #define DECLARATION_IS_ENUM_VALUE      0x0'4000
 #define DECLARATION_IS_RETURN          0x0'8000
 #define DECLARATION_IS_MUST            0x1'0000
+#define DECLARATION_IS_IN_COMPOUND     0x2'0000
 
 
 struct Declaration {

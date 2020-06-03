@@ -75,30 +75,27 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 			flattenTo.add(expr);
 			break;
 		}
-		case ExprFlavor::FUNCTION: {
-			ExprFunction *function = static_cast<ExprFunction *>(*expr);
-
-			flatten(flattenTo, &function->returnType);
-
+		case ExprFlavor::FUNCTION:
+		case ExprFlavor::FUNCTION_PROTOTYPE: {
 			flattenTo.add(expr);
 
-			// The function arguments are handled separately since the arguments are declarations of their own so will be type-checked separately
+			// The function arguments and returns are handled separately since they are declarations of their own so will be type-checked separately
 			// The function body is type-checked separately from the head so we don't get circular dependencies with recursive functions
 			// And the body's types are irrelevant to the expression using the function
 
 			break;
 		}
-		case ExprFlavor::FUNCTION_PROTOTYPE: {
-			ExprFunction *function = static_cast<ExprFunction *>(*expr);
+		case ExprFlavor::COMMA_ASSIGNMENT: {
+			
+			if (!((*expr)->flags & EXPR_COMMA_ASSIGNMENT_IS_DECLARATION)) {
+				auto comma = static_cast<ExprCommaAssignment *>(*expr);
 
-			flatten(flattenTo, &function->returnType);
-
-			for (auto argument : function->arguments.declarations) {
-				flatten(flattenTo, &argument->type);
+				for (u64 i = 0; i < comma->exprCount; i++) {
+					flatten(flattenTo, &comma->left[i]);
+				}
 			}
 
 			flattenTo.add(expr);
-
 			break;
 		}
 		case ExprFlavor::TYPE_LITERAL:
@@ -172,8 +169,8 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 		case ExprFlavor::FUNCTION_CALL: {
 			ExprFunctionCall *call = static_cast<ExprFunctionCall *>(*expr);
 
-			for (u64 i = 0; i < call->argumentCount; i++) {
-				flatten(flattenTo, &call->arguments[i]);
+			for (u64 i = 0; i < call->arguments.count; i++) {
+				flatten(flattenTo, &call->arguments.values[i]);
 			}
 
 			flatten(flattenTo, &call->function);
@@ -198,8 +195,8 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 		case ExprFlavor::RETURN: {
 			ExprReturn *return_ = static_cast<ExprReturn *>(*expr);
 
-			if (return_->value)
-				flatten(flattenTo, &return_->value);
+			for (u64 i = 0; i < return_->returns.count; i++)
+				flatten(flattenTo, &return_->returns.values[i]);
 
 			flattenTo.add(expr);
 
@@ -1966,6 +1963,99 @@ bool isAddressable(Expr *expr) {
 	}
 }
 
+bool inferArguments(InferJob *job, Arguments *arguments, Block *block, const char *message, Expr *callLocation, Expr *functionLocation, bool *yield) {
+	*yield = false;
+
+	bool hasNamedArguments = false;
+
+	String functionName = "function";
+
+	if (functionLocation->valueOfDeclaration) {
+		functionName = functionLocation->valueOfDeclaration->name;
+	}
+
+	u64 minArguments = block->declarations.count;
+
+	for (auto declaration : block->declarations) {
+		if (declaration->initialValue) {
+			--minArguments;
+		}
+	}
+
+	if (hasNamedArguments || (arguments->count < block->declarations.count && minArguments != block->declarations.count)) {
+		Expr **sortedArguments = new Expr * [block->declarations.count]{};
+
+		for (u64 i = 0; i < arguments->count; i++) {
+			u64 argIndex = i;
+			if (arguments->names[i].length) {
+				auto argument = findDeclarationNoYield(block, arguments->names[i], &argIndex);
+				assert(!(argument->flags & DECLARATION_IMPORTED_BY_USING));
+
+				if (!argument) {
+					reportError(arguments->values[i], "Error: %.*s does not have a %s called %.*s", STRING_PRINTF(functionName), message, STRING_PRINTF(arguments->names[i]));
+					return false;
+				}
+			}
+
+			if (sortedArguments[argIndex]) {
+				reportError(arguments->values[i], "Error: %s %.*s was supplied twice", message, STRING_PRINTF(block->declarations[argIndex]->name));
+				reportError(sortedArguments[argIndex], "   ..: It was previously given here");
+				return false;
+			}
+
+			sortedArguments[argIndex] = arguments->values[i];
+		}
+
+		for (u64 i = 0; i < block->declarations.count; i++) {
+			if (!sortedArguments[i]) {
+				auto argument = block->declarations[i];
+
+				if (argument->initialValue) {
+					sortedArguments[i] = argument->initialValue;
+					addSizeDependency(job, argument->initialValue->type);
+				}
+				else {
+					reportError(callLocation, "Error: Required %s '%.*s' was not given", message, STRING_PRINTF(argument->name));
+					reportError(argument, "   ..: Here is the %s", message);
+					return false;
+				}
+			}
+		}
+
+		arguments->values = sortedArguments;
+		arguments->count = block->declarations.count;
+	}
+	else if (arguments->count != block->declarations.count) {
+
+		if (arguments->count < block->declarations.count) {
+			reportError(callLocation, "Error: Too few %ss for %.*s (Expected: %" PRIu64 ", Given: %" PRIu64 ")", message, 
+				STRING_PRINTF(functionName), block->declarations.count, arguments->count);
+
+			reportError(block->declarations[arguments->count], "   ..: Here are the missing %ss", message);
+		}
+		else if (arguments->count > block->declarations.count) {
+			reportError(callLocation, "Error: Too many %ss for %.*s (Expected: %" PRIu64 ", Given: %" PRIu64 ")", message, 
+				STRING_PRINTF(functionName), block->declarations.count, arguments->count);
+		}
+
+		return false;
+	}
+
+	for (u64 i = 0; i < arguments->count; i++) {
+		Type *correct = static_cast<ExprLiteral *>(block->declarations[i]->type)->typeValue;
+
+		if (!assignOp(job, arguments->values[i], correct, arguments->values[i], yield)) { // @Incomplete: Give function call specific error messages instead of general type conversion errors
+			return false;
+		}
+	}
+
+	return true;
+}
+
+bool functionIsVoid(TypeFunction *function) {
+	return function->returnCount == 1 && function->returnTypes[0] == &TYPE_VOID;
+}
+
 
 bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 	*yield = false;
@@ -3198,32 +3288,11 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 			case ExprFlavor::FUNCTION: {
 				auto function = static_cast<ExprFunction *>(expr);
 
-
-				if (function->returnType->flavor != ExprFlavor::TYPE_LITERAL) {
-
-					if (function->returnType->type == &TYPE_TYPE) {
-						reportError(function->returnType, "Error: Function return type must evaluate to a constant");
-					}
-					else {
-						reportError(function->returnType, "Error: Function return type must be a type");
-					}
-
-					return false;
-				}
-
-				if (static_cast<ExprLiteral *>(function->returnType)->typeValue == &TYPE_VOID && (function->flags & EXPR_FUNCTION_IS_MUST)) {
-					reportError(function, "Error: A void return cannot be marked as #must");
-					return false;
-				}
-
-				bool argumentsInferred = true;
-
 				for (auto argument : function->arguments.declarations) {
 					assert(argument);
 
 					if (!(argument->flags & DECLARATION_TYPE_IS_READY)) {
-						argumentsInferred = false;
-						break;
+						return true;
 					}
 
 
@@ -3235,61 +3304,56 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 							}
 						}
 						else {
-							argumentsInferred = false;
-							break;
+							return true;
 						}
 					}
 				}
 
-				if (argumentsInferred) {
 
-					TypeFunction *type = new TypeFunction;
-					type->argumentCount = function->arguments.declarations.count;
+				for (auto return_ : function->returns.declarations) {
+					assert(return_);
 
-					if (type->argumentCount) {
-						type->argumentTypes = new Type * [type->argumentCount];
-
-						for (u64 i = 0; i < type->argumentCount; i++) {
-							auto arg = static_cast<ExprLiteral *>(function->arguments.declarations[i]->type);
-
-							assert(arg->flavor == ExprFlavor::TYPE_LITERAL);
-
-							type->argumentTypes[i] = arg->typeValue;
-						}
+					if (!(return_->flags & DECLARATION_TYPE_IS_READY)) {
+						return true;
+					}
+					else {
 					}
 
-					function->type = getFunctionType(function);
+
+					if (return_->initialValue) {
+						if (return_->flags & DECLARATION_VALUE_IS_READY) {
+							if (!isLiteral(return_->initialValue)) {
+								reportError(return_, "Error: Default returns must be a constant value");
+								return false;
+							}
+						}
+						else {
+							return true;
+						}
+					}
 				}
-				else {
-					return true;
-				}
+
+				function->type = getFunctionType(function);
 
 				break;
 			}
 			case ExprFlavor::FUNCTION_PROTOTYPE: {
 				auto function = static_cast<ExprFunction *>(expr);
 
-				if (function->returnType->type != &TYPE_TYPE) {
-					reportError(function->returnType, "Error: Function return type must be a type");
-					return false;
-				}
-				else if (function->returnType->flavor != ExprFlavor::TYPE_LITERAL) {
-					reportError(function->returnType, "Error: Function return type must be a constant");
-					return false;
-				}
-				else if (static_cast<ExprLiteral *>(function->returnType)->typeValue->flavor == TypeFlavor::NAMESPACE) {
-					reportError(function->returnType, "Error: Function return type cannot be a namespace");
-					return false;
+				for (auto argument : function->arguments.declarations) {
+					assert(argument);
+
+					if (!(argument->flags & DECLARATION_TYPE_IS_READY)) {
+						return true;
+					}
 				}
 
-				for (auto argument : function->arguments.declarations) {
-					if (argument->type->type != &TYPE_TYPE) {
-						reportError(argument->type, "Error: Function argument type must be a type");
-						return false;
-					}
-					else if (argument->type->flavor != ExprFlavor::TYPE_LITERAL) {
-						reportError(argument->type, "Error: Function argument type must be a constant");
-						return false;
+
+				for (auto return_ : function->returns.declarations) {
+					assert(return_);
+
+					if (!(return_->flags & DECLARATION_TYPE_IS_READY)) {
+						return true;
 					}
 				}
 
@@ -3574,6 +3638,69 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 
 				break;
 			}
+			case ExprFlavor::COMMA_ASSIGNMENT: {
+				auto comma = static_cast<ExprCommaAssignment *>(expr);
+
+
+				ExprFunction *functionForArgumentNames = nullptr;
+
+				if (comma->call->function->flavor == ExprFlavor::FUNCTION) {
+					functionForArgumentNames = static_cast<ExprFunction *>(comma->call->function);
+
+					for (u64 i = comma->exprCount; i < functionForArgumentNames->returns.declarations.count; i++) {
+						auto declaration = functionForArgumentNames->returns.declarations[i];
+
+						if (declaration->flags & DECLARATION_IS_MUST) {
+							reportError(comma->call, "Error: Cannot ignore the return value of the function call, it was marked as #must");
+							reportError(declaration, "   ..: Here is the function");
+							return false;
+						}
+					}
+				}
+
+				auto function = static_cast<TypeFunction *>(comma->call->function->type);
+
+				if (comma->exprCount > function->returnCount || functionIsVoid(function)) {
+					if (functionIsVoid(function)) {
+						reportError(comma->call, "Error: Cannot assign from a function that returns void");
+					}
+					else {
+						reportError(comma->call, "Error: Assigning to too many variables from function call, assigning to %" PRIu64 " variables, the function returns %" PRIu64, comma->exprCount, function->returnCount);
+					}
+
+					if (functionForArgumentNames) {
+						reportError(functionForArgumentNames, "   ..: Here is the function");
+					}
+				}
+
+				if (comma->flags & EXPR_COMMA_ASSIGNMENT_IS_DECLARATION) {
+					for (u64 i = 0; i < comma->exprCount; i++) {
+						auto declaration = static_cast<ExprIdentifier *>(comma->left[i])->declaration;
+
+						declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, function->returnTypes[i]);
+					}
+				}
+				else {
+					for (u64 i = 0; i < comma->exprCount; i++) {
+						if (!isAssignable(comma->left[i])) {
+							reportError(comma->left[i], "Error: This expression cannot be assigned to");
+							return false;
+						}
+
+						if (comma->left[i]->type != function->returnTypes[i]) {
+							reportError(comma->left[i], "Error: Cannot do a multiple assignment from %.*s to %.*s", STRING_PRINTF(function->returnTypes[i]->name), STRING_PRINTF(comma->left[i]->type->name));
+
+							if (functionForArgumentNames) {
+								reportError(functionForArgumentNames->returns.declarations[i], "   ..: Here is the return");
+							}
+							
+							return false;
+						}
+					}
+				}
+
+				break;
+			}
 			case ExprFlavor::FUNCTION_CALL: {
 				auto call = static_cast<ExprFunctionCall *>(expr);
 
@@ -3584,7 +3711,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 
 				auto function = static_cast<TypeFunction *>(call->function->type);
 
-				expr->type = function->returnTypes;
+				expr->type = function->returnTypes[0];
 
 				addSizeDependency(job, expr->type);
 
@@ -3595,28 +3722,34 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 				if (call->function->flavor == ExprFlavor::FUNCTION) {
 					functionForArgumentNames = static_cast<ExprFunction *>(call->function);
 
-					if ((call->flags & EXPR_FUNCTION_CALL_IS_STATEMENT_LEVEL) && (functionForArgumentNames->flags & EXPR_FUNCTION_IS_MUST)) {
-						reportError(call, "Error: Cannot ignore the return value of the function call, it was marked as #must");
-						reportError(functionForArgumentNames, "   ..: Here is the function");
-						return false;
+					if (call->flags & EXPR_FUNCTION_CALL_IS_STATEMENT_LEVEL) {
+						for (auto declaration : functionForArgumentNames->returns.declarations) {
+							if (declaration->flags & DECLARATION_IS_MUST) {
+								reportError(call, "Error: Cannot ignore the return value of the function call, it was marked as #must");
+								reportError(declaration, "   ..: Here is the function");
+								return false;
+							}
+						}
+					}
+					else if (!(call->flags & EXPR_FUNCTION_CALL_IS_IN_COMMA_ASSIGNMENT)) {
+						for (u64 i = 1; i < functionForArgumentNames->returns.declarations.count; i++) {
+							auto declaration = functionForArgumentNames->returns.declarations[i];
+
+							if (declaration->flags & DECLARATION_IS_MUST) {
+								reportError(call, "Error: Cannot ignore the return value of the function call, it was marked as #must");
+								reportError(declaration, "   ..: Here is the function");
+								return false;
+							}
+						}
 					}
 				}
 
 				bool hasNamedArguments = false;
 
-				for (u64 i = 0; i < call->argumentCount; i++) {
-					if (call->argumentNames[i].length != 0) {
+
+				for (u64 i = 0; i < call->arguments.count; i++) {
+					if (call->arguments.names[i].length != 0) {
 						hasNamedArguments = true;
-					}
-				}
-
-				u64 minArguments = function->argumentCount;
-
-				if (functionForArgumentNames) {
-					for (u64 i = 0; i < functionForArgumentNames->arguments.declarations.count; i++) {
-						if (functionForArgumentNames->arguments.declarations[i]->initialValue) {
-							--minArguments;
-						}
 					}
 				}
 
@@ -3625,73 +3758,35 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 					return false;
 				}
 
-				if (hasNamedArguments || (call->argumentCount < function->argumentCount && minArguments != function->argumentCount)) {
-					Expr **sortedArguments = new Expr * [function->argumentCount]{};
-
-					for (u64 i = 0; i < call->argumentCount; i++) {
-						u64 argIndex = i;
-						if (call->argumentNames[i].length) {
-							auto argument = findDeclarationNoYield(&functionForArgumentNames->arguments, call->argumentNames[i], &argIndex);
-							assert(!(argument->flags & DECLARATION_IMPORTED_BY_USING));
-
-							if (!argument) {
-								reportError(call->arguments[i], "Error: %.*s does not have an argument called %.*s", STRING_PRINTF(functionName), STRING_PRINTF(call->argumentNames[i]));
-								return false;
-							}
-						}
-
-						if (sortedArguments[argIndex]) {
-							reportError(call->arguments[i], "Error: Argument %.*s was supplied twice", STRING_PRINTF(functionForArgumentNames->arguments.declarations[argIndex]->name));
-							reportError(sortedArguments[argIndex], "   ..: It was previously given here");
-							return false;
-						}
-
-						sortedArguments[argIndex] = call->arguments[i];
-					}
-
-					for (u64 i = 0; i < function->argumentCount; i++) {
-						if (!sortedArguments[i]) {
-							auto argument = functionForArgumentNames->arguments.declarations[i];
-
-							if (argument->initialValue) {
-								sortedArguments[i] = argument->initialValue;
-								addSizeDependency(job, argument->initialValue->type);
-							}
-							else {
-								reportError(call, "Error: Required argument '%.*s' was not given", STRING_PRINTF(argument->name));
-								reportError(argument, "   ..: Here is the argument");
-								return false;
-							}
-						}
-					}
-
-					call->arguments = sortedArguments;
-					call->argumentCount = function->argumentCount;
-				}
-				else if (call->argumentCount != function->argumentCount) {
-
-					if (call->argumentCount < function->argumentCount) {
-						reportError(call, "Error: Too few arguments for %.*s (Expected: %" PRIu64 ", Given: %" PRIu64 ")",
-							STRING_PRINTF(functionName), function->argumentCount, call->argumentCount);
-
-						if (functionForArgumentNames) {
-							reportError(functionForArgumentNames->arguments.declarations[call->argumentCount], "   ..: Here are the missing arguments");
-						}
-					}
-					else if (call->argumentCount > function->argumentCount) {
-						reportError(call, "Error: Too many arguments for %.*s (Expected: %" PRIu64 ", Given: %" PRIu64 ")",
-							STRING_PRINTF(functionName), function->argumentCount, call->argumentCount);
-					}
-
-					return false;
-				}
-
-				for (u64 i = 0; i < call->argumentCount; i++) {
-					Type *correct = function->argumentTypes[i];
-
+				if (functionForArgumentNames) {
 					bool yield;
-					if (!assignOp(job, call->arguments[i], correct, call->arguments[i], &yield)) { // @Incomplete: Give function call specific error messages instead of general type conversion errors
+
+					if (!inferArguments(job, &call->arguments, &functionForArgumentNames->arguments, "argument", call, functionForArgumentNames, &yield)) {
 						return yield;
+					}
+				}
+				else {
+					if (call->arguments.count != function->argumentCount) {
+
+						if (call->arguments.count < function->argumentCount) {
+							reportError(call, "Error: Too few arguments for %.*s (Expected: %" PRIu64 ", Given: %" PRIu64 ")",
+								STRING_PRINTF(functionName), function->argumentCount, call->arguments.count);
+						}
+						else if (call->arguments.count > function->argumentCount) {
+							reportError(call, "Error: Too many arguments for %.*s (Expected: %" PRIu64 ", Given: %" PRIu64 ")",
+								STRING_PRINTF(functionName), function->argumentCount, call->arguments.count);
+						}
+
+						return false;
+					}
+
+					for (u64 i = 0; i < call->arguments.count; i++) {
+						Type *correct = function->argumentTypes[i];
+
+						bool yield;
+						if (!assignOp(job, call->arguments.values[i], correct, call->arguments.values[i], &yield)) { // @Incomplete: Give function call specific error messages instead of general type conversion errors
+							return yield;
+						}
 					}
 				}
 
@@ -3720,22 +3815,18 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 
 				assert(return_->returnsFrom->type->flavor == TypeFlavor::FUNCTION);
 
-				Type *returnType = static_cast<TypeFunction *>(return_->returnsFrom->type)->returnTypes;
+				Block *returnTypes = &return_->returnsFrom->returns;
 
-				if (returnType == &TYPE_VOID) {
-					if (return_->value) {
-						reportError(return_->value, "Error: A function with void return type cannot return a value");
+				if (returnTypes->declarations.count == 1 && static_cast<ExprLiteral *>(returnTypes->declarations[0]->type)->typeValue == &TYPE_VOID) {
+					if (return_->returns.count) {
+						reportError(return_->returns.values[0], "Error: A function with void return type cannot return a value");
 						return false;
 					}
 				}
 				else {
-					if (!return_->value) {
-						reportError(return_, "Error: A function without void return type must return a value");
-						return false;
-					}
-
 					bool yield;
-					if (!assignOp(job, return_, returnType, return_->value, &yield)) {
+
+					if (!inferArguments(job, &return_->returns, returnTypes, "return", return_, return_->returnsFrom, &yield)) {
 						return yield;
 					}
 				}
@@ -4142,7 +4233,7 @@ bool addDeclaration(Declaration *declaration) {
 
 	declaration->inferJob = nullptr;
 
-	if (declaration->flags & (DECLARATION_IS_ITERATOR | DECLARATION_IS_ITERATOR_INDEX))
+	if (declaration->flags & (DECLARATION_IS_ITERATOR | DECLARATION_IS_ITERATOR_INDEX | DECLARATION_IS_IN_COMPOUND))
 		return true;
 
 	if (!declaration->enclosingScope) {
@@ -4357,8 +4448,16 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 			}
 
 			if (static_cast<ExprLiteral *>(declaration->type)->typeValue == &TYPE_VOID) {
-				reportError(declaration->type, "Error: Declaration cannot have type void");
-				return false;
+				if (declaration->flags & DECLARATION_IS_RETURN) {
+					if (declaration->enclosingScope->declarations.count != 1) {
+						reportError(declaration->type, "Error: Functions with multiple return values cannot return void");
+						return false;
+					}
+				}
+				else {
+					reportError(declaration->type, "Error: Declaration cannot have type void");
+					return false;
+				}
 			}
 
 			if (static_cast<ExprLiteral *>(declaration->type)->typeValue->flavor == TypeFlavor::NAMESPACE) {
