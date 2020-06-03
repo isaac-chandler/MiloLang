@@ -29,6 +29,15 @@ currently this doesn't do what you'd expect
 		
 		print_b(cast(*B) a) // Prints "A" because a cast from 'base class' to 'sub class' just does a pointer conversion instead of paying attention to the using
 	}
+	
+Make it a compile time error to out of bounds index a static array if the index is a constant
+ - Compile time error for constant negative index of normal and dynamic arrays?
+ - Compile time error for things that are an array literal of normal or dynamic type
+ 
+Compile option for runtime checking
+ - Array bounds checking
+ - Cast bounds checking
+ - 
 
 ABI/calling convention
  - multiple return values

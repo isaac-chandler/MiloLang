@@ -14,7 +14,7 @@ BucketedArenaAllocator typeArena(1024 * 1024);
 #define STATIC_ARRAY_SIZE_HASH_PRIME 4789
 #define STATIC_ARRAY_TYPE_HASH_PRIME 4969
 #define FUNCTION_ARGUMENT_HASH_PRIME 5147
-#define FUNCTION_RETURN_HASH_PRINE 5347
+#define FUNCTION_RETURN_HASH_PRIME 5347
 
 static u32 nextStructHash = STRUCT_HASH_PRIME;
 
@@ -342,9 +342,15 @@ TypeArray *getStaticArray(Type *type, u64 count) {
 
 
 void generateTypeNameForFunction(TypeFunction *function) {
-	function->name.length = 6; // "() -> "
+	function->name.length = 8; // "() (-> )"
 
-	function->name.length += function->returnType->name.length;
+	for (u64 i = 0; i < function->returnCount; i++) {
+		function->name.length += function->returnTypes[i]->name.length;
+
+		if (i + 1 != function->returnCount) {
+			function->name.length += 2;
+		}
+	}
 
 	for (u64 i = 0; i < function->argumentCount; i++) {
 		function->name.length += function->argumentTypes[i]->name.length;
@@ -373,25 +379,42 @@ void generateTypeNameForFunction(TypeFunction *function) {
 
 	*cursor++ = ')';
 	*cursor++ = ' ';
+	*cursor++ = '(';
 	*cursor++ = '-';
 	*cursor++ = '>';
 	*cursor++ = ' ';
 
 
-	String name = function->returnType->name;
+	for (u64 i = 0; i < function->returnCount; i++) {
+		String name = function->returnTypes[i]->name;
 
-	memcpy(cursor, name.characters, name.length);
+		memcpy(cursor, name.characters, name.length);
+
+		cursor += name.length;
+
+		if (i + 1 != function->returnCount) {
+			*cursor++ = ',';
+			*cursor++ = ' ';
+		}
+	}
+
+	*cursor++ = ')';
 }
 
 TypeFunction *getFunctionType(ExprFunction *expr) {
-	auto returnType = static_cast<ExprLiteral *>(expr->returnType)->typeValue;
 	auto &arguments = expr->arguments.declarations;
+	auto &returns = expr->returns.declarations;
 
-	u32 hash = returnType->hash * FUNCTION_RETURN_HASH_PRINE;
+	u32 hash = 0;
+
+	for (auto return_ : returns) {
+		hash += static_cast<ExprLiteral *>(return_->type)->typeValue->hash;
+		hash *= FUNCTION_RETURN_HASH_PRIME;
+	}
 
 
-	for (u64 i = 0; i < arguments.count; i++) {
-		hash += static_cast<ExprLiteral *>(arguments[i]->type)->typeValue->hash;
+	for (auto argument : arguments) {
+		hash += static_cast<ExprLiteral *>(argument->type)->typeValue->hash;
 		hash *= FUNCTION_ARGUMENT_HASH_PRIME;
 	}
 
@@ -403,9 +426,15 @@ TypeFunction *getFunctionType(ExprFunction *expr) {
 		if (entry.hash == hash && entry.value->flavor == TypeFlavor::FUNCTION) {
 			auto function = static_cast<TypeFunction *>(entry.value);
 
-			if (function->argumentCount == arguments.count && function->returnType == returnType) {
+			if (function->argumentCount == arguments.count && function->returnCount == returns.count) {
 				for (u64 i = 0; i < arguments.count; i++) {
 					if (function->argumentTypes[i] != static_cast<ExprLiteral *>(arguments[i]->type)->typeValue) {
+						goto cont;
+					}
+				}
+
+				for (u64 i = 0; i < returns.count; i++) {
+					if (function->returnTypes[i] != static_cast<ExprLiteral *>(returns[i]->type)->typeValue) {
 						goto cont;
 					}
 				}
@@ -421,10 +450,15 @@ TypeFunction *getFunctionType(ExprFunction *expr) {
 	auto result = TYPE_NEW(TypeFunction);
 	result->size = 8;
 	result->alignment = 8;
-	result->returnType = returnType;
+	result->returnCount = returns.count;
+	result->returnTypes = TYPE_NEW_ARRAY(Type *, result->returnCount);
 	result->hash = hash;
 	result->argumentCount = arguments.count;
 	result->argumentTypes = TYPE_NEW_ARRAY(Type *, result->argumentCount);
+
+	for (u64 i = 0; i < returns.count; i++) {
+		result->returnTypes[i] = static_cast<ExprLiteral *>(returns[i]->type)->typeValue;
+	}
 
 	for (u64 i = 0; i < arguments.count; i++) {
 		result->argumentTypes[i] = static_cast<ExprLiteral *>(arguments[i]->type)->typeValue;

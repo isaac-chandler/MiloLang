@@ -1338,7 +1338,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 			auto type = static_cast<TypeFunction *>(call->function->type);
 
-			if (!isStandardSize(type->returnType->size)) {
+			if (!isStandardSize(type->returnTypes->size)) {
 				paramOffset = 1;
 			}
 			else {
@@ -1764,14 +1764,14 @@ void runIrGenerator() {
 
 		u64 paramOffset;
 
-		if (!isStandardSize(static_cast<ExprLiteral *>(function->returnType)->typeValue->size)) {
+		if (!isStandardSize(static_cast<ExprLiteral *>(function->returns.declarations[0]->type)->typeValue->size)) {
 			paramOffset = 1;
 		}
 		else {
 			paramOffset = 0;
 		}
 
-		function->state.parameterSpace = my_max(4, function->arguments.declarations.count + paramOffset);
+		function->state.parameterSpace = my_max(4, function->arguments.declarations.count + paramOffset + function->returns.declarations.count - 1);
 		function->state.nextRegister += function->state.parameterSpace;
 
 		for (u64 i = 0; i < function->arguments.declarations.count; i++) {
@@ -1779,7 +1779,7 @@ void runIrGenerator() {
 			auto type = static_cast<ExprLiteral *>(declaration->type)->typeValue;
 
 			if (isStandardSize(type->size)) {
-				declaration->physicalStorage = i + 1 + paramOffset;
+				declaration->physicalStorage = i + function->returns.declarations.count + paramOffset;
 			}
 			else {
 				declaration->physicalStorage = allocateSpaceForType(&function->state, type);

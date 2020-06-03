@@ -3584,7 +3584,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 
 				auto function = static_cast<TypeFunction *>(call->function->type);
 
-				expr->type = function->returnType;
+				expr->type = function->returnTypes;
 
 				addSizeDependency(job, expr->type);
 
@@ -3720,7 +3720,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 
 				assert(return_->returnsFrom->type->flavor == TypeFlavor::FUNCTION);
 
-				Type *returnType = static_cast<TypeFunction *>(return_->returnsFrom->type)->returnType;
+				Type *returnType = static_cast<TypeFunction *>(return_->returnsFrom->type)->returnTypes;
 
 				if (returnType == &TYPE_VOID) {
 					if (return_->value) {

@@ -734,18 +734,158 @@ ExprStringLiteral *makeStringLiteral(CodeLocation &start, EndLocation &end, Stri
 	return literal;
 }
 
-bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *usingBlock) {
-	bool must = false;
-	bool hadReturnType = false;
+void addVoidReturn(CodeLocation &start, EndLocation &end, ExprFunction *function) {
+	auto returnType = PARSER_NEW(Declaration);
 
+	returnType->type = parserMakeTypeLiteral(start, end, &TYPE_VOID);
+	returnType->start = start;
+	returnType->end = end;
+	returnType->name = String(nullptr, 0ULL);
+	returnType->initialValue = nullptr;
+	returnType->flags |= DECLARATION_IS_RETURN;
+
+	addDeclarationToBlock(&function->returns, returnType);
+}
+
+bool parseFunctionReturnTypes(LexerFile *lexer, ExprFunction *function) {
 	if (expectAndConsume(lexer, TokenT::ARROW)) {
-		hadReturnType = true;
-		must = expectAndConsume(lexer, TokenT::MUST);
+		auto returnType = PARSER_NEW(Declaration);
 
-		function->returnType = parseExpr(lexer);
+		if (expectAndConsume(lexer, TokenT::MUST))
+			returnType->flags |= DECLARATION_IS_MUST;
+
+		auto expr = parseExpr(lexer);
+
+		if (!expr)
+			return false;
+
+		returnType->type = expr;
+		returnType->start = expr->start;
+		returnType->end = expr->end;
+		returnType->name = String(nullptr, 0ULL);
+		returnType->initialValue = nullptr;
+		returnType->flags |= DECLARATION_IS_RETURN;
+
+		addDeclarationToBlock(&function->returns, returnType);
 	}
-	else {
-		function->returnType = parserMakeTypeLiteral(lexer->token.start, lexer->token.end, &TYPE_VOID);
+	else if (lexer->token.type == TOKEN('(')) {
+		TokenT peek;
+		
+		lexer->peekTokenTypes(1, &peek);
+
+		if (peek == TokenT::ARROW) {
+			lexer->advance();
+			lexer->advance();
+
+			bool must = expectAndConsume(lexer, TokenT::MUST);
+
+			if (lexer->token.type == TOKEN(')')) {
+				if (must) {
+					reportExpectedError(&lexer->token, "Error: Expected return type after #must directive");
+					return false;
+				}
+				else {
+					addVoidReturn(lexer->token.start, lexer->token.end, function);
+
+					lexer->advance();
+
+					return true;
+				}
+			}
+
+			if (lexer->token.type == TokenT::IDENTIFIER) {
+				lexer->peekTokenTypes(1, &peek);
+
+				if (lexer->token.type == TOKEN(':')) {
+					do {
+						if (!must) {
+							must = expectAndConsume(lexer, TokenT::MUST);
+						}
+
+						auto returnType = parseDeclaration(lexer);
+
+						if (!returnType)
+							return false;
+
+						if (returnType->flags & DECLARATION_MARKED_AS_USING) {
+							reportError(returnType, "Error: Cannot mark return types as using");
+							return false;
+						}
+
+						if (returnType->flags & DECLARATION_IS_CONSTANT) {
+							reportError(returnType, "Error: Return types cannot be constant declarations");
+							return false;
+						}
+
+						if (returnType->flags & DECLARATION_IS_UNINITIALIZED) {
+							reportError(returnType, "Error: Return types cannot be uninitialized");
+							return false;
+						}
+
+						returnType->flags |= DECLARATION_IS_RETURN;
+
+						if (must) {
+							returnType->flags |= DECLARATION_IS_MUST;
+							must = false;
+						}
+						addDeclarationToBlock(&function->returns, returnType);
+					} while (lexer->token.type == TOKEN(','));
+
+					if (!expectAndConsume(lexer, ')')) {
+						reportExpectedError(&lexer->token, "Error: Expected ) after return list");
+						return false;
+					}
+
+					return true;
+				}
+			}
+
+			do {
+				if (!must) {
+					must = expectAndConsume(lexer, TokenT::MUST);
+				}
+
+				auto returnType = PARSER_NEW(Declaration);
+
+				if (must) {
+					returnType->flags |= DECLARATION_IS_MUST;
+					must = false;
+				}
+
+				auto expr = parseExpr(lexer);
+
+				if (!expr)
+					return false;
+
+				returnType->type = expr;
+				returnType->start = expr->start;
+				returnType->end = expr->end;
+				returnType->name = String(nullptr, 0ULL);
+				returnType->initialValue = nullptr;
+				returnType->flags |= DECLARATION_IS_RETURN;
+
+				addDeclarationToBlock(&function->returns, returnType);
+			} while (lexer->token.type == TOKEN(','));
+
+			if (!expectAndConsume(lexer, ')')) {
+				reportExpectedError(&lexer->token, "Error: Expected ) after return list");
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
+
+bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *usingBlock) {
+	if (!parseFunctionReturnTypes(lexer, function)) {
+		return false;
+	}
+
+	bool hadReturnType = function->returns.declarations.count != 0;
+
+	if (!hadReturnType) {
+		addVoidReturn(lexer->token.start, lexer->token.end, function);
 	}
 
 
@@ -799,11 +939,12 @@ bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *u
 		pushBlock(&function->arguments);
 		popBlock(&function->arguments);
 
-		if (must) {
-			reportError(function, "Error: A function prototype cannot have its return type marked as #must");
-			return false;
+		for (auto return_ : function->returns.declarations) {
+			if (return_->flags & DECLARATION_IS_MUST) {
+				reportError(function, "Error: A function prototype cannot have its return type marked as #must");
+				return false;
+			}
 		}
-
 
 		if (usingBlock) {
 			reportError(function, "Error: Function prototypes cannot 'using' their parameters");
@@ -902,18 +1043,28 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 		}
 
 		if (expectAndConsume(lexer, ')')) { // It was a single expression in parentheses
-			if (expectAndConsume(lexer, TokenT::ARROW)) { // This is a function type since it has a return value
-				Expr *returnType = parseExpr(lexer);
-				end = lexer->previousTokenEnd;
-				if (!returnType) {
-					return nullptr;
-				}
+			bool func = false;
 
+			if (lexer->token.type == TokenT::ARROW) {
+				func = true;
+			}
+			else if (lexer->token.type == TOKEN('(')) {
+				TokenT peek;
+
+				lexer->peekTokenTypes(1, &peek);
+
+				func = peek == TokenT::ARROW;
+			}
+
+			if (func) { // This is a function type since it has a return value
 				auto type = PARSER_NEW(ExprFunction);
 				type->flavor = ExprFlavor::FUNCTION_PROTOTYPE;
-				type->returnType = returnType;
 				type->start = start;
-				type->end = end;
+
+				if (!parseFunctionReturnTypes(lexer, type))
+					return nullptr;
+
+				type->end = lexer->previousTokenEnd;
 				type->type = &TYPE_TYPE;
 
 				pushBlock(&type->arguments);
@@ -929,6 +1080,19 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 				addDeclarationToBlock(&type->arguments, argument);
 
 				popBlock(&type->arguments);
+
+				for (auto return_ : type->returns.declarations) {
+					if (return_->flags & DECLARATION_IS_MUST) {
+						reportError(type, "Error: A function prototype cannot have its return type marked as #must");
+						return false;
+					}
+				}
+
+				if (type->returns.declarations.count) {
+					reportError(type, "Error: A function prototype must have a return type");
+					return nullptr;
+				}
+
 
 				expr = type;
 			}
@@ -975,20 +1139,37 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 				return nullptr;
 			}
 
-			if (!expectAndConsume(lexer, TokenT::ARROW)) { // Even though this is unambiguously a function type, still require a return type to be given for consistency
-				reportExpectedError(&lexer->token, "Error: Expected a return type after function arguments");
-				return nullptr;
-			}
-
 			Expr *returnType = parseExpr(lexer);
 			if (!returnType)
 				return nullptr;
 
 			type->flavor = ExprFlavor::FUNCTION_PROTOTYPE;
-			type->returnType = returnType;
+			
+			if (!parseFunctionReturnTypes(lexer, type))
+				return nullptr;
+
+
+			if (type->returns.declarations.count) { // Even though this is unambiguously a function type, still require a return type to be given for consistency
+				reportExpectedError(&lexer->token, "Error: Expected a return type after function arguments");
+				return nullptr;
+			}
+
 			type->start = start;
 			type->end = lexer->previousTokenEnd;
 			type->type = &TYPE_TYPE;
+
+
+			for (auto return_ : type->returns.declarations) {
+				if (return_->flags & DECLARATION_IS_MUST) {
+					reportError(type, "Error: A function prototype cannot have its return type marked as #must");
+					return false;
+				}
+			}
+
+			if (type->returns.declarations.count) {
+				reportError(type, "Error: A function prototype must have a return type");
+				return nullptr;
+			}
 
 			expr = type;
 		}

@@ -253,7 +253,7 @@ struct ExprBlock : Expr {
 
 struct ExprFunction : Expr {
 	Block arguments;
-	Expr *returnType;
+	Block returns;
 	IrState state;
 
 	Expr *body;

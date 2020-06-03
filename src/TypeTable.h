@@ -82,7 +82,8 @@ struct Expr;
 
 
 struct TypeFunction : Type {
-	Type *returnType;
+	u64 returnCount;
+	Type **returnTypes;
 
 	u64 argumentCount;
 	Type **argumentTypes;
