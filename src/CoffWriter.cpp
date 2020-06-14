@@ -1082,7 +1082,7 @@ void runCoffWriter() {
 
 			u64 paramOffset;
 
-			if (!isStandardSize(static_cast<ExprLiteral *>(function->returnType)->typeValue->size)) {
+			if (!isStandardSize(static_cast<ExprLiteral *>(function->returns.declarations[0]->type)->typeValue->size)) {
 				paramOffset = 1;
 
 				code.add1(0x48); // mov qword ptr[rsp + 8], rcx
@@ -1097,8 +1097,15 @@ void runCoffWriter() {
 
 			constexpr u8 intRegisters[4] = { 0x4C, 0x54, 0x44, 0x4C };
 
-			for (u32 i = 0; i < my_min(4 - paramOffset, function->arguments.declarations.count); i++) {
-				auto type = static_cast<ExprLiteral *>(function->arguments.declarations[i]->type)->typeValue;
+			for (u32 i = 0; i < my_min(4 - paramOffset, function->arguments.declarations.count + function->returns.declarations.count - 1); i++) {
+				Type *type;
+				
+				if (i < function->arguments.declarations.count) {
+					type = static_cast<ExprLiteral *>(function->arguments.declarations[i]->type)->typeValue;
+				}
+				else {
+					type = TYPE_VOID_POINTER;
+				}
 
 				if (type->flavor == TypeFlavor::FLOAT) {
 					if (type->size == 4) {
@@ -1119,7 +1126,7 @@ void runCoffWriter() {
 
 					u8 rex = 0x40;
 
-					if (i >= 2) rex |= 0x04;
+					if (i + paramOffset >= 2) rex |= 0x04;
 					if (type->size == 8 || !isStandardSize(type->size)) rex |= 0x08;
 
 					if (rex != 0x40) {
@@ -2523,6 +2530,10 @@ void runCoffWriter() {
 							u64 size = ir.arguments->args[i].type->size;
 							u64 reg = ir.arguments->args[i].number;
 
+							if (reg == static_cast<u64>(-1LL)) {
+								continue;
+							}
+
 							if (!isStandardSize(size)) {
 								if (largeStorage & 1) {
 									++largeStorage; // Align to 16 bytes
@@ -2579,14 +2590,24 @@ void runCoffWriter() {
 							}
 						}
 
+						u64 dumpSpace = largeStorage;
+
 						largeStorage = parameterSpace;
 
 						constexpr int intRegisters[4] = { RCX, RDX, 8, 9 };
 
+
 						for (u8 i = 0; i < my_min(4 - parameterOffset, ir.arguments->argCount); i++) {
 							auto type = ir.arguments->args[i].type;
 
-							if (type->flavor == TypeFlavor::FLOAT) {
+
+							if (ir.arguments->args[i].number == static_cast<u64>(-1LL)) {
+
+								code.add1(intRegisters[i + parameterOffset] >= 8 ? 0x4C : 0x48);
+								code.add1(0x8D);
+								writeRSPOffsetByte(&code, intRegisters[i + parameterOffset] & 7, dumpSpace * 8);
+							}
+							else if (type->flavor == TypeFlavor::FLOAT) {
 								loadIntoFloatRegister(&code, function, type->size, i + parameterOffset, ir.arguments->args[i].number);
 							}
 							else {
@@ -2611,7 +2632,13 @@ void runCoffWriter() {
 						for (u32 i = 4 - parameterOffset; i < ir.arguments->argCount; i++) {
 							u64 size = ir.arguments->args[i].type->size;
 
-							if (isStandardSize(size)) {
+							if (ir.arguments->args[i].number == static_cast<u64>(-1LL)) {
+
+								code.add1(0x48);
+								code.add1(0x8D);
+								writeRSPOffsetByte(&code, RAX, dumpSpace * 8);
+							}
+							else if (isStandardSize(size)) {
 								loadIntoIntRegister(&code, function, ir.arguments->args[i].type->size, RAX, ir.arguments->args[i].number);
 							}
 							else {
@@ -2639,7 +2666,7 @@ void runCoffWriter() {
 								writeRSPRegisterByte(&code, function, RCX, ir.dest);
 							}
 							else {
-								writeRSPOffsetByte(&code, RCX, largeStorage * 8);
+								writeRSPOffsetByte(&code, RCX, dumpSpace * 8);
 							}
 						}
 

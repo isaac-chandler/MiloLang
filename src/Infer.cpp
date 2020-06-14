@@ -86,14 +86,16 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 			break;
 		}
 		case ExprFlavor::COMMA_ASSIGNMENT: {
+			auto comma = static_cast<ExprCommaAssignment *>(*expr);
 			
 			if (!((*expr)->flags & EXPR_COMMA_ASSIGNMENT_IS_DECLARATION)) {
-				auto comma = static_cast<ExprCommaAssignment *>(*expr);
 
 				for (u64 i = 0; i < comma->exprCount; i++) {
 					flatten(flattenTo, &comma->left[i]);
 				}
 			}
+
+			flatten(flattenTo, &comma->call);
 
 			flattenTo.add(expr);
 			break;
@@ -3644,8 +3646,10 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 
 				ExprFunction *functionForArgumentNames = nullptr;
 
-				if (comma->call->function->flavor == ExprFlavor::FUNCTION) {
-					functionForArgumentNames = static_cast<ExprFunction *>(comma->call->function);
+				auto call = static_cast<ExprFunctionCall *>(comma->call);
+
+				if (call->function->flavor == ExprFlavor::FUNCTION) {
+					functionForArgumentNames = static_cast<ExprFunction *>(call->function);
 
 					for (u64 i = comma->exprCount; i < functionForArgumentNames->returns.declarations.count; i++) {
 						auto declaration = functionForArgumentNames->returns.declarations[i];
@@ -3658,7 +3662,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 					}
 				}
 
-				auto function = static_cast<TypeFunction *>(comma->call->function->type);
+				auto function = static_cast<TypeFunction *>(static_cast<ExprFunctionCall *>(comma->call)->function->type);
 
 				if (comma->exprCount > function->returnCount || functionIsVoid(function)) {
 					if (functionIsVoid(function)) {
@@ -3675,9 +3679,14 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 
 				if (comma->flags & EXPR_COMMA_ASSIGNMENT_IS_DECLARATION) {
 					for (u64 i = 0; i < comma->exprCount; i++) {
-						auto declaration = static_cast<ExprIdentifier *>(comma->left[i])->declaration;
+						auto identifier = static_cast<ExprIdentifier *>(comma->left[i]);
 
-						declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, function->returnTypes[i]);
+						auto declaration = identifier->declaration;
+
+						identifier->type = function->returnTypes[i];
+						declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, identifier->type);
+
+						declaration->flags |= DECLARATION_TYPE_IS_READY;
 					}
 				}
 				else {
@@ -3698,6 +3707,8 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 						}
 					}
 				}
+
+				expr->type = &TYPE_VOID;
 
 				break;
 			}
@@ -4259,7 +4270,7 @@ bool addDeclaration(Declaration *declaration) {
 				declaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
 				return true;
 			}
-			else if (declaration->type && declaration->type->flavor == ExprFlavor::TYPE_LITERAL && !declaration->initialValue && (declaration->flags & (DECLARATION_IS_ARGUMENT | DECLARATION_IS_UNINITIALIZED))) {
+			else if (declaration->type && declaration->type->flavor == ExprFlavor::TYPE_LITERAL && !declaration->initialValue && (declaration->flags & (DECLARATION_IS_ARGUMENT | DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_RETURN))) {
 				declaration->flags |= DECLARATION_TYPE_IS_READY;
 				return true;
 			}
@@ -4305,6 +4316,15 @@ static Declaration *getDependency(Expr *halted) {
 			}
 			else if (argument->initialValue && !(argument->flags & DECLARATION_VALUE_IS_READY)) {
 				return argument;
+			}
+		}
+
+		for (auto return_ : function->returns.declarations) {
+			if (!(return_->flags & DECLARATION_TYPE_IS_READY)) {
+				return return_;
+			}
+			else if (return_->initialValue && !(return_->flags & DECLARATION_VALUE_IS_READY)) {
+				return return_;
 			}
 		}
 	}
@@ -4497,7 +4517,7 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 				}
 
 				if ((declaration->flags &
-					(DECLARATION_IS_CONSTANT | DECLARATION_IS_ARGUMENT | DECLARATION_IS_STRUCT_MEMBER)) || declaration->enclosingScope == &globalBlock) {
+					(DECLARATION_IS_CONSTANT | DECLARATION_IS_ARGUMENT | DECLARATION_IS_STRUCT_MEMBER | DECLARATION_IS_RETURN)) || declaration->enclosingScope == &globalBlock) {
 					if (!isLiteral(declaration->initialValue)) {
 						reportError(declaration->type, "Error: Declaration value must be a constant");
 						return false;
@@ -4521,7 +4541,7 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 		else if (!(declaration->flags & DECLARATION_IS_USING) && declaration->type) {
 
 			if (job->typeFlattenedIndex == job->typeFlattened.count) {
-				if (!(declaration->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_ITERATOR | DECLARATION_IS_ITERATOR_INDEX | DECLARATION_IS_ARGUMENT))) {
+				if (!(declaration->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_ITERATOR | DECLARATION_IS_ITERATOR_INDEX | DECLARATION_IS_ARGUMENT | DECLARATION_IS_RETURN))) {
 					auto type = static_cast<ExprLiteral *>(declaration->type)->typeValue;
 
 					bool yield;
@@ -4659,7 +4679,7 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 					declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, declaration->initialValue->type);
 
 					if ((declaration->flags &
-						(DECLARATION_IS_CONSTANT | DECLARATION_IS_ARGUMENT | DECLARATION_IS_STRUCT_MEMBER)) || declaration->enclosingScope == &globalBlock) {
+						(DECLARATION_IS_CONSTANT | DECLARATION_IS_ARGUMENT | DECLARATION_IS_STRUCT_MEMBER | DECLARATION_IS_RETURN)) || declaration->enclosingScope == &globalBlock) {
 						if (!isLiteral(declaration->initialValue)) {
 							reportError(declaration->type, "Error: Declaration value must be a constant");
 							return false;

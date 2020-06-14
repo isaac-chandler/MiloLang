@@ -12,12 +12,13 @@ window_height: s32 = 720
 
 counter_scale: f32
 
-load_image :: (filename: string) -> u32 {
-	success: bool
-	
-	file := read_entire_file(filename, *success)
+load_image :: (filename: string) -> u32 {	
+	file, success := read_entire_file(filename)
 	
 	if !success {
+		print_string("Failed to load image ")
+		print_string(filename)
+		print_string("\n")
 		return 0
 	}
 	
@@ -662,8 +663,7 @@ _main :: () {
 	wglSwapIntervalEXT(1)
 	
 	player_index: u64
-	
-	
+
 	glEnable(GL_TEXTURE_2D)
 	texture := load_image("Invaders/Spaceship.bmp")
 	{	

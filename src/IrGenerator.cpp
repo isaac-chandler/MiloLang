@@ -404,13 +404,17 @@ void generateCall(IrState *state, ExprFunctionCall *call, u64 dest, ExprCommaAss
 	auto type = static_cast<TypeFunction *>(call->function->type);
 
 	FunctionCall *argumentInfo = static_cast<FunctionCall *>(state->allocator.allocate(sizeof(FunctionCall) + sizeof(argumentInfo->args[0]) * (call->arguments.count + type->returnCount - 1)));
-	argumentInfo->argCount = call->arguments.count;
+	argumentInfo->argCount = call->arguments.count + type->returnCount - 1;
 
 	for (u64 i = 1; i < type->returnCount; i++) {
-		if (comma && i < comma->exprCount; i++) {
+		if (comma && i < comma->exprCount) {
 			u64 address = loadAddressOf(state, comma->left[i], state->nextRegister++);
 
 			argumentInfo->args[call->arguments.count + i - 1].number = address;
+			argumentInfo->args[call->arguments.count + i - 1].type = TYPE_VOID_POINTER;
+		}
+		else {
+			argumentInfo->args[call->arguments.count + i - 1].number = static_cast<u64>(-1LL);
 			argumentInfo->args[call->arguments.count + i - 1].type = TYPE_VOID_POINTER;
 		}
 	}
@@ -427,7 +431,7 @@ void generateCall(IrState *state, ExprFunctionCall *call, u64 dest, ExprCommaAss
 		paramOffset = 0;
 	}
 
-	u64 callAuxStorage = my_max(4, type->argumentCount + paramOffset);
+	u64 callAuxStorage = my_max(4, type->argumentCount + type->returnCount - 1 + paramOffset);
 
 	for (u64 i = 0; i < call->arguments.count; i++) {
 		argumentInfo->args[i].number = generateIr(state, call->arguments.values[i], state->nextRegister++);
@@ -458,11 +462,11 @@ void generateCall(IrState *state, ExprFunctionCall *call, u64 dest, ExprCommaAss
 		returnSize = my_max(returnSize, (type->returnTypes[i]->size + 7) / 8);
 	}
 
+	callAuxStorage += returnSize;
+
 	if (callAuxStorage > state->callAuxStorage) {
 		state->callAuxStorage = callAuxStorage;
 	}
-
-	state->callAuxStorage += returnSize;
 
 	Ir &ir = state->ir.add();
 	ir.op = IrOp::CALL;
@@ -1033,7 +1037,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 					return info.leftReg;
 				}
 				default:
-					assert(false);
+					return DEST_NONE;
 			}
 
 			break;
@@ -1496,21 +1500,60 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 			return DEST_NONE;
 		}
+		case ExprFlavor::COMMA_ASSIGNMENT: {
+			assert(dest == DEST_NONE);
+			
+			auto comma = static_cast<ExprCommaAssignment *>(expr);
+
+			u64 address = loadAddressOf(state, comma->left[0], state->nextRegister++);
+
+			dest = allocateSpaceForType(state, comma->left[0]->type);
+
+			generateCall(state, static_cast<ExprFunctionCall *>(comma->call), dest, comma);
+
+			Ir &write = state->ir.add();
+			write.op = IrOp::WRITE;
+			write.opSize = comma->left[0]->type->size;
+			write.a = address;
+			write.b = dest;
+			
+
+			return DEST_NONE;
+		}
 		case ExprFlavor::RETURN: {
 			auto return_ = static_cast<ExprReturn *>(expr);
 
 			u64 result = 0;
 
-			result = return_->value ? generateIr(state, return_->value, state->nextRegister++) : 0;
+			if (return_->returns.count) {
+				u64 result = generateIr(state, return_->returns.values[0], state->nextRegister++);
 
-			Ir &ir = state->ir.add();
-			ir.op = IrOp::RETURN;
-			ir.a = result;
-			ir.opSize = return_->value ? return_->value->type->size : 0;
+				for (u64 i = 1; i < return_->returns.count; i++) {
+					u64 store = generateIr(state, return_->returns.values[i], state->nextRegister++);
 
-			if (return_->value && return_->value->type->flavor == TypeFlavor::FLOAT) {
-				ir.flags |= IR_FLOAT_OP;
+					Ir &write = state->ir.add();
+					write.op = IrOp::WRITE;
+					write.a = return_->returnsFrom->returns.declarations[i]->physicalStorage;
+					write.b = store;
+					write.opSize = return_->returns.values[i]->type->size;
+				}
+
+				Ir &ir = state->ir.add();
+				ir.op = IrOp::RETURN;
+				ir.a = result;
+				ir.opSize = return_->returns.values[0]->type->size;
+
+				if (return_->returns.values[0]->type->flavor == TypeFlavor::FLOAT) {
+					ir.flags |= IR_FLOAT_OP;
+				}
 			}
+			else {
+				Ir &ir = state->ir.add();
+				ir.op = IrOp::RETURN;
+				ir.a = 0;
+				ir.opSize = 0;
+			}
+
 
 			return DEST_NONE;
 		}
@@ -1666,15 +1709,6 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 			return DEST_NONE;
 		}
-		case ExprFlavor::COMMA_ASSIGNMENT: {
-			assert(dest == DEST_NONE);
-
-			auto comma = static_cast<ExprCommaAssignment *>(expr);
-
-			
-
-			break;
-		}
 		case ExprFlavor::ARRAY: {
 			if (dest == DEST_NONE) return DEST_NONE;
 
@@ -1804,6 +1838,7 @@ void runIrGenerator() {
 			paramOffset = 0;
 		}
 
+
 		function->state.parameterSpace = my_max(4, function->arguments.declarations.count + paramOffset + function->returns.declarations.count - 1);
 		function->state.nextRegister += function->state.parameterSpace;
 
@@ -1812,11 +1847,17 @@ void runIrGenerator() {
 			auto type = static_cast<ExprLiteral *>(declaration->type)->typeValue;
 
 			if (isStandardSize(type->size)) {
-				declaration->physicalStorage = i + function->returns.declarations.count + paramOffset;
+				declaration->physicalStorage = i + 1 + paramOffset;
 			}
 			else {
 				declaration->physicalStorage = allocateSpaceForType(&function->state, type);
 			}
+		}
+
+		for (u64 i = 1; i < function->returns.declarations.count; i++) {
+			auto declaration = function->returns.declarations[i];
+
+			declaration->physicalStorage = function->arguments.declarations.count + paramOffset + i;
 		}
 
 

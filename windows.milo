@@ -579,17 +579,17 @@ create_wide_string :: (s: string) -> #must *u16 {
 }
 
 // @Incomplete add multiple return values 
-read_entire_file :: (file: string, success: *bool) -> #must []u8 {
-	<<success = true
-
-	result: []u8 = --
+read_entire_file :: (file: string) (-> #must result: []u8, success := true) {
+	result: []u8
 	
 	filename := create_wide_string(file)
 	
 	handle := CreateFileW(filename, GENERIC_READ, 0, null, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN)
 	
+	deallocate(filename)
+	
 	if handle == INVALID_HANDLE_VALUE {
-		<<success = false
+		return result, false
 	} else {
 	
 		if GetFileSizeEx(handle, cast() *result.count) {
@@ -607,23 +607,26 @@ read_entire_file :: (file: string, success: *bool) -> #must []u8 {
 				}
 				
 				if !ReadFile(handle, remaining.data, cast() bytes_to_read, *bytes_read) || bytes_read != bytes_to_read {
-					<<success = false
 					result.count = 0
 					deallocate(result.data)
 					result.data = null
-					break
+					
+					CloseHandle(handle)
+					
+					return result, false
 				}
 				
 				remaining.count -= bytes_to_read
 				remaining.data += bytes_to_read
 			}
 		} else {
-			<<success = false
+			CloseHandle(handle)
+		
+			return result, false
 		}
 		
 		CloseHandle(handle)
 	}
-	deallocate(filename)
 	
 	return result
 }

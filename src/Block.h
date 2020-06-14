@@ -53,6 +53,7 @@ struct Declaration {
 #define BLOCK_IS_COMPLETE 0x2
 #define BLOCK_IS_LOOP 0x4
 #define BLOCK_IS_STRUCT 0x8
+#define BLOCK_IS_RETURNS 0x10
 
 #define BLOCK_HASHTABLE_MIN_COUNT 32
 
@@ -183,7 +184,7 @@ inline Declaration *findDeclaration(Block *block, String name, u64 *index, bool 
 
 inline bool addImplicitImport(Block *block, String name, CodeLocation *start, EndLocation *end) {
 	PROFILE_FUNC();
-	if (block->flags & (BLOCK_IS_ARGUMENTS | BLOCK_IS_STRUCT)) return true;
+	if (block->flags & (BLOCK_IS_ARGUMENTS | BLOCK_IS_STRUCT | BLOCK_IS_RETURNS)) return true;
 
 	u64 index;
 	auto declaration = findDeclarationIncludeImplictImports(block, name, &index);

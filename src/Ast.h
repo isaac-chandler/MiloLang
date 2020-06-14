@@ -312,5 +312,5 @@ struct ExprCommaAssignment : Expr {
 	u64 exprCount;
 	Expr **left;
 
-	ExprFunctionCall *call;
+	Expr *call;
 };

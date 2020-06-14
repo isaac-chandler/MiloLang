@@ -40,17 +40,8 @@ Compile option for runtime checking
  - 
 
 ABI/calling convention
- - multiple return values
  - varargs (represent with arrays?)
- - arguments by value are immutable?
- 
-
-multiple return values
- - Named return values
- - Return values are declarations
- - Make #must work with multiple returns
- - ABI
-   - 
+ - arguments by value are immutable
  
 varargs
  - 

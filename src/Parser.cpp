@@ -180,6 +180,8 @@ Declaration *createDeclarationForUsing(Declaration *oldDeclaration, Block *block
 	return declaration;
 }
 
+bool parseArguments(LexerFile *lexer, Arguments *args, const char *message);
+
 Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 	if (lexer->token.type == TokenT::FOR) {
 		ExprLoop *loop = PARSER_NEW(ExprLoop);
@@ -541,7 +543,9 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 				comma->end = lexer->token.end;
 
 				if (expectAndConsume(lexer, '=')) {
-					comma->call = static_cast<ExprFunctionCall *>(parseExpr(lexer));
+					comma->call = parseExpr(lexer);
+
+					break;
 				}
 				else if (expectAndConsume(lexer, ':')) {
 					if (!allowDeclarations) {
@@ -557,7 +561,7 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 						return nullptr;
 					}
 
-					comma->call = static_cast<ExprFunctionCall *>(parseExpr(lexer));
+					comma->call = parseExpr(lexer);
 					
 					for (auto expr : exprs) {
 						if (expr->flavor != ExprFlavor::IDENTIFIER) {
@@ -580,7 +584,11 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 						if (!addDeclarationToCurrentBlock(declaration)) {
 							return nullptr;
 						}
+
+						identifier->declaration = declaration;
 					}
+
+					break;
 				}
 				else {
 					expr = parseExpr(lexer);
@@ -875,7 +883,7 @@ bool parseFunctionReturnTypes(LexerFile *lexer, ExprFunction *function) {
 			if (lexer->token.type == TokenT::IDENTIFIER) {
 				lexer->peekTokenTypes(1, &peek);
 
-				if (lexer->token.type == TOKEN(':')) {
+				if (peek == TOKEN(':')) {
 					do {
 						if (!must) {
 							must = expectAndConsume(lexer, TokenT::MUST);
@@ -908,7 +916,7 @@ bool parseFunctionReturnTypes(LexerFile *lexer, ExprFunction *function) {
 							must = false;
 						}
 						addDeclarationToBlock(&function->returns, returnType);
-					} while (lexer->token.type == TOKEN(','));
+					} while (expectAndConsume(lexer, ','));
 
 					if (!expectAndConsume(lexer, ')')) {
 						reportExpectedError(&lexer->token, "Error: Expected ) after return list");
@@ -945,7 +953,7 @@ bool parseFunctionReturnTypes(LexerFile *lexer, ExprFunction *function) {
 				returnType->flags |= DECLARATION_IS_RETURN;
 
 				addDeclarationToBlock(&function->returns, returnType);
-			} while (lexer->token.type == TOKEN(','));
+			} while (expectAndConsume(lexer, ','));
 
 			if (!expectAndConsume(lexer, ')')) {
 				reportExpectedError(&lexer->token, "Error: Expected ) after return list");
@@ -1069,6 +1077,7 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 		ExprFunction *function = PARSER_NEW(ExprFunction);
 		function->start = start;
 		function->arguments.flags |= BLOCK_IS_ARGUMENTS;
+		function->returns.flags |= BLOCK_IS_RETURNS;
 
 		if (!parseFunctionPostfix(lexer, function, nullptr))
 			return false;
@@ -1080,6 +1089,7 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 		function->flavor = ExprFlavor::FUNCTION;
 		function->start = start;
 		function->arguments.flags |= BLOCK_IS_ARGUMENTS;
+		function->returns.flags |= BLOCK_IS_RETURNS;
 
 		ExprBlock *usingBlock = nullptr;
 
@@ -1152,6 +1162,9 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 				type->flavor = ExprFlavor::FUNCTION_PROTOTYPE;
 				type->start = start;
 
+				type->arguments.flags |= BLOCK_IS_ARGUMENTS;
+				type->returns.flags |= BLOCK_IS_RETURNS;
+
 				if (!parseFunctionReturnTypes(lexer, type))
 					return nullptr;
 
@@ -1175,11 +1188,11 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 				for (auto return_ : type->returns.declarations) {
 					if (return_->flags & DECLARATION_IS_MUST) {
 						reportError(type, "Error: A function prototype cannot have its return type marked as #must");
-						return false;
+						return nullptr;
 					}
 				}
 
-				if (type->returns.declarations.count) {
+				if (!type->returns.declarations.count) {
 					reportError(type, "Error: A function prototype must have a return type");
 					return nullptr;
 				}
@@ -1187,7 +1200,7 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 				for (auto declaration : type->returns.declarations) {
 					if (declaration->initialValue) {
 						reportError(declaration, "Error: A function prototype cannot have a default return value");
-						return false;
+						return nullptr;
 					}
 				}
 
@@ -1200,6 +1213,9 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 		}
 		else if (expectAndConsume(lexer, ',')) { // This is a function type since there are multiple comma separated values in parentheses
 			auto *type = PARSER_NEW(ExprFunction);
+
+			type->arguments.flags |= BLOCK_IS_ARGUMENTS;
+			type->returns.flags |= BLOCK_IS_RETURNS;
 
 			pushBlock(&type->arguments);
 
@@ -1247,7 +1263,7 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 				return nullptr;
 
 
-			if (type->returns.declarations.count) { // Even though this is unambiguously a function type, still require a return type to be given for consistency
+			if (!type->returns.declarations.count) { // Even though this is unambiguously a function type, still require a return type to be given for consistency
 				reportExpectedError(&lexer->token, "Error: Expected a return type after function arguments");
 				return nullptr;
 			}
@@ -1272,7 +1288,7 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 			for (auto declaration : type->returns.declarations) {
 				if (declaration->initialValue) {
 					reportError(declaration, "Error: A function prototype cannot have a default return value");
-					return false;
+					return nullptr;
 				}
 			}
 
@@ -1336,6 +1352,8 @@ bool parseArguments(LexerFile *lexer, Arguments *args, const char *message) {
 	args->count = arguments.count;
 	args->values = arguments.storage;
 	args->names = names.storage;
+
+	return true;
 }
 
 Expr *parsePrimaryExpr(LexerFile *lexer) {
