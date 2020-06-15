@@ -82,6 +82,10 @@ defer
 
 switch if
  - #complete
+ 
+make for 0..5 not lex as for 0. . 5
+ 
+unary .
 
 runtime manipulation of type values
  - ==, !=

@@ -277,175 +277,45 @@ void trySolidifyNumericLiteralToDefault(Expr *expr) {
 
 // @Incomplete more specific handling so we can print the bounds that were violated
 bool boundsCheckImplicitConversion(Expr *location, Type *convertTo, ExprLiteral *convertFrom) {
-	if (convertFrom->type->flags & TYPE_INTEGER_IS_SIGNED) {
-		if (convertTo == &TYPE_U64) {
-			if (convertFrom->signedValue < 0) {
-				reportError(location, "Error: Integer literal too small for u64 (min: 0, given: %" PRIi64 ")", convertFrom->signedValue);
-				return false;
-			}
-			return true;
-		}
-		else if (convertTo == &TYPE_U32) {
-			if (convertFrom->signedValue < 0) {
-				reportError(location, "Error: Integer literal too small for u32 (min: 0, given: %" PRIi64 ")", convertFrom->signedValue);
-				return false;
-			}
-			if (convertFrom->signedValue > static_cast<s64>(UINT32_MAX)) {
-				reportError(location, "Error: Integer literal too large for u32 (max: %" PRIu32 ", given: %" PRIu64 ")", UINT32_MAX, convertFrom->unsignedValue);
+	if (convertTo->flags & TYPE_INTEGER_IS_SIGNED) {
+		s64 max = static_cast<s64>((1ULL << (convertTo->size * 8 - 1)) - 1);
+		s64 min = -static_cast<s64>(max) - 1;
 
+		if (convertFrom->flags & TYPE_INTEGER_IS_SIGNED) {
+			if (convertFrom->signedValue > max) {
+				reportError(location, "Error: Integer literal too large for %.*s (max: %" PRIi64 ", given: %" PRIi64 ")", STRING_PRINTF(convertTo->name), max, convertFrom->signedValue);
 				return false;
 			}
 
-			return true;
-		}
-		else if (convertTo == &TYPE_U16) {
-			if (convertFrom->signedValue < 0) {
-				reportError(location, "Error: Integer literal too small for u16 (min: 0, given: %" PRIi64 ")", convertFrom->signedValue);
+			if (convertFrom->signedValue < min) {
+				reportError(location, "Error: Integer literal too small for %.*s (min: %" PRIi64 ", given: %" PRIi64 ")", STRING_PRINTF(convertTo->name), min, convertFrom->signedValue);
 				return false;
 			}
-			if (convertFrom->unsignedValue > static_cast<s64>(UINT16_MAX)) {
-				reportError(location, "Error: Integer literal too large for u16 (max: %" PRIu16 ", given: %" PRIu64 ")", UINT16_MAX, convertFrom->unsignedValue);
-
-				return false;
-			}
-
-			return true;
-		}
-		else if (convertTo == &TYPE_U8) {
-			if (convertFrom->signedValue < 0) {
-				reportError(location, "Error: Integer literal too small for u8 (min: 0, given: %" PRIi64 ")", convertFrom->signedValue);
-				return false;
-			}
-			if (convertFrom->unsignedValue > static_cast<s64>(UINT8_MAX)) {
-				reportError(location, "Error: Integer literal too large for u8 (max: %" PRIu8 ", given: %" PRIu64 ")", UINT16_MAX, convertFrom->unsignedValue);
-
-				return false;
-			}
-
-			return true;
-		}
-		if (convertTo == &TYPE_S64) {
-			return true;
-		}
-		else if (convertTo == &TYPE_S32) {
-			if (convertFrom->signedValue > INT32_MAX) {
-				reportError(location, "Error: Integer literal too large for s32 (max: %" PRIi32 ", given: %" PRIi64 ")", INT32_MAX, convertFrom->signedValue);
-
-				return false;
-			}
-			else if (convertFrom->signedValue < INT32_MIN) {
-				reportError(location, "Error: Integer literal too small for s32 (min: %" PRIi32 ", given: %" PRIi64 ")", INT32_MIN, convertFrom->signedValue);
-
-				return false;
-			}
-
-			return true;
-		}
-		else if (convertTo == &TYPE_S16) {
-			if (convertFrom->signedValue > INT16_MAX) {
-				reportError(location, "Error: Integer literal too large for s16 (max: %" PRIi16 ", given: %" PRIi64 ")", INT16_MAX, convertFrom->signedValue);
-
-				return false;
-			}
-			else if (convertFrom->signedValue < INT16_MIN) {
-				reportError(location, "Error: Integer literal too small for s16 (min: %" PRIi16 ", given: %" PRIi64 ")", INT16_MIN, convertFrom->signedValue);
-
-				return false;
-			}
-
-			return true;
-		}
-		else if (convertTo == &TYPE_S8) {
-			if (convertFrom->signedValue > INT8_MAX) {
-				reportError(location, "Error: Integer literal too large for s8 (max: %" PRIi8 ", given: %" PRIi64 ")", INT8_MAX, convertFrom->signedValue);
-
-				return false;
-			}
-			else if (convertFrom->signedValue < INT16_MIN) {
-				reportError(location, "Error: Integer literal too small for s8 (min: %" PRIi8 ", given: %" PRIi64 ")", INT8_MIN, convertFrom->signedValue);
-
-				return false;
-			}
-
-			return true;
 		}
 		else {
-			assert(false);
-			return false;
+			if (convertFrom->unsignedValue > static_cast<u64>(max)) {
+				reportError(location, "Error: Integer literal too large for %.*s (max: %" PRIi64 ", given: %" PRIu64 ")", STRING_PRINTF(convertTo->name), max, convertFrom->unsignedValue);
+				return false;
+			}
 		}
 	}
 	else {
-		if (convertTo == &TYPE_U64) {
-			return true;
-		}
-		else if (convertTo == &TYPE_U32) {
-			if (convertFrom->unsignedValue > UINT32_MAX) {
-				reportError(location, "Error: Integer literal too large for u32 (max: %" PRIu32 ", given: %" PRIu64 ")", UINT32_MAX, convertFrom->unsignedValue);
+		u64 max = convertTo == &TYPE_U64 ? UINT64_MAX : (1ULL << (convertTo->size * 8)) - 1;
 
+		if ((convertFrom->flags & TYPE_INTEGER_IS_SIGNED) && convertFrom->signedValue < 0) {
+			if (convertFrom->signedValue < 0) {
+				reportError(location, "Error: Integer literal too small for %.*s (min: 0, given: %" PRIi64 ")", STRING_PRINTF(convertTo->name), convertFrom->signedValue);
 				return false;
 			}
-
-			return true;
 		}
-		else if (convertTo == &TYPE_U16) {
-			if (convertFrom->unsignedValue > UINT16_MAX) {
-				reportError(location, "Error: Integer literal too large for u16 (max: %" PRIu16 ", given: %" PRIu64 ")", UINT16_MAX, convertFrom->unsignedValue);
 
-				return false;
-			}
-
-			return true;
-		}
-		else if (convertTo == &TYPE_U8) {
-			if (convertFrom->unsignedValue > UINT8_MAX) {
-				reportError(location, "Error: Integer literal too large for u8 (max: %" PRIu8 ", given: %" PRIu64 ")", UINT16_MAX, convertFrom->unsignedValue);
-
-				return false;
-			}
-
-			return true;
-		}
-		else if (convertTo == &TYPE_S64) {
-			if (convertFrom->unsignedValue > static_cast<u64>(INT64_MAX)) {
-				reportError(location, "Error: Integer literal too large for s64 (max: %" PRIi64 ", given: %" PRIu64 ")", INT64_MAX, convertFrom->unsignedValue);
-
-				return false;
-			}
-
-			return true;
-		}
-		else if (convertTo == &TYPE_S32) {
-			if (convertFrom->unsignedValue > static_cast<u64>(INT32_MAX)) {
-				reportError(location, "Error: Integer literal too large for s32 (max: %" PRIi32 ", given: %" PRIu64 ")", INT32_MAX, convertFrom->unsignedValue);
-
-				return false;
-			}
-
-			return true;
-		}
-		else if (convertTo == &TYPE_S16) {
-			if (convertFrom->unsignedValue > static_cast<u64>(INT16_MAX)) {
-				reportError(location, "Error: Integer literal too large for s16 (max: %" PRIi16 ", given: %" PRIu64 ")", INT16_MAX, convertFrom->unsignedValue);
-
-				return false;
-			}
-
-			return true;
-		}
-		else if (convertTo == &TYPE_S8) {
-			if (convertFrom->unsignedValue > static_cast<u64>(INT8_MAX)) {
-				reportError(location, "Error: Integer literal too large for s8 (max: %" PRIi8 ", given: %" PRIu64 ")", INT8_MAX, convertFrom->unsignedValue);
-
-				return false;
-			}
-
-			return true;
-		}
-		else {
-			assert(false);
+		if (convertFrom->unsignedValue > max) {
+			reportError(location, "Error: Integer literal too large for %.*s (max: %" PRIu64 ", given: %" PRIu64 ")", STRING_PRINTF(convertTo->name), max, convertFrom->unsignedValue);
 			return false;
 		}
 	}
+
+	return true;
 }
 
 
@@ -3288,54 +3158,9 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 				break;
 			}
 			case ExprFlavor::FUNCTION: {
-				auto function = static_cast<ExprFunction *>(expr);
-
-				for (auto argument : function->arguments.declarations) {
-					assert(argument);
-
-					if (!(argument->flags & DECLARATION_TYPE_IS_READY)) {
-						return true;
-					}
-
-
-					if (argument->initialValue) {
-						if (argument->flags & DECLARATION_VALUE_IS_READY) {
-							if (!isLiteral(argument->initialValue)) {
-								reportError(argument, "Error: Default arguments must be a constant value");
-								return false;
-							}
-						}
-						else {
-							return true;
-						}
-					}
+				if (!expr->type) {
+					return true;
 				}
-
-
-				for (auto return_ : function->returns.declarations) {
-					assert(return_);
-
-					if (!(return_->flags & DECLARATION_TYPE_IS_READY)) {
-						return true;
-					}
-					else {
-					}
-
-
-					if (return_->initialValue) {
-						if (return_->flags & DECLARATION_VALUE_IS_READY) {
-							if (!isLiteral(return_->initialValue)) {
-								reportError(return_, "Error: Default returns must be a constant value");
-								return false;
-							}
-						}
-						else {
-							return true;
-						}
-					}
-				}
-
-				function->type = getFunctionType(function);
 
 				break;
 			}
@@ -4253,6 +4078,11 @@ bool addDeclaration(Declaration *declaration) {
 		}
 	}
 
+	if ((declaration->flags & DECLARATION_TYPE_IS_READY) && (declaration->flags & DECLARATION_VALUE_IS_READY)) {
+		return true;
+	}
+
+	// Fast path for declarations that are trivial to infer
 	if (!(declaration->flags & DECLARATION_IS_USING)) {
 		if (declaration->flags & DECLARATION_IS_CONSTANT) {
 			if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::INT_LITERAL) {
@@ -4260,9 +4090,9 @@ bool addDeclaration(Declaration *declaration) {
 				declaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
 				return true;
 			}
-			/*else if (!declaration->type && declaration->initialValue->flavor == ExprFlavor::FUNCTION && static_cast<ExprFunction *>(declaration->initialValue)->returnType->flavor == ExprFlavor::TYPE_LITERAL) {
+			else if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::FUNCTION) {
 				return true;
-			}*/
+			}
 		}
 		else if (declaration->enclosingScope) {
 			if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::INT_LITERAL)  {
@@ -4274,9 +4104,9 @@ bool addDeclaration(Declaration *declaration) {
 				declaration->flags |= DECLARATION_TYPE_IS_READY;
 				return true;
 			}
-			/*else if (!declaration->type && declaration->initialValue->flavor == ExprFlavor::FUNCTION && static_cast<ExprFunction *>(declaration->initialValue)->returnType->flavor == ExprFlavor::TYPE_LITERAL) {
+			else if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::FUNCTION) {
 				return true;
-			}*/
+			}
 		}
 	}
 
@@ -4334,6 +4164,10 @@ static Declaration *getDependency(Expr *halted) {
 }
 
 static s64 findLoop(Array<Declaration *> &loop, Declaration *declaration) {
+	if (!declaration->inferJob) {
+		return -1;
+	}
+
 	loop.add(declaration);
 
 	auto job = declaration->inferJob;
@@ -4400,6 +4234,70 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 	case InferType::FUNCTION_BODY: {
 		auto function = job->infer.function;
 
+		if (!function->type) {
+			bool typesInferred = true;
+
+			for (auto argument : function->arguments.declarations) {
+				assert(argument);
+
+				if (!(argument->flags & DECLARATION_TYPE_IS_READY)) {
+					typesInferred = false;
+					break;
+				}
+
+
+				if (argument->initialValue) {
+					if (argument->flags & DECLARATION_VALUE_IS_READY) {
+						if (!isLiteral(argument->initialValue)) {
+							reportError(argument, "Error: Default arguments must be a constant value");
+							return false;
+						}
+					}
+					else {
+						typesInferred = false;
+						break;
+					}
+				}
+			}
+
+
+			for (auto return_ : function->returns.declarations) {
+				assert(return_);
+
+				if (!(return_->flags & DECLARATION_TYPE_IS_READY)) {
+					typesInferred = false;
+					break;
+				}
+				else if (static_cast<ExprLiteral *>(return_->type)->typeValue == &TYPE_VOID && function->returns.declarations.count != 1) {
+					reportError(return_, "Error: Functions with multiple return values cannot return a void value");
+					return false;
+				}
+
+
+				if (return_->initialValue) {
+					if (return_->flags & DECLARATION_VALUE_IS_READY) {
+						if (!isLiteral(return_->initialValue)) {
+							reportError(return_, "Error: Default returns must be a constant value");
+							return false;
+						}
+					}
+					else {
+						typesInferred = false;
+						break;
+					}
+				}
+			}
+
+			if (typesInferred) {
+				function->type = getFunctionType(function);
+
+				if (function->valueOfDeclaration && !function->valueOfDeclaration->type && !function->valueOfDeclaration->inferJob) {
+					function->valueOfDeclaration->type = inferMakeTypeLiteral(function->start, function->end, function->type);
+					function->valueOfDeclaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
+				}
+			}
+		}
+
 		if (!inferFlattened(job, job->valueFlattened, &job->valueFlattenedIndex, &job->waitingOnBlock)) {
 			return false;
 		}
@@ -4407,6 +4305,10 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 		if (function->type) {
 			for (auto argument : job->infer.function->arguments.declarations) {
 				addSizeDependency(job, static_cast<ExprLiteral *>(argument->type)->typeValue);
+			}
+
+			for (auto return_ : job->infer.function->returns.declarations) {
+				addSizeDependency(job, static_cast<ExprLiteral *>(return_->type)->typeValue);
 			}
 
 			if (job->infer.function->flags & EXPR_FUNCTION_IS_EXTERNAL) {

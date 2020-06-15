@@ -39,7 +39,7 @@ struct Declaration {
 	struct Block *enclosingScope;
 	u64 indexInBlock;
 
-	struct InferJob *inferJob;
+	struct InferJob *inferJob = nullptr;
 
 	union Symbol *symbol;
 	u64 physicalStorage;

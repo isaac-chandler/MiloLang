@@ -1080,7 +1080,7 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 		function->returns.flags |= BLOCK_IS_RETURNS;
 
 		if (!parseFunctionPostfix(lexer, function, nullptr))
-			return false;
+			return nullptr;
 
 		expr = function;
 	}
@@ -1276,7 +1276,7 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 			for (auto return_ : type->returns.declarations) {
 				if (return_->flags & DECLARATION_IS_MUST) {
 					reportError(type, "Error: A function prototype cannot have its return type marked as #must");
-					return false;
+					return nullptr;
 				}
 			}
 
@@ -1749,7 +1749,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 				if (!expectAndConsume(lexer, ')')) {
 					reportExpectedError(&lexer->token, "Error: Expected ')' after function arguments");
-					return false;
+					return nullptr;
 				}
 			}
 
