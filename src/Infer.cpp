@@ -38,7 +38,6 @@ struct InferJob {
 	} infer;
 
 	InferType type;
-	Block *waitingOnBlock = nullptr;
 
 	Array<Expr **> typeFlattened;
 	union {
@@ -3033,7 +3032,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 
 	return true;
 }
-bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block ** const waitingOnBlock) {
+bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 	PROFILE_FUNC();
 	++totalInfers;
 
@@ -3059,7 +3058,6 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 						auto member = findDeclaration(&struct_->members, identifier->name, &index, &yield);
 
 						if (yield) {
-							*waitingOnBlock = &struct_->members;
 							return true;
 						}
 
@@ -3104,7 +3102,6 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 								}
 							}
 							else if (yield) {
-								*waitingOnBlock = identifier->resolveFrom;
 								return true;
 							}
 
@@ -3118,13 +3115,6 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index, Block 
 							if (!identifier->resolveFrom) { // If we have checked all the local scopes and the
 								u64 index;
 								identifier->declaration = findDeclarationNoYield(&globalBlock, identifier->name, &index);
-
-								if (!identifier->declaration) {
-									*waitingOnBlock = &globalBlock;
-								}
-							}
-							else {
-								*waitingOnBlock = identifier->resolveFrom;
 							}
 						}
 						
@@ -4035,7 +4025,6 @@ InferJob *allocateJob() {
 		auto result = firstFreeInferJob;
 		firstFreeInferJob = firstFreeInferJob->nextFree;
 
-		result->waitingOnBlock = nullptr;
 		result->typeFlattened.clear();
 		result->typeFlattenedIndex = 0;
 		result->valueFlattened.clear();
@@ -4265,6 +4254,10 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 				assert(return_);
 
 				if (!(return_->flags & DECLARATION_TYPE_IS_READY)) {
+					if (return_->type->flavor == ExprFlavor::TYPE_LITERAL) {
+						printf("%llx\n", return_->inferJob);
+					}
+
 					typesInferred = false;
 					break;
 				}
@@ -4298,7 +4291,7 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 			}
 		}
 
-		if (!inferFlattened(job, job->valueFlattened, &job->valueFlattenedIndex, &job->waitingOnBlock)) {
+		if (!inferFlattened(job, job->valueFlattened, &job->valueFlattenedIndex)) {
 			return false;
 		}
 
@@ -4343,13 +4336,13 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 		auto declaration = job->infer.declaration;
 
 		if (declaration->type) {
-			if (!inferFlattened(nullptr, job->typeFlattened, &job->typeFlattenedIndex, &job->waitingOnBlock)) {
+			if (!inferFlattened(nullptr, job->typeFlattened, &job->typeFlattenedIndex)) {
 				return false;
 			}
 		}
 
 		if (declaration->initialValue) {
-			if (!inferFlattened(job, job->valueFlattened, &job->valueFlattenedIndex, &job->waitingOnBlock)) {
+			if (!inferFlattened(job, job->valueFlattened, &job->valueFlattenedIndex)) {
 				return false;
 			}
 		}
@@ -4781,9 +4774,6 @@ void runInfer() {
 			for (u64 i = 0; i < inferJobs.count; i++) {
 
 				auto job = inferJobs[i];
-
-				if (job->waitingOnBlock && job->waitingOnBlock != changedBlock && !madeProgress) continue;
-				job->waitingOnBlock = nullptr;
 
 				if (!doInferJob(&i, &madeProgress)) {
 					goto error;
