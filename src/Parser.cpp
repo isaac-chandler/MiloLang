@@ -832,8 +832,10 @@ void addVoidReturn(CodeLocation &start, EndLocation &end, ExprFunction *function
 	addDeclarationToBlock(&function->returns, returnType);
 }
 
-bool parseFunctionReturnTypes(LexerFile *lexer, ExprFunction *function) {
+bool parseFunctionReturnTypes(LexerFile *lexer, ExprFunction *function, bool *hadReturns) {
 	pushBlock(&function->returns);
+
+	*hadReturns = true;
 
 	if (expectAndConsume(lexer, TokenT::ARROW)) {
 		auto returnType = PARSER_NEW(Declaration);
@@ -961,6 +963,11 @@ bool parseFunctionReturnTypes(LexerFile *lexer, ExprFunction *function) {
 			}
 		}
 	}
+	else {
+		*hadReturns = false;
+
+		addVoidReturn(lexer->token.start, lexer->token.end, function);
+	}
 
 	popBlock(&function->returns);
 
@@ -968,14 +975,10 @@ bool parseFunctionReturnTypes(LexerFile *lexer, ExprFunction *function) {
 }
 
 bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *usingBlock) {
-	if (!parseFunctionReturnTypes(lexer, function)) {
+	bool hadReturnType;
+
+	if (!parseFunctionReturnTypes(lexer, function, &hadReturnType)) {
 		return false;
-	}
-
-	bool hadReturnType = function->returns.declarations.count != 0;
-
-	if (!hadReturnType) {
-		addVoidReturn(lexer->token.start, lexer->token.end, function);
 	}
 
 
@@ -1165,7 +1168,9 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 				type->arguments.flags |= BLOCK_IS_ARGUMENTS;
 				type->returns.flags |= BLOCK_IS_RETURNS;
 
-				if (!parseFunctionReturnTypes(lexer, type))
+				bool hadReturnType;
+
+				if (!parseFunctionReturnTypes(lexer, type, &hadReturnType))
 					return nullptr;
 
 				type->end = lexer->previousTokenEnd;
@@ -1258,12 +1263,14 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 				return nullptr;
 
 			type->flavor = ExprFlavor::FUNCTION_PROTOTYPE;
+
+			bool hadReturnType;
 			
-			if (!parseFunctionReturnTypes(lexer, type))
+			if (!parseFunctionReturnTypes(lexer, type, &hadReturnType))
 				return nullptr;
 
 
-			if (!type->returns.declarations.count) { // Even though this is unambiguously a function type, still require a return type to be given for consistency
+			if (hadReturnType) { // Even though this is unambiguously a function type, still require a return type to be given for consistency
 				reportExpectedError(&lexer->token, "Error: Expected a return type after function arguments");
 				return nullptr;
 			}

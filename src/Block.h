@@ -41,6 +41,8 @@ struct Declaration {
 
 	struct InferJob *inferJob = nullptr;
 
+	Array<struct SubJob *> sleepingOnMe;
+
 	union Symbol *symbol;
 	u64 physicalStorage;
 
@@ -67,6 +69,8 @@ struct Block {
 	Block *parentBlock = nullptr;
 	u64 indexInParent;
 	u64 flags = 0;
+
+	Array<struct SubJob *> sleepingOnMe;
 };
 
 inline Block globalBlock;

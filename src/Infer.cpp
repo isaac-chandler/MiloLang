@@ -12,8 +12,9 @@ u64 totalDeclarations = 0;
 u64 totalFunctions = 0;
 u64 totalTypesSized = 0;
 u64 totalInfers = 0;
+u64 totalSizes = 0;
 
-enum class InferType {
+enum class InferFlavor {
 	FUNCTION_BODY,
 	DECLARATION,
 	TYPE_TO_SIZE
@@ -30,6 +31,21 @@ ExprLiteral *inferMakeTypeLiteral(CodeLocation &start, EndLocation &end, Type *t
 	return literal;
 }
 
+struct SubJob {
+	Array<Expr **> flattened;
+	u64 index = 0;
+	bool sleeping = false;
+	String sleepingOnName;
+};
+
+void goToSleep(SubJob *job, Array<SubJob *> *sleepingOnMe, String name = String(nullptr, 0ULL)) {
+	job->sleeping = true;
+
+	_ReadWriteBarrier();
+
+	sleepingOnMe->add(job);
+}
+
 struct InferJob {
 	union {
 		Declaration *declaration;
@@ -37,25 +53,20 @@ struct InferJob {
 		Type *type;
 	} infer;
 
-	InferType type;
+	InferFlavor flavor;
 
-	Array<Expr **> typeFlattened;
-	union {
-		u64 typeFlattenedIndex = 0;
-		u64 sizingIndexInMembers;
-	};
+	SubJob type;
+	SubJob value;
 
-	Array<Expr **> valueFlattened;
-	union {
-		u64 valueFlattenedIndex = 0;
-		u64 runningSize;
-	};
+	u64 sizingIndexInMembers = 0;
+
+	u64 runningSize = 0;
 
 	Array<Type *> sizeDependencies;
 
 	InferJob *nextFree;
 
-	InferJob() : valueFlattened(20) {}
+	InferJob() {}
 };
 
 Array<InferJob *> inferJobs;
@@ -563,15 +574,15 @@ u64 convertToSigned(u64 value, u64 size) {
 	return value;
 }
 
-void addSizeDependency(InferJob *job, Type *type) {
-	if (job && type->size == 0 && !(type->flags & TYPE_IS_INTERNAL)) {
-		job->sizeDependencies.add(type);
+void addSizeDependency(Array<Type *> *sizeDependencies, Type *type) {
+	if (sizeDependencies && type->size == 0 && !(type->flags & TYPE_IS_INTERNAL)) {
+		sizeDependencies->add(type);
 	}
 }
 
-void checkedRemoveLastSizeDependency(InferJob *job, Type *type) {
-	if (job && type->size == 0 && !(type->flags & TYPE_IS_INTERNAL)) {
-		if (job->sizeDependencies.pop() != type) {
+void checkedRemoveLastSizeDependency(Array<Type *> *sizeDependencies, Type *type) {
+	if (sizeDependencies && type->size == 0 && !(type->flags & TYPE_IS_INTERNAL)) {
+		if (sizeDependencies->pop() != type) {
 			assert(false);
 		}
 	}
@@ -677,7 +688,7 @@ void doConstantCast(Expr **cast) {
 	}
 }
 
-void insertImplicitCast(InferJob *job, Expr **castFrom, Type *castTo) {
+void insertImplicitCast(Array<Type *> *sizeDependencies, Expr **castFrom, Type *castTo) {
 	ExprBinaryOperator *cast = new ExprBinaryOperator;
 	cast->flavor = ExprFlavor::BINARY_OPERATOR;
 	cast->op = TokenT::CAST;
@@ -692,7 +703,7 @@ void insertImplicitCast(InferJob *job, Expr **castFrom, Type *castTo) {
 
 	*castFrom = cast;
 
-	addSizeDependency(job, castTo);
+	addSizeDependency(sizeDependencies, castTo);
 
 	assert(isValidCast(castTo, cast->right->type));
 
@@ -796,16 +807,16 @@ Expr *pushStructAccessDown(ExprIdentifier *accesses, Expr *base, CodeLocation st
 	}
 }
 
-bool inferIdentifier(InferJob *job, Expr **exprPointer, ExprIdentifier *identifier, bool *yield) {
+bool inferIdentifier(Array<Type *> *sizeDependencies, SubJob *job, Expr **exprPointer, ExprIdentifier *identifier, bool *yield) {
 	*yield = false;
 
 	if ((identifier->declaration->flags & DECLARATION_IMPORTED_BY_USING) && !(identifier->declaration->flags & DECLARATION_IS_CONSTANT)) {
 		auto current = static_cast<ExprIdentifier *>(identifier->declaration->initialValue);
 
-		if (job) {
+		if (sizeDependencies) {
 			while (current->structAccess) {
 				bool onlyConstants;
-				addSizeDependency(job, getExpressionNamespace(current->structAccess, &onlyConstants, current->structAccess));
+				addSizeDependency(sizeDependencies, getExpressionNamespace(current->structAccess, &onlyConstants, current->structAccess));
 
 				current = static_cast<ExprIdentifier *>(current->structAccess);
 				assert(current->flavor == ExprFlavor::IDENTIFIER);
@@ -841,10 +852,12 @@ bool inferIdentifier(InferJob *job, Expr **exprPointer, ExprIdentifier *identifi
 		if (identifier->declaration->flags & DECLARATION_TYPE_IS_READY) {
 			if (!identifier->type) {
 				identifier->type = getDeclarationType(identifier->declaration);
-				addSizeDependency(job, identifier->type);
+				addSizeDependency(sizeDependencies, identifier->type);
 			}
 		}
 		else {
+			goToSleep(job, &identifier->declaration->sleepingOnMe);
+
 			*yield = true;
 			return false;
 		}
@@ -854,6 +867,8 @@ bool inferIdentifier(InferJob *job, Expr **exprPointer, ExprIdentifier *identifi
 				copyLiteral(exprPointer, identifier->declaration->initialValue);
 			}
 			else {
+				goToSleep(job, &identifier->declaration->sleepingOnMe);
+
 				*yield = true;
 				return false;
 			}
@@ -865,7 +880,28 @@ bool inferIdentifier(InferJob *job, Expr **exprPointer, ExprIdentifier *identifi
 	return true;
 }
 
-bool tryUsingConversion(InferJob *job, Type *correct, Expr **exprPointer, bool *yield) {
+void wakeUpSleepers(Array<SubJob *> *sleepers, String name = String(nullptr, 0ULL)) {
+	if (name.length == 0) {
+		for (auto sleeper : *sleepers) {
+			sleeper->sleeping = false;
+		}
+
+		sleepers->clear();
+	}
+	else {
+		for (u64 i = 0; i < sleepers->count; i++) {
+			auto sleeper = (*sleepers)[i];
+
+			if (sleeper->sleepingOnName.length == 0 || name == sleeper->sleepingOnName) {
+				sleeper->sleeping = false;
+
+				sleepers->unordered_remove(i--);
+			}
+		}
+	}
+}
+
+bool tryUsingConversion(Array<Type *> *sizeDependencies, SubJob *job, Type *correct, Expr **exprPointer, bool *yield) {
 	*yield = false;
 	auto given = *exprPointer;
 
@@ -926,7 +962,7 @@ bool tryUsingConversion(InferJob *job, Type *correct, Expr **exprPointer, bool *
 
 	Expr *expr = identifier;
 
-	if (!inferIdentifier(job, &expr, identifier, yield)) {
+	if (!inferIdentifier(sizeDependencies, job, &expr, identifier, yield)) {
 		assert(false); // This shouldn't fail
 	}
 
@@ -950,7 +986,8 @@ bool tryUsingConversion(InferJob *job, Type *correct, Expr **exprPointer, bool *
 
 	return true;
 }
-bool tryAutoCast(InferJob *job, Expr **cast, Type *castTo, bool *yield) {
+
+bool tryAutoCast(Array<Type *> *sizeDependencies, SubJob *job, Expr **cast, Type *castTo, bool *yield) {
 	*yield = false;
 	auto castExpr = *cast;
 	assert(castExpr->type->flavor == TypeFlavor::AUTO_CAST);
@@ -971,7 +1008,7 @@ bool tryAutoCast(InferJob *job, Expr **cast, Type *castTo, bool *yield) {
 	autoCast->type = castTo;
 	autoCast->left = inferMakeTypeLiteral(autoCast->start, autoCast->end, castTo);
 
-	if (!tryUsingConversion(job, castTo, &autoCast->right, yield)) {
+	if (!tryUsingConversion(sizeDependencies, job, castTo, &autoCast->right, yield)) {
 		if (*yield) {
 			return false;
 		}
@@ -981,7 +1018,7 @@ bool tryAutoCast(InferJob *job, Expr **cast, Type *castTo, bool *yield) {
 		return false;
 	}
 
-	addSizeDependency(job, castTo);
+	addSizeDependency(sizeDependencies, castTo);
 	doConstantCast(cast);
 
 	return true;
@@ -1082,7 +1119,7 @@ bool assignOpForFloat(ExprBinaryOperator *binary) {
 	return true;
 }
 
-bool binaryOpForInteger(InferJob *job, Expr **exprPointer) {
+bool binaryOpForInteger(Array<Type *> *sizeDependencies, Expr **exprPointer) {
 	auto binary = static_cast<ExprBinaryOperator *>(*exprPointer);
 	auto &left = binary->left;
 	auto &right = binary->right;
@@ -1209,10 +1246,10 @@ bool binaryOpForInteger(InferJob *job, Expr **exprPointer) {
 				right->type = left->type;
 			}
 			else if (left->type->size > right->type->size) {
-				insertImplicitCast(job, &right, left->type);
+				insertImplicitCast(sizeDependencies, &right, left->type);
 			}
 			else if (right->type->size > left->type->size) {
-				insertImplicitCast(job, &left, right->type);
+				insertImplicitCast(sizeDependencies, &left, right->type);
 			}
 		}
 		else {
@@ -1240,7 +1277,7 @@ bool binaryOpForInteger(InferJob *job, Expr **exprPointer) {
 	return true;
 }
 
-bool assignOpForInteger(InferJob *job, ExprBinaryOperator *binary) {
+bool assignOpForInteger(Array<Type *> *sizeDependencies, ExprBinaryOperator *binary) {
 	auto &left = binary->left;
 	auto &right = binary->right;
 
@@ -1260,7 +1297,7 @@ bool assignOpForInteger(InferJob *job, ExprBinaryOperator *binary) {
 				right->type = left->type;
 			}
 			else if (left->type->size > right->type->size) {
-				insertImplicitCast(job, &right, left->type);
+				insertImplicitCast(sizeDependencies, &right, left->type);
 			}
 			else if (right->type->size > left->type->size) {
 				reportError(binary, "Error: Cannot convert %.*s to %.*s, information could be lost", STRING_PRINTF(right->type->name), STRING_PRINTF(left->type->name));
@@ -1285,14 +1322,14 @@ bool assignOpForInteger(InferJob *job, ExprBinaryOperator *binary) {
 	return true;
 }
 
-bool binaryOpForAutoCast(InferJob *job, ExprBinaryOperator *binary, bool *yield) {
+bool binaryOpForAutoCast(Array<Type *> *sizeDependencies, SubJob *job, ExprBinaryOperator *binary, bool *yield) {
 	auto &left = binary->left;
 	auto &right = binary->right;
 
 	if (left->type->flavor == TypeFlavor::AUTO_CAST) {
 		trySolidifyNumericLiteralToDefault(right);
 
-		if (!tryAutoCast(job, &left, right->type, yield)) {
+		if (!tryAutoCast(sizeDependencies, job, &left, right->type, yield)) {
 			if (*yield) {
 				return false;
 			}
@@ -1307,7 +1344,7 @@ bool binaryOpForAutoCast(InferJob *job, ExprBinaryOperator *binary, bool *yield)
 	else if (right->type->flavor == TypeFlavor::AUTO_CAST) {
 		trySolidifyNumericLiteralToDefault(left);
 
-		if (!tryAutoCast(job, &right, left->type, yield)) {
+		if (!tryAutoCast(sizeDependencies, job, &right, left->type, yield)) {
 			if (*yield) {
 				return false;
 			}
@@ -1323,13 +1360,13 @@ bool binaryOpForAutoCast(InferJob *job, ExprBinaryOperator *binary, bool *yield)
 	return true;
 }
 
-bool assignOpForAutoCast(InferJob *job, ExprBinaryOperator *binary, bool *yield) {
+bool assignOpForAutoCast(Array<Type *> *sizeDependencies, SubJob *job, ExprBinaryOperator *binary, bool *yield) {
 	auto &right = binary->right;
 
 	if (right->type->flavor == TypeFlavor::AUTO_CAST) {
 		auto &left = binary->left;
 
-		if (!tryAutoCast(job, &right, left->type, yield)) {
+		if (!tryAutoCast(sizeDependencies, job, &right, left->type, yield)) {
 			if (!*yield)
 				reportError(binary, "Error: Cannot cast from %.*s to %.*s", STRING_PRINTF(static_cast<ExprBinaryOperator *>(right)->right->type->name), STRING_PRINTF(left->type->name));
 			return false;
@@ -1593,7 +1630,7 @@ Expr *createDefaultValue(Declaration *location, Type *type, bool *shouldYield) {
 	}
 }
 
-bool assignOp(InferJob *job, Expr *location, Type *correct, Expr *&given, bool *yield) {
+bool assignOp(Array<Type *> *sizeDependencies, SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yield) {
 	*yield = false;
 	if (correct != given->type) {
 		if (correct->flavor == given->type->flavor) {
@@ -1603,7 +1640,7 @@ bool assignOp(InferJob *job, Expr *location, Type *correct, Expr *&given, bool *
 						if (given->type->flags & (TYPE_ARRAY_IS_DYNAMIC | TYPE_ARRAY_IS_FIXED)) {
 							if (!(correct->flags & (TYPE_ARRAY_IS_DYNAMIC | TYPE_ARRAY_IS_FIXED))) { // We are converting from [N]T or [..]T to []T
 								if (static_cast<TypeArray *>(given->type)->arrayOf == static_cast<TypeArray *>(correct)->arrayOf) {
-									insertImplicitCast(job, &given, correct);
+									insertImplicitCast(sizeDependencies, &given, correct);
 								}
 								else {
 									reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
@@ -1634,7 +1671,7 @@ bool assignOp(InferJob *job, Expr *location, Type *correct, Expr *&given, bool *
 						given->type = correct;
 					}
 					else if (given->type->size < correct->size) {
-						insertImplicitCast(job, &given, correct);
+						insertImplicitCast(sizeDependencies, &given, correct);
 					}
 					else {
 						// @Incomplete should we allow this conversion in some cases, this code was originally taken
@@ -1660,7 +1697,7 @@ bool assignOp(InferJob *job, Expr *location, Type *correct, Expr *&given, bool *
 							given->type = correct;
 						}
 						else if (correct->size > given->type->size) {
-							insertImplicitCast(job, &given, correct);
+							insertImplicitCast(sizeDependencies, &given, correct);
 						}
 						else if (correct->size < given->type->size) {
 							reportError(location, "Error: Cannot convert from %.*s to %.*s, precision will be lost", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
@@ -1689,25 +1726,25 @@ bool assignOp(InferJob *job, Expr *location, Type *correct, Expr *&given, bool *
 						auto correctPointer = static_cast<TypePointer *>(correct)->pointerTo;
 
 						if (correct == TYPE_VOID_POINTER) {
-							insertImplicitCast(job, &given, correct);
+							insertImplicitCast(sizeDependencies, &given, correct);
 						}
 						else if (given->type == TYPE_VOID_POINTER) {
-							insertImplicitCast(job, &given, correct);
+							insertImplicitCast(sizeDependencies, &given, correct);
 						}
 						else if (givenPointer->flavor == TypeFlavor::ARRAY && correctPointer->flavor == TypeFlavor::ARRAY && 
 							(givenPointer->flags & TYPE_ARRAY_IS_DYNAMIC) && !(correctPointer->flags & (TYPE_ARRAY_IS_FIXED | TYPE_ARRAY_IS_DYNAMIC))) {
 							if (static_cast<TypeArray *>(givenPointer)->arrayOf == static_cast<TypeArray *>(correctPointer)->arrayOf) {
-								insertImplicitCast(job, &given, correct);
+								insertImplicitCast(sizeDependencies, &given, correct);
 							}
 						}
 						else {
-							if (!tryUsingConversion(job, correct, &given, yield)) {
+							if (!tryUsingConversion(sizeDependencies, job, correct, &given, yield)) {
 								if (*yield) {
 									return false;
 								}
 							}
 							else {
-								addSizeDependency(job, given->type);
+								addSizeDependency(sizeDependencies, given->type);
 							}
 
 							if (correct != given->type) {
@@ -1725,13 +1762,13 @@ bool assignOp(InferJob *job, Expr *location, Type *correct, Expr *&given, bool *
 					return false;
 				}
 				case TypeFlavor::STRUCT: {
-					if (!tryUsingConversion(job, correct, &given, yield)) {
+					if (!tryUsingConversion(sizeDependencies, job, correct, &given, yield)) {
 						if (*yield) {
 							return false;
 						}
 					}
 					else {
-						addSizeDependency(job, given->type);
+						addSizeDependency(sizeDependencies, given->type);
 					}
 
 					if (correct != given->type) {
@@ -1753,7 +1790,7 @@ bool assignOp(InferJob *job, Expr *location, Type *correct, Expr *&given, bool *
 		}
 		else {
 			if (given->type->flavor == TypeFlavor::AUTO_CAST) {
-				if (!tryAutoCast(job, &given, correct, yield)) {
+				if (!tryAutoCast(sizeDependencies, job, &given, correct, yield)) {
 					if (!yield)
 						reportError(location, "Error: Cannot cast from %.*s to %.*s", STRING_PRINTF(static_cast<ExprBinaryOperator *>(given)->right->type->name), STRING_PRINTF(correct->name));
 					return false;
@@ -1772,11 +1809,11 @@ bool assignOp(InferJob *job, Expr *location, Type *correct, Expr *&given, bool *
 						return false;
 					}
 
-					insertImplicitCast(job, &given, correct);
+					insertImplicitCast(sizeDependencies, &given, correct);
 				}
 				else if (correct->flavor == TypeFlavor::ENUM && (correct->flags & TYPE_ENUM_IS_FLAGS) &&
 					given->type->flavor == TypeFlavor::INTEGER && given->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(given)->unsignedValue == 0) {
-					insertImplicitCast(job, &given, correct);
+					insertImplicitCast(sizeDependencies, &given, correct);
 				}
 				else if (correct->flavor == TypeFlavor::FLOAT && given->type == &TYPE_SIGNED_INT_LITERAL) {
 					auto literal = static_cast<ExprLiteral *>(given);
@@ -1786,16 +1823,16 @@ bool assignOp(InferJob *job, Expr *location, Type *correct, Expr *&given, bool *
 					literal->type = correct;
 				}
 				else if ((given->type == TYPE_VOID_POINTER && correct->flavor == TypeFlavor::FUNCTION) || (given->type->flavor == TypeFlavor::FUNCTION && correct == TYPE_VOID_POINTER)) {
-					insertImplicitCast(job, &given, correct);
+					insertImplicitCast(sizeDependencies, &given, correct);
 				}
 
-				if (!tryUsingConversion(job, correct, &given, yield)) {
+				if (!tryUsingConversion(sizeDependencies, job, correct, &given, yield)) {
 					if (*yield) {
 						return false;
 					}
 				}
 				else {
-					addSizeDependency(job, given->type);
+					addSizeDependency(sizeDependencies, given->type);
 				}
 
 				if (correct != given->type) {
@@ -1834,7 +1871,7 @@ bool isAddressable(Expr *expr) {
 	}
 }
 
-bool inferArguments(InferJob *job, Arguments *arguments, Block *block, const char *message, Expr *callLocation, Expr *functionLocation, bool *yield) {
+bool inferArguments(Array<Type *> *sizeDependencies, SubJob *job, Arguments *arguments, Block *block, const char *message, Expr *callLocation, Expr *functionLocation, bool *yield) {
 	*yield = false;
 
 	bool hasNamedArguments = false;
@@ -1883,7 +1920,7 @@ bool inferArguments(InferJob *job, Arguments *arguments, Block *block, const cha
 
 				if (argument->initialValue) {
 					sortedArguments[i] = argument->initialValue;
-					addSizeDependency(job, argument->initialValue->type);
+					addSizeDependency(sizeDependencies, argument->initialValue->type);
 				}
 				else {
 					reportError(callLocation, "Error: Required %s '%.*s' was not given", message, STRING_PRINTF(argument->name));
@@ -1915,7 +1952,7 @@ bool inferArguments(InferJob *job, Arguments *arguments, Block *block, const cha
 	for (u64 i = 0; i < arguments->count; i++) {
 		Type *correct = static_cast<ExprLiteral *>(block->declarations[i]->type)->typeValue;
 
-		if (!assignOp(job, arguments->values[i], correct, arguments->values[i], yield)) { // @Incomplete: Give function call specific error messages instead of general type conversion errors
+		if (!assignOp(sizeDependencies, job, arguments->values[i], correct, arguments->values[i], yield)) { // @Incomplete: Give function call specific error messages instead of general type conversion errors
 			return false;
 		}
 	}
@@ -1928,7 +1965,7 @@ bool functionIsVoid(TypeFunction *function) {
 }
 
 
-bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
+bool inferBinary(Array<Type *> *sizeDependencies, SubJob *job, Expr **exprPointer, bool *yield) {
 	*yield = false;
 
 	auto expr = *exprPointer;
@@ -2000,7 +2037,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 			Type *castTo = static_cast<ExprLiteral *>(left)->typeValue;
 			trySolidifyNumericLiteralToDefault(right);
 
-			if (!tryUsingConversion(job, castTo, &right, yield)) {
+			if (!tryUsingConversion(sizeDependencies, job, castTo, &right, yield)) {
 				if (*yield) {
 					return false;
 				}
@@ -2045,7 +2082,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 			else if (left->type->flavor == TypeFlavor::ARRAY) {
 				trySolidifyNumericLiteralToDefault(right);
 
-				addSizeDependency(job, left->type);
+				addSizeDependency(sizeDependencies, left->type);
 
 				expr->type = static_cast<TypeArray *>(left->type)->arrayOf;
 			}
@@ -2054,7 +2091,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 				return false;
 			}
 
-			addSizeDependency(job, expr->type);
+			addSizeDependency(sizeDependencies, expr->type);
 
 			break;
 		}
@@ -2078,10 +2115,10 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 					case TypeFlavor::FUNCTION: {
 						if (left->type != right->type) {
 							if (left->type == TYPE_VOID_POINTER) {
-								insertImplicitCast(job, &right, left->type);
+								insertImplicitCast(sizeDependencies, &right, left->type);
 							}
 							else if (right->type == TYPE_VOID_POINTER) {
-								insertImplicitCast(job, &left, right->type);
+								insertImplicitCast(sizeDependencies, &left, right->type);
 							}
 							else {
 								reportError(binary, "Error: Cannot compare %.*s to %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
@@ -2090,7 +2127,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 						}
 					}
 					case TypeFlavor::INTEGER: {
-						if (!binaryOpForInteger(job, exprPointer))
+						if (!binaryOpForInteger(sizeDependencies, exprPointer))
 							return false;
 
 						break;
@@ -2098,10 +2135,10 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 					case TypeFlavor::POINTER: {
 						if (left->type != right->type) {
 							if (left->type == TYPE_VOID_POINTER) {
-								insertImplicitCast(job, &right, left->type);
+								insertImplicitCast(sizeDependencies, &right, left->type);
 							}
 							else if (right->type == TYPE_VOID_POINTER) {
-								insertImplicitCast(job, &left, right->type);
+								insertImplicitCast(sizeDependencies, &left, right->type);
 							}
 							else {
 								reportError(binary, "Error: Cannot compare %.*s to %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
@@ -2137,7 +2174,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 				}
 			}
 			else {
-				if (!binaryOpForAutoCast(job, binary, yield)) {
+				if (!binaryOpForAutoCast(sizeDependencies, job, binary, yield)) {
 					return false;
 				}
 				else if (!binaryOpForFloatAndIntLiteral(exprPointer)) {
@@ -2145,11 +2182,11 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 				}
 				else if (left->type->flavor == TypeFlavor::ENUM && (left->type->flags & TYPE_ENUM_IS_FLAGS) &&
 					right->type->flavor == TypeFlavor::INTEGER && right->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(right)->unsignedValue == 0) {
-					insertImplicitCast(job, &right, left->type);
+					insertImplicitCast(sizeDependencies, &right, left->type);
 				}
 				else if (right->type->flavor == TypeFlavor::ENUM && (right->type->flags & TYPE_ENUM_IS_FLAGS) &&
 					left->type->flavor == TypeFlavor::INTEGER && left->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(left)->unsignedValue == 0) {
-					insertImplicitCast(job, &left, right->type);
+					insertImplicitCast(sizeDependencies, &left, right->type);
 				}
 
 				if (right->type != left->type) {
@@ -2190,7 +2227,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 						return false;
 					}
 					case TypeFlavor::INTEGER: {
-						if (!binaryOpForInteger(job, exprPointer))
+						if (!binaryOpForInteger(sizeDependencies, exprPointer))
 							return false;
 
 						break;
@@ -2198,10 +2235,10 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 					case TypeFlavor::POINTER: {
 						if (left->type != right->type) {
 							if (left->type == TYPE_VOID_POINTER) {
-								insertImplicitCast(job, &right, left->type);
+								insertImplicitCast(sizeDependencies, &right, left->type);
 							}
 							else if (right->type == TYPE_VOID_POINTER) {
-								insertImplicitCast(job, &left, right->type);
+								insertImplicitCast(sizeDependencies, &left, right->type);
 							}
 							else {
 								reportError(binary, "Error: Cannot compare %.*s to %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
@@ -2228,7 +2265,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 				}
 			}
 			else {
-				if (!binaryOpForAutoCast(job, binary, yield)) {
+				if (!binaryOpForAutoCast(sizeDependencies, job, binary, yield)) {
 					return false;
 				}
 				else if (!binaryOpForFloatAndIntLiteral(exprPointer)) {
@@ -2271,7 +2308,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 						return false;
 					}
 					case TypeFlavor::INTEGER: {
-						if (!binaryOpForInteger(job, exprPointer))
+						if (!binaryOpForInteger(sizeDependencies, exprPointer))
 							return false;
 
 						break;
@@ -2289,7 +2326,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 
 						auto pointer = static_cast<TypePointer *>(left->type);
 
-						addSizeDependency(job, pointer->pointerTo);
+						addSizeDependency(sizeDependencies, pointer->pointerTo);
 
 						break;
 					}
@@ -2310,14 +2347,14 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 				}
 			}
 			else {
-				if (!binaryOpForAutoCast(job, binary, yield)) {
+				if (!binaryOpForAutoCast(sizeDependencies, job, binary, yield)) {
 					return false;
 				}
 				else if (left->type->flavor == TypeFlavor::POINTER && right->type->flavor == TypeFlavor::INTEGER) {
 					trySolidifyNumericLiteralToDefault(right);
 					auto pointer = static_cast<TypePointer *>(left->type);
 
-					addSizeDependency(job, pointer->pointerTo);
+					addSizeDependency(sizeDependencies, pointer->pointerTo);
 				}
 				else if (!binaryOpForFloatAndIntLiteral(exprPointer)) {
 					return false;
@@ -2364,7 +2401,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 						return false;
 					}
 					case TypeFlavor::INTEGER: {
-						if (!binaryOpForInteger(job, exprPointer))
+						if (!binaryOpForInteger(sizeDependencies, exprPointer))
 							return false;
 
 						break;
@@ -2400,16 +2437,16 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 				}
 			}
 			else {
-				if (!binaryOpForAutoCast(job, binary, yield)) {
+				if (!binaryOpForAutoCast(sizeDependencies, job, binary, yield)) {
 					return false;
 				}
 				else if (left->type->flavor == TypeFlavor::ENUM && (left->type->flags & TYPE_ENUM_IS_FLAGS) &&
 					right->type->flavor == TypeFlavor::INTEGER && right->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(right)->unsignedValue == 0) {
-					insertImplicitCast(job, &right, left->type);
+					insertImplicitCast(sizeDependencies, &right, left->type);
 				}
 				else if (right->type->flavor == TypeFlavor::ENUM && (right->type->flags & TYPE_ENUM_IS_FLAGS) &&
 					left->type->flavor == TypeFlavor::INTEGER && left->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(left)->unsignedValue == 0) {
-					insertImplicitCast(job, &left, right->type);
+					insertImplicitCast(sizeDependencies, &left, right->type);
 				}
 
 				if (right->type != left->type) {
@@ -2447,7 +2484,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 						return false;
 					}
 					case TypeFlavor::INTEGER: {
-						if (!binaryOpForInteger(job, exprPointer))
+						if (!binaryOpForInteger(sizeDependencies, exprPointer))
 							return false;
 
 						break;
@@ -2473,7 +2510,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 				}
 			}
 			else {
-				if (!binaryOpForAutoCast(job, binary, yield)) {
+				if (!binaryOpForAutoCast(sizeDependencies, job, binary, yield)) {
 					return false;
 				}
 
@@ -2516,7 +2553,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 						return false;
 					}
 					case TypeFlavor::INTEGER: {
-						if (!binaryOpForInteger(job, exprPointer))
+						if (!binaryOpForInteger(sizeDependencies, exprPointer))
 							return false;
 
 						break;
@@ -2542,7 +2579,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 				}
 			}
 			else {
-				if (!binaryOpForAutoCast(job, binary, yield)) {
+				if (!binaryOpForAutoCast(sizeDependencies, job, binary, yield)) {
 					return false;
 				}
 				else if (!binaryOpForFloatAndIntLiteral(exprPointer)) {
@@ -2575,7 +2612,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 			}
 			else {
 				bool yield;
-				if (!assignOp(job, binary, left->type, binary->right, &yield)) {
+				if (!assignOp(sizeDependencies, job, binary, left->type, binary->right, &yield)) {
 					if (yield) {
 						return true;
 					}
@@ -2624,7 +2661,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 						return false;
 					}
 					case TypeFlavor::INTEGER: {
-						if (!assignOpForInteger(job, binary))
+						if (!assignOpForInteger(sizeDependencies, binary))
 							return false;
 
 						break;
@@ -2656,7 +2693,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 				}
 			}
 			else {
-				if (!assignOpForAutoCast(job, binary, yield)) {
+				if (!assignOpForAutoCast(sizeDependencies, job, binary, yield)) {
 					return false;
 				}
 				else if (!assignOpForFloatAndIntLiteral(binary)) {
@@ -2667,7 +2704,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 					trySolidifyNumericLiteralToDefault(right);
 					auto pointer = static_cast<TypePointer *>(left->type);
 
-					addSizeDependency(job, pointer->pointerTo);
+					addSizeDependency(sizeDependencies, pointer->pointerTo);
 				}
 				else if (right->type != left->type) {
 					reportError(binary, "Error: Cannot %s %.*s to %.*s",
@@ -2684,7 +2721,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 		case TokenT::LOGIC_OR: {
 			if (left->type != &TYPE_BOOL) {
 				if (isValidCast(&TYPE_BOOL, left->type)) {
-					insertImplicitCast(job, &left, &TYPE_BOOL);
+					insertImplicitCast(sizeDependencies, &left, &TYPE_BOOL);
 				}
 				else {
 					reportError(binary->left, "Error: Cannot convert %.*s to bool", STRING_PRINTF(left->type->name));
@@ -2694,7 +2731,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 
 			if (right->type != &TYPE_BOOL) {
 				if (isValidCast(&TYPE_BOOL, right->type)) {
-					insertImplicitCast(job, &right, &TYPE_BOOL);
+					insertImplicitCast(sizeDependencies, &right, &TYPE_BOOL);
 				}
 				else {
 					reportError(binary->right, "Error: Cannot convert %.*s to bool", STRING_PRINTF(right->type->name));
@@ -2742,7 +2779,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 						return false;
 					}
 					case TypeFlavor::INTEGER: {
-						if (!assignOpForInteger(job, binary))
+						if (!assignOpForInteger(sizeDependencies, binary))
 							return false;
 
 						break;
@@ -2778,12 +2815,12 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 				}
 			}
 			else {
-				if (!assignOpForAutoCast(job, binary, yield)) {
+				if (!assignOpForAutoCast(sizeDependencies, job, binary, yield)) {
 					return false;
 				}
 				else if (left->type->flavor == TypeFlavor::ENUM && (left->type->flags & TYPE_ENUM_IS_FLAGS) &&
 					right->type->flavor == TypeFlavor::INTEGER && right->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(right)->unsignedValue == 0) {
-					insertImplicitCast(job, &right, left->type);
+					insertImplicitCast(sizeDependencies, &right, left->type);
 				}
 
 				if (right->type != left->type) {
@@ -2830,7 +2867,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 						return false;
 					}
 					case TypeFlavor::INTEGER: {
-						if (!assignOpForInteger(job, binary))
+						if (!assignOpForInteger(sizeDependencies, binary))
 							return false;
 
 						break;
@@ -2856,7 +2893,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 				}
 			}
 			else {
-				if (!assignOpForAutoCast(job, binary, yield)) {
+				if (!assignOpForAutoCast(sizeDependencies, job, binary, yield)) {
 					return false;
 				}
 
@@ -2908,7 +2945,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 						return false;
 					}
 					case TypeFlavor::INTEGER: {
-						if (!assignOpForInteger(job, binary))
+						if (!assignOpForInteger(sizeDependencies, binary))
 							return false;
 
 						break;
@@ -2934,7 +2971,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 				}
 			}
 			else {
-				if (!assignOpForAutoCast(job, binary, yield)) {
+				if (!assignOpForAutoCast(sizeDependencies, job, binary, yield)) {
 					assert(false);
 				}
 				else if (!assignOpForFloatAndIntLiteral(binary)) {
@@ -3003,7 +3040,7 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 
 				if (type->typeValue->size == 0 && !array->sizeJob) {
 					auto sizeJob = allocateJob();
-					sizeJob->type = InferType::TYPE_TO_SIZE;
+					sizeJob->flavor = InferFlavor::TYPE_TO_SIZE;
 					sizeJob->infer.type = array;
 					sizeJob->infer.type->sizeJob = sizeJob;
 
@@ -3032,12 +3069,14 @@ bool inferBinary(InferJob *job, Expr **exprPointer, bool *yield) {
 
 	return true;
 }
-bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
+bool inferFlattened(SubJob *job, Array<Type *> *sizeDependencies = nullptr) {
+	if (job->sleeping) return true;
+
 	PROFILE_FUNC();
 	++totalInfers;
 
-	for (; *index < flattened.count; ++ * index) {
-		auto exprPointer = flattened[*index];
+	for (; job->index < job->flattened.count; ++job->index) {
+		auto exprPointer = job->flattened[job->index];
 		auto expr = *exprPointer;
 
 		switch (expr->flavor) {
@@ -3058,6 +3097,8 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 						auto member = findDeclaration(&struct_->members, identifier->name, &index, &yield);
 
 						if (yield) {
+							goToSleep(job, &struct_->members.sleepingOnMe, identifier->name);
+
 							return true;
 						}
 
@@ -3071,7 +3112,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 						}
 						identifier->declaration = member;
 
-						addSizeDependency(job, struct_);
+						addSizeDependency(sizeDependencies, struct_);
 					}
 					else {
 						for (; identifier->resolveFrom; identifier->resolveFrom = identifier->resolveFrom->parentBlock) {
@@ -3102,6 +3143,8 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 								}
 							}
 							else if (yield) {
+								goToSleep(job, &identifier->resolveFrom->sleepingOnMe, identifier->name);
+
 								return true;
 							}
 
@@ -3115,6 +3158,10 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 							if (!identifier->resolveFrom) { // If we have checked all the local scopes and the
 								u64 index;
 								identifier->declaration = findDeclarationNoYield(&globalBlock, identifier->name, &index);
+
+								if (!identifier->declaration) {
+									goToSleep(job, &globalBlock.sleepingOnMe, identifier->name);
+								}
 							}
 						}
 						
@@ -3132,7 +3179,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 
 				if (identifier->declaration) {
 					bool yield;
-					if (!inferIdentifier(job, exprPointer, identifier, &yield)) {
+					if (!inferIdentifier(sizeDependencies, job, exprPointer, identifier, &yield)) {
 						if (yield) {
 							return true;
 						}
@@ -3201,7 +3248,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 				// Do two passes over the array because if the first pass added dependencies on some declarations then yielded, it would add them again next time round
 				for (auto declaration : block->declarations.declarations) {
 					if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_USING | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT))) {
-						addSizeDependency(job, static_cast<ExprLiteral *>(declaration->type)->typeValue);
+						addSizeDependency(sizeDependencies, static_cast<ExprLiteral *>(declaration->type)->typeValue);
 					}
 				}
 
@@ -3250,7 +3297,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 				bool yield;
 
 				// Split this into a separate function so microsofts shitty optimizer doesn't fuck us during profiling builds
-				if (!inferBinary(job, exprPointer, &yield)) {
+				if (!inferBinary(sizeDependencies, job, exprPointer, &yield)) {
 					return false;
 				}
 
@@ -3280,12 +3327,12 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 
 					if (loop->forBegin->type == &TYPE_AUTO_CAST) {
 						bool yield;
-						if (!tryAutoCast(job, &loop->forBegin, loop->forEnd->type, &yield))
+						if (!tryAutoCast(sizeDependencies, job, &loop->forBegin, loop->forEnd->type, &yield))
 							return yield;
 					}
 					else if (loop->forEnd->type == &TYPE_AUTO_CAST) {
 						bool yield;
-						if (!tryAutoCast(job, &loop->forEnd, loop->forBegin->type, &yield))
+						if (!tryAutoCast(sizeDependencies, job, &loop->forEnd, loop->forBegin->type, &yield))
 							return yield;
 					}
 
@@ -3322,10 +3369,10 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 							}
 
 							if (loop->forBegin->type->size > loop->forEnd->type->size) {
-								insertImplicitCast(job, &loop->forEnd, loop->forBegin->type);
+								insertImplicitCast(sizeDependencies, &loop->forEnd, loop->forBegin->type);
 							}
 							else if (loop->forBegin->type->size < loop->forEnd->type->size) {
-								insertImplicitCast(job, &loop->forBegin, loop->forEnd->type);
+								insertImplicitCast(sizeDependencies, &loop->forBegin, loop->forEnd->type);
 							}
 
 							assert(loop->forBegin->type == loop->forEnd->type);
@@ -3451,7 +3498,11 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 				it_index->type = inferMakeTypeLiteral(it_index->start, it_index->end, &TYPE_U64);
 				it_index->flags |= DECLARATION_TYPE_IS_READY;
 
-				addSizeDependency(job, getDeclarationType(it));
+				addSizeDependency(sizeDependencies, getDeclarationType(it));
+
+
+				wakeUpSleepers(&it->sleepingOnMe);
+				wakeUpSleepers(&it_index->sleepingOnMe);
 
 				break;
 			}
@@ -3502,6 +3553,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 						declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, identifier->type);
 
 						declaration->flags |= DECLARATION_TYPE_IS_READY;
+						wakeUpSleepers(&declaration->sleepingOnMe);
 					}
 				}
 				else {
@@ -3539,7 +3591,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 
 				expr->type = function->returnTypes[0];
 
-				addSizeDependency(job, expr->type);
+				addSizeDependency(sizeDependencies, expr->type);
 
 				String functionName = call->function->valueOfDeclaration ? call->function->valueOfDeclaration->name : "function";
 
@@ -3587,7 +3639,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 				if (functionForArgumentNames) {
 					bool yield;
 
-					if (!inferArguments(job, &call->arguments, &functionForArgumentNames->arguments, "argument", call, functionForArgumentNames, &yield)) {
+					if (!inferArguments(sizeDependencies, job, &call->arguments, &functionForArgumentNames->arguments, "argument", call, functionForArgumentNames, &yield)) {
 						return yield;
 					}
 				}
@@ -3610,7 +3662,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 						Type *correct = function->argumentTypes[i];
 
 						bool yield;
-						if (!assignOp(job, call->arguments.values[i], correct, call->arguments.values[i], &yield)) { // @Incomplete: Give function call specific error messages instead of general type conversion errors
+						if (!assignOp(sizeDependencies, job, call->arguments.values[i], correct, call->arguments.values[i], &yield)) { // @Incomplete: Give function call specific error messages instead of general type conversion errors
 							return yield;
 						}
 					}
@@ -3623,7 +3675,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 
 				if (ifElse->condition->type != &TYPE_BOOL) {
 					if (isValidCast(&TYPE_BOOL, ifElse->condition->type)) {
-						insertImplicitCast(job, &ifElse->condition, &TYPE_BOOL);
+						insertImplicitCast(sizeDependencies, &ifElse->condition, &TYPE_BOOL);
 					}
 					else {
 						reportError(ifElse->condition, "Error: Cannot convert %.*s to bool", STRING_PRINTF(ifElse->condition->type->name));
@@ -3652,7 +3704,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 				else {
 					bool yield;
 
-					if (!inferArguments(job, &return_->returns, returnTypes, "return", return_, return_->returnsFrom, &yield)) {
+					if (!inferArguments(sizeDependencies, job, &return_->returns, returnTypes, "return", return_, return_->returnsFrom, &yield)) {
 						return yield;
 					}
 				}
@@ -3764,7 +3816,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 					case TOKEN('!'): {
 						if (value->type != &TYPE_BOOL) {
 							if (isValidCast(&TYPE_BOOL, value->type)) {
-								insertImplicitCast(job, &value, &TYPE_BOOL);
+								insertImplicitCast(sizeDependencies, &value, &TYPE_BOOL);
 							}
 							else {
 								reportError(value, "Error: Cannot convert %.*s to bool", STRING_PRINTF(value->type->name));
@@ -3858,7 +3910,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 
 						unary->type = pointer->pointerTo;
 
-						addSizeDependency(job, unary->type);
+						addSizeDependency(sizeDependencies, unary->type);
 
 						break;
 					}
@@ -3878,7 +3930,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 							auto binary = static_cast<ExprBinaryOperator *>(value);
 
 							if (binary->op == TOKEN('[')) {
-								checkedRemoveLastSizeDependency(job, value->type);
+								checkedRemoveLastSizeDependency(sizeDependencies, value->type);
 
 								auto pointer = getPointer(value->type);
 
@@ -3895,7 +3947,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 								return false;
 							}
 
-							checkedRemoveLastSizeDependency(job, value->type);
+							checkedRemoveLastSizeDependency(sizeDependencies, value->type);
 
 							auto pointer = getPointer(value->type);
 
@@ -3917,7 +3969,7 @@ bool inferFlattened(InferJob *job, Array<Expr **> &flattened, u64 *index) {
 
 				if (loop->whileCondition->type != &TYPE_BOOL) {
 					if (isValidCast(&TYPE_BOOL, loop->whileCondition->type)) {
-						insertImplicitCast(job, &loop->whileCondition, &TYPE_BOOL);
+						insertImplicitCast(sizeDependencies, &loop->whileCondition, &TYPE_BOOL);
 					}
 					else {
 						reportError(loop->whileCondition, "Error: Cannot convert %.*s to bool", STRING_PRINTF(loop->whileCondition->type->name));
@@ -4025,11 +4077,16 @@ InferJob *allocateJob() {
 		auto result = firstFreeInferJob;
 		firstFreeInferJob = firstFreeInferJob->nextFree;
 
-		result->typeFlattened.clear();
-		result->typeFlattenedIndex = 0;
-		result->valueFlattened.clear();
-		result->valueFlattenedIndex = 0;
+		result->type.flattened.clear();
+		result->type.index = 0;
+		result->value.flattened.clear();
+		result->value.index = 0;
 		result->sizeDependencies.clear();
+		result->sizingIndexInMembers = 0;
+		result->runningSize = 0;
+
+		result->type.sleeping = false;
+		result->value.sleeping = false;
 
 		return result;
 	}
@@ -4065,11 +4122,14 @@ bool addDeclaration(Declaration *declaration) {
 		if (!addDeclarationToBlock(&globalBlock, declaration)) {
 			return false;
 		}
+
+		wakeUpSleepers(&declaration->enclosingScope->sleepingOnMe, declaration->name);
 	}
 
 	if ((declaration->flags & DECLARATION_TYPE_IS_READY) && (declaration->flags & DECLARATION_VALUE_IS_READY)) {
 		return true;
 	}
+
 
 	// Fast path for declarations that are trivial to infer
 	if (!(declaration->flags & DECLARATION_IS_USING)) {
@@ -4077,6 +4137,7 @@ bool addDeclaration(Declaration *declaration) {
 			if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::INT_LITERAL) {
 				declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, &TYPE_UNSIGNED_INT_LITERAL);
 				declaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
+				wakeUpSleepers(&declaration->sleepingOnMe);
 				return true;
 			}
 			else if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::FUNCTION) {
@@ -4087,10 +4148,12 @@ bool addDeclaration(Declaration *declaration) {
 			if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::INT_LITERAL)  {
 				declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, declaration->initialValue->type);
 				declaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
+				wakeUpSleepers(&declaration->sleepingOnMe);
 				return true;
 			}
 			else if (declaration->type && declaration->type->flavor == ExprFlavor::TYPE_LITERAL && !declaration->initialValue && (declaration->flags & (DECLARATION_IS_ARGUMENT | DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_RETURN))) {
 				declaration->flags |= DECLARATION_TYPE_IS_READY;
+				wakeUpSleepers(&declaration->sleepingOnMe);
 				return true;
 			}
 			else if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::FUNCTION) {
@@ -4102,16 +4165,16 @@ bool addDeclaration(Declaration *declaration) {
 	++totalDeclarations;
 
 	InferJob *job = allocateJob();
-	job->type = InferType::DECLARATION;
+	job->flavor = InferFlavor::DECLARATION;
 	job->infer.declaration = declaration;
 	job->infer.declaration->inferJob = job;
 
 	if (declaration->type) {
-		flatten(job->typeFlattened, &declaration->type);
+		flatten(job->type.flattened, &declaration->type);
 	}
 
 	if (declaration->initialValue) {
-		flatten(job->valueFlattened, &declaration->initialValue);
+		flatten(job->value.flattened, &declaration->initialValue);
 	}
 
 	inferJobs.add(job);
@@ -4161,8 +4224,8 @@ static s64 findLoop(Array<Declaration *> &loop, Declaration *declaration) {
 
 	auto job = declaration->inferJob;
 
-	if (job->typeFlattenedIndex != job->typeFlattened.count) {
-		auto dependency = getDependency(*job->typeFlattened[job->typeFlattenedIndex]);
+	if (job->type.index != job->type.flattened.count) {
+		auto dependency = getDependency(*job->type.flattened[job->type.index]);
 
 		for (u64 i = 0; i < loop.count; i++) {
 			if (loop[i] == dependency) {
@@ -4177,8 +4240,8 @@ static s64 findLoop(Array<Declaration *> &loop, Declaration *declaration) {
 		}
 	}
 
-	if (job->valueFlattenedIndex != job->valueFlattened.count) {
-		auto dependency = getDependency(*job->valueFlattened[job->valueFlattenedIndex]);
+	if (job->value.index != job->value.flattened.count) {
+		auto dependency = getDependency(*job->value.flattened[job->value.index]);
 
 		for (u64 i = 0; i < loop.count; i++) {
 			if (loop[i] == dependency) {
@@ -4201,12 +4264,12 @@ static s64 findLoop(Array<Declaration *> &loop, Declaration *declaration) {
 void getHaltStatus(Declaration *declaration, Declaration *next, Expr **haltedOn, bool *typeDependence) {
 	auto job = declaration->inferJob;
 
-	if (job->typeFlattenedIndex != job->typeFlattened.count && getDependency(*job->typeFlattened[job->typeFlattenedIndex]) == next) {
-		*haltedOn = *job->typeFlattened[job->typeFlattenedIndex];
+	if (job->type.index != job->type.flattened.count && getDependency(*job->type.flattened[job->type.index]) == next) {
+		*haltedOn = *job->type.flattened[job->type.index];
 		*typeDependence = true;
 	}
-	else if (job->valueFlattenedIndex != job->valueFlattened.count && getDependency(*job->valueFlattened[job->valueFlattenedIndex]) == next) {
-		*haltedOn = *job->valueFlattened[job->valueFlattenedIndex];
+	else if (job->value.index != job->value.flattened.count && getDependency(*job->value.flattened[job->value.index]) == next) {
+		*haltedOn = *job->value.flattened[job->value.index];
 		*typeDependence = false;
 	}
 	else {
@@ -4219,17 +4282,21 @@ Array<InferJob *> waitingOnSize;
 bool doInferJob(u64 *index, bool *madeProgress) {
 	InferJob *job = inferJobs[*index];
 
-	switch (job->type) {
-	case InferType::FUNCTION_BODY: {
+	if (job->type.sleeping && job->value.sleeping) return true;
+
+	switch (job->flavor) {
+	case InferFlavor::FUNCTION_BODY: {
 		auto function = job->infer.function;
 
-		if (!function->type) {
+		if (!job->type.sleeping && !function->type) {
 			bool typesInferred = true;
 
 			for (auto argument : function->arguments.declarations) {
 				assert(argument);
 
 				if (!(argument->flags & DECLARATION_TYPE_IS_READY)) {
+					goToSleep(&job->type, &argument->sleepingOnMe);
+
 					typesInferred = false;
 					break;
 				}
@@ -4243,6 +4310,8 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 						}
 					}
 					else {
+						goToSleep(&job->type, &argument->sleepingOnMe);
+
 						typesInferred = false;
 						break;
 					}
@@ -4254,6 +4323,8 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 				assert(return_);
 
 				if (!(return_->flags & DECLARATION_TYPE_IS_READY)) {
+					goToSleep(&job->type, &return_->sleepingOnMe);
+
 					typesInferred = false;
 					break;
 				}
@@ -4271,6 +4342,8 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 						}
 					}
 					else {
+						goToSleep(&job->type, &return_->sleepingOnMe);
+
 						typesInferred = false;
 						break;
 					}
@@ -4283,21 +4356,23 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 				if (function->valueOfDeclaration && !function->valueOfDeclaration->type && !function->valueOfDeclaration->inferJob) {
 					function->valueOfDeclaration->type = inferMakeTypeLiteral(function->start, function->end, function->type);
 					function->valueOfDeclaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
+
+					wakeUpSleepers(&function->valueOfDeclaration->sleepingOnMe);
 				}
 			}
 		}
 
-		if (!inferFlattened(job, job->valueFlattened, &job->valueFlattenedIndex)) {
+		if (!inferFlattened(&job->value, &job->sizeDependencies)) {
 			return false;
 		}
 
 		if (function->type) {
 			for (auto argument : job->infer.function->arguments.declarations) {
-				addSizeDependency(job, static_cast<ExprLiteral *>(argument->type)->typeValue);
+				addSizeDependency(&job->sizeDependencies, static_cast<ExprLiteral *>(argument->type)->typeValue);
 			}
 
 			for (auto return_ : job->infer.function->returns.declarations) {
-				addSizeDependency(job, static_cast<ExprLiteral *>(return_->type)->typeValue);
+				addSizeDependency(&job->sizeDependencies, static_cast<ExprLiteral *>(return_->type)->typeValue);
 			}
 
 			if (job->infer.function->flags & EXPR_FUNCTION_IS_EXTERNAL) {
@@ -4319,8 +4394,12 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 			}
 			else {
 				assert(job->infer.function->body);
+				
+				if (function->valueOfDeclaration && !(function->valueOfDeclaration->flags & DECLARATION_TYPE_IS_READY)) {
+					reportError(function, "A");
+				}
 
-				if (job->valueFlattenedIndex == job->valueFlattened.count) {
+				if (job->value.index == job->value.flattened.count) {
 					inferJobs.unordered_remove((*index)--);
 					waitingOnSize.add(job);
 				}
@@ -4328,22 +4407,22 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 		}
 		break;
 	}
-	case InferType::DECLARATION: {
+	case InferFlavor::DECLARATION: {
 		auto declaration = job->infer.declaration;
 
 		if (declaration->type) {
-			if (!inferFlattened(nullptr, job->typeFlattened, &job->typeFlattenedIndex)) {
+			if (!inferFlattened(&job->type)) {
 				return false;
 			}
 		}
 
 		if (declaration->initialValue) {
-			if (!inferFlattened(job, job->valueFlattened, &job->valueFlattenedIndex)) {
+			if (!inferFlattened(&job->value, &job->sizeDependencies)) {
 				return false;
 			}
 		}
 
-		if (!(declaration->flags & (DECLARATION_TYPE_IS_READY | DECLARATION_IS_USING)) && declaration->type && job->typeFlattenedIndex == job->typeFlattened.count) {
+		if (!(declaration->flags & (DECLARATION_TYPE_IS_READY | DECLARATION_IS_USING)) && declaration->type && job->type.index == job->type.flattened.count) {
 			if (declaration->type->type != &TYPE_TYPE) {
 				if (declaration->type->type->flavor == TypeFlavor::FUNCTION) {
 					reportError(declaration->type, "Error: Declaration type cannot be a function, did you miss a colon?");
@@ -4378,10 +4457,11 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 
 			*madeProgress = true;
 			declaration->flags |= DECLARATION_TYPE_IS_READY;
+			wakeUpSleepers(&declaration->sleepingOnMe);
 		}
 
 		if (!(declaration->flags & DECLARATION_IS_USING) && declaration->type && declaration->initialValue) {
-			if (job->typeFlattenedIndex == job->typeFlattened.count && job->valueFlattenedIndex == job->valueFlattened.count) {
+			if (job->type.index == job->type.flattened.count && job->value.index == job->value.flattened.count) {
 				assert(declaration->initialValue->type);
 
 				Type *correct = static_cast<ExprLiteral *>(declaration->type)->typeValue;
@@ -4403,7 +4483,7 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 				}
 
 				bool yield;
-				if (!assignOp(job, declaration->initialValue, correct, declaration->initialValue, &yield)) {
+				if (!assignOp(&job->sizeDependencies, &job->value, declaration->initialValue, correct, declaration->initialValue, &yield)) {
 					return yield;
 				}
 
@@ -4420,6 +4500,7 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 				inferJobs.unordered_remove((*index)--);
 
 				declaration->flags |= DECLARATION_VALUE_IS_READY;
+				wakeUpSleepers(&declaration->sleepingOnMe);
 
 				if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
 					waitingOnSize.add(job);
@@ -4431,7 +4512,7 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 		}
 		else if (!(declaration->flags & DECLARATION_IS_USING) && declaration->type) {
 
-			if (job->typeFlattenedIndex == job->typeFlattened.count) {
+			if (job->type.index == job->type.flattened.count) {
 				if (!(declaration->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_ITERATOR | DECLARATION_IS_ITERATOR_INDEX | DECLARATION_IS_ARGUMENT | DECLARATION_IS_RETURN))) {
 					auto type = static_cast<ExprLiteral *>(declaration->type)->typeValue;
 
@@ -4455,6 +4536,7 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 				inferJobs.unordered_remove((*index)--);
 
 				declaration->flags |= DECLARATION_VALUE_IS_READY;
+				wakeUpSleepers(&declaration->sleepingOnMe);
 
 
 				if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
@@ -4466,7 +4548,7 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 			}
 		}
 		else if (declaration->initialValue) {
-			if (job->valueFlattenedIndex == job->valueFlattened.count) {
+			if (job->value.index == job->value.flattened.count) {
 				if (declaration->flags & DECLARATION_IS_USING) {
 					bool onlyConstants;
 					auto struct_ = getExpressionNamespace(declaration->initialValue, &onlyConstants, declaration->initialValue);
@@ -4512,10 +4594,6 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 										import->initialValue = member->initialValue;
 										import->type = declaration->initialValue;
 										import->flags &= ~DECLARATION_USING_IS_RESOLVED;
-
-										if (!addDeclaration(import)) {
-											return false;
-										}
 									}
 									else {
 										if (member->flags & DECLARATION_IS_CONSTANT) {
@@ -4532,6 +4610,16 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 
 									addDeclarationToBlock(declaration->enclosingScope, import);
 									import->indexInBlock = declaration->indexInBlock;
+
+									if (import->name.length) {
+										wakeUpSleepers(&declaration->enclosingScope->sleepingOnMe, import->name);
+									}
+
+									if (member->flags & DECLARATION_IS_USING) {
+										if (!addDeclaration(import)) {
+											return false;
+										}
+									}
 								}
 							}
 						}
@@ -4584,6 +4672,7 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 
 					declaration->flags |= DECLARATION_VALUE_IS_READY;
 					declaration->flags |= DECLARATION_TYPE_IS_READY;
+					wakeUpSleepers(&declaration->sleepingOnMe);
 
 
 					if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
@@ -4598,18 +4687,25 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 
 		break;
 	}
-	case InferType::TYPE_TO_SIZE: {
+	case InferFlavor::TYPE_TO_SIZE: {
+		if (job->type.sleeping) return true;
+
 		auto type = job->infer.type;
 
 		if (type->flavor == TypeFlavor::STRUCT) {
+			totalSizes++;
+
 			auto struct_ = static_cast<TypeStruct *>(type);
 
 			while (job->sizingIndexInMembers < struct_->members.declarations.count) {
 				auto member = struct_->members.declarations[job->sizingIndexInMembers];
 
 				if (!(member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_USING | DECLARATION_IMPORTED_BY_USING))) {
-					if (!(member->flags & DECLARATION_TYPE_IS_READY))
+					if (!(member->flags & DECLARATION_TYPE_IS_READY)) {
+						goToSleep(&job->type, &member->sleepingOnMe);
+
 						break;
+					}
 
 					auto memberType = static_cast<ExprLiteral *>(member->type)->typeValue;
 
@@ -4702,10 +4798,10 @@ void runInfer() {
 
 			if (declarations.data.expr->flavor == ExprFlavor::FUNCTION) {
 				body->infer.function = static_cast<ExprFunction *>(declarations.data.expr);
-				body->type = InferType::FUNCTION_BODY;
+				body->flavor = InferFlavor::FUNCTION_BODY;
 
 				if (body->infer.function->body) {
-					flatten(body->valueFlattened, &body->infer.function->body);
+					flatten(body->value.flattened, &body->infer.function->body);
 				}
 
 				++totalFunctions;
@@ -4722,7 +4818,7 @@ void runInfer() {
 			}
 			else if (declarations.data.expr->flavor == ExprFlavor::TYPE_LITERAL) {
 				body->infer.type = static_cast<ExprLiteral *>(declarations.data.expr)->typeValue;
-				body->type = InferType::TYPE_TO_SIZE;
+				body->flavor = InferFlavor::TYPE_TO_SIZE;
 
 				if (body->infer.type->flavor == TypeFlavor::STRUCT) {
 					body->infer.type->name = declarations.data.expr->valueOfDeclaration ? declarations.data.expr->valueOfDeclaration->name : "(struct)";
@@ -4789,13 +4885,13 @@ void runInfer() {
 				if (job->sizeDependencies.count == 0) {
 					waitingOnSize.unordered_remove(i--);
 
-					if (job->type == InferType::DECLARATION) {
+					if (job->flavor == InferFlavor::DECLARATION) {
 						CoffJob coffJob;
 						coffJob.declaration = job->infer.declaration;
 						coffJob.isFunction = false;
 						coffWriterQueue.add(coffJob);
 					}
-					else if (job->type == InferType::FUNCTION_BODY) {
+					else if (job->flavor == InferFlavor::FUNCTION_BODY) {
 						irGeneratorQueue.add(job->infer.function);
 					}
 
@@ -4809,19 +4905,19 @@ void runInfer() {
 		// Check for undeclared identifiers
 
 		for (auto job : inferJobs) {
-			if (job->type == InferType::TYPE_TO_SIZE) continue;
+			if (job->flavor == InferFlavor::TYPE_TO_SIZE) continue;
 
-			if (job->type == InferType::TYPE_TO_SIZE) continue;
-			if (job->typeFlattenedIndex != job->typeFlattened.count) {
-				auto haltedOn = *job->typeFlattened[job->typeFlattenedIndex];
+			if (job->flavor == InferFlavor::TYPE_TO_SIZE) continue;
+			if (job->type.index != job->type.flattened.count) {
+				auto haltedOn = *job->type.flattened[job->type.index];
 
 				if (checkForUndeclaredIdentifier(haltedOn)) {
 					goto error;
 				}
 			}
 
-			if (job->valueFlattenedIndex != job->valueFlattened.count) {
-				auto haltedOn = *job->valueFlattened[job->valueFlattenedIndex];
+			if (job->value.index != job->value.flattened.count) {
+				auto haltedOn = *job->value.flattened[job->value.index];
 
 				if (checkForUndeclaredIdentifier(haltedOn)) {
 					goto error;
@@ -4834,8 +4930,8 @@ void runInfer() {
 		Array<Declaration *> loop;
 
 		for (auto job : inferJobs) {
-			if (job->type == InferType::TYPE_TO_SIZE) continue;
-			if (job->type == InferType::FUNCTION_BODY) continue; // A circular dependency must contain a declaration, we start from there
+			if (job->flavor == InferFlavor::TYPE_TO_SIZE) continue;
+			if (job->flavor == InferFlavor::FUNCTION_BODY) continue; // A circular dependency must contain a declaration, we start from there
 
 			loop.clear();
 
@@ -4876,7 +4972,7 @@ void runInfer() {
 		reportError("Internal Compiler Error: Inference got stuck but no undelcared identifiers or circular dependencies were detected");
 
 		for (auto job : inferJobs) {
-			if (job->type == InferType::TYPE_TO_SIZE) {
+			if (job->flavor == InferFlavor::TYPE_TO_SIZE) {
 				auto type = job->infer.type;
 
 				if (type->flavor == TypeFlavor::STRUCT) {
@@ -4889,21 +4985,46 @@ void runInfer() {
 				}
 			}
 			else {
-				const char *type = job->type == InferType::DECLARATION ? "declaration" : "function body";
+				const char *type = job->flavor == InferFlavor::DECLARATION ? "declaration" : "function body";
 
-				String name = job->type == InferType::DECLARATION ? job->infer.declaration->name :
+				String name = job->flavor == InferFlavor::DECLARATION ? job->infer.declaration->name :
 					(job->infer.function->valueOfDeclaration ? job->infer.function->valueOfDeclaration->name : "(function)");
 
-				if (job->typeFlattenedIndex != job->typeFlattened.count) {
-					auto haltedOn = *job->typeFlattened[job->typeFlattenedIndex];
+				if (job->type.index != job->type.flattened.count) {
+					auto haltedOn = *job->type.flattened[job->type.index];
 
 					reportError(haltedOn, "%.*s %s type halted here", STRING_PRINTF(name), type);
 				}
 
-				if (job->valueFlattenedIndex != job->valueFlattened.count) {
-					auto haltedOn = *job->valueFlattened[job->valueFlattenedIndex];
+				if (job->value.index != job->value.flattened.count) {
+					auto haltedOn = *job->value.flattened[job->value.index];
 
 					reportError(haltedOn, "%.*s %s value halted here", STRING_PRINTF(name), type);
+					
+					if (haltedOn->flavor == ExprFlavor::IDENTIFIER) {
+						auto identifier = static_cast<ExprIdentifier *>(haltedOn);
+					}
+				}
+
+				if (job->type.index == job->type.flattened.count && job->value.index == job->value.flattened.count) {
+					if (job->flavor == InferFlavor::DECLARATION) {
+						reportError(job->infer.declaration, "Declaration halted after completing infer: value.sleeping = %d type.sleeping = %d", job->value.sleeping, job->type.sleeping);
+					}
+					else {
+						reportError(job->infer.function, "Function halted after completing infer: value.sleeping = %d type.sleeping = %d", job->value.sleeping, job->type.sleeping);
+
+						for (auto declaration : job->infer.function->arguments.declarations) {
+							if (declaration->sleepingOnMe.count) {
+								reportError(declaration, "Declaration has sleepers, flags: %llx", declaration->flags);
+							}
+						}
+
+						for (auto declaration : job->infer.function->returns.declarations) {
+							if (declaration->sleepingOnMe.count) {
+								reportError(declaration, "Declaration has sleepers, flags: %llx", declaration->flags);
+							}
+						}
+					}
 				}
 			}
 		}
@@ -4925,8 +5046,9 @@ void runInfer() {
 			"  %llu declarations\n"
 			"  %llu functions\n"
 			"  %llu types\n"
-			"Total infers: %llu, %.1f infers/queued\n",
-			totalQueued, totalDeclarations, totalFunctions, totalTypesSized, totalInfers, static_cast<float>(totalInfers) / totalQueued);
+			"Total infers: %llu, %.1f infers/queued\n"
+			"Total sizes: %llu, %.1f sizes/type\n",
+			totalQueued, totalDeclarations, totalFunctions, totalTypesSized, totalInfers, static_cast<float>(totalInfers) / totalQueued, totalSizes, static_cast<float>(totalSizes) / totalTypesSized);
 	}
 	return;
 error:;
