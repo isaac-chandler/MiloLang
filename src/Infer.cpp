@@ -4254,10 +4254,6 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 				assert(return_);
 
 				if (!(return_->flags & DECLARATION_TYPE_IS_READY)) {
-					if (return_->type->flavor == ExprFlavor::TYPE_LITERAL) {
-						printf("%llx\n", return_->inferJob);
-					}
-
 					typesInferred = false;
 					break;
 				}
@@ -4698,8 +4694,6 @@ void runInfer() {
 	while (true) {
 		DeclarationPack declarations = inferQueue.take();
 
-		Block *changedBlock = nullptr;
-
 		if (declarations.type == DeclarationPackType::EXPRESSION && !declarations.data.expr) {
 			break;
 		}
@@ -4748,8 +4742,6 @@ void runInfer() {
 			}
 		}
 		else if (declarations.type == DeclarationPackType::GLOBAL_DECLARATION) {
-			changedBlock = &globalBlock;
-
 			if (!addDeclaration(declarations.data.declaration)) {
 				goto error;
 			}
@@ -4757,7 +4749,6 @@ void runInfer() {
 		else {
 			//inferJobs.reserve(inferJobs.count + declarations.count); // Make sure we don't do unnecessary allocations
 			assert(declarations.type == DeclarationPackType::BLOCK);
-			changedBlock = declarations.data.block;
 
 			for (auto declaration : declarations.data.block->declarations) {
 				if (!addDeclaration(declaration)) {
