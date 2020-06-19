@@ -48,6 +48,7 @@ struct Type {
 	u32 hash;
 	u16 flags = 0;
 	TypeFlavor flavor;
+	Array<struct SubJob *> sleepingOnMe;
 	struct InferJob *sizeJob = nullptr;
 };
 

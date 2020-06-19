@@ -880,8 +880,12 @@ bool inferIdentifier(Array<Type *> *sizeDependencies, SubJob *job, Expr **exprPo
 	return true;
 }
 
-void wakeUpSleepers(Array<SubJob *> *sleepers, String name = String(nullptr, 0ULL)) {
+bool wakeUpSleepers(Array<SubJob *> *sleepers, String name = String(nullptr, 0ULL)) {
+	bool awokeSleepers = false;
+
 	if (name.length == 0) {
+		awokeSleepers = sleepers->count != 0;
+
 		for (auto sleeper : *sleepers) {
 			sleeper->sleeping = false;
 		}
@@ -896,9 +900,13 @@ void wakeUpSleepers(Array<SubJob *> *sleepers, String name = String(nullptr, 0UL
 				sleeper->sleeping = false;
 
 				sleepers->unordered_remove(i--);
+
+				awokeSleepers = true;
 			}
 		}
 	}
+
+	return awokeSleepers;
 }
 
 bool tryUsingConversion(Array<Type *> *sizeDependencies, SubJob *job, Type *correct, Expr **exprPointer, bool *yield) {
@@ -1978,6 +1986,8 @@ bool inferBinary(Array<Type *> *sizeDependencies, SubJob *job, Expr **exprPointe
 		auto declaration = static_cast<ExprIdentifier *>(left)->declaration;
 
 		if (!(declaration->flags & DECLARATION_VALUE_IS_READY)) {
+			goToSleep(job, &declaration->sleepingOnMe);
+
 			*yield = true;
 			return true;
 		}
@@ -3116,7 +3126,10 @@ bool inferFlattened(SubJob *job, Array<Type *> *sizeDependencies = nullptr) {
 					}
 					else {
 						for (; identifier->resolveFrom; identifier->resolveFrom = identifier->resolveFrom->parentBlock) {
-							if (!(identifier->resolveFrom->flags & BLOCK_IS_COMPLETE)) break;
+							if (!(identifier->resolveFrom->flags & BLOCK_IS_COMPLETE)) {
+								goToSleep(job, &identifier->resolveFrom->sleepingOnMe, identifier->name);
+								break;
+							}
 
 							bool yield;
 							u64 index;
@@ -3208,6 +3221,8 @@ bool inferFlattened(SubJob *job, Array<Type *> *sizeDependencies = nullptr) {
 					assert(argument);
 
 					if (!(argument->flags & DECLARATION_TYPE_IS_READY)) {
+						goToSleep(job, &argument->sleepingOnMe);
+
 						return true;
 					}
 				}
@@ -3217,6 +3232,8 @@ bool inferFlattened(SubJob *job, Array<Type *> *sizeDependencies = nullptr) {
 					assert(return_);
 
 					if (!(return_->flags & DECLARATION_TYPE_IS_READY)) {
+						goToSleep(job, &return_->sleepingOnMe);
+
 						return true;
 					}
 				}
@@ -3240,6 +3257,8 @@ bool inferFlattened(SubJob *job, Array<Type *> *sizeDependencies = nullptr) {
 				for (auto declaration : block->declarations.declarations) {
 					if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_USING | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT))) {
 						if (!(declaration->flags & DECLARATION_TYPE_IS_READY)) {
+							goToSleep(job, &declaration->sleepingOnMe);
+
 							return true;
 						}
 					}
@@ -3854,6 +3873,8 @@ bool inferFlattened(SubJob *job, Array<Type *> *sizeDependencies = nullptr) {
 						}
 
 						if (!type->typeValue->size) {
+							goToSleep(job, &type->typeValue->sleepingOnMe);
+
 							return true;
 						}
 
@@ -4037,6 +4058,8 @@ bool inferFlattened(SubJob *job, Array<Type *> *sizeDependencies = nullptr) {
 					*exprPointer = literal;
 				}
 				else {
+					goToSleep(job, &increment->previous->sleepingOnMe);
+
 					return true;
 				}
 
@@ -4365,6 +4388,13 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 		if (!inferFlattened(&job->value, &job->sizeDependencies)) {
 			return false;
 		}
+#if BUILD_DEBUG // Catch yields where we don't go to sleep, this means we are probably doing wasted computations
+		else {
+			if (!job->value.sleeping && job->value.index != job->value.flattened.count) {
+				int aaa = 0;
+			}
+		}
+#endif
 
 		if (function->type) {
 			for (auto argument : job->infer.function->arguments.declarations) {
@@ -4414,12 +4444,26 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 			if (!inferFlattened(&job->type)) {
 				return false;
 			}
+#if BUILD_DEBUG // Catch yields where we don't go to sleep, this means we are probably doing wasted computations
+			else {
+				if (!job->type.sleeping && job->type.index != job->type.flattened.count) {
+					int aaa = 0;
+				}
+			}
+#endif
 		}
 
 		if (declaration->initialValue) {
 			if (!inferFlattened(&job->value, &job->sizeDependencies)) {
 				return false;
 			}
+#if BUILD_DEBUG // Catch yields where we don't go to sleep, this means we are probably doing wasted computations
+			else {
+				if (!job->value.sleeping && job->value.index != job->value.flattened.count) {
+					int aaa = 0;
+				}
+			}
+#endif
 		}
 
 		if (!(declaration->flags & (DECLARATION_TYPE_IS_READY | DECLARATION_IS_USING)) && declaration->type && job->type.index == job->type.flattened.count) {
@@ -4455,9 +4499,9 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 				return false;
 			}
 
-			*madeProgress = true;
 			declaration->flags |= DECLARATION_TYPE_IS_READY;
-			wakeUpSleepers(&declaration->sleepingOnMe);
+
+			*madeProgress = wakeUpSleepers(&declaration->sleepingOnMe);
 		}
 
 		if (!(declaration->flags & DECLARATION_IS_USING) && declaration->type && declaration->initialValue) {
@@ -4495,12 +4539,11 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 					}
 				}
 
-				*madeProgress = true;
-
 				inferJobs.unordered_remove((*index)--);
 
 				declaration->flags |= DECLARATION_VALUE_IS_READY;
-				wakeUpSleepers(&declaration->sleepingOnMe);
+
+				*madeProgress = wakeUpSleepers(&declaration->sleepingOnMe);
 
 				if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
 					waitingOnSize.add(job);
@@ -4531,12 +4574,11 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 					declaration->initialValue->end = declaration->end;
 				}
 
-				*madeProgress = true;
-
 				inferJobs.unordered_remove((*index)--);
 
 				declaration->flags |= DECLARATION_VALUE_IS_READY;
-				wakeUpSleepers(&declaration->sleepingOnMe);
+
+				*madeProgress = wakeUpSleepers(&declaration->sleepingOnMe);
 
 
 				if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
@@ -4612,7 +4654,7 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 									import->indexInBlock = declaration->indexInBlock;
 
 									if (import->name.length) {
-										wakeUpSleepers(&declaration->enclosingScope->sleepingOnMe, import->name);
+										*madeProgress = wakeUpSleepers(&declaration->enclosingScope->sleepingOnMe, import->name);
 									}
 
 									if (member->flags & DECLARATION_IS_USING) {
@@ -4627,8 +4669,6 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 							return false;
 						}
 					}
-
-					*madeProgress = true;
 
 					declaration->enclosingScope->usings.unordered_remove(declaration);
 					declaration->flags |= DECLARATION_USING_IS_RESOLVED;
@@ -4665,14 +4705,11 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 						}
 					}
 
-					*madeProgress = true;
-
-
 					inferJobs.unordered_remove((*index)--);
 
 					declaration->flags |= DECLARATION_VALUE_IS_READY;
 					declaration->flags |= DECLARATION_TYPE_IS_READY;
-					wakeUpSleepers(&declaration->sleepingOnMe);
+					*madeProgress = wakeUpSleepers(&declaration->sleepingOnMe);
 
 
 					if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
@@ -4709,8 +4746,11 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 
 					auto memberType = static_cast<ExprLiteral *>(member->type)->typeValue;
 
-					if (!memberType->size)
+					if (!memberType->size) {
+						goToSleep(&job->type, &memberType->sleepingOnMe);
+
 						break;
+					}
 
 					if (!(struct_->flags & TYPE_STRUCT_IS_PACKED)) {
 						struct_->alignment = my_max(struct_->alignment, memberType->alignment);
@@ -4752,7 +4792,8 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 					}
 				}
 
-				*madeProgress = true;
+				*madeProgress = wakeUpSleepers(&struct_->sleepingOnMe);
+
 				freeJob(job);
 				inferJobs.unordered_remove((*index)--);
 			}
@@ -4766,9 +4807,12 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 				array->size = array->arrayOf->size * array->count;
 				array->alignment = array->arrayOf->alignment;
 
-				*madeProgress = true;
+				*madeProgress = wakeUpSleepers(&array->sleepingOnMe);
 				freeJob(job);
 				inferJobs.unordered_remove((*index)--);
+			}
+			else {
+				goToSleep(&job->type, &array->arrayOf->sleepingOnMe);
 			}
 		}
 		else {
@@ -4851,6 +4895,8 @@ void runInfer() {
 					goto error;
 				}
 			}
+
+			wakeUpSleepers(&declarations.data.block->sleepingOnMe);
 		}
 
 		bool madeProgress;
