@@ -1444,9 +1444,10 @@ bool isAssignable(Expr *expr) {
 		return true;
 	}
 	else if (expr->flavor == ExprFlavor::IDENTIFIER) {
-		auto access = static_cast<ExprIdentifier *>(expr)->structAccess;
+		auto identifier = static_cast<ExprIdentifier *>(expr);
+		auto access = identifier->structAccess;
 
-		if (!access) return true;
+		if (!access) return !(identifier->declaration->flags & (DECLARATION_IS_ARGUMENT | DECLARATION_IS_ITERATOR | DECLARATION_IS_ITERATOR_INDEX));
 
 		if (access->type->flavor == TypeFlavor::ARRAY) {
 			return !(access->type->flags & TYPE_ARRAY_IS_FIXED) && isAssignable(access);
@@ -1859,9 +1860,11 @@ bool isAddressable(Expr *expr) {
 		return static_cast<ExprBinaryOperator *>(expr)->op == TOKEN('[');
 	}
 	else if (expr->flavor == ExprFlavor::IDENTIFIER) {
-		auto access = static_cast<ExprIdentifier *>(expr)->structAccess;
+		auto identifier = static_cast<ExprIdentifier *>(expr);
 
-		if (!access) return true;
+		auto access = identifier->structAccess;
+
+		if (!access) return !(identifier->declaration->flags & (DECLARATION_IS_ARGUMENT | DECLARATION_IS_ITERATOR | DECLARATION_IS_ITERATOR_INDEX));
 
 		if (access->type->flavor == TypeFlavor::POINTER) {
 			auto pointer = static_cast<TypePointer *>(access->type);
@@ -2929,7 +2932,7 @@ bool inferBinary(Array<Type *> *sizeDependencies, SubJob *job, Expr **exprPointe
 				return false;
 			}
 
-			const char *opName = binary->op == TOKEN('*') ? "multiply" : (binary->op == TOKEN('/') ? "divide" : "mod");
+			const char *opName = binary->op == TokenT::TIMES_EQUALS ? "multiply" : ((binary->op == TokenT::DIVIDE_EQUALS) ? "divide" : "mod");
 
 			if (left->type->flavor == right->type->flavor) {
 				switch (left->type->flavor) {
@@ -4146,7 +4149,7 @@ bool addDeclaration(Declaration *declaration) {
 			return false;
 		}
 
-		wakeUpSleepers(&declaration->enclosingScope->sleepingOnMe, declaration->name);
+		wakeUpSleepers(&globalBlock.sleepingOnMe, declaration->name);
 	}
 
 	if ((declaration->flags & DECLARATION_TYPE_IS_READY) && (declaration->flags & DECLARATION_VALUE_IS_READY)) {

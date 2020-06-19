@@ -38,10 +38,15 @@ Compile option for runtime checking
  - Array bounds checking
  - Cast bounds checking
  - 
+ 
+Syntax for casting float to int and int to float bitwise
+
+Rotate operators
+
+Allow logical shifting of signed values
 
 ABI/calling convention
  - varargs (represent with arrays?)
- - arguments by value are immutable
  
 varargs
  - 
@@ -73,6 +78,7 @@ performance
  - Multithread ir generator
  - Multithread coff writer?
  - Multithread parser and lexer - Write obj faster (somehow)
+ - Get rid of linker
  - Multithread type inference (nightmare nightmare nightmare)
  
 

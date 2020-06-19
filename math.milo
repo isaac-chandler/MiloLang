@@ -30,7 +30,9 @@ sqrt :: (val: f32) -> f32 {
 
 // very approximate square root - 2 significant figures at best, not thoroughly tested, use at your own risk
 approximate_sqrt :: (val: f32) -> f32 {
-	i := <<cast(*u32) *val
+	x := val
+
+	i := <<cast(*u32) *x
 	
 	
 	i = 0x1fbd1df5 + (i >> 1)
