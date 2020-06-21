@@ -49,7 +49,7 @@ struct Type {
 	u16 flags = 0;
 	TypeFlavor flavor;
 	Array<struct SubJob *> sleepingOnMe;
-	struct InferJob *sizeJob = nullptr;
+	struct SizeJob *sizeJob = nullptr;
 };
 
 struct TypePointer : Type {

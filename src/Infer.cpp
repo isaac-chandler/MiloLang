@@ -46,211 +46,222 @@ void goToSleep(SubJob *job, Array<SubJob *> *sleepingOnMe, String name = String(
 	sleepingOnMe->add(job);
 }
 
-struct InferJob {
-	union {
-		Declaration *declaration;
-		ExprFunction *function;
-		Type *type;
-	} infer;
-
-	InferFlavor flavor;
-
-	SubJob type;
-	SubJob value;
-
-	u64 sizingIndexInMembers = 0;
-
-	u64 runningSize = 0;
-
+struct InferJobBase {
 	Array<Type *> sizeDependencies;
+	SubJob type;
 
-	InferJob *nextFree;
 
-	InferJob() {}
 };
 
-Array<InferJob *> declarationJobs;
-Array<InferJob *> inferJobs;
+struct DeclarationJob : InferJobBase {
+	Declaration *declaration;
+
+	SubJob value;
+
+	DeclarationJob *nextFree;
+};
+
+struct FunctionJob : InferJobBase {
+	ExprFunction *function;
+
+	SubJob value;
+
+	FunctionJob *nextFree;
+
+};
+
+struct SizeJob : SubJob {
+	Type *type;
+
+	u64 sizingIndexInMembers = 0;
+	u64 runningSize = 0;
+
+	SizeJob *nextFree;
+};
+
+Array<DeclarationJob *> declarationJobs;
+Array<FunctionJob *> functionJobs;
+Array<SizeJob *> sizeJobs;
 
 
 void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 	PROFILE_FUNC();
 	switch ((*expr)->flavor) {
-		case ExprFlavor::IDENTIFIER: {
-			auto identifier = static_cast<ExprIdentifier *>(*expr);
+	case ExprFlavor::IDENTIFIER: {
+		auto identifier = static_cast<ExprIdentifier *>(*expr);
 
-			if (identifier->structAccess) {
-				flatten(flattenTo, &identifier->structAccess);
+		if (identifier->structAccess) {
+			flatten(flattenTo, &identifier->structAccess);
+		}
+
+		flattenTo.add(expr);
+		break;
+	}
+	case ExprFlavor::FUNCTION:
+	case ExprFlavor::FUNCTION_PROTOTYPE: {
+		flattenTo.add(expr);
+
+		// The function arguments and returns are handled separately since they are declarations of their own so will be type-checked separately
+		// The function body is type-checked separately from the head so we don't get circular dependencies with recursive functions
+		// And the body's types are irrelevant to the expression using the function
+
+		break;
+	}
+	case ExprFlavor::COMMA_ASSIGNMENT: {
+		auto comma = static_cast<ExprCommaAssignment *>(*expr);
+
+		if (!((*expr)->flags & EXPR_COMMA_ASSIGNMENT_IS_DECLARATION)) {
+
+			for (u64 i = 0; i < comma->exprCount; i++) {
+				flatten(flattenTo, &comma->left[i]);
 			}
+		}
 
+		flatten(flattenTo, &comma->call);
+
+		flattenTo.add(expr);
+		break;
+	}
+	case ExprFlavor::TYPE_LITERAL:
+	case ExprFlavor::STRING_LITERAL:
+	case ExprFlavor::FLOAT_LITERAL:
+	case ExprFlavor::INT_LITERAL:
+		break;
+	case ExprFlavor::BREAK:
+	case ExprFlavor::CONTINUE:
+	case ExprFlavor::REMOVE: {
+		auto continue_ = static_cast<ExprBreakOrContinue *>(*expr);
+
+		if (continue_->label) {
+			flatten(flattenTo, &continue_->label);
+		}
+
+		if (!continue_->refersTo) {
 			flattenTo.add(expr);
-			break;
 		}
-		case ExprFlavor::FUNCTION:
-		case ExprFlavor::FUNCTION_PROTOTYPE: {
+
+		break;
+	}
+	case ExprFlavor::BINARY_OPERATOR: {
+		ExprBinaryOperator *binary = static_cast<ExprBinaryOperator *>(*expr);
+
+		if (binary->left) {
+			flatten(flattenTo, &binary->left);
+		}
+
+		if (!(binary->flags & EXPR_ASSIGN_IS_IMPLICIT_INITIALIZER)) {
+			flatten(flattenTo, &binary->right);
+		}
+
+		if (binary->op == TokenT::CAST && !binary->left) {
+			// Don't add auto-casts to the flattened list, there is nothing to infer
+		}
+		else {
 			flattenTo.add(expr);
-
-			// The function arguments and returns are handled separately since they are declarations of their own so will be type-checked separately
-			// The function body is type-checked separately from the head so we don't get circular dependencies with recursive functions
-			// And the body's types are irrelevant to the expression using the function
-
-			break;
 		}
-		case ExprFlavor::COMMA_ASSIGNMENT: {
-			auto comma = static_cast<ExprCommaAssignment *>(*expr);
-			
-			if (!((*expr)->flags & EXPR_COMMA_ASSIGNMENT_IS_DECLARATION)) {
 
-				for (u64 i = 0; i < comma->exprCount; i++) {
-					flatten(flattenTo, &comma->left[i]);
-				}
-			}
+		break;
+	}
+	case ExprFlavor::BLOCK: {
+		ExprBlock *block = static_cast<ExprBlock *>(*expr);
 
-			flatten(flattenTo, &comma->call);
+		for (auto &subExpr : block->exprs)
+			flatten(flattenTo, &subExpr);
 
-			flattenTo.add(expr);
-			break;
+		flattenTo.add(expr);
+
+		break;
+	}
+	case ExprFlavor::FOR: {
+		ExprLoop *loop = static_cast<ExprLoop *>(*expr);
+
+		flatten(flattenTo, &loop->forBegin);
+
+		if (loop->forEnd)
+			flatten(flattenTo, &loop->forEnd);
+
+		flattenTo.add(expr);
+
+		if (loop->body)
+			flatten(flattenTo, &loop->body);
+
+		if (loop->completedBody)
+			flatten(flattenTo, &loop->completedBody);
+
+		break;
+	}
+	case ExprFlavor::FUNCTION_CALL: {
+		ExprFunctionCall *call = static_cast<ExprFunctionCall *>(*expr);
+
+		for (u64 i = 0; i < call->arguments.count; i++) {
+			flatten(flattenTo, &call->arguments.values[i]);
 		}
-		case ExprFlavor::TYPE_LITERAL:
-		case ExprFlavor::STRING_LITERAL:
-		case ExprFlavor::FLOAT_LITERAL:
-		case ExprFlavor::INT_LITERAL:
-			break;
-		case ExprFlavor::BREAK:
-		case ExprFlavor::CONTINUE:
-		case ExprFlavor::REMOVE: {
-			auto continue_ = static_cast<ExprBreakOrContinue *>(*expr);
 
-			if (continue_->label) {
-				flatten(flattenTo, &continue_->label);
-			}
+		flatten(flattenTo, &call->function);
+		flattenTo.add(expr);
 
-			if (!continue_->refersTo) {
-				flattenTo.add(expr);
-			}
+		break;
+	}
+	case ExprFlavor::IF: {
+		ExprIf *ifElse = static_cast<ExprIf *>(*expr);
 
-			break;
-		}
-		case ExprFlavor::BINARY_OPERATOR: {
-			ExprBinaryOperator *binary = static_cast<ExprBinaryOperator *>(*expr);
+		flatten(flattenTo, &ifElse->condition);
+		flattenTo.add(expr);
 
-			if (binary->left) {
-				flatten(flattenTo, &binary->left);
-			}
+		if (ifElse->ifBody)
+			flatten(flattenTo, &ifElse->ifBody);
 
-			if (!(binary->flags & EXPR_ASSIGN_IS_IMPLICIT_INITIALIZER)) {
-				flatten(flattenTo, &binary->right);
-			}
+		if (ifElse->elseBody)
+			flatten(flattenTo, &ifElse->elseBody);
 
-			if (binary->op == TokenT::CAST && !binary->left) {
-				// Don't add auto-casts to the flattened list, there is nothing to infer
-			}
-			else {
-				flattenTo.add(expr);
-			}
+		break;
+	}
+	case ExprFlavor::RETURN: {
+		ExprReturn *return_ = static_cast<ExprReturn *>(*expr);
 
-			break;
-		}
-		case ExprFlavor::BLOCK: {
-			ExprBlock *block = static_cast<ExprBlock *>(*expr);
+		for (u64 i = 0; i < return_->returns.count; i++)
+			flatten(flattenTo, &return_->returns.values[i]);
 
-			for (auto &subExpr : block->exprs)
-				flatten(flattenTo, &subExpr);
+		flattenTo.add(expr);
 
-			flattenTo.add(expr);
+		break;
+	}
+	case ExprFlavor::UNARY_OPERATOR: {
+		ExprUnaryOperator *unary = static_cast<ExprUnaryOperator *>(*expr);
 
-			break;
-		}
-		case ExprFlavor::FOR: {
-			ExprLoop *loop = static_cast<ExprLoop *>(*expr);
+		flatten(flattenTo, &unary->value);
+		flattenTo.add(expr);
 
-			flatten(flattenTo, &loop->forBegin);
+		break;
+	}
+	case ExprFlavor::WHILE: {
+		ExprLoop *loop = static_cast<ExprLoop *>(*expr);
 
-			if (loop->forEnd)
-				flatten(flattenTo, &loop->forEnd);
+		flatten(flattenTo, &loop->whileCondition);
+		flattenTo.add(expr);
 
-			flattenTo.add(expr);
+		if (loop->body)
+			flatten(flattenTo, &loop->body);
 
-			if (loop->body)
-				flatten(flattenTo, &loop->body);
+		if (loop->completedBody)
+			flatten(flattenTo, &loop->completedBody);
 
-			if (loop->completedBody)
-				flatten(flattenTo, &loop->completedBody);
+		break;
+	}
+	case ExprFlavor::ENUM_INCREMENT: {
+		flattenTo.add(expr);
+		break;
+	}
+	case ExprFlavor::ENUM: {
+		auto enum_ = static_cast<ExprEnum *>(*expr);
 
-			break;
-		}
-		case ExprFlavor::FUNCTION_CALL: {
-			ExprFunctionCall *call = static_cast<ExprFunctionCall *>(*expr);
+		flatten(flattenTo, &enum_->integerType);
 
-			for (u64 i = 0; i < call->arguments.count; i++) {
-				flatten(flattenTo, &call->arguments.values[i]);
-			}
-
-			flatten(flattenTo, &call->function);
-			flattenTo.add(expr);
-
-			break;
-		}
-		case ExprFlavor::IF: {
-			ExprIf *ifElse = static_cast<ExprIf *>(*expr);
-
-			flatten(flattenTo, &ifElse->condition);
-			flattenTo.add(expr);
-
-			if (ifElse->ifBody)
-				flatten(flattenTo, &ifElse->ifBody);
-
-			if (ifElse->elseBody)
-				flatten(flattenTo, &ifElse->elseBody);
-
-			break;
-		}
-		case ExprFlavor::RETURN: {
-			ExprReturn *return_ = static_cast<ExprReturn *>(*expr);
-
-			for (u64 i = 0; i < return_->returns.count; i++)
-				flatten(flattenTo, &return_->returns.values[i]);
-
-			flattenTo.add(expr);
-
-			break;
-		}
-		case ExprFlavor::UNARY_OPERATOR: {
-			ExprUnaryOperator *unary = static_cast<ExprUnaryOperator *>(*expr);
-
-			flatten(flattenTo, &unary->value);
-			flattenTo.add(expr);
-
-			break;
-		}
-		case ExprFlavor::WHILE: {
-			ExprLoop *loop = static_cast<ExprLoop *>(*expr);
-
-			flatten(flattenTo, &loop->whileCondition);
-			flattenTo.add(expr);
-
-			if (loop->body)
-				flatten(flattenTo, &loop->body);
-
-			if (loop->completedBody)
-				flatten(flattenTo, &loop->completedBody);
-
-			break;
-		}
-		case ExprFlavor::ENUM_INCREMENT: {
-			flattenTo.add(expr);
-			break;
-		}
-		case ExprFlavor::ENUM: {
-			auto enum_ = static_cast<ExprEnum *>(*expr);
-
-			flatten(flattenTo, &enum_->integerType);
-
-			flattenTo.add(expr);
-			break;
-		}
-		default:
-			assert(false);
+		flattenTo.add(expr);
+		break;
+	}
+	default:
+		assert(false);
 	}
 }
 
@@ -490,7 +501,9 @@ bool solidifyOneLiteral(ExprBinaryOperator *binary) {
 }
 
 
-InferJob *allocateJob();
+SizeJob *allocateSizeJob();
+DeclarationJob *allocateDeclarationJob();
+FunctionJob *allocateFunctionJob();
 
 bool isValidCast(Type *to, Type *from) {
 	if (to->flavor == from->flavor) {
@@ -533,7 +546,7 @@ bool isValidCast(Type *to, Type *from) {
 		return to->flavor == TypeFlavor::BOOL || (to->flavor == TypeFlavor::INTEGER && to->size == 8) || to == TYPE_VOID_POINTER;
 	}
 	else if (from->flavor == TypeFlavor::INTEGER) {
-		return to->flavor == TypeFlavor::ENUM || to->flavor == TypeFlavor::BOOL || to->flavor == TypeFlavor::FLOAT || 
+		return to->flavor == TypeFlavor::ENUM || to->flavor == TypeFlavor::BOOL || to->flavor == TypeFlavor::FLOAT ||
 			(from->size == 8 && (to->flavor == TypeFlavor::FUNCTION || to->flavor == TypeFlavor::POINTER));
 	}
 	else if (from->flavor == TypeFlavor::POINTER) {
@@ -1137,7 +1150,7 @@ bool binaryOpForInteger(Array<Type *> *sizeDependencies, Expr **exprPointer) {
 		if (!boundsCheckImplicitConversion(binary, &TYPE_S64, static_cast<ExprLiteral *>(left))) {
 			return false;
 		}
-		
+
 		left->type = &TYPE_SIGNED_INT_LITERAL;
 	}
 
@@ -1497,56 +1510,56 @@ bool defaultValueIsZero(Type *type, bool *yield) {
 	*yield = false;
 
 	switch (type->flavor) {
-		case TypeFlavor::BOOL:
-		case TypeFlavor::FLOAT:
-		case TypeFlavor::FUNCTION:
-		case TypeFlavor::INTEGER:
-		case TypeFlavor::POINTER: {
+	case TypeFlavor::BOOL:
+	case TypeFlavor::FLOAT:
+	case TypeFlavor::FUNCTION:
+	case TypeFlavor::INTEGER:
+	case TypeFlavor::POINTER: {
+		return true;
+	}
+	case TypeFlavor::STRING: {
+		return false;
+	}
+	case TypeFlavor::ARRAY: {
+		if (type->flags & TYPE_ARRAY_IS_FIXED) {
+			return defaultValueIsZero(static_cast<TypeArray *>(type)->arrayOf, yield);
+		}
+		else {
 			return true;
 		}
-		case TypeFlavor::STRING: {
-			return false;
-		}
-		case TypeFlavor::ARRAY: {
-			if (type->flags & TYPE_ARRAY_IS_FIXED) {
-				return defaultValueIsZero(static_cast<TypeArray *>(type)->arrayOf, yield);
+	}
+	case TypeFlavor::STRUCT: {
+		auto struct_ = static_cast<TypeStruct *>(type);
+
+		for (auto member : struct_->members.declarations) {
+			if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IS_USING)) continue;
+
+			if (member->flags & DECLARATION_IS_UNINITIALIZED) return false;
+
+			if (!(member->flags & DECLARATION_VALUE_IS_READY)) {
+				*yield = true;
+				return false;
+			}
+
+			assert(member->initialValue);
+
+			if ((member->initialValue->flavor == ExprFlavor::INT_LITERAL || member->initialValue->flavor == ExprFlavor::FLOAT_LITERAL)
+				&& static_cast<ExprLiteral *>(member->initialValue)->unsignedValue == 0) { // Check against unsignedValue even for float literals so if the user explicitly 
+																						   // sets the default value to -0, they will actually get -0, not 0
 			}
 			else {
-				return true;
+				return false;
 			}
 		}
-		case TypeFlavor::STRUCT: {
-			auto struct_ = static_cast<TypeStruct *>(type);
 
-			for (auto member : struct_->members.declarations) {
-				if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IS_USING)) continue;
-
-				if (member->flags & DECLARATION_IS_UNINITIALIZED) return false;
-
-				if (!(member->flags & DECLARATION_VALUE_IS_READY)) {
-					*yield = true;
-					return false;
-				}
-
-				assert(member->initialValue);
-
-				if ((member->initialValue->flavor == ExprFlavor::INT_LITERAL || member->initialValue->flavor == ExprFlavor::FLOAT_LITERAL)
-					&& static_cast<ExprLiteral *>(member->initialValue)->unsignedValue == 0) { // Check against unsignedValue even for float literals so if the user explicitly 
-																							   // sets the default value to -0, they will actually get -0, not 0
-				}
-				else {
-					return false;
-				}
-			}
-
-			return true;
-		}
-		case TypeFlavor::ENUM: {
-			return type->flags & TYPE_ENUM_IS_FLAGS ? true : false;
-		}
-		default: {
-			return false;
-		}
+		return true;
+	}
+	case TypeFlavor::ENUM: {
+		return type->flags & TYPE_ENUM_IS_FLAGS ? true : false;
+	}
+	default: {
+		return false;
+	}
 	}
 }
 
@@ -1569,78 +1582,78 @@ Expr *createDefaultValue(Declaration *location, Type *type, bool *shouldYield) {
 	}
 
 	switch (type->flavor) {
-		case TypeFlavor::BOOL:
-		case TypeFlavor::FLOAT:
-		case TypeFlavor::FUNCTION:
-		case TypeFlavor::INTEGER:
-		case TypeFlavor::POINTER: {
-			assert(false); // This should be handled by the defaultValueIsZero check
-			return nullptr;
-		}
-		case TypeFlavor::STRUCT: {
-			Expr *literal = new Expr;
-			literal->flavor = ExprFlavor::STRUCT_DEFAULT;
-			literal->type = type;
+	case TypeFlavor::BOOL:
+	case TypeFlavor::FLOAT:
+	case TypeFlavor::FUNCTION:
+	case TypeFlavor::INTEGER:
+	case TypeFlavor::POINTER: {
+		assert(false); // This should be handled by the defaultValueIsZero check
+		return nullptr;
+	}
+	case TypeFlavor::STRUCT: {
+		Expr *literal = new Expr;
+		literal->flavor = ExprFlavor::STRUCT_DEFAULT;
+		literal->type = type;
 
-			return literal;
-		}
-		case TypeFlavor::STRING: {
-			ExprStringLiteral *empty = new ExprStringLiteral;
-			empty->flavor = ExprFlavor::STRING_LITERAL;
-			empty->string = "";
-			empty->type = type;
+		return literal;
+	}
+	case TypeFlavor::STRING: {
+		ExprStringLiteral *empty = new ExprStringLiteral;
+		empty->flavor = ExprFlavor::STRING_LITERAL;
+		empty->string = "";
+		empty->type = type;
 
-			return empty;
+		return empty;
 
-		}
-		case TypeFlavor::ARRAY: {
-			ExprArray *defaults = new ExprArray;
-			defaults->flavor = ExprFlavor::ARRAY;
-			defaults->type = type;
-
-
-			if (type->flags & TYPE_ARRAY_IS_FIXED) {
-				auto array = static_cast<TypeArray *>(type);
-				defaults->count = array->count;
+	}
+	case TypeFlavor::ARRAY: {
+		ExprArray *defaults = new ExprArray;
+		defaults->flavor = ExprFlavor::ARRAY;
+		defaults->type = type;
 
 
-				defaults->storage = new Expr * [array->count];
+		if (type->flags & TYPE_ARRAY_IS_FIXED) {
+			auto array = static_cast<TypeArray *>(type);
+			defaults->count = array->count;
 
-				bool yield;
 
-				Expr *value = createDefaultValue(location, array->arrayOf, &yield);
+			defaults->storage = new Expr * [array->count];
 
-				if (yield) {
-					*shouldYield = true;
-					return nullptr;
-				}
+			bool yield;
 
-				if (!value) {
-					return nullptr;
-				}
+			Expr *value = createDefaultValue(location, array->arrayOf, &yield);
 
-				defaults->storage[0] = value;
-
-				if (array->count > 1) {
-					defaults->storage[1] = nullptr; // A value of nullptr signifies all remaining values are the same as the previous
-				}
+			if (yield) {
+				*shouldYield = true;
+				return nullptr;
 			}
 
-			return defaults;
+			if (!value) {
+				return nullptr;
+			}
+
+			defaults->storage[0] = value;
+
+			if (array->count > 1) {
+				defaults->storage[1] = nullptr; // A value of nullptr signifies all remaining values are the same as the previous
+			}
 		}
-		case TypeFlavor::TYPE: {
-			reportError(location, "Error: There is no default value for a type");
-			return nullptr;
-		}
-		case TypeFlavor::ENUM: {
-			// Enum flags will be handled by the defaultIsZero case
-			reportError(location, "Error: Enums do not have a default value");
-			return nullptr;
-		}
-		default: {
-			assert(false);
-			return nullptr;
-		}
+
+		return defaults;
+	}
+	case TypeFlavor::TYPE: {
+		reportError(location, "Error: There is no default value for a type");
+		return nullptr;
+	}
+	case TypeFlavor::ENUM: {
+		// Enum flags will be handled by the defaultIsZero case
+		reportError(location, "Error: Enums do not have a default value");
+		return nullptr;
+	}
+	default: {
+		assert(false);
+		return nullptr;
+	}
 	}
 }
 
@@ -1649,17 +1662,12 @@ bool assignOp(Array<Type *> *sizeDependencies, SubJob *job, Expr *location, Type
 	if (correct != given->type) {
 		if (correct->flavor == given->type->flavor) {
 			switch (correct->flavor) {
-				case TypeFlavor::ARRAY: {
-					if (correct != given->type) {
-						if (given->type->flags & (TYPE_ARRAY_IS_DYNAMIC | TYPE_ARRAY_IS_FIXED)) {
-							if (!(correct->flags & (TYPE_ARRAY_IS_DYNAMIC | TYPE_ARRAY_IS_FIXED))) { // We are converting from [N]T or [..]T to []T
-								if (static_cast<TypeArray *>(given->type)->arrayOf == static_cast<TypeArray *>(correct)->arrayOf) {
-									insertImplicitCast(sizeDependencies, &given, correct);
-								}
-								else {
-									reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
-									return false;
-								}
+			case TypeFlavor::ARRAY: {
+				if (correct != given->type) {
+					if (given->type->flags & (TYPE_ARRAY_IS_DYNAMIC | TYPE_ARRAY_IS_FIXED)) {
+						if (!(correct->flags & (TYPE_ARRAY_IS_DYNAMIC | TYPE_ARRAY_IS_FIXED))) { // We are converting from [N]T or [..]T to []T
+							if (static_cast<TypeArray *>(given->type)->arrayOf == static_cast<TypeArray *>(correct)->arrayOf) {
+								insertImplicitCast(sizeDependencies, &given, correct);
 							}
 							else {
 								reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
@@ -1671,135 +1679,140 @@ bool assignOp(Array<Type *> *sizeDependencies, SubJob *job, Expr *location, Type
 							return false;
 						}
 					}
-					break;
-				}
-				case TypeFlavor::BOOL: {
-					break;
-				}
-				case TypeFlavor::STRING: {
-					break;
-				}
-				case TypeFlavor::FLOAT: {
-					if (given->type == &TYPE_FLOAT_LITERAL) {
-						given->type = correct;
-						given->type = correct;
-					}
-					else if (given->type->size < correct->size) {
-						insertImplicitCast(sizeDependencies, &given, correct);
-					}
 					else {
-						// @Incomplete should we allow this conversion in some cases, this code was originally taken
-						// from == and != where float conversion definitely shouldn't be allowed, since that's already
-						reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
-						return false;
-					}
-					break;
-				}
-				case TypeFlavor::FUNCTION: {
-					if (correct != given->type) {
 						reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
 						return false;
 					}
 				}
-				case TypeFlavor::INTEGER: {
-					if ((correct->flags & TYPE_INTEGER_IS_SIGNED) == (given->type->flags & TYPE_INTEGER_IS_SIGNED)) {
-						if (given->type == &TYPE_UNSIGNED_INT_LITERAL || given->type == &TYPE_SIGNED_INT_LITERAL) {
-							if (!boundsCheckImplicitConversion(location, correct, static_cast<ExprLiteral *>(given))) {
-								return false;
-							}
-
-							given->type = correct;
-						}
-						else if (correct->size > given->type->size) {
-							insertImplicitCast(sizeDependencies, &given, correct);
-						}
-						else if (correct->size < given->type->size) {
-							reportError(location, "Error: Cannot convert from %.*s to %.*s, precision will be lost", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
-							return false;
-						}
-					}
-					else {
-						if ((given->type == &TYPE_UNSIGNED_INT_LITERAL) && (correct->flags & TYPE_INTEGER_IS_SIGNED)) {
-							if (!boundsCheckImplicitConversion(location, correct, static_cast<ExprLiteral *>(given))) {
-								return false;
-							}
-
-							given->type = correct;
-						}
-						else {
-							reportError(location, "Error: Signed-unsigned mismatch. Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
-							return false;
-						}
-					}
-
-					break;
+				break;
+			}
+			case TypeFlavor::BOOL: {
+				break;
+			}
+			case TypeFlavor::STRING: {
+				break;
+			}
+			case TypeFlavor::FLOAT: {
+				if (given->type == &TYPE_FLOAT_LITERAL) {
+					given->type = correct;
+					given->type = correct;
 				}
-				case TypeFlavor::POINTER: {
-					if (given->type != correct) {
-						auto givenPointer = static_cast<TypePointer *>(given->type)->pointerTo;
-						auto correctPointer = static_cast<TypePointer *>(correct)->pointerTo;
-
-						if (correct == TYPE_VOID_POINTER) {
-							insertImplicitCast(sizeDependencies, &given, correct);
-						}
-						else if (given->type == TYPE_VOID_POINTER) {
-							insertImplicitCast(sizeDependencies, &given, correct);
-						}
-						else if (givenPointer->flavor == TypeFlavor::ARRAY && correctPointer->flavor == TypeFlavor::ARRAY && 
-							(givenPointer->flags & TYPE_ARRAY_IS_DYNAMIC) && !(correctPointer->flags & (TYPE_ARRAY_IS_FIXED | TYPE_ARRAY_IS_DYNAMIC))) {
-							if (static_cast<TypeArray *>(givenPointer)->arrayOf == static_cast<TypeArray *>(correctPointer)->arrayOf) {
-								insertImplicitCast(sizeDependencies, &given, correct);
-							}
-						}
-						else {
-							if (!tryUsingConversion(sizeDependencies, job, correct, &given, yield)) {
-								if (*yield) {
-									return false;
-								}
-							}
-							else {
-								addSizeDependency(sizeDependencies, given->type);
-							}
-
-							if (correct != given->type) {
-								reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
-								return false;
-							}
-						}
-					}
-
-					break;
+				else if (given->type->size < correct->size) {
+					insertImplicitCast(sizeDependencies, &given, correct);
 				}
-				case TypeFlavor::TYPE: {
-					// @Incomplete make this work
-					assert(false);
+				else {
+					// @Incomplete should we allow this conversion in some cases, this code was originally taken
+					// from == and != where float conversion definitely shouldn't be allowed, since that's already
+					reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
 					return false;
 				}
-				case TypeFlavor::STRUCT: {
-					if (!tryUsingConversion(sizeDependencies, job, correct, &given, yield)) {
-						if (*yield) {
+				break;
+			}
+			case TypeFlavor::FUNCTION: {
+				if (correct != given->type) {
+					reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
+					return false;
+				}
+			}
+			case TypeFlavor::INTEGER: {
+				if ((correct->flags & TYPE_INTEGER_IS_SIGNED) == (given->type->flags & TYPE_INTEGER_IS_SIGNED)) {
+					if (given->type == &TYPE_UNSIGNED_INT_LITERAL || given->type == &TYPE_SIGNED_INT_LITERAL) {
+						if (!boundsCheckImplicitConversion(location, correct, static_cast<ExprLiteral *>(given))) {
 							return false;
+						}
+
+						given->type = correct;
+					}
+					else if (correct->size > given->type->size) {
+						insertImplicitCast(sizeDependencies, &given, correct);
+					}
+					else if (correct->size < given->type->size) {
+						reportError(location, "Error: Cannot convert from %.*s to %.*s, precision will be lost", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
+						return false;
+					}
+				}
+				else {
+					if ((given->type == &TYPE_UNSIGNED_INT_LITERAL) && (correct->flags & TYPE_INTEGER_IS_SIGNED)) {
+						if (!boundsCheckImplicitConversion(location, correct, static_cast<ExprLiteral *>(given))) {
+							return false;
+						}
+
+						given->type = correct;
+					}
+					else {
+						reportError(location, "Error: Signed-unsigned mismatch. Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
+						return false;
+					}
+				}
+
+				break;
+			}
+			case TypeFlavor::POINTER: {
+				if (given->type != correct) {
+					auto givenPointer = static_cast<TypePointer *>(given->type)->pointerTo;
+					auto correctPointer = static_cast<TypePointer *>(correct)->pointerTo;
+
+					if (correct == TYPE_VOID_POINTER) {
+						insertImplicitCast(sizeDependencies, &given, correct);
+					}
+					else if (given->type == TYPE_VOID_POINTER) {
+						insertImplicitCast(sizeDependencies, &given, correct);
+					}
+					else if (givenPointer->flavor == TypeFlavor::ARRAY && correctPointer->flavor == TypeFlavor::ARRAY &&
+						(givenPointer->flags & TYPE_ARRAY_IS_DYNAMIC) && !(correctPointer->flags & (TYPE_ARRAY_IS_FIXED | TYPE_ARRAY_IS_DYNAMIC))) {
+						if (static_cast<TypeArray *>(givenPointer)->arrayOf == static_cast<TypeArray *>(correctPointer)->arrayOf) {
+							insertImplicitCast(sizeDependencies, &given, correct);
 						}
 					}
 					else {
-						addSizeDependency(sizeDependencies, given->type);
-					}
+						if (!tryUsingConversion(sizeDependencies, job, correct, &given, yield)) {
+							if (*yield) {
+								return false;
+							}
+						}
+						else {
+							addSizeDependency(sizeDependencies, given->type);
+						}
 
-					if (correct != given->type) {
-						reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
+						if (correct != given->type) {
+							reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
+							return false;
+						}
+					}
+				}
+
+				break;
+			}
+			case TypeFlavor::TYPE: {
+				// @Incomplete make this work
+				assert(false);
+				return false;
+			}
+			case TypeFlavor::STRUCT: {
+				if (!tryUsingConversion(sizeDependencies, job, correct, &given, yield)) {
+					if (*yield) {
 						return false;
 					}
+				}
+				else {
+					addSizeDependency(sizeDependencies, given->type);
+				}
 
-					break;
+				if (correct != given->type) {
+					reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
+					return false;
 				}
-				case TypeFlavor::ENUM: {
-					if (correct != given->type) {
-						reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
-						return false;
-					}
+
+				break;
+			}
+			case TypeFlavor::ENUM: {
+				if (correct != given->type) {
+					reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
+					return false;
 				}
-				default:
-					assert(false);
+			}
+			default:
+				assert(false);
 			}
 		}
 		else {
@@ -1954,13 +1967,13 @@ bool inferArguments(Array<Type *> *sizeDependencies, SubJob *job, Arguments *arg
 	else if (arguments->count != block->declarations.count) {
 
 		if (arguments->count < block->declarations.count) {
-			reportError(callLocation, "Error: Too few %ss for %.*s (Expected: %" PRIu64 ", Given: %" PRIu64 ")", message, 
+			reportError(callLocation, "Error: Too few %ss for %.*s (Expected: %" PRIu64 ", Given: %" PRIu64 ")", message,
 				STRING_PRINTF(functionName), block->declarations.count, arguments->count);
 
 			reportError(block->declarations[arguments->count], "   ..: Here are the missing %ss", message);
 		}
 		else if (arguments->count > block->declarations.count) {
-			reportError(callLocation, "Error: Too many %ss for %.*s (Expected: %" PRIu64 ", Given: %" PRIu64 ")", message, 
+			reportError(callLocation, "Error: Too many %ss for %.*s (Expected: %" PRIu64 ", Given: %" PRIu64 ")", message,
 				STRING_PRINTF(functionName), block->declarations.count, arguments->count);
 		}
 
@@ -2041,1050 +2054,1050 @@ bool inferBinary(Array<Type *> *sizeDependencies, SubJob *job, Expr **exprPointe
 	}
 
 	switch (binary->op) {
-		case TokenT::CAST: {
-			if (left->type != &TYPE_TYPE) {
-				reportError(left, "Error: Cast target must be a type");
+	case TokenT::CAST: {
+		if (left->type != &TYPE_TYPE) {
+			reportError(left, "Error: Cast target must be a type");
+			return false;
+		}
+		else if (left->flavor != ExprFlavor::TYPE_LITERAL) {
+			reportError(left, "Error: Cast target must be a constant");
+			return false;
+		}
+
+
+		assert(left->flavor == ExprFlavor::TYPE_LITERAL);
+
+		Type *castTo = static_cast<ExprLiteral *>(left)->typeValue;
+		trySolidifyNumericLiteralToDefault(right);
+
+		if (!tryUsingConversion(sizeDependencies, job, castTo, &right, yield)) {
+			if (*yield) {
 				return false;
 			}
-			else if (left->flavor != ExprFlavor::TYPE_LITERAL) {
-				reportError(left, "Error: Cast target must be a constant");
+
+			if (!isValidCast(castTo, right->type)) {
+				reportError(binary, "Error: Cannot cast from %.*s to %.*s", STRING_PRINTF(right->type->name), STRING_PRINTF(castTo->name));
+				return false;
+			}
+		}
+
+		expr->type = castTo;
+
+		doConstantCast(exprPointer);
+
+		break;
+	}
+	case TOKEN('['): {
+		trySolidifyNumericLiteralToDefault(right);
+
+		if (right->type->flavor != TypeFlavor::INTEGER) {
+			reportError(right, "Error: Array index must be an integer");
+			return false;
+		}
+
+		if (left->type->flavor == TypeFlavor::POINTER) {
+			TypePointer *pointer = static_cast<TypePointer *>(left->type);
+
+			if (pointer->pointerTo == &TYPE_VOID) {
+				reportError(binary, "Error: Cannot read from a void pointer");
 				return false;
 			}
 
+			assert(!(pointer->pointerTo->flags & TYPE_IS_INTERNAL));
 
-			assert(left->flavor == ExprFlavor::TYPE_LITERAL);
-
-			Type *castTo = static_cast<ExprLiteral *>(left)->typeValue;
+			expr->type = pointer->pointerTo;
+		}
+		else if (left->type->flavor == TypeFlavor::STRING) {
 			trySolidifyNumericLiteralToDefault(right);
 
-			if (!tryUsingConversion(sizeDependencies, job, castTo, &right, yield)) {
-				if (*yield) {
-					return false;
-				}
-
-				if (!isValidCast(castTo, right->type)) {
-					reportError(binary, "Error: Cannot cast from %.*s to %.*s", STRING_PRINTF(right->type->name), STRING_PRINTF(castTo->name));
-					return false;
-				}
-			}
-
-			expr->type = castTo;
-
-			doConstantCast(exprPointer);
-
-			break;
+			expr->type = &TYPE_U8;
 		}
-		case TOKEN('['): {
+		else if (left->type->flavor == TypeFlavor::ARRAY) {
 			trySolidifyNumericLiteralToDefault(right);
 
-			if (right->type->flavor != TypeFlavor::INTEGER) {
-				reportError(right, "Error: Array index must be an integer");
-				return false;
-			}
+			addSizeDependency(sizeDependencies, left->type);
 
-			if (left->type->flavor == TypeFlavor::POINTER) {
-				TypePointer *pointer = static_cast<TypePointer *>(left->type);
-
-				if (pointer->pointerTo == &TYPE_VOID) {
-					reportError(binary, "Error: Cannot read from a void pointer");
-					return false;
-				}
-
-				assert(!(pointer->pointerTo->flags & TYPE_IS_INTERNAL));
-
-				expr->type = pointer->pointerTo;
-			}
-			else if (left->type->flavor == TypeFlavor::STRING) {
-				trySolidifyNumericLiteralToDefault(right);
-
-				expr->type = &TYPE_U8;
-			}
-			else if (left->type->flavor == TypeFlavor::ARRAY) {
-				trySolidifyNumericLiteralToDefault(right);
-
-				addSizeDependency(sizeDependencies, left->type);
-
-				expr->type = static_cast<TypeArray *>(left->type)->arrayOf;
-			}
-			else {
-				reportError(binary->left, "Error: Cannot index a %.*s", STRING_PRINTF(left->type->name));
-				return false;
-			}
-
-			addSizeDependency(sizeDependencies, expr->type);
-
-			break;
+			expr->type = static_cast<TypeArray *>(left->type)->arrayOf;
 		}
-		case TokenT::EQUAL:
-		case TokenT::NOT_EQUAL: {
-			if (left->type->flavor == right->type->flavor) {
-				switch (left->type->flavor) {
-					case TypeFlavor::STRING: {
-						break;
-					}
-					case TypeFlavor::BOOL: {
-						break;
-					}
-					case TypeFlavor::FLOAT: {
-						if (!binaryOpForFloat(exprPointer)) {
-							assert(false);
-							return false;
-						}
-						break;
-					}
-					case TypeFlavor::FUNCTION: {
-						if (left->type != right->type) {
-							if (left->type == TYPE_VOID_POINTER) {
-								insertImplicitCast(sizeDependencies, &right, left->type);
-							}
-							else if (right->type == TYPE_VOID_POINTER) {
-								insertImplicitCast(sizeDependencies, &left, right->type);
-							}
-							else {
-								reportError(binary, "Error: Cannot compare %.*s to %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
-								return false;
-							}
-						}
-					}
-					case TypeFlavor::INTEGER: {
-						if (!binaryOpForInteger(sizeDependencies, exprPointer))
-							return false;
-
-						break;
-					}
-					case TypeFlavor::POINTER: {
-						if (left->type != right->type) {
-							if (left->type == TYPE_VOID_POINTER) {
-								insertImplicitCast(sizeDependencies, &right, left->type);
-							}
-							else if (right->type == TYPE_VOID_POINTER) {
-								insertImplicitCast(sizeDependencies, &left, right->type);
-							}
-							else {
-								reportError(binary, "Error: Cannot compare %.*s to %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
-								return false;
-							}
-						}
-
-						break;
-					}
-					case TypeFlavor::ARRAY: {
-						reportError(binary, "Error: Cannot compare arrays");
-						return false;
-					}
-					case TypeFlavor::STRUCT: {
-						reportError(binary, "Error: Cannot compare structs");
-						return false;
-					}
-					case TypeFlavor::ENUM: {
-						if (left->type != right->type) {
-							reportError(binary, "Error: Cannot compare %.*s to %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
-							return false;
-						}
-
-						break;
-					}
-					case TypeFlavor::TYPE: {
-						// @Incomplete make this work
-						assert(false);
-						return false;
-					}
-					default:
-						assert(false);
-				}
-			}
-			else {
-				if (!binaryOpForAutoCast(sizeDependencies, job, binary, yield)) {
-					return false;
-				}
-				else if (!binaryOpForFloatAndIntLiteral(exprPointer)) {
-					return false;
-				}
-				else if (left->type->flavor == TypeFlavor::ENUM && (left->type->flags & TYPE_ENUM_IS_FLAGS) &&
-					right->type->flavor == TypeFlavor::INTEGER && right->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(right)->unsignedValue == 0) {
-					insertImplicitCast(sizeDependencies, &right, left->type);
-				}
-				else if (right->type->flavor == TypeFlavor::ENUM && (right->type->flags & TYPE_ENUM_IS_FLAGS) &&
-					left->type->flavor == TypeFlavor::INTEGER && left->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(left)->unsignedValue == 0) {
-					insertImplicitCast(sizeDependencies, &left, right->type);
-				}
-
-				if (right->type != left->type) {
-					reportError(binary, "Error: Cannot compare %.*s to %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
-					return false;
-				}
-			}
-
-			expr->type = &TYPE_BOOL;
-
-			break;
+		else {
+			reportError(binary->left, "Error: Cannot index a %.*s", STRING_PRINTF(left->type->name));
+			return false;
 		}
-		case TokenT::GREATER_EQUAL:
-		case TokenT::LESS_EQUAL:
-		case TOKEN('>'):
-		case TOKEN('<'): {
-			if (left->type->flavor == right->type->flavor) {
-				switch (left->type->flavor) {
-					case TypeFlavor::ARRAY: {
-						reportError(binary, "Error: Cannot compare arrays");
-						return false;
-					}
-					case TypeFlavor::BOOL: {
-						reportError(binary, "Error: Cannot compare bools");
-						return false;
-					}
-					case TypeFlavor::STRING: {
-						reportError(binary, "Error: Cannot compare strings");
-						return false;
-					}
-					case TypeFlavor::FLOAT: {
-						if (!binaryOpForFloat(exprPointer))
-							return false;
-						break;
-					}
-					case TypeFlavor::FUNCTION: {
-						reportError(binary, "Error: Cannot compare functions");
-						return false;
-					}
-					case TypeFlavor::INTEGER: {
-						if (!binaryOpForInteger(sizeDependencies, exprPointer))
-							return false;
 
-						break;
-					}
-					case TypeFlavor::POINTER: {
-						if (left->type != right->type) {
-							if (left->type == TYPE_VOID_POINTER) {
-								insertImplicitCast(sizeDependencies, &right, left->type);
-							}
-							else if (right->type == TYPE_VOID_POINTER) {
-								insertImplicitCast(sizeDependencies, &left, right->type);
-							}
-							else {
-								reportError(binary, "Error: Cannot compare %.*s to %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
-								return false;
-							}
-						}
+		addSizeDependency(sizeDependencies, expr->type);
 
-						break;
-					}
-					case TypeFlavor::TYPE: {
-						reportError(binary, "Error: Cannot compare types");
-						return false;
-					}
-					case TypeFlavor::STRUCT: {
-						reportError(binary, "Error: Cannot compare structs");
-						return false;
-					}
-					case TypeFlavor::ENUM: {
-						reportError(binary, "Error: Cannot compare enums");
-						return false;
-					}
-					default:
-						assert(false);
-				}
+		break;
+	}
+	case TokenT::EQUAL:
+	case TokenT::NOT_EQUAL: {
+		if (left->type->flavor == right->type->flavor) {
+			switch (left->type->flavor) {
+			case TypeFlavor::STRING: {
+				break;
 			}
-			else {
-				if (!binaryOpForAutoCast(sizeDependencies, job, binary, yield)) {
+			case TypeFlavor::BOOL: {
+				break;
+			}
+			case TypeFlavor::FLOAT: {
+				if (!binaryOpForFloat(exprPointer)) {
+					assert(false);
 					return false;
 				}
-				else if (!binaryOpForFloatAndIntLiteral(exprPointer)) {
-					return false;
-				}
-
-				if (right->type != left->type) {
-					reportError(binary, "Error: Cannot compare %.*s to %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
-					return false;
-				}
+				break;
 			}
-
-			expr->type = &TYPE_BOOL;
-
-			break;
-		}
-		case TOKEN('+'):
-		case TOKEN('-'): {
-			if (left->type->flavor == right->type->flavor) {
-				switch (left->type->flavor) {
-					case TypeFlavor::ARRAY: {
-						reportError(binary, "Error: Cannot %s arrays", binary->op == TOKEN('+') ? "add" : "subtract");
-						return false;
+			case TypeFlavor::FUNCTION: {
+				if (left->type != right->type) {
+					if (left->type == TYPE_VOID_POINTER) {
+						insertImplicitCast(sizeDependencies, &right, left->type);
 					}
-					case TypeFlavor::BOOL: {
-						reportError(binary, "Error: Cannot %s bools", binary->op == TOKEN('+') ? "add" : "subtract");
-						return false;
-					}
-					case TypeFlavor::STRING: {
-						reportError(binary, "Error: Cannot %s strings", binary->op == TOKEN('+') ? "add" : "subtract");
-						return false;
-					}
-					case TypeFlavor::FLOAT: {
-						if (!binaryOpForFloat(exprPointer))
-							return false;
-						break;
-					}
-					case TypeFlavor::FUNCTION: {
-						reportError(binary, "Error: Cannot %s functions", binary->op == TOKEN('+') ? "add" : "subtract");
-						return false;
-					}
-					case TypeFlavor::INTEGER: {
-						if (!binaryOpForInteger(sizeDependencies, exprPointer))
-							return false;
-
-						break;
-					}
-					case TypeFlavor::POINTER: {
-						if (binary->op == TOKEN('+')) {
-							reportError(binary, "Error: Cannot add pointers");
-							return false;
-						}
-
-						if (left->type != right->type) {
-							reportError(binary, "Error: Cannot subtract %.*s and %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
-							return false;
-						}
-
-						auto pointer = static_cast<TypePointer *>(left->type);
-
-						addSizeDependency(sizeDependencies, pointer->pointerTo);
-
-						break;
-					}
-					case TypeFlavor::TYPE: {
-						reportError(binary, "Error: Cannot %s types", binary->op == TOKEN('+') ? "add" : "subtract");
-						return false;
-					}
-					case TypeFlavor::STRUCT: {
-						reportError(binary, "Error: Cannot %s structs", binary->op == TOKEN('+') ? "add" : "subtract");
-						return false;
-					}
-					case TypeFlavor::ENUM: {
-						reportError(binary, "Error: Cannot %s enums", binary->op == TOKEN('+') ? "add" : "subtract");
-						return false;
-					}
-					default:
-						assert(false);
-				}
-			}
-			else {
-				if (!binaryOpForAutoCast(sizeDependencies, job, binary, yield)) {
-					return false;
-				}
-				else if (left->type->flavor == TypeFlavor::POINTER && right->type->flavor == TypeFlavor::INTEGER) {
-					trySolidifyNumericLiteralToDefault(right);
-					auto pointer = static_cast<TypePointer *>(left->type);
-
-					addSizeDependency(sizeDependencies, pointer->pointerTo);
-				}
-				else if (!binaryOpForFloatAndIntLiteral(exprPointer)) {
-					return false;
-				} else if (right->type != left->type) {
-					reportError(binary, "Error: Cannot %s %.*s and %.*s",
-						binary->op == TOKEN('+') ? "add" : "subtract", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
-					return false;
-				}
-			}
-
-			if (right->type->flavor == TypeFlavor::POINTER) {
-				expr->type = &TYPE_S64;
-			}
-			else { // it is already set to s64 for pointer subtraction
-				expr->type = left->type;
-			}
-
-			break;
-		}
-		case TOKEN('&'):
-		case TOKEN('|'):
-		case TOKEN('^'): {
-			const char *opName = binary->op == TOKEN('&') ? "and" : (binary->op == TOKEN('|') ? "or" : "xor");
-
-			if (left->type->flavor == right->type->flavor) {
-				switch (left->type->flavor) {
-					case TypeFlavor::ARRAY: {
-						reportError(binary, "Error: Cannot '%s' arrays", opName);
-						return false;
-					}
-					case TypeFlavor::BOOL: {
-						// We are done
-					}
-					case TypeFlavor::STRING: {
-						reportError(binary, "Error: Cannot '%s' strings", opName);
-						return false;
-					}
-					case TypeFlavor::FLOAT: {
-						reportError(binary, "Error: Cannot '%s' floats", opName);
-						return false;
-					}
-					case TypeFlavor::FUNCTION: {
-						reportError(binary, "Error: Cannot '%s' functions", opName);
-						return false;
-					}
-					case TypeFlavor::INTEGER: {
-						if (!binaryOpForInteger(sizeDependencies, exprPointer))
-							return false;
-
-						break;
-					}
-					case TypeFlavor::POINTER: { // @Incomplete: should this be allowed, i.e. to store data in unused alignment bits
-						reportError(binary, "Error: Cannot '%s' pointers", opName);
-						return false;
-					}
-					case TypeFlavor::TYPE: {
-						reportError(binary, "Error: Cannot '%s' types", opName);
-						return false;
-					}
-					case TypeFlavor::STRUCT: {
-						reportError(binary, "Error: Cannot '%s' structs", opName);
-						return false;
-					}
-					case TypeFlavor::ENUM: {
-						if (left->type->flags & right->type->flags & TYPE_ENUM_IS_FLAGS) {
-							if (left->type != right->type) {
-								reportError(binary, "Error: Cannot '%s' %.*s and %.*s", opName, STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
-								return false;
-							}
-						}
-						else {
-							reportError(binary, "Error: Cannot '%s' enums", opName);
-							return false;
-						}
-						
-						break;
-					}
-					default:
-						assert(false);
-				}
-			}
-			else {
-				if (!binaryOpForAutoCast(sizeDependencies, job, binary, yield)) {
-					return false;
-				}
-				else if (left->type->flavor == TypeFlavor::ENUM && (left->type->flags & TYPE_ENUM_IS_FLAGS) &&
-					right->type->flavor == TypeFlavor::INTEGER && right->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(right)->unsignedValue == 0) {
-					insertImplicitCast(sizeDependencies, &right, left->type);
-				}
-				else if (right->type->flavor == TypeFlavor::ENUM && (right->type->flags & TYPE_ENUM_IS_FLAGS) &&
-					left->type->flavor == TypeFlavor::INTEGER && left->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(left)->unsignedValue == 0) {
-					insertImplicitCast(sizeDependencies, &left, right->type);
-				}
-
-				if (right->type != left->type) {
-					reportError(binary, "Error: Cannot '%s' %.*s and %.*s", opName, STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
-					return false;
-				}
-			}
-
-			expr->type = left->type;
-
-			break;
-		}
-		case TokenT::SHIFT_LEFT:
-		case TokenT::SHIFT_RIGHT: {
-			if (left->type->flavor == right->type->flavor) {
-				switch (left->type->flavor) {
-					case TypeFlavor::ARRAY: {
-						reportError(binary, "Error: Cannot shift arrays");
-						return false;
-					}
-					case TypeFlavor::BOOL: {
-						reportError(binary, "Error: Cannot shift bools");
-						return false;
-					}
-					case TypeFlavor::STRING: {
-						reportError(binary, "Error: Cannot shift strings");
-						return false;
-					}
-					case TypeFlavor::FLOAT: {
-						reportError(binary, "Error: Cannot shift floats");
-						return false;
-					}
-					case TypeFlavor::FUNCTION: {
-						reportError(binary, "Error: Cannot shift functions");
-						return false;
-					}
-					case TypeFlavor::INTEGER: {
-						if (!binaryOpForInteger(sizeDependencies, exprPointer))
-							return false;
-
-						break;
-					}
-					case TypeFlavor::POINTER: {
-						reportError(binary, "Error: Cannot shift pointers");
-						return false;
-					}
-					case TypeFlavor::TYPE: {
-						reportError(binary, "Error: Cannot shift types");
-						return false;
-					}
-					case TypeFlavor::STRUCT: {
-						reportError(binary, "Error: Cannot shift structs");
-						return false;
-					}
-					case TypeFlavor::ENUM: {
-						reportError(binary, "Error: Cannot shift enums");
-						return false;
-					}
-					default:
-						assert(false);
-				}
-			}
-			else {
-				if (!binaryOpForAutoCast(sizeDependencies, job, binary, yield)) {
-					return false;
-				}
-
-				if (right->type != left->type) {
-					reportError(binary, "Error: Cannot shift %.*s by %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
-					return false;
-				}
-			}
-
-			expr->type = left->type;
-
-			break;
-		}
-		case TOKEN('*'):
-		case TOKEN('/'):
-		case TOKEN('%'): {
-			const char *opName = binary->op == TOKEN('*') ? "multiply" : (binary->op == TOKEN('/') ? "divide" : "mod");
-
-			if (left->type->flavor == right->type->flavor) {
-				switch (left->type->flavor) {
-					case TypeFlavor::ARRAY: {
-						reportError(binary, "Error: Cannot %s arrays", opName);
-						return false;
-					}
-					case TypeFlavor::BOOL: {
-						reportError(binary, "Error: Cannot %s bools", opName);
-						return false;
-					}
-					case TypeFlavor::STRING: {
-						reportError(binary, "Error: Cannot %s strings", opName);
-						return false;
-					}
-					case TypeFlavor::FLOAT: {
-						if (!binaryOpForFloat(exprPointer))
-							return false;
-						break;
-					}
-					case TypeFlavor::FUNCTION: {
-						reportError(binary, "Error: Cannot %s functions", opName);
-						return false;
-					}
-					case TypeFlavor::INTEGER: {
-						if (!binaryOpForInteger(sizeDependencies, exprPointer))
-							return false;
-
-						break;
-					}
-					case TypeFlavor::POINTER: {
-						reportError(binary, "Error: Cannot %s pointers", opName);
-						return false;
-					}
-					case TypeFlavor::TYPE: {
-						reportError(binary, "Error: Cannot %s types", opName);
-						return false;
-					}
-					case TypeFlavor::STRUCT: {
-						reportError(binary, "Error: Cannot %s structs", opName);
-						return false;
-					}
-					case TypeFlavor::ENUM: {
-						reportError(binary, "Error: Cannot %s enums", opName);
-						return false;
-					}
-					default:
-						assert(false);
-				}
-			}
-			else {
-				if (!binaryOpForAutoCast(sizeDependencies, job, binary, yield)) {
-					return false;
-				}
-				else if (!binaryOpForFloatAndIntLiteral(exprPointer)) {
-					return false;
-				}
-
-
-				if (right->type != left->type) {
-					reportError(binary, "Error: Cannot %s %.*s and %.*s", opName, STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
-					return false;
-				}
-			}
-
-			expr->type = left->type;
-
-			break;
-		}
-		case TOKEN('='): {
-			if (!isAssignable(left)) {
-				// @Incomplete: better error messages here
-				//  - If we were assigning to a constant
-				//  - If we were assigning to a pointer
-
-				reportError(binary, "Error: Left side of binary is not assignable");
-				return false;
-			}
-
-			if (!right) {
-				assert(false);
-			}
-			else {
-				bool yield;
-				if (!assignOp(sizeDependencies, job, binary, left->type, binary->right, &yield)) {
-					if (yield) {
-						return true;
+					else if (right->type == TYPE_VOID_POINTER) {
+						insertImplicitCast(sizeDependencies, &left, right->type);
 					}
 					else {
+						reportError(binary, "Error: Cannot compare %.*s to %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
+						return false;
+					}
+				}
+			}
+			case TypeFlavor::INTEGER: {
+				if (!binaryOpForInteger(sizeDependencies, exprPointer))
+					return false;
+
+				break;
+			}
+			case TypeFlavor::POINTER: {
+				if (left->type != right->type) {
+					if (left->type == TYPE_VOID_POINTER) {
+						insertImplicitCast(sizeDependencies, &right, left->type);
+					}
+					else if (right->type == TYPE_VOID_POINTER) {
+						insertImplicitCast(sizeDependencies, &left, right->type);
+					}
+					else {
+						reportError(binary, "Error: Cannot compare %.*s to %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
 						return false;
 					}
 				}
 
-				assert(binary->left->type == binary->right->type);
+				break;
+			}
+			case TypeFlavor::ARRAY: {
+				reportError(binary, "Error: Cannot compare arrays");
+				return false;
+			}
+			case TypeFlavor::STRUCT: {
+				reportError(binary, "Error: Cannot compare structs");
+				return false;
+			}
+			case TypeFlavor::ENUM: {
+				if (left->type != right->type) {
+					reportError(binary, "Error: Cannot compare %.*s to %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
+					return false;
+				}
+
+				break;
+			}
+			case TypeFlavor::TYPE: {
+				// @Incomplete make this work
+				assert(false);
+				return false;
+			}
+			default:
+				assert(false);
+			}
+		}
+		else {
+			if (!binaryOpForAutoCast(sizeDependencies, job, binary, yield)) {
+				return false;
+			}
+			else if (!binaryOpForFloatAndIntLiteral(exprPointer)) {
+				return false;
+			}
+			else if (left->type->flavor == TypeFlavor::ENUM && (left->type->flags & TYPE_ENUM_IS_FLAGS) &&
+				right->type->flavor == TypeFlavor::INTEGER && right->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(right)->unsignedValue == 0) {
+				insertImplicitCast(sizeDependencies, &right, left->type);
+			}
+			else if (right->type->flavor == TypeFlavor::ENUM && (right->type->flags & TYPE_ENUM_IS_FLAGS) &&
+				left->type->flavor == TypeFlavor::INTEGER && left->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(left)->unsignedValue == 0) {
+				insertImplicitCast(sizeDependencies, &left, right->type);
 			}
 
-			break;
+			if (right->type != left->type) {
+				reportError(binary, "Error: Cannot compare %.*s to %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
+				return false;
+			}
 		}
-		case TokenT::PLUS_EQUALS:
-		case TokenT::MINUS_EQUALS: {
-			if (!isAssignable(left)) {
-				// @Incomplete: better error messages here
-				//  - If we were assigning to a constant
-				//  - If we were assigning to a pointer
 
-				reportError(binary, "Error: Left side of binary is not assignable");
+		expr->type = &TYPE_BOOL;
+
+		break;
+	}
+	case TokenT::GREATER_EQUAL:
+	case TokenT::LESS_EQUAL:
+	case TOKEN('>'):
+	case TOKEN('<'): {
+		if (left->type->flavor == right->type->flavor) {
+			switch (left->type->flavor) {
+			case TypeFlavor::ARRAY: {
+				reportError(binary, "Error: Cannot compare arrays");
+				return false;
+			}
+			case TypeFlavor::BOOL: {
+				reportError(binary, "Error: Cannot compare bools");
+				return false;
+			}
+			case TypeFlavor::STRING: {
+				reportError(binary, "Error: Cannot compare strings");
+				return false;
+			}
+			case TypeFlavor::FLOAT: {
+				if (!binaryOpForFloat(exprPointer))
+					return false;
+				break;
+			}
+			case TypeFlavor::FUNCTION: {
+				reportError(binary, "Error: Cannot compare functions");
+				return false;
+			}
+			case TypeFlavor::INTEGER: {
+				if (!binaryOpForInteger(sizeDependencies, exprPointer))
+					return false;
+
+				break;
+			}
+			case TypeFlavor::POINTER: {
+				if (left->type != right->type) {
+					if (left->type == TYPE_VOID_POINTER) {
+						insertImplicitCast(sizeDependencies, &right, left->type);
+					}
+					else if (right->type == TYPE_VOID_POINTER) {
+						insertImplicitCast(sizeDependencies, &left, right->type);
+					}
+					else {
+						reportError(binary, "Error: Cannot compare %.*s to %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
+						return false;
+					}
+				}
+
+				break;
+			}
+			case TypeFlavor::TYPE: {
+				reportError(binary, "Error: Cannot compare types");
+				return false;
+			}
+			case TypeFlavor::STRUCT: {
+				reportError(binary, "Error: Cannot compare structs");
+				return false;
+			}
+			case TypeFlavor::ENUM: {
+				reportError(binary, "Error: Cannot compare enums");
+				return false;
+			}
+			default:
+				assert(false);
+			}
+		}
+		else {
+			if (!binaryOpForAutoCast(sizeDependencies, job, binary, yield)) {
+				return false;
+			}
+			else if (!binaryOpForFloatAndIntLiteral(exprPointer)) {
 				return false;
 			}
 
-			if (left->type->flavor == right->type->flavor) {
-				switch (left->type->flavor) {
-					case TypeFlavor::ARRAY: {
-						reportError(binary, "Error: Cannot %s arrays", binary->op == TokenT::PLUS_EQUALS ? "add" : "subtract");
-						return false;
-					}
-					case TypeFlavor::BOOL: {
-						reportError(binary, "Error: Cannot %s bools", binary->op == TokenT::PLUS_EQUALS ? "add" : "subtract");
-						return false;
-					}
-					case TypeFlavor::STRING: {
-						reportError(binary, "Error: Cannot %s strings", binary->op == TokenT::PLUS_EQUALS ? "add" : "subtract");
-						return false;
-					}
-					case TypeFlavor::FLOAT: {
-						if (!assignOpForFloat(binary))
-							return false;
-						break;
-					}
-					case TypeFlavor::FUNCTION: {
-						reportError(binary, "Error: Cannot %s functions", binary->op == TokenT::PLUS_EQUALS ? "add" : "subtract");
-						return false;
-					}
-					case TypeFlavor::INTEGER: {
-						if (!assignOpForInteger(sizeDependencies, binary))
-							return false;
-
-						break;
-					}
-					case TypeFlavor::POINTER: {
-						if (binary->op == TokenT::PLUS_EQUALS) {
-							reportError(binary, "Error: Cannot add pointers");
-						}
-						else {
-							reportError(binary, "Error: Cannot '-=' two pointers, the result of '-' gives s64 which cannot be assigned to %.*s", STRING_PRINTF(left->type->name));
-						}
-
-						return false;
-					}
-					case TypeFlavor::TYPE: {
-						reportError(binary, "Error: Cannot %s types", binary->op == TokenT::PLUS_EQUALS ? "add" : "subtract");
-						return false;
-					}
-					case TypeFlavor::STRUCT: {
-						reportError(binary, "Error: Cannot %s structs", binary->op == TokenT::PLUS_EQUALS ? "add" : "subtract");
-						return false;
-					}
-					case TypeFlavor::ENUM: {
-						reportError(binary, "Error: Cannot %s enums", binary->op == TokenT::PLUS_EQUALS ? "add" : "subtract");
-						return false;
-					}
-					default:
-						assert(false);
-				}
+			if (right->type != left->type) {
+				reportError(binary, "Error: Cannot compare %.*s to %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
+				return false;
 			}
-			else {
-				if (!assignOpForAutoCast(sizeDependencies, job, binary, yield)) {
-					return false;
-				}
-				else if (!assignOpForFloatAndIntLiteral(binary)) {
-					return false;
-				}
-
-				if (left->type->flavor == TypeFlavor::POINTER && right->type->flavor == TypeFlavor::INTEGER) {
-					trySolidifyNumericLiteralToDefault(right);
-					auto pointer = static_cast<TypePointer *>(left->type);
-
-					addSizeDependency(sizeDependencies, pointer->pointerTo);
-				}
-				else if (right->type != left->type) {
-					reportError(binary, "Error: Cannot %s %.*s to %.*s",
-						binary->op == TokenT::PLUS_EQUALS ? "add" : "subtract", STRING_PRINTF(right->type->name), STRING_PRINTF(left->type->name));
-					return false;
-				}
-			}
-
-			expr->type = left->type;
-
-			break;
 		}
-		case TokenT::LOGIC_AND:
-		case TokenT::LOGIC_OR: {
-			if (left->type != &TYPE_BOOL) {
-				if (isValidCast(&TYPE_BOOL, left->type)) {
-					insertImplicitCast(sizeDependencies, &left, &TYPE_BOOL);
+
+		expr->type = &TYPE_BOOL;
+
+		break;
+	}
+	case TOKEN('+'):
+	case TOKEN('-'): {
+		if (left->type->flavor == right->type->flavor) {
+			switch (left->type->flavor) {
+			case TypeFlavor::ARRAY: {
+				reportError(binary, "Error: Cannot %s arrays", binary->op == TOKEN('+') ? "add" : "subtract");
+				return false;
+			}
+			case TypeFlavor::BOOL: {
+				reportError(binary, "Error: Cannot %s bools", binary->op == TOKEN('+') ? "add" : "subtract");
+				return false;
+			}
+			case TypeFlavor::STRING: {
+				reportError(binary, "Error: Cannot %s strings", binary->op == TOKEN('+') ? "add" : "subtract");
+				return false;
+			}
+			case TypeFlavor::FLOAT: {
+				if (!binaryOpForFloat(exprPointer))
+					return false;
+				break;
+			}
+			case TypeFlavor::FUNCTION: {
+				reportError(binary, "Error: Cannot %s functions", binary->op == TOKEN('+') ? "add" : "subtract");
+				return false;
+			}
+			case TypeFlavor::INTEGER: {
+				if (!binaryOpForInteger(sizeDependencies, exprPointer))
+					return false;
+
+				break;
+			}
+			case TypeFlavor::POINTER: {
+				if (binary->op == TOKEN('+')) {
+					reportError(binary, "Error: Cannot add pointers");
+					return false;
+				}
+
+				if (left->type != right->type) {
+					reportError(binary, "Error: Cannot subtract %.*s and %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
+					return false;
+				}
+
+				auto pointer = static_cast<TypePointer *>(left->type);
+
+				addSizeDependency(sizeDependencies, pointer->pointerTo);
+
+				break;
+			}
+			case TypeFlavor::TYPE: {
+				reportError(binary, "Error: Cannot %s types", binary->op == TOKEN('+') ? "add" : "subtract");
+				return false;
+			}
+			case TypeFlavor::STRUCT: {
+				reportError(binary, "Error: Cannot %s structs", binary->op == TOKEN('+') ? "add" : "subtract");
+				return false;
+			}
+			case TypeFlavor::ENUM: {
+				reportError(binary, "Error: Cannot %s enums", binary->op == TOKEN('+') ? "add" : "subtract");
+				return false;
+			}
+			default:
+				assert(false);
+			}
+		}
+		else {
+			if (!binaryOpForAutoCast(sizeDependencies, job, binary, yield)) {
+				return false;
+			}
+			else if (left->type->flavor == TypeFlavor::POINTER && right->type->flavor == TypeFlavor::INTEGER) {
+				trySolidifyNumericLiteralToDefault(right);
+				auto pointer = static_cast<TypePointer *>(left->type);
+
+				addSizeDependency(sizeDependencies, pointer->pointerTo);
+			}
+			else if (!binaryOpForFloatAndIntLiteral(exprPointer)) {
+				return false;
+			}
+			else if (right->type != left->type) {
+				reportError(binary, "Error: Cannot %s %.*s and %.*s",
+					binary->op == TOKEN('+') ? "add" : "subtract", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
+				return false;
+			}
+		}
+
+		if (right->type->flavor == TypeFlavor::POINTER) {
+			expr->type = &TYPE_S64;
+		}
+		else { // it is already set to s64 for pointer subtraction
+			expr->type = left->type;
+		}
+
+		break;
+	}
+	case TOKEN('&'):
+	case TOKEN('|'):
+	case TOKEN('^'): {
+		const char *opName = binary->op == TOKEN('&') ? "and" : (binary->op == TOKEN('|') ? "or" : "xor");
+
+		if (left->type->flavor == right->type->flavor) {
+			switch (left->type->flavor) {
+			case TypeFlavor::ARRAY: {
+				reportError(binary, "Error: Cannot '%s' arrays", opName);
+				return false;
+			}
+			case TypeFlavor::BOOL: {
+				// We are done
+			}
+			case TypeFlavor::STRING: {
+				reportError(binary, "Error: Cannot '%s' strings", opName);
+				return false;
+			}
+			case TypeFlavor::FLOAT: {
+				reportError(binary, "Error: Cannot '%s' floats", opName);
+				return false;
+			}
+			case TypeFlavor::FUNCTION: {
+				reportError(binary, "Error: Cannot '%s' functions", opName);
+				return false;
+			}
+			case TypeFlavor::INTEGER: {
+				if (!binaryOpForInteger(sizeDependencies, exprPointer))
+					return false;
+
+				break;
+			}
+			case TypeFlavor::POINTER: { // @Incomplete: should this be allowed, i.e. to store data in unused alignment bits
+				reportError(binary, "Error: Cannot '%s' pointers", opName);
+				return false;
+			}
+			case TypeFlavor::TYPE: {
+				reportError(binary, "Error: Cannot '%s' types", opName);
+				return false;
+			}
+			case TypeFlavor::STRUCT: {
+				reportError(binary, "Error: Cannot '%s' structs", opName);
+				return false;
+			}
+			case TypeFlavor::ENUM: {
+				if (left->type->flags & right->type->flags & TYPE_ENUM_IS_FLAGS) {
+					if (left->type != right->type) {
+						reportError(binary, "Error: Cannot '%s' %.*s and %.*s", opName, STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
+						return false;
+					}
 				}
 				else {
-					reportError(binary->left, "Error: Cannot convert %.*s to bool", STRING_PRINTF(left->type->name));
+					reportError(binary, "Error: Cannot '%s' enums", opName);
 					return false;
 				}
+
+				break;
 			}
-
-			if (right->type != &TYPE_BOOL) {
-				if (isValidCast(&TYPE_BOOL, right->type)) {
-					insertImplicitCast(sizeDependencies, &right, &TYPE_BOOL);
-				}
-				else {
-					reportError(binary->right, "Error: Cannot convert %.*s to bool", STRING_PRINTF(right->type->name));
-					return false;
-				}
+			default:
+				assert(false);
 			}
-
-			expr->type = &TYPE_BOOL;
-
-			break;
 		}
-		case TokenT::AND_EQUALS:
-		case TokenT::OR_EQUALS:
-		case TokenT::XOR_EQUALS: {
-			if (!isAssignable(left)) {
-				// @Incomplete: better error messages here
-				//  - If we were assigning to a constant
-				//  - If we were assigning to a pointer
-
-				reportError(binary, "Error: Left side of binary is not assignable");
+		else {
+			if (!binaryOpForAutoCast(sizeDependencies, job, binary, yield)) {
 				return false;
 			}
-
-			const char *opName = binary->op == TokenT::AND_EQUALS ? "and" : (binary->op == TokenT::OR_EQUALS ? "or" : "xor");
-
-			if (left->type->flavor == right->type->flavor) {
-				switch (left->type->flavor) {
-					case TypeFlavor::ARRAY: {
-						reportError(binary, "Error: Cannot '%s' arrays", opName);
-						return false;
-					}
-					case TypeFlavor::BOOL: {
-						// We are done
-					}
-					case TypeFlavor::STRING: {
-						reportError(binary, "Error: Cannot '%s' strings", opName);
-						return false;
-					}
-					case TypeFlavor::FLOAT: {
-						reportError(binary, "Error: Cannot '%s' floats", opName);
-						return false;
-					}
-					case TypeFlavor::FUNCTION: {
-						reportError(binary, "Error: Cannot '%s' functions", opName);
-						return false;
-					}
-					case TypeFlavor::INTEGER: {
-						if (!assignOpForInteger(sizeDependencies, binary))
-							return false;
-
-						break;
-					}
-					case TypeFlavor::POINTER: {
-						reportError(binary, "Error: Cannot '%s' pointers", opName);
-						return false;
-					}
-					case TypeFlavor::TYPE: {
-						reportError(binary, "Error: Cannot '%s' types", opName);
-						return false;
-					}
-					case TypeFlavor::STRUCT: {
-						reportError(binary, "Error: Cannot '%s' structs", opName);
-						return false;
-					}
-					case TypeFlavor::ENUM: {
-						if (left->type->flags & right->type->flags & TYPE_ENUM_IS_FLAGS) {
-							if (left->type != right->type) {
-								reportError(binary, "Error: Cannot '%s' %.*s and %.*s", opName, STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
-								return false;
-							}
-						}
-						else {
-							reportError(binary, "Error: Cannot '%s' enums", opName);
-							return false;
-						}
-
-						break;
-					}
-					default:
-						assert(false);
-				}
+			else if (left->type->flavor == TypeFlavor::ENUM && (left->type->flags & TYPE_ENUM_IS_FLAGS) &&
+				right->type->flavor == TypeFlavor::INTEGER && right->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(right)->unsignedValue == 0) {
+				insertImplicitCast(sizeDependencies, &right, left->type);
 			}
-			else {
-				if (!assignOpForAutoCast(sizeDependencies, job, binary, yield)) {
-					return false;
-				}
-				else if (left->type->flavor == TypeFlavor::ENUM && (left->type->flags & TYPE_ENUM_IS_FLAGS) &&
-					right->type->flavor == TypeFlavor::INTEGER && right->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(right)->unsignedValue == 0) {
-					insertImplicitCast(sizeDependencies, &right, left->type);
-				}
-
-				if (right->type != left->type) {
-					reportError(binary, "Error: Cannot %s %.*s and %.*s", opName, STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
-					return false;
-				}
+			else if (right->type->flavor == TypeFlavor::ENUM && (right->type->flags & TYPE_ENUM_IS_FLAGS) &&
+				left->type->flavor == TypeFlavor::INTEGER && left->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(left)->unsignedValue == 0) {
+				insertImplicitCast(sizeDependencies, &left, right->type);
 			}
 
-			expr->type = left->type;
-
-			break;
+			if (right->type != left->type) {
+				reportError(binary, "Error: Cannot '%s' %.*s and %.*s", opName, STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
+				return false;
+			}
 		}
-		case TokenT::SHIFT_LEFT_EQUALS:
-		case TokenT::SHIFT_RIGHT_EQUALS: {
-			if (!isAssignable(left)) {
-				// @Incomplete: better error messages here
-				//  - If we were assigning to a constant
-				//  - If we were assigning to a pointer
 
-				reportError(binary, "Error: Left side of binary is not assignable");
+		expr->type = left->type;
+
+		break;
+	}
+	case TokenT::SHIFT_LEFT:
+	case TokenT::SHIFT_RIGHT: {
+		if (left->type->flavor == right->type->flavor) {
+			switch (left->type->flavor) {
+			case TypeFlavor::ARRAY: {
+				reportError(binary, "Error: Cannot shift arrays");
 				return false;
 			}
-
-			if (left->type->flavor == right->type->flavor) {
-				switch (left->type->flavor) {
-					case TypeFlavor::ARRAY: {
-						reportError(binary, "Error: Cannot shift arrays");
-						return false;
-					}
-					case TypeFlavor::BOOL: {
-						reportError(binary, "Error: Cannot shift bools");
-						return false;
-					}
-					case TypeFlavor::STRING: {
-						reportError(binary, "Error: Cannot shift strings");
-						return false;
-					}
-					case TypeFlavor::FLOAT: {
-						reportError(binary, "Error: Cannot shift floats");
-						return false;
-					}
-					case TypeFlavor::FUNCTION: {
-						reportError(binary, "Error: Cannot shift functions");
-						return false;
-					}
-					case TypeFlavor::INTEGER: {
-						if (!assignOpForInteger(sizeDependencies, binary))
-							return false;
-
-						break;
-					}
-					case TypeFlavor::POINTER: {
-						reportError(binary, "Error: Cannot shift pointers");
-						return false;
-					}
-					case TypeFlavor::TYPE: {
-						reportError(binary, "Error: Cannot shift types");
-						return false;
-					}
-					case TypeFlavor::STRUCT: {
-						reportError(binary, "Error: Cannot shift structs");
-						return false;
-					}
-					case TypeFlavor::ENUM: {
-						reportError(binary, "Error: Cannot shift enums");
-						return false;
-					}
-					default:
-						assert(false);
-				}
+			case TypeFlavor::BOOL: {
+				reportError(binary, "Error: Cannot shift bools");
+				return false;
 			}
-			else {
-				if (!assignOpForAutoCast(sizeDependencies, job, binary, yield)) {
-					return false;
-				}
-
-				if (right->type != left->type) {
-					reportError(binary, "Error: Cannot shift %.*s by %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
-					return false;
-				}
+			case TypeFlavor::STRING: {
+				reportError(binary, "Error: Cannot shift strings");
+				return false;
 			}
+			case TypeFlavor::FLOAT: {
+				reportError(binary, "Error: Cannot shift floats");
+				return false;
+			}
+			case TypeFlavor::FUNCTION: {
+				reportError(binary, "Error: Cannot shift functions");
+				return false;
+			}
+			case TypeFlavor::INTEGER: {
+				if (!binaryOpForInteger(sizeDependencies, exprPointer))
+					return false;
 
-			expr->type = left->type;
-
-			break;
+				break;
+			}
+			case TypeFlavor::POINTER: {
+				reportError(binary, "Error: Cannot shift pointers");
+				return false;
+			}
+			case TypeFlavor::TYPE: {
+				reportError(binary, "Error: Cannot shift types");
+				return false;
+			}
+			case TypeFlavor::STRUCT: {
+				reportError(binary, "Error: Cannot shift structs");
+				return false;
+			}
+			case TypeFlavor::ENUM: {
+				reportError(binary, "Error: Cannot shift enums");
+				return false;
+			}
+			default:
+				assert(false);
+			}
 		}
-		case TokenT::TIMES_EQUALS:
-		case TokenT::DIVIDE_EQUALS:
-		case TokenT::MOD_EQUALS: {
-			if (!isAssignable(left)) {
-				// @Incomplete: better error messages here
-				//  - If we were assigning to a constant
-				//  - If we were assigning to a pointer
-
-				reportError(binary, "Error: Left side of binary is not assignable");
+		else {
+			if (!binaryOpForAutoCast(sizeDependencies, job, binary, yield)) {
 				return false;
 			}
 
-			const char *opName = binary->op == TokenT::TIMES_EQUALS ? "multiply" : ((binary->op == TokenT::DIVIDE_EQUALS) ? "divide" : "mod");
-
-			if (left->type->flavor == right->type->flavor) {
-				switch (left->type->flavor) {
-					case TypeFlavor::ARRAY: {
-						reportError(binary, "Error: Cannot '%s' arrays", opName);
-						return false;
-					}
-					case TypeFlavor::BOOL: {
-						reportError(binary, "Error: Cannot '%s' bools", opName);
-						return false;
-					}
-					case TypeFlavor::STRING: {
-						reportError(binary, "Error: Cannot '%s' strings", opName);
-						return false;
-					}
-					case TypeFlavor::FLOAT: {
-						if (!assignOpForFloat(binary))
-							return false;
-						break;
-					}
-					case TypeFlavor::FUNCTION: {
-						reportError(binary, "Error: Cannot '%s' functions", opName);
-						return false;
-					}
-					case TypeFlavor::INTEGER: {
-						if (!assignOpForInteger(sizeDependencies, binary))
-							return false;
-
-						break;
-					}
-					case TypeFlavor::POINTER: {
-						reportError(binary, "Error: Cannot '%s' pointers", opName);
-						return false;
-					}
-					case TypeFlavor::TYPE: {
-						reportError(binary, "Error: Cannot '%s' types", opName);
-						return false;
-					}
-					case TypeFlavor::STRUCT: {
-						reportError(binary, "Error: Cannot '%s' structs", opName);
-						return false;
-					}
-					case TypeFlavor::ENUM: {
-						reportError(binary, "Error: Cannot '%s' enums", opName);
-						return false;
-					}
-					default:
-						assert(false);
-				}
+			if (right->type != left->type) {
+				reportError(binary, "Error: Cannot shift %.*s by %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
+				return false;
 			}
-			else {
-				if (!assignOpForAutoCast(sizeDependencies, job, binary, yield)) {
-					assert(false);
-				}
-				else if (!assignOpForFloatAndIntLiteral(binary)) {
-					return false;
-				}
-
-
-				if (right->type != left->type) {
-					reportError(binary, "Error: Cannot %s %.*s and %.*s", opName, STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
-					return false;
-				}
-			}
-
-			expr->type = left->type;
-
-			break;
 		}
-		case TokenT::ARRAY_TYPE: {
-			if (right->type->flavor != TypeFlavor::TYPE) {
-				reportError(right, "Error: Array element type must be a type");
+
+		expr->type = left->type;
+
+		break;
+	}
+	case TOKEN('*'):
+	case TOKEN('/'):
+	case TOKEN('%'): {
+		const char *opName = binary->op == TOKEN('*') ? "multiply" : (binary->op == TOKEN('/') ? "divide" : "mod");
+
+		if (left->type->flavor == right->type->flavor) {
+			switch (left->type->flavor) {
+			case TypeFlavor::ARRAY: {
+				reportError(binary, "Error: Cannot %s arrays", opName);
 				return false;
 			}
-
-			if (right->flavor != ExprFlavor::TYPE_LITERAL) {
-				reportError(right, "Error: Array element type must be a constant");
+			case TypeFlavor::BOOL: {
+				reportError(binary, "Error: Cannot %s bools", opName);
 				return false;
 			}
-
-			auto type = static_cast<ExprLiteral *>(right);
-
-			if (type->typeValue == &TYPE_VOID) {
-				reportError(right, "Error: Cannot have an array of void elements");
+			case TypeFlavor::STRING: {
+				reportError(binary, "Error: Cannot %s strings", opName);
 				return false;
 			}
-
-			type->start = expr->start;
-
-			TypeArray *array;
-
-
-			if (left) {
-
-				if (left->type->flavor != TypeFlavor::INTEGER) {
-					reportError(right, "Error: Array size must be an integer");
+			case TypeFlavor::FLOAT: {
+				if (!binaryOpForFloat(exprPointer))
 					return false;
-				}
-
-				if (left->flavor != ExprFlavor::INT_LITERAL) {
-					reportError(right, "Error: Array size must be a constant");
-					return false;
-				}
-
-				auto size = static_cast<ExprLiteral *>(left);
-
-				if (size->unsignedValue == 0) {
-					reportError(right, "Error: Array size cannot be zero");
-					return false;
-				}
-
-				if ((left->type->flags & TYPE_INTEGER_IS_SIGNED) && size->signedValue < 0) {
-					reportError(right, "Error: Array size must be positive (given: %" PRIi64 ")", size->signedValue);
-					return false;
-				}
-
-				array = getStaticArray(type->typeValue, size->unsignedValue);
-
-				if (type->typeValue->size == 0 && !array->sizeJob) {
-					auto sizeJob = allocateJob();
-					sizeJob->flavor = InferFlavor::TYPE_TO_SIZE;
-					sizeJob->infer.type = array;
-					sizeJob->infer.type->sizeJob = sizeJob;
-
-					inferJobs.add(sizeJob);
-					++totalTypesSized;
-				}
+				break;
 			}
-			else {
-				if (expr->flags & EXPR_ARRAY_IS_DYNAMIC) {
-					array = getDynamicArray(type->typeValue);
-				}
-				else {
-					array = getArray(type->typeValue);
-				}
+			case TypeFlavor::FUNCTION: {
+				reportError(binary, "Error: Cannot %s functions", opName);
+				return false;
 			}
+			case TypeFlavor::INTEGER: {
+				if (!binaryOpForInteger(sizeDependencies, exprPointer))
+					return false;
 
-			*exprPointer = inferMakeTypeLiteral(binary->start, binary->right->end, array);
-			(*exprPointer)->valueOfDeclaration = expr->valueOfDeclaration;
-
-			break;
+				break;
+			}
+			case TypeFlavor::POINTER: {
+				reportError(binary, "Error: Cannot %s pointers", opName);
+				return false;
+			}
+			case TypeFlavor::TYPE: {
+				reportError(binary, "Error: Cannot %s types", opName);
+				return false;
+			}
+			case TypeFlavor::STRUCT: {
+				reportError(binary, "Error: Cannot %s structs", opName);
+				return false;
+			}
+			case TypeFlavor::ENUM: {
+				reportError(binary, "Error: Cannot %s enums", opName);
+				return false;
+			}
+			default:
+				assert(false);
+			}
 		}
-		default:
-			assert(false);
+		else {
+			if (!binaryOpForAutoCast(sizeDependencies, job, binary, yield)) {
+				return false;
+			}
+			else if (!binaryOpForFloatAndIntLiteral(exprPointer)) {
+				return false;
+			}
+
+
+			if (right->type != left->type) {
+				reportError(binary, "Error: Cannot %s %.*s and %.*s", opName, STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
+				return false;
+			}
+		}
+
+		expr->type = left->type;
+
+		break;
+	}
+	case TOKEN('='): {
+		if (!isAssignable(left)) {
+			// @Incomplete: better error messages here
+			//  - If we were assigning to a constant
+			//  - If we were assigning to a pointer
+
+			reportError(binary, "Error: Left side of binary is not assignable");
 			return false;
+		}
+
+		if (!right) {
+			assert(false);
+		}
+		else {
+			bool yield;
+			if (!assignOp(sizeDependencies, job, binary, left->type, binary->right, &yield)) {
+				if (yield) {
+					return true;
+				}
+				else {
+					return false;
+				}
+			}
+
+			assert(binary->left->type == binary->right->type);
+		}
+
+		break;
+	}
+	case TokenT::PLUS_EQUALS:
+	case TokenT::MINUS_EQUALS: {
+		if (!isAssignable(left)) {
+			// @Incomplete: better error messages here
+			//  - If we were assigning to a constant
+			//  - If we were assigning to a pointer
+
+			reportError(binary, "Error: Left side of binary is not assignable");
+			return false;
+		}
+
+		if (left->type->flavor == right->type->flavor) {
+			switch (left->type->flavor) {
+			case TypeFlavor::ARRAY: {
+				reportError(binary, "Error: Cannot %s arrays", binary->op == TokenT::PLUS_EQUALS ? "add" : "subtract");
+				return false;
+			}
+			case TypeFlavor::BOOL: {
+				reportError(binary, "Error: Cannot %s bools", binary->op == TokenT::PLUS_EQUALS ? "add" : "subtract");
+				return false;
+			}
+			case TypeFlavor::STRING: {
+				reportError(binary, "Error: Cannot %s strings", binary->op == TokenT::PLUS_EQUALS ? "add" : "subtract");
+				return false;
+			}
+			case TypeFlavor::FLOAT: {
+				if (!assignOpForFloat(binary))
+					return false;
+				break;
+			}
+			case TypeFlavor::FUNCTION: {
+				reportError(binary, "Error: Cannot %s functions", binary->op == TokenT::PLUS_EQUALS ? "add" : "subtract");
+				return false;
+			}
+			case TypeFlavor::INTEGER: {
+				if (!assignOpForInteger(sizeDependencies, binary))
+					return false;
+
+				break;
+			}
+			case TypeFlavor::POINTER: {
+				if (binary->op == TokenT::PLUS_EQUALS) {
+					reportError(binary, "Error: Cannot add pointers");
+				}
+				else {
+					reportError(binary, "Error: Cannot '-=' two pointers, the result of '-' gives s64 which cannot be assigned to %.*s", STRING_PRINTF(left->type->name));
+				}
+
+				return false;
+			}
+			case TypeFlavor::TYPE: {
+				reportError(binary, "Error: Cannot %s types", binary->op == TokenT::PLUS_EQUALS ? "add" : "subtract");
+				return false;
+			}
+			case TypeFlavor::STRUCT: {
+				reportError(binary, "Error: Cannot %s structs", binary->op == TokenT::PLUS_EQUALS ? "add" : "subtract");
+				return false;
+			}
+			case TypeFlavor::ENUM: {
+				reportError(binary, "Error: Cannot %s enums", binary->op == TokenT::PLUS_EQUALS ? "add" : "subtract");
+				return false;
+			}
+			default:
+				assert(false);
+			}
+		}
+		else {
+			if (!assignOpForAutoCast(sizeDependencies, job, binary, yield)) {
+				return false;
+			}
+			else if (!assignOpForFloatAndIntLiteral(binary)) {
+				return false;
+			}
+
+			if (left->type->flavor == TypeFlavor::POINTER && right->type->flavor == TypeFlavor::INTEGER) {
+				trySolidifyNumericLiteralToDefault(right);
+				auto pointer = static_cast<TypePointer *>(left->type);
+
+				addSizeDependency(sizeDependencies, pointer->pointerTo);
+			}
+			else if (right->type != left->type) {
+				reportError(binary, "Error: Cannot %s %.*s to %.*s",
+					binary->op == TokenT::PLUS_EQUALS ? "add" : "subtract", STRING_PRINTF(right->type->name), STRING_PRINTF(left->type->name));
+				return false;
+			}
+		}
+
+		expr->type = left->type;
+
+		break;
+	}
+	case TokenT::LOGIC_AND:
+	case TokenT::LOGIC_OR: {
+		if (left->type != &TYPE_BOOL) {
+			if (isValidCast(&TYPE_BOOL, left->type)) {
+				insertImplicitCast(sizeDependencies, &left, &TYPE_BOOL);
+			}
+			else {
+				reportError(binary->left, "Error: Cannot convert %.*s to bool", STRING_PRINTF(left->type->name));
+				return false;
+			}
+		}
+
+		if (right->type != &TYPE_BOOL) {
+			if (isValidCast(&TYPE_BOOL, right->type)) {
+				insertImplicitCast(sizeDependencies, &right, &TYPE_BOOL);
+			}
+			else {
+				reportError(binary->right, "Error: Cannot convert %.*s to bool", STRING_PRINTF(right->type->name));
+				return false;
+			}
+		}
+
+		expr->type = &TYPE_BOOL;
+
+		break;
+	}
+	case TokenT::AND_EQUALS:
+	case TokenT::OR_EQUALS:
+	case TokenT::XOR_EQUALS: {
+		if (!isAssignable(left)) {
+			// @Incomplete: better error messages here
+			//  - If we were assigning to a constant
+			//  - If we were assigning to a pointer
+
+			reportError(binary, "Error: Left side of binary is not assignable");
+			return false;
+		}
+
+		const char *opName = binary->op == TokenT::AND_EQUALS ? "and" : (binary->op == TokenT::OR_EQUALS ? "or" : "xor");
+
+		if (left->type->flavor == right->type->flavor) {
+			switch (left->type->flavor) {
+			case TypeFlavor::ARRAY: {
+				reportError(binary, "Error: Cannot '%s' arrays", opName);
+				return false;
+			}
+			case TypeFlavor::BOOL: {
+				// We are done
+			}
+			case TypeFlavor::STRING: {
+				reportError(binary, "Error: Cannot '%s' strings", opName);
+				return false;
+			}
+			case TypeFlavor::FLOAT: {
+				reportError(binary, "Error: Cannot '%s' floats", opName);
+				return false;
+			}
+			case TypeFlavor::FUNCTION: {
+				reportError(binary, "Error: Cannot '%s' functions", opName);
+				return false;
+			}
+			case TypeFlavor::INTEGER: {
+				if (!assignOpForInteger(sizeDependencies, binary))
+					return false;
+
+				break;
+			}
+			case TypeFlavor::POINTER: {
+				reportError(binary, "Error: Cannot '%s' pointers", opName);
+				return false;
+			}
+			case TypeFlavor::TYPE: {
+				reportError(binary, "Error: Cannot '%s' types", opName);
+				return false;
+			}
+			case TypeFlavor::STRUCT: {
+				reportError(binary, "Error: Cannot '%s' structs", opName);
+				return false;
+			}
+			case TypeFlavor::ENUM: {
+				if (left->type->flags & right->type->flags & TYPE_ENUM_IS_FLAGS) {
+					if (left->type != right->type) {
+						reportError(binary, "Error: Cannot '%s' %.*s and %.*s", opName, STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
+						return false;
+					}
+				}
+				else {
+					reportError(binary, "Error: Cannot '%s' enums", opName);
+					return false;
+				}
+
+				break;
+			}
+			default:
+				assert(false);
+			}
+		}
+		else {
+			if (!assignOpForAutoCast(sizeDependencies, job, binary, yield)) {
+				return false;
+			}
+			else if (left->type->flavor == TypeFlavor::ENUM && (left->type->flags & TYPE_ENUM_IS_FLAGS) &&
+				right->type->flavor == TypeFlavor::INTEGER && right->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(right)->unsignedValue == 0) {
+				insertImplicitCast(sizeDependencies, &right, left->type);
+			}
+
+			if (right->type != left->type) {
+				reportError(binary, "Error: Cannot %s %.*s and %.*s", opName, STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
+				return false;
+			}
+		}
+
+		expr->type = left->type;
+
+		break;
+	}
+	case TokenT::SHIFT_LEFT_EQUALS:
+	case TokenT::SHIFT_RIGHT_EQUALS: {
+		if (!isAssignable(left)) {
+			// @Incomplete: better error messages here
+			//  - If we were assigning to a constant
+			//  - If we were assigning to a pointer
+
+			reportError(binary, "Error: Left side of binary is not assignable");
+			return false;
+		}
+
+		if (left->type->flavor == right->type->flavor) {
+			switch (left->type->flavor) {
+			case TypeFlavor::ARRAY: {
+				reportError(binary, "Error: Cannot shift arrays");
+				return false;
+			}
+			case TypeFlavor::BOOL: {
+				reportError(binary, "Error: Cannot shift bools");
+				return false;
+			}
+			case TypeFlavor::STRING: {
+				reportError(binary, "Error: Cannot shift strings");
+				return false;
+			}
+			case TypeFlavor::FLOAT: {
+				reportError(binary, "Error: Cannot shift floats");
+				return false;
+			}
+			case TypeFlavor::FUNCTION: {
+				reportError(binary, "Error: Cannot shift functions");
+				return false;
+			}
+			case TypeFlavor::INTEGER: {
+				if (!assignOpForInteger(sizeDependencies, binary))
+					return false;
+
+				break;
+			}
+			case TypeFlavor::POINTER: {
+				reportError(binary, "Error: Cannot shift pointers");
+				return false;
+			}
+			case TypeFlavor::TYPE: {
+				reportError(binary, "Error: Cannot shift types");
+				return false;
+			}
+			case TypeFlavor::STRUCT: {
+				reportError(binary, "Error: Cannot shift structs");
+				return false;
+			}
+			case TypeFlavor::ENUM: {
+				reportError(binary, "Error: Cannot shift enums");
+				return false;
+			}
+			default:
+				assert(false);
+			}
+		}
+		else {
+			if (!assignOpForAutoCast(sizeDependencies, job, binary, yield)) {
+				return false;
+			}
+
+			if (right->type != left->type) {
+				reportError(binary, "Error: Cannot shift %.*s by %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
+				return false;
+			}
+		}
+
+		expr->type = left->type;
+
+		break;
+	}
+	case TokenT::TIMES_EQUALS:
+	case TokenT::DIVIDE_EQUALS:
+	case TokenT::MOD_EQUALS: {
+		if (!isAssignable(left)) {
+			// @Incomplete: better error messages here
+			//  - If we were assigning to a constant
+			//  - If we were assigning to a pointer
+
+			reportError(binary, "Error: Left side of binary is not assignable");
+			return false;
+		}
+
+		const char *opName = binary->op == TokenT::TIMES_EQUALS ? "multiply" : ((binary->op == TokenT::DIVIDE_EQUALS) ? "divide" : "mod");
+
+		if (left->type->flavor == right->type->flavor) {
+			switch (left->type->flavor) {
+			case TypeFlavor::ARRAY: {
+				reportError(binary, "Error: Cannot '%s' arrays", opName);
+				return false;
+			}
+			case TypeFlavor::BOOL: {
+				reportError(binary, "Error: Cannot '%s' bools", opName);
+				return false;
+			}
+			case TypeFlavor::STRING: {
+				reportError(binary, "Error: Cannot '%s' strings", opName);
+				return false;
+			}
+			case TypeFlavor::FLOAT: {
+				if (!assignOpForFloat(binary))
+					return false;
+				break;
+			}
+			case TypeFlavor::FUNCTION: {
+				reportError(binary, "Error: Cannot '%s' functions", opName);
+				return false;
+			}
+			case TypeFlavor::INTEGER: {
+				if (!assignOpForInteger(sizeDependencies, binary))
+					return false;
+
+				break;
+			}
+			case TypeFlavor::POINTER: {
+				reportError(binary, "Error: Cannot '%s' pointers", opName);
+				return false;
+			}
+			case TypeFlavor::TYPE: {
+				reportError(binary, "Error: Cannot '%s' types", opName);
+				return false;
+			}
+			case TypeFlavor::STRUCT: {
+				reportError(binary, "Error: Cannot '%s' structs", opName);
+				return false;
+			}
+			case TypeFlavor::ENUM: {
+				reportError(binary, "Error: Cannot '%s' enums", opName);
+				return false;
+			}
+			default:
+				assert(false);
+			}
+		}
+		else {
+			if (!assignOpForAutoCast(sizeDependencies, job, binary, yield)) {
+				assert(false);
+			}
+			else if (!assignOpForFloatAndIntLiteral(binary)) {
+				return false;
+			}
+
+
+			if (right->type != left->type) {
+				reportError(binary, "Error: Cannot %s %.*s and %.*s", opName, STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
+				return false;
+			}
+		}
+
+		expr->type = left->type;
+
+		break;
+	}
+	case TokenT::ARRAY_TYPE: {
+		if (right->type->flavor != TypeFlavor::TYPE) {
+			reportError(right, "Error: Array element type must be a type");
+			return false;
+		}
+
+		if (right->flavor != ExprFlavor::TYPE_LITERAL) {
+			reportError(right, "Error: Array element type must be a constant");
+			return false;
+		}
+
+		auto type = static_cast<ExprLiteral *>(right);
+
+		if (type->typeValue == &TYPE_VOID) {
+			reportError(right, "Error: Cannot have an array of void elements");
+			return false;
+		}
+
+		type->start = expr->start;
+
+		TypeArray *array;
+
+
+		if (left) {
+
+			if (left->type->flavor != TypeFlavor::INTEGER) {
+				reportError(right, "Error: Array size must be an integer");
+				return false;
+			}
+
+			if (left->flavor != ExprFlavor::INT_LITERAL) {
+				reportError(right, "Error: Array size must be a constant");
+				return false;
+			}
+
+			auto size = static_cast<ExprLiteral *>(left);
+
+			if (size->unsignedValue == 0) {
+				reportError(right, "Error: Array size cannot be zero");
+				return false;
+			}
+
+			if ((left->type->flags & TYPE_INTEGER_IS_SIGNED) && size->signedValue < 0) {
+				reportError(right, "Error: Array size must be positive (given: %" PRIi64 ")", size->signedValue);
+				return false;
+			}
+
+			array = getStaticArray(type->typeValue, size->unsignedValue);
+
+			if (type->typeValue->size == 0 && !array->sizeJob) {
+				auto sizeJob = allocateSizeJob();
+				sizeJob->type = array;
+				sizeJob->type->sizeJob = sizeJob;
+
+				sizeJobs.add(sizeJob);
+				++totalTypesSized;
+			}
+		}
+		else {
+			if (expr->flags & EXPR_ARRAY_IS_DYNAMIC) {
+				array = getDynamicArray(type->typeValue);
+			}
+			else {
+				array = getArray(type->typeValue);
+			}
+		}
+
+		*exprPointer = inferMakeTypeLiteral(binary->start, binary->right->end, array);
+		(*exprPointer)->valueOfDeclaration = expr->valueOfDeclaration;
+
+		break;
+	}
+	default:
+		assert(false);
+		return false;
 	}
 
 	return true;
@@ -3100,983 +3113,983 @@ bool inferFlattened(SubJob *job, Array<Type *> *sizeDependencies = nullptr) {
 		auto expr = *exprPointer;
 
 		switch (expr->flavor) {
-			case ExprFlavor::IDENTIFIER: {
+		case ExprFlavor::IDENTIFIER: {
 
-				auto identifier = static_cast<ExprIdentifier *>(expr);
-				if (!identifier->declaration) {
-					if (identifier->structAccess) {
-						bool onlyConstants;
-						auto struct_ = getExpressionNamespace(identifier->structAccess, &onlyConstants, identifier);
+			auto identifier = static_cast<ExprIdentifier *>(expr);
+			if (!identifier->declaration) {
+				if (identifier->structAccess) {
+					bool onlyConstants;
+					auto struct_ = getExpressionNamespace(identifier->structAccess, &onlyConstants, identifier);
 
-						if (!struct_) {
-							return false;
+					if (!struct_) {
+						return false;
+					}
+
+					bool yield;
+					u64 index;
+					auto member = findDeclaration(&struct_->members, identifier->name, &index, &yield);
+
+					if (yield) {
+						goToSleep(job, &struct_->members.sleepingOnMe, identifier->name);
+
+						return true;
+					}
+
+					if (!member) {
+						reportError(identifier, "Error: %.*s does not have member %.*s", STRING_PRINTF(struct_->name), STRING_PRINTF(identifier->name));
+						return false;
+					}
+					else if (onlyConstants & !(member->flags & DECLARATION_IS_CONSTANT)) {
+						reportError(identifier, "Error: Can only access constant members of %.*s from it's prototype", STRING_PRINTF(struct_->name));
+						return false;
+					}
+					identifier->declaration = member;
+
+					addSizeDependency(sizeDependencies, struct_);
+				}
+				else {
+					for (; identifier->resolveFrom; identifier->resolveFrom = identifier->resolveFrom->parentBlock) {
+						if (!(identifier->resolveFrom->flags & BLOCK_IS_COMPLETE)) {
+							goToSleep(job, &identifier->resolveFrom->sleepingOnMe, identifier->name);
+							break;
 						}
 
 						bool yield;
 						u64 index;
-						auto member = findDeclaration(&struct_->members, identifier->name, &index, &yield);
-
-						if (yield) {
-							goToSleep(job, &struct_->members.sleepingOnMe, identifier->name);
-
-							return true;
-						}
-
-						if (!member) {
-							reportError(identifier, "Error: %.*s does not have member %.*s", STRING_PRINTF(struct_->name), STRING_PRINTF(identifier->name));
-							return false;
-						}
-						else if (onlyConstants & !(member->flags & DECLARATION_IS_CONSTANT)) {
-							reportError(identifier, "Error: Can only access constant members of %.*s from it's prototype", STRING_PRINTF(struct_->name));
-							return false;
-						}
-						identifier->declaration = member;
-
-						addSizeDependency(sizeDependencies, struct_);
-					}
-					else {
-						for (; identifier->resolveFrom; identifier->resolveFrom = identifier->resolveFrom->parentBlock) {
-							if (!(identifier->resolveFrom->flags & BLOCK_IS_COMPLETE)) {
-								goToSleep(job, &identifier->resolveFrom->sleepingOnMe, identifier->name);
+						if (Declaration *declaration = findDeclaration(identifier->resolveFrom, identifier->name, &index, &yield, identifier->indexInBlock)) {
+							if ((declaration->flags & DECLARATION_IS_CONSTANT) && !(declaration->flags & DECLARATION_IMPORTED_BY_USING)) {
+								identifier->declaration = declaration;
 								break;
 							}
+							else {
+								if ((identifier->flags & EXPR_IDENTIFIER_RESOLVING_ONLY_CONSTANTS) && !(identifier->flags & EXPR_VALUE_NOT_REQUIRED)) {
+									reportError(identifier, "Error: Cannot refer to %s from outside, capture is not supported", (identifier->declaration->flags & DECLARATION_IS_ARGUMENT) ? "argument" : "variable");
+									return false;
+								}
 
-							bool yield;
-							u64 index;
-							if (Declaration *declaration = findDeclaration(identifier->resolveFrom, identifier->name, &index, &yield, identifier->indexInBlock)) {
-								if ((declaration->flags & DECLARATION_IS_CONSTANT) && !(declaration->flags & DECLARATION_IMPORTED_BY_USING)) {
+								if (declaration->indexInBlock < identifier->indexInBlock) {
 									identifier->declaration = declaration;
 									break;
 								}
 								else {
-									if ((identifier->flags & EXPR_IDENTIFIER_RESOLVING_ONLY_CONSTANTS) && !(identifier->flags & EXPR_VALUE_NOT_REQUIRED)) {
-										reportError(identifier, "Error: Cannot refer to %s from outside, capture is not supported", (identifier->declaration->flags & DECLARATION_IS_ARGUMENT) ? "argument" : "variable");
-										return false;
-									}
-
-									if (declaration->indexInBlock < identifier->indexInBlock) {
-										identifier->declaration = declaration;
-										break;
-									}
-									else {
-										reportError(identifier, "Error: Cannot refer to variable '%.*s' before it was declared", STRING_PRINTF(identifier->name));
-										reportError(declaration, "   ..: Here is the location of the declaration");
-										return false;
-									}
-								}
-							}
-							else if (yield) {
-								goToSleep(job, &identifier->resolveFrom->sleepingOnMe, identifier->name);
-
-								return true;
-							}
-
-							identifier->indexInBlock = identifier->resolveFrom->indexInParent;
-
-							if (identifier->resolveFrom->flags & (BLOCK_IS_ARGUMENTS | BLOCK_IS_STRUCT))
-								identifier->flags |= EXPR_IDENTIFIER_RESOLVING_ONLY_CONSTANTS;
-						}
-
-						if (!identifier->declaration) {
-							if (!identifier->resolveFrom) { // If we have checked all the local scopes and the
-								u64 index;
-								identifier->declaration = findDeclarationNoYield(&globalBlock, identifier->name, &index);
-
-								if (!identifier->declaration) {
-									goToSleep(job, &globalBlock.sleepingOnMe, identifier->name);
-								}
-							}
-						}
-						
-						if (identifier->declaration) {
-							if (identifier->enclosingScope && identifier->declaration->enclosingScope != identifier->enclosingScope) {
-								assert(identifier->enclosingScope != &globalBlock);
-
-								if (!addImplicitImport(identifier->enclosingScope, identifier->name, &identifier->start, &identifier->end)) {
+									reportError(identifier, "Error: Cannot refer to variable '%.*s' before it was declared", STRING_PRINTF(identifier->name));
+									reportError(declaration, "   ..: Here is the location of the declaration");
 									return false;
 								}
 							}
 						}
-					}
-				}
-
-				if (identifier->declaration) {
-					bool yield;
-					if (!inferIdentifier(sizeDependencies, job, exprPointer, identifier, &yield)) {
-						if (yield) {
-							return true;
-						}
-						else {
-							return false;
-						}
-					}
-				}
-				else {
-					return true;
-				}
-
-				break;
-			}
-			case ExprFlavor::FUNCTION: {
-				if (!expr->type) {
-					return true;
-				}
-
-				break;
-			}
-			case ExprFlavor::FUNCTION_PROTOTYPE: {
-				auto function = static_cast<ExprFunction *>(expr);
-
-				for (auto argument : function->arguments.declarations) {
-					assert(argument);
-
-					if (!(argument->flags & DECLARATION_TYPE_IS_READY)) {
-						goToSleep(job, &argument->sleepingOnMe);
-
-						return true;
-					}
-				}
-
-
-				for (auto return_ : function->returns.declarations) {
-					assert(return_);
-
-					if (!(return_->flags & DECLARATION_TYPE_IS_READY)) {
-						goToSleep(job, &return_->sleepingOnMe);
-
-						return true;
-					}
-				}
-
-				auto type = getFunctionType(function);
-
-				*exprPointer = inferMakeTypeLiteral(function->start, function->end, type);
-				(*exprPointer)->valueOfDeclaration = expr->valueOfDeclaration;
-
-				break;
-			}
-			case ExprFlavor::TYPE_LITERAL:
-			case ExprFlavor::STRING_LITERAL:
-			case ExprFlavor::FLOAT_LITERAL:
-			case ExprFlavor::INT_LITERAL: {
-				break;
-			}
-			case ExprFlavor::BLOCK: {
-				auto block = static_cast<ExprBlock *>(expr);
-
-				for (auto declaration : block->declarations.declarations) {
-					if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_USING | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT))) {
-						if (!(declaration->flags & DECLARATION_TYPE_IS_READY)) {
-							goToSleep(job, &declaration->sleepingOnMe);
+						else if (yield) {
+							goToSleep(job, &identifier->resolveFrom->sleepingOnMe, identifier->name);
 
 							return true;
 						}
+
+						identifier->indexInBlock = identifier->resolveFrom->indexInParent;
+
+						if (identifier->resolveFrom->flags & (BLOCK_IS_ARGUMENTS | BLOCK_IS_STRUCT))
+							identifier->flags |= EXPR_IDENTIFIER_RESOLVING_ONLY_CONSTANTS;
+					}
+
+					if (!identifier->declaration) {
+						if (!identifier->resolveFrom) { // If we have checked all the local scopes and the
+							u64 index;
+							identifier->declaration = findDeclarationNoYield(&globalBlock, identifier->name, &index);
+
+							if (!identifier->declaration) {
+								goToSleep(job, &globalBlock.sleepingOnMe, identifier->name);
+							}
+						}
+					}
+
+					if (identifier->declaration) {
+						if (identifier->enclosingScope && identifier->declaration->enclosingScope != identifier->enclosingScope) {
+							assert(identifier->enclosingScope != &globalBlock);
+
+							if (!addImplicitImport(identifier->enclosingScope, identifier->name, &identifier->start, &identifier->end)) {
+								return false;
+							}
+						}
 					}
 				}
-
-				// Do two passes over the array because if the first pass added dependencies on some declarations then yielded, it would add them again next time round
-				for (auto declaration : block->declarations.declarations) {
-					if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_USING | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT))) {
-						addSizeDependency(sizeDependencies, static_cast<ExprLiteral *>(declaration->type)->typeValue);
-					}
-				}
-
-				break;
 			}
-			case ExprFlavor::BREAK:
-			case ExprFlavor::CONTINUE:
-			case ExprFlavor::REMOVE: {
-				auto continue_ = static_cast<ExprBreakOrContinue *>(expr);
 
-				assert(continue_->flavor == ExprFlavor::IDENTIFIER);
-				auto label = static_cast<ExprIdentifier *>(continue_->label);
-				assert(label->declaration);
-
-				if (!(label->declaration->flags & DECLARATION_IS_ITERATOR)) {
-					reportError(continue_, "Error: %s label '%.*s' is not a loop iterator", continue_->flavor == ExprFlavor::CONTINUE ? "Continue" : "Break", STRING_PRINTF(label->name));
-					return false;
-				}
-
-				continue_->refersTo = CAST_FROM_SUBSTRUCT(ExprLoop, iteratorBlock, label->declaration->enclosingScope);
-
-				if (continue_->flavor == ExprFlavor::REMOVE) {
-					if (continue_->refersTo->flavor == ExprFlavor::WHILE) {
-						reportError(continue_, "Error: Cannot remove from a while loop");
-						return false;
-					}
-
-					if (continue_->refersTo->forBegin->type->flavor != TypeFlavor::ARRAY) {
-						reportError(continue_, "Error: Can only remove from an array, not a %.*s",
-							STRING_PRINTF(continue_->refersTo->forBegin->type->name));
-
-						return false;
-					}
-
-					if (continue_->refersTo->forBegin->type->flags & TYPE_ARRAY_IS_FIXED) {
-						reportError(continue_, "Error: Cannot remove from a static size array");
-
-						return false;
-					}
-				}
-
-				break;
-			}
-			case ExprFlavor::BINARY_OPERATOR: {
-				auto binary = static_cast<ExprBinaryOperator *>(expr);
+			if (identifier->declaration) {
 				bool yield;
-
-				// Split this into a separate function so microsofts shitty optimizer doesn't fuck us during profiling builds
-				if (!inferBinary(sizeDependencies, job, exprPointer, &yield)) {
-					return false;
-				}
-
-				if (yield) {
-					return true;
-				}
-
-				break;
-			}
-			case ExprFlavor::FOR: {
-				auto loop = static_cast<ExprLoop *>(expr);
-
-				assert(loop->iteratorBlock.declarations.count >= 2);
-				assert(loop->iteratorBlock.declarations[0]->flags & DECLARATION_IS_ITERATOR);
-				assert(loop->iteratorBlock.declarations[1]->flags & DECLARATION_IS_ITERATOR_INDEX);
-
-				auto &it = loop->iteratorBlock.declarations[0];
-				auto &it_index = loop->iteratorBlock.declarations[1];
-
-				if (loop->forEnd) {
-					assert(loop->forBegin);
-
-					if (loop->forBegin->type == loop->forEnd->type && loop->forBegin->type == &TYPE_AUTO_CAST) {
-						reportError("Error: Cannot infer types of loop range when both are auto casted");
-						return false;
-					}
-
-					if (loop->forBegin->type == &TYPE_AUTO_CAST) {
-						bool yield;
-						if (!tryAutoCast(sizeDependencies, job, &loop->forBegin, loop->forEnd->type, &yield))
-							return yield;
-					}
-					else if (loop->forEnd->type == &TYPE_AUTO_CAST) {
-						bool yield;
-						if (!tryAutoCast(sizeDependencies, job, &loop->forEnd, loop->forBegin->type, &yield))
-							return yield;
-					}
-
-
-					if (loop->forBegin->type->flavor == TypeFlavor::INTEGER) {
-						if (loop->forEnd->type->flavor != TypeFlavor::INTEGER) {
-							reportError(loop, "Error: Cannot iterate from a %.*s to a %.*s", STRING_PRINTF(loop->forBegin->type->name), STRING_PRINTF(loop->forEnd->type->name));
-							return false;
-						}
-
-						if (loop->flags & EXPR_FOR_BY_POINTER) {
-							reportError(loop, "Error: Cannot iterate over integers by pointer");
-							return false;
-						}
-
-						if ((loop->forBegin->type->flags & TYPE_INTEGER_IS_SIGNED) == (loop->forEnd->type->flags & TYPE_INTEGER_IS_SIGNED)) {
-							if (loop->forBegin->type == loop->forEnd->type) {
-								trySolidifyNumericLiteralToDefault(loop->forBegin);
-								trySolidifyNumericLiteralToDefault(loop->forEnd);
-							}
-							else if (loop->forBegin->type->size == 0) {
-								if (!boundsCheckImplicitConversion(loop, loop->forEnd->type, static_cast<ExprLiteral *>(loop->forBegin))) {
-									return false;
-								}
-
-								loop->forBegin->type = loop->forEnd->type;
-							}
-							else if (loop->forEnd->type->size == 0) {
-								if (!boundsCheckImplicitConversion(loop, loop->forBegin->type, static_cast<ExprLiteral *>(loop->forEnd))) {
-									return false;
-								}
-
-								loop->forEnd->type = loop->forBegin->type;
-							}
-
-							if (loop->forBegin->type->size > loop->forEnd->type->size) {
-								insertImplicitCast(sizeDependencies, &loop->forEnd, loop->forBegin->type);
-							}
-							else if (loop->forBegin->type->size < loop->forEnd->type->size) {
-								insertImplicitCast(sizeDependencies, &loop->forBegin, loop->forEnd->type);
-							}
-
-							assert(loop->forBegin->type == loop->forEnd->type);
-						}
-						else {
-							if (loop->forBegin->type == &TYPE_UNSIGNED_INT_LITERAL) {
-								trySolidifyNumericLiteralToDefault(loop->forEnd);
-
-								if (!boundsCheckImplicitConversion(loop, loop->forEnd->type, static_cast<ExprLiteral *>(loop->forBegin))) {
-									return false;
-								}
-
-								loop->forBegin->type = loop->forEnd->type;
-							}
-							else if (loop->forEnd->type == &TYPE_UNSIGNED_INT_LITERAL) {
-								trySolidifyNumericLiteralToDefault(loop->forBegin);
-
-								if (!boundsCheckImplicitConversion(loop, loop->forBegin->type, static_cast<ExprLiteral *>(loop->forEnd))) {
-									return false;
-								}
-
-								loop->forEnd->type = loop->forBegin->type;
-							}
-							else {
-								reportError(loop, "Error: Signed-unsigned mismatch, cannot iterate from a %.*s to a %.*s",
-									STRING_PRINTF(loop->forBegin->type->name), STRING_PRINTF(loop->forEnd->type->name));
-								return false;
-							}
-						}
-
-						it->type = inferMakeTypeLiteral(it->start, it->end, loop->forEnd->type);
-						it->flags |= DECLARATION_TYPE_IS_READY;
-					}
-					else if (loop->forBegin->type->flavor == TypeFlavor::POINTER) {
-						if (loop->forBegin->type != loop->forEnd->type) {
-							reportError(loop, "Error: Cannot iterate from a %.*s to a %.*s", STRING_PRINTF(loop->forBegin->type->name), STRING_PRINTF(loop->forEnd->type->name));
-							return false;
-						}
-
-						auto pointer = static_cast<TypePointer *>(loop->forBegin->type);
-
-						if (loop->flags & EXPR_FOR_BY_POINTER) {
-							it->type = inferMakeTypeLiteral(it->start, it->end, pointer);
-							it->flags |= DECLARATION_TYPE_IS_READY;
-						}
-						else {
-							if (loop->forBegin->type == TYPE_VOID_POINTER) {
-								reportError(loop, "Error: Cannot iterate over a *void by value");
-								return false;
-							}
-
-							it->type = inferMakeTypeLiteral(it->start, it->end, pointer->pointerTo);
-
-							it->flags |= DECLARATION_TYPE_IS_READY;
-						}
-					}
-					else if (loop->forBegin->type->flavor == TypeFlavor::STRING) {
-						reportError(loop, "Error: Cannot iterate over a range of strings");
-						return false;
-					}
-					else if (loop->forBegin->type->flavor == TypeFlavor::ARRAY) {
-						reportError(loop, "Error: Cannot iterate over a range of arrays");
-						return false;
+				if (!inferIdentifier(sizeDependencies, job, exprPointer, identifier, &yield)) {
+					if (yield) {
+						return true;
 					}
 					else {
+						return false;
+					}
+				}
+			}
+			else {
+				return true;
+			}
+
+			break;
+		}
+		case ExprFlavor::FUNCTION: {
+			if (!expr->type) {
+				return true;
+			}
+
+			break;
+		}
+		case ExprFlavor::FUNCTION_PROTOTYPE: {
+			auto function = static_cast<ExprFunction *>(expr);
+
+			for (auto argument : function->arguments.declarations) {
+				assert(argument);
+
+				if (!(argument->flags & DECLARATION_TYPE_IS_READY)) {
+					goToSleep(job, &argument->sleepingOnMe);
+
+					return true;
+				}
+			}
+
+
+			for (auto return_ : function->returns.declarations) {
+				assert(return_);
+
+				if (!(return_->flags & DECLARATION_TYPE_IS_READY)) {
+					goToSleep(job, &return_->sleepingOnMe);
+
+					return true;
+				}
+			}
+
+			auto type = getFunctionType(function);
+
+			*exprPointer = inferMakeTypeLiteral(function->start, function->end, type);
+			(*exprPointer)->valueOfDeclaration = expr->valueOfDeclaration;
+
+			break;
+		}
+		case ExprFlavor::TYPE_LITERAL:
+		case ExprFlavor::STRING_LITERAL:
+		case ExprFlavor::FLOAT_LITERAL:
+		case ExprFlavor::INT_LITERAL: {
+			break;
+		}
+		case ExprFlavor::BLOCK: {
+			auto block = static_cast<ExprBlock *>(expr);
+
+			for (auto declaration : block->declarations.declarations) {
+				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_USING | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT))) {
+					if (!(declaration->flags & DECLARATION_TYPE_IS_READY)) {
+						goToSleep(job, &declaration->sleepingOnMe);
+
+						return true;
+					}
+				}
+			}
+
+			// Do two passes over the array because if the first pass added dependencies on some declarations then yielded, it would add them again next time round
+			for (auto declaration : block->declarations.declarations) {
+				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_USING | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT))) {
+					addSizeDependency(sizeDependencies, static_cast<ExprLiteral *>(declaration->type)->typeValue);
+				}
+			}
+
+			break;
+		}
+		case ExprFlavor::BREAK:
+		case ExprFlavor::CONTINUE:
+		case ExprFlavor::REMOVE: {
+			auto continue_ = static_cast<ExprBreakOrContinue *>(expr);
+
+			assert(continue_->flavor == ExprFlavor::IDENTIFIER);
+			auto label = static_cast<ExprIdentifier *>(continue_->label);
+			assert(label->declaration);
+
+			if (!(label->declaration->flags & DECLARATION_IS_ITERATOR)) {
+				reportError(continue_, "Error: %s label '%.*s' is not a loop iterator", continue_->flavor == ExprFlavor::CONTINUE ? "Continue" : "Break", STRING_PRINTF(label->name));
+				return false;
+			}
+
+			continue_->refersTo = CAST_FROM_SUBSTRUCT(ExprLoop, iteratorBlock, label->declaration->enclosingScope);
+
+			if (continue_->flavor == ExprFlavor::REMOVE) {
+				if (continue_->refersTo->flavor == ExprFlavor::WHILE) {
+					reportError(continue_, "Error: Cannot remove from a while loop");
+					return false;
+				}
+
+				if (continue_->refersTo->forBegin->type->flavor != TypeFlavor::ARRAY) {
+					reportError(continue_, "Error: Can only remove from an array, not a %.*s",
+						STRING_PRINTF(continue_->refersTo->forBegin->type->name));
+
+					return false;
+				}
+
+				if (continue_->refersTo->forBegin->type->flags & TYPE_ARRAY_IS_FIXED) {
+					reportError(continue_, "Error: Cannot remove from a static size array");
+
+					return false;
+				}
+			}
+
+			break;
+		}
+		case ExprFlavor::BINARY_OPERATOR: {
+			auto binary = static_cast<ExprBinaryOperator *>(expr);
+			bool yield;
+
+			// Split this into a separate function so microsofts shitty optimizer doesn't fuck us during profiling builds
+			if (!inferBinary(sizeDependencies, job, exprPointer, &yield)) {
+				return false;
+			}
+
+			if (yield) {
+				return true;
+			}
+
+			break;
+		}
+		case ExprFlavor::FOR: {
+			auto loop = static_cast<ExprLoop *>(expr);
+
+			assert(loop->iteratorBlock.declarations.count >= 2);
+			assert(loop->iteratorBlock.declarations[0]->flags & DECLARATION_IS_ITERATOR);
+			assert(loop->iteratorBlock.declarations[1]->flags & DECLARATION_IS_ITERATOR_INDEX);
+
+			auto &it = loop->iteratorBlock.declarations[0];
+			auto &it_index = loop->iteratorBlock.declarations[1];
+
+			if (loop->forEnd) {
+				assert(loop->forBegin);
+
+				if (loop->forBegin->type == loop->forEnd->type && loop->forBegin->type == &TYPE_AUTO_CAST) {
+					reportError("Error: Cannot infer types of loop range when both are auto casted");
+					return false;
+				}
+
+				if (loop->forBegin->type == &TYPE_AUTO_CAST) {
+					bool yield;
+					if (!tryAutoCast(sizeDependencies, job, &loop->forBegin, loop->forEnd->type, &yield))
+						return yield;
+				}
+				else if (loop->forEnd->type == &TYPE_AUTO_CAST) {
+					bool yield;
+					if (!tryAutoCast(sizeDependencies, job, &loop->forEnd, loop->forBegin->type, &yield))
+						return yield;
+				}
+
+
+				if (loop->forBegin->type->flavor == TypeFlavor::INTEGER) {
+					if (loop->forEnd->type->flavor != TypeFlavor::INTEGER) {
 						reportError(loop, "Error: Cannot iterate from a %.*s to a %.*s", STRING_PRINTF(loop->forBegin->type->name), STRING_PRINTF(loop->forEnd->type->name));
 						return false;
 					}
+
+					if (loop->flags & EXPR_FOR_BY_POINTER) {
+						reportError(loop, "Error: Cannot iterate over integers by pointer");
+						return false;
+					}
+
+					if ((loop->forBegin->type->flags & TYPE_INTEGER_IS_SIGNED) == (loop->forEnd->type->flags & TYPE_INTEGER_IS_SIGNED)) {
+						if (loop->forBegin->type == loop->forEnd->type) {
+							trySolidifyNumericLiteralToDefault(loop->forBegin);
+							trySolidifyNumericLiteralToDefault(loop->forEnd);
+						}
+						else if (loop->forBegin->type->size == 0) {
+							if (!boundsCheckImplicitConversion(loop, loop->forEnd->type, static_cast<ExprLiteral *>(loop->forBegin))) {
+								return false;
+							}
+
+							loop->forBegin->type = loop->forEnd->type;
+						}
+						else if (loop->forEnd->type->size == 0) {
+							if (!boundsCheckImplicitConversion(loop, loop->forBegin->type, static_cast<ExprLiteral *>(loop->forEnd))) {
+								return false;
+							}
+
+							loop->forEnd->type = loop->forBegin->type;
+						}
+
+						if (loop->forBegin->type->size > loop->forEnd->type->size) {
+							insertImplicitCast(sizeDependencies, &loop->forEnd, loop->forBegin->type);
+						}
+						else if (loop->forBegin->type->size < loop->forEnd->type->size) {
+							insertImplicitCast(sizeDependencies, &loop->forBegin, loop->forEnd->type);
+						}
+
+						assert(loop->forBegin->type == loop->forEnd->type);
+					}
+					else {
+						if (loop->forBegin->type == &TYPE_UNSIGNED_INT_LITERAL) {
+							trySolidifyNumericLiteralToDefault(loop->forEnd);
+
+							if (!boundsCheckImplicitConversion(loop, loop->forEnd->type, static_cast<ExprLiteral *>(loop->forBegin))) {
+								return false;
+							}
+
+							loop->forBegin->type = loop->forEnd->type;
+						}
+						else if (loop->forEnd->type == &TYPE_UNSIGNED_INT_LITERAL) {
+							trySolidifyNumericLiteralToDefault(loop->forBegin);
+
+							if (!boundsCheckImplicitConversion(loop, loop->forBegin->type, static_cast<ExprLiteral *>(loop->forEnd))) {
+								return false;
+							}
+
+							loop->forEnd->type = loop->forBegin->type;
+						}
+						else {
+							reportError(loop, "Error: Signed-unsigned mismatch, cannot iterate from a %.*s to a %.*s",
+								STRING_PRINTF(loop->forBegin->type->name), STRING_PRINTF(loop->forEnd->type->name));
+							return false;
+						}
+					}
+
+					it->type = inferMakeTypeLiteral(it->start, it->end, loop->forEnd->type);
+					it->flags |= DECLARATION_TYPE_IS_READY;
 				}
-				else {
-					if (loop->forBegin->type->flavor == TypeFlavor::INTEGER) {
-						if (loop->flags & EXPR_FOR_BY_POINTER) {
-							reportError(loop->forBegin, "Error: Cannot iterate over integers by pointer");
+				else if (loop->forBegin->type->flavor == TypeFlavor::POINTER) {
+					if (loop->forBegin->type != loop->forEnd->type) {
+						reportError(loop, "Error: Cannot iterate from a %.*s to a %.*s", STRING_PRINTF(loop->forBegin->type->name), STRING_PRINTF(loop->forEnd->type->name));
+						return false;
+					}
+
+					auto pointer = static_cast<TypePointer *>(loop->forBegin->type);
+
+					if (loop->flags & EXPR_FOR_BY_POINTER) {
+						it->type = inferMakeTypeLiteral(it->start, it->end, pointer);
+						it->flags |= DECLARATION_TYPE_IS_READY;
+					}
+					else {
+						if (loop->forBegin->type == TYPE_VOID_POINTER) {
+							reportError(loop, "Error: Cannot iterate over a *void by value");
 							return false;
 						}
 
-						trySolidifyNumericLiteralToDefault(loop->forBegin);
+						it->type = inferMakeTypeLiteral(it->start, it->end, pointer->pointerTo);
 
-						loop->forEnd = loop->forBegin;
-						ExprLiteral *zero = new ExprLiteral;
-						zero->flavor = ExprFlavor::INT_LITERAL;
-						zero->unsignedValue = 0;
-						zero->type = loop->forEnd->type;
-						zero->start = loop->start;
-						zero->end = loop->end;
-						loop->forBegin = zero;
-
-						it->type = inferMakeTypeLiteral(it->start, it->end, loop->forEnd->type);
 						it->flags |= DECLARATION_TYPE_IS_READY;
 					}
-					else if (loop->forBegin->type->flavor == TypeFlavor::STRING) {
-						if (loop->flags & EXPR_FOR_BY_POINTER) {
-							it->type = inferMakeTypeLiteral(it->start, it->end, getPointer(&TYPE_U8));
-						}
-						else {
-							it->type = inferMakeTypeLiteral(it->start, it->end, &TYPE_U8);
-						}
-						it->flags |= DECLARATION_TYPE_IS_READY;
-					}
-					else if (loop->forBegin->type->flavor == TypeFlavor::ARRAY) {
-						auto array = static_cast<TypeArray *>(loop->forBegin->type);
-
-						if (loop->flags & EXPR_FOR_BY_POINTER) {
-							auto pointerType = getPointer(array->arrayOf);
-
-							it->type = inferMakeTypeLiteral(it->start, it->end, pointerType);
-						}
-						else {
-							it->type = inferMakeTypeLiteral(it->start, it->end, array->arrayOf);
-						}
-						it->flags |= DECLARATION_TYPE_IS_READY;
-					}
-					else if (loop->forBegin->type->flavor == TypeFlavor::POINTER) {
-						reportError(loop->forBegin, "Error: Cannot iterate over a lone pointer, you must specify a begin and end");
+				}
+				else if (loop->forBegin->type->flavor == TypeFlavor::STRING) {
+					reportError(loop, "Error: Cannot iterate over a range of strings");
+					return false;
+				}
+				else if (loop->forBegin->type->flavor == TypeFlavor::ARRAY) {
+					reportError(loop, "Error: Cannot iterate over a range of arrays");
+					return false;
+				}
+				else {
+					reportError(loop, "Error: Cannot iterate from a %.*s to a %.*s", STRING_PRINTF(loop->forBegin->type->name), STRING_PRINTF(loop->forEnd->type->name));
+					return false;
+				}
+			}
+			else {
+				if (loop->forBegin->type->flavor == TypeFlavor::INTEGER) {
+					if (loop->flags & EXPR_FOR_BY_POINTER) {
+						reportError(loop->forBegin, "Error: Cannot iterate over integers by pointer");
 						return false;
 					}
+
+					trySolidifyNumericLiteralToDefault(loop->forBegin);
+
+					loop->forEnd = loop->forBegin;
+					ExprLiteral *zero = new ExprLiteral;
+					zero->flavor = ExprFlavor::INT_LITERAL;
+					zero->unsignedValue = 0;
+					zero->type = loop->forEnd->type;
+					zero->start = loop->start;
+					zero->end = loop->end;
+					loop->forBegin = zero;
+
+					it->type = inferMakeTypeLiteral(it->start, it->end, loop->forEnd->type);
+					it->flags |= DECLARATION_TYPE_IS_READY;
+				}
+				else if (loop->forBegin->type->flavor == TypeFlavor::STRING) {
+					if (loop->flags & EXPR_FOR_BY_POINTER) {
+						it->type = inferMakeTypeLiteral(it->start, it->end, getPointer(&TYPE_U8));
+					}
 					else {
-						reportError(loop->forBegin, "Error: Cannot iterate over a %.*s", STRING_PRINTF(loop->forBegin->type->name));
+						it->type = inferMakeTypeLiteral(it->start, it->end, &TYPE_U8);
+					}
+					it->flags |= DECLARATION_TYPE_IS_READY;
+				}
+				else if (loop->forBegin->type->flavor == TypeFlavor::ARRAY) {
+					auto array = static_cast<TypeArray *>(loop->forBegin->type);
+
+					if (loop->flags & EXPR_FOR_BY_POINTER) {
+						auto pointerType = getPointer(array->arrayOf);
+
+						it->type = inferMakeTypeLiteral(it->start, it->end, pointerType);
+					}
+					else {
+						it->type = inferMakeTypeLiteral(it->start, it->end, array->arrayOf);
+					}
+					it->flags |= DECLARATION_TYPE_IS_READY;
+				}
+				else if (loop->forBegin->type->flavor == TypeFlavor::POINTER) {
+					reportError(loop->forBegin, "Error: Cannot iterate over a lone pointer, you must specify a begin and end");
+					return false;
+				}
+				else {
+					reportError(loop->forBegin, "Error: Cannot iterate over a %.*s", STRING_PRINTF(loop->forBegin->type->name));
+					return false;
+				}
+			}
+
+			it_index->type = inferMakeTypeLiteral(it_index->start, it_index->end, &TYPE_U64);
+			it_index->flags |= DECLARATION_TYPE_IS_READY;
+
+			addSizeDependency(sizeDependencies, getDeclarationType(it));
+
+
+			wakeUpSleepers(&it->sleepingOnMe);
+			wakeUpSleepers(&it_index->sleepingOnMe);
+
+			break;
+		}
+		case ExprFlavor::COMMA_ASSIGNMENT: {
+			auto comma = static_cast<ExprCommaAssignment *>(expr);
+
+
+			ExprFunction *functionForArgumentNames = nullptr;
+
+			auto call = static_cast<ExprFunctionCall *>(comma->call);
+
+			if (call->function->flavor == ExprFlavor::FUNCTION) {
+				functionForArgumentNames = static_cast<ExprFunction *>(call->function);
+
+				for (u64 i = comma->exprCount; i < functionForArgumentNames->returns.declarations.count; i++) {
+					auto declaration = functionForArgumentNames->returns.declarations[i];
+
+					if (declaration->flags & DECLARATION_IS_MUST) {
+						reportError(comma->call, "Error: Cannot ignore the return value of the function call, it was marked as #must");
+						reportError(declaration, "   ..: Here is the function");
 						return false;
 					}
 				}
-
-				it_index->type = inferMakeTypeLiteral(it_index->start, it_index->end, &TYPE_U64);
-				it_index->flags |= DECLARATION_TYPE_IS_READY;
-
-				addSizeDependency(sizeDependencies, getDeclarationType(it));
-
-
-				wakeUpSleepers(&it->sleepingOnMe);
-				wakeUpSleepers(&it_index->sleepingOnMe);
-
-				break;
 			}
-			case ExprFlavor::COMMA_ASSIGNMENT: {
-				auto comma = static_cast<ExprCommaAssignment *>(expr);
 
+			auto function = static_cast<TypeFunction *>(static_cast<ExprFunctionCall *>(comma->call)->function->type);
 
-				ExprFunction *functionForArgumentNames = nullptr;
+			if (comma->exprCount > function->returnCount || functionIsVoid(function)) {
+				if (functionIsVoid(function)) {
+					reportError(comma->call, "Error: Cannot assign from a function that returns void");
+				}
+				else {
+					reportError(comma->call, "Error: Assigning to too many variables from function call, assigning to %" PRIu64 " variables, the function returns %" PRIu64, comma->exprCount, function->returnCount);
+				}
 
-				auto call = static_cast<ExprFunctionCall *>(comma->call);
+				if (functionForArgumentNames) {
+					reportError(functionForArgumentNames, "   ..: Here is the function");
+				}
+			}
 
-				if (call->function->flavor == ExprFlavor::FUNCTION) {
-					functionForArgumentNames = static_cast<ExprFunction *>(call->function);
+			if (comma->flags & EXPR_COMMA_ASSIGNMENT_IS_DECLARATION) {
+				for (u64 i = 0; i < comma->exprCount; i++) {
+					auto identifier = static_cast<ExprIdentifier *>(comma->left[i]);
 
-					for (u64 i = comma->exprCount; i < functionForArgumentNames->returns.declarations.count; i++) {
-						auto declaration = functionForArgumentNames->returns.declarations[i];
+					auto declaration = identifier->declaration;
 
+					identifier->type = function->returnTypes[i];
+					declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, identifier->type);
+
+					declaration->flags |= DECLARATION_TYPE_IS_READY;
+					wakeUpSleepers(&declaration->sleepingOnMe);
+				}
+			}
+			else {
+				for (u64 i = 0; i < comma->exprCount; i++) {
+					if (!isAssignable(comma->left[i])) {
+						reportError(comma->left[i], "Error: This expression cannot be assigned to");
+						return false;
+					}
+
+					if (comma->left[i]->type != function->returnTypes[i]) {
+						reportError(comma->left[i], "Error: Cannot do a multiple assignment from %.*s to %.*s", STRING_PRINTF(function->returnTypes[i]->name), STRING_PRINTF(comma->left[i]->type->name));
+
+						if (functionForArgumentNames) {
+							reportError(functionForArgumentNames->returns.declarations[i], "   ..: Here is the return");
+						}
+
+						return false;
+					}
+				}
+			}
+
+			expr->type = &TYPE_VOID;
+
+			break;
+		}
+		case ExprFlavor::FUNCTION_CALL: {
+			auto call = static_cast<ExprFunctionCall *>(expr);
+
+			if (call->function->type->flavor != TypeFlavor::FUNCTION) {
+				reportError(call->function, "Error: Cannot call a %.*s", STRING_PRINTF(call->function->type->name));
+				return false;
+			}
+
+			auto function = static_cast<TypeFunction *>(call->function->type);
+
+			expr->type = function->returnTypes[0];
+
+			addSizeDependency(sizeDependencies, expr->type);
+
+			String functionName = call->function->valueOfDeclaration ? call->function->valueOfDeclaration->name : "function";
+
+			ExprFunction *functionForArgumentNames = nullptr;
+
+			if (call->function->flavor == ExprFlavor::FUNCTION) {
+				functionForArgumentNames = static_cast<ExprFunction *>(call->function);
+
+				if (call->flags & EXPR_FUNCTION_CALL_IS_STATEMENT_LEVEL) {
+					for (auto declaration : functionForArgumentNames->returns.declarations) {
 						if (declaration->flags & DECLARATION_IS_MUST) {
-							reportError(comma->call, "Error: Cannot ignore the return value of the function call, it was marked as #must");
+							reportError(call, "Error: Cannot ignore the return value of the function call, it was marked as #must");
 							reportError(declaration, "   ..: Here is the function");
 							return false;
 						}
 					}
 				}
+				else if (!(call->flags & EXPR_FUNCTION_CALL_IS_IN_COMMA_ASSIGNMENT)) {
+					for (u64 i = 1; i < functionForArgumentNames->returns.declarations.count; i++) {
+						auto declaration = functionForArgumentNames->returns.declarations[i];
 
-				auto function = static_cast<TypeFunction *>(static_cast<ExprFunctionCall *>(comma->call)->function->type);
-
-				if (comma->exprCount > function->returnCount || functionIsVoid(function)) {
-					if (functionIsVoid(function)) {
-						reportError(comma->call, "Error: Cannot assign from a function that returns void");
-					}
-					else {
-						reportError(comma->call, "Error: Assigning to too many variables from function call, assigning to %" PRIu64 " variables, the function returns %" PRIu64, comma->exprCount, function->returnCount);
-					}
-
-					if (functionForArgumentNames) {
-						reportError(functionForArgumentNames, "   ..: Here is the function");
-					}
-				}
-
-				if (comma->flags & EXPR_COMMA_ASSIGNMENT_IS_DECLARATION) {
-					for (u64 i = 0; i < comma->exprCount; i++) {
-						auto identifier = static_cast<ExprIdentifier *>(comma->left[i]);
-
-						auto declaration = identifier->declaration;
-
-						identifier->type = function->returnTypes[i];
-						declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, identifier->type);
-
-						declaration->flags |= DECLARATION_TYPE_IS_READY;
-						wakeUpSleepers(&declaration->sleepingOnMe);
-					}
-				}
-				else {
-					for (u64 i = 0; i < comma->exprCount; i++) {
-						if (!isAssignable(comma->left[i])) {
-							reportError(comma->left[i], "Error: This expression cannot be assigned to");
-							return false;
-						}
-
-						if (comma->left[i]->type != function->returnTypes[i]) {
-							reportError(comma->left[i], "Error: Cannot do a multiple assignment from %.*s to %.*s", STRING_PRINTF(function->returnTypes[i]->name), STRING_PRINTF(comma->left[i]->type->name));
-
-							if (functionForArgumentNames) {
-								reportError(functionForArgumentNames->returns.declarations[i], "   ..: Here is the return");
-							}
-							
+						if (declaration->flags & DECLARATION_IS_MUST) {
+							reportError(call, "Error: Cannot ignore the return value of the function call, it was marked as #must");
+							reportError(declaration, "   ..: Here is the function");
 							return false;
 						}
 					}
 				}
-
-				expr->type = &TYPE_VOID;
-
-				break;
 			}
-			case ExprFlavor::FUNCTION_CALL: {
-				auto call = static_cast<ExprFunctionCall *>(expr);
 
-				if (call->function->type->flavor != TypeFlavor::FUNCTION) {
-					reportError(call->function, "Error: Cannot call a %.*s", STRING_PRINTF(call->function->type->name));
+			bool hasNamedArguments = false;
+
+
+			for (u64 i = 0; i < call->arguments.count; i++) {
+				if (call->arguments.names[i].length != 0) {
+					hasNamedArguments = true;
+				}
+			}
+
+			if (hasNamedArguments && !functionForArgumentNames) {
+				reportError(call, "Error: Cannot use named arguments with a non-constant function"); // @Improvement better message
+				return false;
+			}
+
+			if (functionForArgumentNames) {
+				bool yield;
+
+				if (!inferArguments(sizeDependencies, job, &call->arguments, &functionForArgumentNames->arguments, "argument", call, functionForArgumentNames, &yield)) {
+					return yield;
+				}
+			}
+			else {
+				if (call->arguments.count != function->argumentCount) {
+
+					if (call->arguments.count < function->argumentCount) {
+						reportError(call, "Error: Too few arguments for %.*s (Expected: %" PRIu64 ", Given: %" PRIu64 ")",
+							STRING_PRINTF(functionName), function->argumentCount, call->arguments.count);
+					}
+					else if (call->arguments.count > function->argumentCount) {
+						reportError(call, "Error: Too many arguments for %.*s (Expected: %" PRIu64 ", Given: %" PRIu64 ")",
+							STRING_PRINTF(functionName), function->argumentCount, call->arguments.count);
+					}
+
 					return false;
 				}
-
-				auto function = static_cast<TypeFunction *>(call->function->type);
-
-				expr->type = function->returnTypes[0];
-
-				addSizeDependency(sizeDependencies, expr->type);
-
-				String functionName = call->function->valueOfDeclaration ? call->function->valueOfDeclaration->name : "function";
-
-				ExprFunction *functionForArgumentNames = nullptr;
-
-				if (call->function->flavor == ExprFlavor::FUNCTION) {
-					functionForArgumentNames = static_cast<ExprFunction *>(call->function);
-
-					if (call->flags & EXPR_FUNCTION_CALL_IS_STATEMENT_LEVEL) {
-						for (auto declaration : functionForArgumentNames->returns.declarations) {
-							if (declaration->flags & DECLARATION_IS_MUST) {
-								reportError(call, "Error: Cannot ignore the return value of the function call, it was marked as #must");
-								reportError(declaration, "   ..: Here is the function");
-								return false;
-							}
-						}
-					}
-					else if (!(call->flags & EXPR_FUNCTION_CALL_IS_IN_COMMA_ASSIGNMENT)) {
-						for (u64 i = 1; i < functionForArgumentNames->returns.declarations.count; i++) {
-							auto declaration = functionForArgumentNames->returns.declarations[i];
-
-							if (declaration->flags & DECLARATION_IS_MUST) {
-								reportError(call, "Error: Cannot ignore the return value of the function call, it was marked as #must");
-								reportError(declaration, "   ..: Here is the function");
-								return false;
-							}
-						}
-					}
-				}
-
-				bool hasNamedArguments = false;
-
 
 				for (u64 i = 0; i < call->arguments.count; i++) {
-					if (call->arguments.names[i].length != 0) {
-						hasNamedArguments = true;
+					Type *correct = function->argumentTypes[i];
+
+					bool yield;
+					if (!assignOp(sizeDependencies, job, call->arguments.values[i], correct, call->arguments.values[i], &yield)) { // @Incomplete: Give function call specific error messages instead of general type conversion errors
+						return yield;
 					}
 				}
+			}
 
-				if (hasNamedArguments && !functionForArgumentNames) {
-					reportError(call, "Error: Cannot use named arguments with a non-constant function"); // @Improvement better message
+			break;
+		}
+		case ExprFlavor::IF: {
+			auto ifElse = static_cast<ExprIf *>(expr);
+
+			if (ifElse->condition->type != &TYPE_BOOL) {
+				if (isValidCast(&TYPE_BOOL, ifElse->condition->type)) {
+					insertImplicitCast(sizeDependencies, &ifElse->condition, &TYPE_BOOL);
+				}
+				else {
+					reportError(ifElse->condition, "Error: Cannot convert %.*s to bool", STRING_PRINTF(ifElse->condition->type->name));
+					return false;
+				}
+			}
+
+			break;
+		}
+		case ExprFlavor::RETURN: {
+			auto return_ = static_cast<ExprReturn *>(expr);
+
+			if (!return_->returnsFrom->type)
+				return true;
+
+			assert(return_->returnsFrom->type->flavor == TypeFlavor::FUNCTION);
+
+			Block *returnTypes = &return_->returnsFrom->returns;
+
+			if (returnTypes->declarations.count == 1 && static_cast<ExprLiteral *>(returnTypes->declarations[0]->type)->typeValue == &TYPE_VOID) {
+				if (return_->returns.count) {
+					reportError(return_->returns.values[0], "Error: A function with void return type cannot return a value");
+					return false;
+				}
+			}
+			else {
+				bool yield;
+
+				if (!inferArguments(sizeDependencies, job, &return_->returns, returnTypes, "return", return_, return_->returnsFrom, &yield)) {
+					return yield;
+				}
+			}
+
+			break;
+		}
+		case ExprFlavor::UNARY_OPERATOR: {
+			auto unary = static_cast<ExprUnaryOperator *>(expr);
+
+			auto &value = unary->value;
+
+			switch (unary->op) {
+			case TOKEN('-'): {
+				if (value->type->flavor == TypeFlavor::INTEGER) {
+					if (value->type->flags & TYPE_INTEGER_IS_SIGNED) {
+						if (value->type == &TYPE_SIGNED_INT_LITERAL) {
+							value->start = unary->start;
+
+							auto literal = static_cast<ExprLiteral *>(value);
+
+							if (literal->signedValue == INT64_MIN) {
+								reportError(value, "Error: Integer literal too large, the maximum value is %" PRIi64, INT64_MAX);
+								return false;
+							}
+
+							literal->signedValue = -literal->signedValue;
+							*exprPointer = value;
+						}
+						else {
+							unary->type = value->type;
+						}
+					}
+					else {
+						if (value->type == &TYPE_UNSIGNED_INT_LITERAL) {
+							auto literal = static_cast<ExprLiteral *>(value);
+							literal->start = unary->start;
+
+							if (literal->unsignedValue > static_cast<u64>(INT64_MAX) + 1ULL) {
+								reportError(value, "Error: Integer literal too small, the minimum value is %" PRIi64, INT64_MIN);
+								return false;
+							}
+
+							literal->type = &TYPE_SIGNED_INT_LITERAL;
+
+							literal->signedValue = -literal->signedValue;
+							*exprPointer = value;
+						}
+						else { // @Incomplete: should we allow negation of unsigned numbers, its useful for some bit twiddling but feels weird
+							unary->type = value->type;
+						}
+
+					}
+				}
+				else if (value->type->flavor == TypeFlavor::FLOAT) {
+					if (value->type == &TYPE_FLOAT_LITERAL) {
+						value->start = unary->start;
+
+						auto literal = static_cast<ExprLiteral *>(value);
+						literal->floatValue = -literal->floatValue;
+						*exprPointer = value;
+					}
+					else {
+						unary->type = value->type;
+					}
+				}
+				else {
+					reportError(value, "Error: Cannot negate a %.*s", STRING_PRINTF(value->type->name));
 					return false;
 				}
 
-				if (functionForArgumentNames) {
-					bool yield;
-
-					if (!inferArguments(sizeDependencies, job, &call->arguments, &functionForArgumentNames->arguments, "argument", call, functionForArgumentNames, &yield)) {
-						return yield;
-					}
+				break;
+			}
+			case TOKEN('+'): {
+				if (value->type->flavor == TypeFlavor::INTEGER) { // @Incomplete: Should unsigned int literals become signed?
+					value->start = unary->start;
+					*exprPointer = value;
+				}
+				else if (value->type->flavor == TypeFlavor::FLOAT) {
+					value->start = unary->start;
+					*exprPointer = value;
 				}
 				else {
-					if (call->arguments.count != function->argumentCount) {
-
-						if (call->arguments.count < function->argumentCount) {
-							reportError(call, "Error: Too few arguments for %.*s (Expected: %" PRIu64 ", Given: %" PRIu64 ")",
-								STRING_PRINTF(functionName), function->argumentCount, call->arguments.count);
-						}
-						else if (call->arguments.count > function->argumentCount) {
-							reportError(call, "Error: Too many arguments for %.*s (Expected: %" PRIu64 ", Given: %" PRIu64 ")",
-								STRING_PRINTF(functionName), function->argumentCount, call->arguments.count);
-						}
-
-						return false;
-					}
-
-					for (u64 i = 0; i < call->arguments.count; i++) {
-						Type *correct = function->argumentTypes[i];
-
-						bool yield;
-						if (!assignOp(sizeDependencies, job, call->arguments.values[i], correct, call->arguments.values[i], &yield)) { // @Incomplete: Give function call specific error messages instead of general type conversion errors
-							return yield;
-						}
-					}
+					reportError(value, "Error: Cannot have a '+' in front of a %.*s", STRING_PRINTF(value->type->name));
+					return false;
 				}
 
 				break;
 			}
-			case ExprFlavor::IF: {
-				auto ifElse = static_cast<ExprIf *>(expr);
+			case TOKEN('~'): {
+				if (value->type->flavor == TypeFlavor::INTEGER) {
+					trySolidifyNumericLiteralToDefault(value);
 
-				if (ifElse->condition->type != &TYPE_BOOL) {
-					if (isValidCast(&TYPE_BOOL, ifElse->condition->type)) {
-						insertImplicitCast(sizeDependencies, &ifElse->condition, &TYPE_BOOL);
+					unary->type = value->type;
+				}
+				else if (value->type->flavor == TypeFlavor::ENUM) {
+					if (value->type->flags & TYPE_ENUM_IS_FLAGS) {
+						unary->type = value->type;
 					}
 					else {
-						reportError(ifElse->condition, "Error: Cannot convert %.*s to bool", STRING_PRINTF(ifElse->condition->type->name));
-						return false;
-					}
-				}
-
-				break;
-			}
-			case ExprFlavor::RETURN: {
-				auto return_ = static_cast<ExprReturn *>(expr);
-
-				if (!return_->returnsFrom->type)
-					return true;
-
-				assert(return_->returnsFrom->type->flavor == TypeFlavor::FUNCTION);
-
-				Block *returnTypes = &return_->returnsFrom->returns;
-
-				if (returnTypes->declarations.count == 1 && static_cast<ExprLiteral *>(returnTypes->declarations[0]->type)->typeValue == &TYPE_VOID) {
-					if (return_->returns.count) {
-						reportError(return_->returns.values[0], "Error: A function with void return type cannot return a value");
+						reportError(unary, "Error: Cannot invert an enum");
 						return false;
 					}
 				}
 				else {
-					bool yield;
-
-					if (!inferArguments(sizeDependencies, job, &return_->returns, returnTypes, "return", return_, return_->returnsFrom, &yield)) {
-						return yield;
-					}
+					reportError(unary, "Error: Cannot invert a %.*s", STRING_PRINTF(value->type->name));
+					return false;
 				}
-
-				break;
 			}
-			case ExprFlavor::UNARY_OPERATOR: {
-				auto unary = static_cast<ExprUnaryOperator *>(expr);
-
-				auto &value = unary->value;
-
-				switch (unary->op) {
-					case TOKEN('-'): {
-						if (value->type->flavor == TypeFlavor::INTEGER) {
-							if (value->type->flags & TYPE_INTEGER_IS_SIGNED) {
-								if (value->type == &TYPE_SIGNED_INT_LITERAL) {
-									value->start = unary->start;
-
-									auto literal = static_cast<ExprLiteral *>(value);
-
-									if (literal->signedValue == INT64_MIN) {
-										reportError(value, "Error: Integer literal too large, the maximum value is %" PRIi64, INT64_MAX);
-										return false;
-									}
-
-									literal->signedValue = -literal->signedValue;
-									*exprPointer = value;
-								}
-								else {
-									unary->type = value->type;
-								}
-							}
-							else {
-								if (value->type == &TYPE_UNSIGNED_INT_LITERAL) {
-									auto literal = static_cast<ExprLiteral *>(value);
-									literal->start = unary->start;
-
-									if (literal->unsignedValue > static_cast<u64>(INT64_MAX) + 1ULL) {
-										reportError(value, "Error: Integer literal too small, the minimum value is %" PRIi64, INT64_MIN);
-										return false;
-									}
-
-									literal->type = &TYPE_SIGNED_INT_LITERAL;
-
-									literal->signedValue = -literal->signedValue;
-									*exprPointer = value;
-								}
-								else { // @Incomplete: should we allow negation of unsigned numbers, its useful for some bit twiddling but feels weird
-									unary->type = value->type;
-								}
-
-							}
-						}
-						else if (value->type->flavor == TypeFlavor::FLOAT) {
-							if (value->type == &TYPE_FLOAT_LITERAL) {
-								value->start = unary->start;
-
-								auto literal = static_cast<ExprLiteral *>(value);
-								literal->floatValue = -literal->floatValue;
-								*exprPointer = value;
-							}
-							else {
-								unary->type = value->type;
-							}
-						}
-						else {
-							reportError(value, "Error: Cannot negate a %.*s", STRING_PRINTF(value->type->name));
-							return false;
-						}
-
-						break;
-					}
-					case TOKEN('+'): {
-						if (value->type->flavor == TypeFlavor::INTEGER) { // @Incomplete: Should unsigned int literals become signed?
-							value->start = unary->start;
-							*exprPointer = value;
-						}
-						else if (value->type->flavor == TypeFlavor::FLOAT) {
-							value->start = unary->start;
-							*exprPointer = value;
-						}
-						else {
-							reportError(value, "Error: Cannot have a '+' in front of a %.*s", STRING_PRINTF(value->type->name));
-							return false;
-						}
-
-						break;
-					}
-					case TOKEN('~'): {
-						if (value->type->flavor == TypeFlavor::INTEGER) {
-							trySolidifyNumericLiteralToDefault(value);
-
-							unary->type = value->type;
-						}
-						else if (value->type->flavor == TypeFlavor::ENUM) {
-							if (value->type->flags & TYPE_ENUM_IS_FLAGS) {
-								unary->type = value->type;
-							}
-							else {
-								reportError(unary, "Error: Cannot invert an enum");
-								return false;
-							}
-						}
-						else {
-							reportError(unary, "Error: Cannot invert a %.*s", STRING_PRINTF(value->type->name));
-							return false;
-						}
-					}
-					case TOKEN('!'): {
-						if (value->type != &TYPE_BOOL) {
-							if (isValidCast(&TYPE_BOOL, value->type)) {
-								insertImplicitCast(sizeDependencies, &value, &TYPE_BOOL);
-							}
-							else {
-								reportError(value, "Error: Cannot convert %.*s to bool", STRING_PRINTF(value->type->name));
-								return false;
-							}
-						}
-
-						unary->type = &TYPE_BOOL;
-
-						break;
-					}
-					case TokenT::SIZE_OF: {
-						if (value->type != &TYPE_TYPE) {
-							reportError(value, "Error: size_of can only accept a type (given a %.*s)", STRING_PRINTF(value->type->name));
-							return false;
-						}
-						else if (value->flavor != ExprFlavor::TYPE_LITERAL) {
-							reportError(value, "Error: size_of type must be a constant");
-							return false;
-						}
-
-						auto type = static_cast<ExprLiteral *>(value);
-
-						if (type->typeValue == &TYPE_VOID) {
-							reportError(value, "Error: Cannot take the size of void");
-							return false;
-						}
-						else if (type->typeValue == &TYPE_AUTO_CAST) {
-							reportError(value, "Error: Cannot take the size of an auto casted value");
-							return false;
-						}
-						else if (type->typeValue == &TYPE_TYPE) {
-							assert(false); // @Incomplete: make this work
-							return false;
-						}
-
-						if (!type->typeValue->size) {
-							goToSleep(job, &type->typeValue->sleepingOnMe);
-
-							return true;
-						}
-
-						assert(type->typeValue->size);
-
-						auto literal = new ExprLiteral;
-						literal->flavor = ExprFlavor::INT_LITERAL;
-						literal->unsignedValue = type->typeValue->size;
-						literal->type = &TYPE_UNSIGNED_INT_LITERAL;
-						literal->start = unary->start;
-						literal->end = unary->end;
-						literal->valueOfDeclaration = unary->valueOfDeclaration;
-
-						*exprPointer = literal;
-
-						break;
-					}
-					case TokenT::TYPE_OF: {
-						trySolidifyNumericLiteralToDefault(value);
-
-						if (value->type == &TYPE_AUTO_CAST) {
-							reportError(value, "Error: Cannot take the type of an auto casted value");
-							return false;
-						}
-						else if (value->type->flavor == TypeFlavor::NAMESPACE) {
-							reportError(value, "Error: Cannot take the type of a namespace");
-							return false;
-						}
-
-						auto literal = new ExprLiteral;
-						literal->flavor = ExprFlavor::TYPE_LITERAL;
-						literal->typeValue = value->type;
-						literal->start = unary->start;
-						literal->end = unary->end;
-						literal->type = &TYPE_TYPE;
-						literal->valueOfDeclaration = unary->valueOfDeclaration;
-
-						*exprPointer = literal;
-
-						break;
-					}
-					case TokenT::SHIFT_LEFT: {
-						if (value->type->flavor != TypeFlavor::POINTER) {
-							reportError(value, "Error: Cannot only read from a pointer, given a %.*s", STRING_PRINTF(value->type->name));
-							return false;
-						}
-
-						if (value->type == TYPE_VOID_POINTER) {
-							reportError(value, "Error: Cannot read from a *void");
-							return false;
-						}
-
-						auto pointer = static_cast<TypePointer *>(value->type);
-
-						unary->type = pointer->pointerTo;
-
-						addSizeDependency(sizeDependencies, unary->type);
-
-						break;
-					}
-					case TOKEN('*'): {
-						if (value->flavor == ExprFlavor::TYPE_LITERAL) {
-							auto literal = static_cast<ExprLiteral *>(value);
-
-							if (literal->typeValue->flavor == TypeFlavor::NAMESPACE) {
-								reportError(unary, "Error: Cannot take a pointer to a namespace");
-								return false;
-							}
-
-							*exprPointer = inferMakeTypeLiteral(unary->start, value->end, getPointer(literal->typeValue));
-							(*exprPointer)->valueOfDeclaration = expr->valueOfDeclaration;
-						}
-						else if (value->flavor == ExprFlavor::BINARY_OPERATOR) {
-							auto binary = static_cast<ExprBinaryOperator *>(value);
-
-							if (binary->op == TOKEN('[')) {
-								checkedRemoveLastSizeDependency(sizeDependencies, value->type);
-
-								auto pointer = getPointer(value->type);
-
-								unary->type = pointer;
-							}
-							else {
-								reportError(value, "Error: Cannot take an addres to something that has no storage");
-								return false;
-							}
-						}
-						else if (value->flavor == ExprFlavor::IDENTIFIER) {
-							if (!isAddressable(value)) {
-								reportError(value, "Error: Cannot take an address to something that has no storage");
-								return false;
-							}
-
-							checkedRemoveLastSizeDependency(sizeDependencies, value->type);
-
-							auto pointer = getPointer(value->type);
-
-							unary->type = pointer;
-						}
-						else {
-							reportError(value, "Error: Cannot take an addres to something that has no storage");
-							return false;
-						}
-
-						break;
-					}
-				}
-
-				break;
-			}
-			case ExprFlavor::WHILE: {
-				auto loop = static_cast<ExprLoop *>(expr);
-
-				if (loop->whileCondition->type != &TYPE_BOOL) {
-					if (isValidCast(&TYPE_BOOL, loop->whileCondition->type)) {
-						insertImplicitCast(sizeDependencies, &loop->whileCondition, &TYPE_BOOL);
+			case TOKEN('!'): {
+				if (value->type != &TYPE_BOOL) {
+					if (isValidCast(&TYPE_BOOL, value->type)) {
+						insertImplicitCast(sizeDependencies, &value, &TYPE_BOOL);
 					}
 					else {
-						reportError(loop->whileCondition, "Error: Cannot convert %.*s to bool", STRING_PRINTF(loop->whileCondition->type->name));
+						reportError(value, "Error: Cannot convert %.*s to bool", STRING_PRINTF(value->type->name));
 						return false;
 					}
 				}
+
+				unary->type = &TYPE_BOOL;
 
 				break;
 			}
-			case ExprFlavor::ENUM: {
-				auto enum_ = static_cast<ExprEnum *>(expr);
-
-				if (enum_->struct_.integerType) {
-					*exprPointer = inferMakeTypeLiteral(enum_->start, enum_->end, &enum_->struct_);
+			case TokenT::SIZE_OF: {
+				if (value->type != &TYPE_TYPE) {
+					reportError(value, "Error: size_of can only accept a type (given a %.*s)", STRING_PRINTF(value->type->name));
+					return false;
 				}
-				else {
-					if (enum_->integerType->type != &TYPE_TYPE) {
-						reportError(enum_->integerType, "Error: enum type must be a type");
-						return false;
-					}
-					else if (enum_->integerType->flavor != ExprFlavor::TYPE_LITERAL) {
-						reportError(enum_->integerType, "Error: enum type must be a constant");
-						return false;
-					}
-					else if (static_cast<ExprLiteral *>(enum_->integerType)->typeValue->flavor != TypeFlavor::INTEGER) {
-						reportError(enum_->integerType, "Error: enum type must be an integer");
-						return false;
-					}
-					else if ((static_cast<ExprLiteral *>(enum_->integerType)->typeValue->flags & TYPE_INTEGER_IS_SIGNED) && (enum_->struct_.flags & TYPE_ENUM_IS_FLAGS)) {
-						reportError(enum_->integerType, "Error: enum_flags cannot have a signed type");
-						return false;
-					}
-
-					enum_->struct_.integerType = static_cast<ExprLiteral *>(enum_->integerType)->typeValue;
-					enum_->struct_.alignment = enum_->struct_.integerType->alignment;
-					enum_->struct_.size = enum_->struct_.integerType->size;
-					enum_->struct_.flags |= enum_->struct_.integerType->flags & TYPE_INTEGER_IS_SIGNED;
-
-					auto literal = inferMakeTypeLiteral(enum_->start, enum_->end, &enum_->struct_);
-
-					literal->valueOfDeclaration = enum_->valueOfDeclaration;
-
-					literal->typeValue->name = literal->valueOfDeclaration ? literal->valueOfDeclaration->name : (enum_->struct_.flags & TYPE_ENUM_IS_FLAGS ? "(enum_flags)" : "(enum)");
-
-					*exprPointer = literal;
+				else if (value->flavor != ExprFlavor::TYPE_LITERAL) {
+					reportError(value, "Error: size_of type must be a constant");
+					return false;
 				}
-				break;
-			}
-			case ExprFlavor::ENUM_INCREMENT: {
-				auto increment = static_cast<ExprEnumIncrement *>(expr);
 
-				if (increment->previous->flags & DECLARATION_VALUE_IS_READY) {
-					auto value = static_cast<ExprLiteral *>(increment->previous->initialValue);
+				auto type = static_cast<ExprLiteral *>(value);
 
-					assert(value->flavor == ExprFlavor::INT_LITERAL);
-					assert(value->type->flavor == TypeFlavor::ENUM);
-
-					auto literal = new ExprLiteral;
-					literal->flavor = ExprFlavor::INT_LITERAL;
-					literal->start = increment->start;
-					literal->end = increment->end;
-					literal->type = value->type->flags & TYPE_INTEGER_IS_SIGNED ? &TYPE_SIGNED_INT_LITERAL : &TYPE_UNSIGNED_INT_LITERAL;
-					literal->unsignedValue = value->type->flags & TYPE_ENUM_IS_FLAGS ? value->unsignedValue * 2 : value->unsignedValue + 1;
-
-					*exprPointer = literal;
+				if (type->typeValue == &TYPE_VOID) {
+					reportError(value, "Error: Cannot take the size of void");
+					return false;
 				}
-				else {
-					goToSleep(job, &increment->previous->sleepingOnMe);
+				else if (type->typeValue == &TYPE_AUTO_CAST) {
+					reportError(value, "Error: Cannot take the size of an auto casted value");
+					return false;
+				}
+				else if (type->typeValue == &TYPE_TYPE) {
+					assert(false); // @Incomplete: make this work
+					return false;
+				}
+
+				if (!type->typeValue->size) {
+					goToSleep(job, &type->typeValue->sleepingOnMe);
 
 					return true;
 				}
 
+				assert(type->typeValue->size);
+
+				auto literal = new ExprLiteral;
+				literal->flavor = ExprFlavor::INT_LITERAL;
+				literal->unsignedValue = type->typeValue->size;
+				literal->type = &TYPE_UNSIGNED_INT_LITERAL;
+				literal->start = unary->start;
+				literal->end = unary->end;
+				literal->valueOfDeclaration = unary->valueOfDeclaration;
+
+				*exprPointer = literal;
+
 				break;
 			}
-			default:
-				assert(false);
+			case TokenT::TYPE_OF: {
+				trySolidifyNumericLiteralToDefault(value);
+
+				if (value->type == &TYPE_AUTO_CAST) {
+					reportError(value, "Error: Cannot take the type of an auto casted value");
+					return false;
+				}
+				else if (value->type->flavor == TypeFlavor::NAMESPACE) {
+					reportError(value, "Error: Cannot take the type of a namespace");
+					return false;
+				}
+
+				auto literal = new ExprLiteral;
+				literal->flavor = ExprFlavor::TYPE_LITERAL;
+				literal->typeValue = value->type;
+				literal->start = unary->start;
+				literal->end = unary->end;
+				literal->type = &TYPE_TYPE;
+				literal->valueOfDeclaration = unary->valueOfDeclaration;
+
+				*exprPointer = literal;
+
+				break;
+			}
+			case TokenT::SHIFT_LEFT: {
+				if (value->type->flavor != TypeFlavor::POINTER) {
+					reportError(value, "Error: Cannot only read from a pointer, given a %.*s", STRING_PRINTF(value->type->name));
+					return false;
+				}
+
+				if (value->type == TYPE_VOID_POINTER) {
+					reportError(value, "Error: Cannot read from a *void");
+					return false;
+				}
+
+				auto pointer = static_cast<TypePointer *>(value->type);
+
+				unary->type = pointer->pointerTo;
+
+				addSizeDependency(sizeDependencies, unary->type);
+
+				break;
+			}
+			case TOKEN('*'): {
+				if (value->flavor == ExprFlavor::TYPE_LITERAL) {
+					auto literal = static_cast<ExprLiteral *>(value);
+
+					if (literal->typeValue->flavor == TypeFlavor::NAMESPACE) {
+						reportError(unary, "Error: Cannot take a pointer to a namespace");
+						return false;
+					}
+
+					*exprPointer = inferMakeTypeLiteral(unary->start, value->end, getPointer(literal->typeValue));
+					(*exprPointer)->valueOfDeclaration = expr->valueOfDeclaration;
+				}
+				else if (value->flavor == ExprFlavor::BINARY_OPERATOR) {
+					auto binary = static_cast<ExprBinaryOperator *>(value);
+
+					if (binary->op == TOKEN('[')) {
+						checkedRemoveLastSizeDependency(sizeDependencies, value->type);
+
+						auto pointer = getPointer(value->type);
+
+						unary->type = pointer;
+					}
+					else {
+						reportError(value, "Error: Cannot take an addres to something that has no storage");
+						return false;
+					}
+				}
+				else if (value->flavor == ExprFlavor::IDENTIFIER) {
+					if (!isAddressable(value)) {
+						reportError(value, "Error: Cannot take an address to something that has no storage");
+						return false;
+					}
+
+					checkedRemoveLastSizeDependency(sizeDependencies, value->type);
+
+					auto pointer = getPointer(value->type);
+
+					unary->type = pointer;
+				}
+				else {
+					reportError(value, "Error: Cannot take an addres to something that has no storage");
+					return false;
+				}
+
+				break;
+			}
+			}
+
+			break;
+		}
+		case ExprFlavor::WHILE: {
+			auto loop = static_cast<ExprLoop *>(expr);
+
+			if (loop->whileCondition->type != &TYPE_BOOL) {
+				if (isValidCast(&TYPE_BOOL, loop->whileCondition->type)) {
+					insertImplicitCast(sizeDependencies, &loop->whileCondition, &TYPE_BOOL);
+				}
+				else {
+					reportError(loop->whileCondition, "Error: Cannot convert %.*s to bool", STRING_PRINTF(loop->whileCondition->type->name));
+					return false;
+				}
+			}
+
+			break;
+		}
+		case ExprFlavor::ENUM: {
+			auto enum_ = static_cast<ExprEnum *>(expr);
+
+			if (enum_->struct_.integerType) {
+				*exprPointer = inferMakeTypeLiteral(enum_->start, enum_->end, &enum_->struct_);
+			}
+			else {
+				if (enum_->integerType->type != &TYPE_TYPE) {
+					reportError(enum_->integerType, "Error: enum type must be a type");
+					return false;
+				}
+				else if (enum_->integerType->flavor != ExprFlavor::TYPE_LITERAL) {
+					reportError(enum_->integerType, "Error: enum type must be a constant");
+					return false;
+				}
+				else if (static_cast<ExprLiteral *>(enum_->integerType)->typeValue->flavor != TypeFlavor::INTEGER) {
+					reportError(enum_->integerType, "Error: enum type must be an integer");
+					return false;
+				}
+				else if ((static_cast<ExprLiteral *>(enum_->integerType)->typeValue->flags & TYPE_INTEGER_IS_SIGNED) && (enum_->struct_.flags & TYPE_ENUM_IS_FLAGS)) {
+					reportError(enum_->integerType, "Error: enum_flags cannot have a signed type");
+					return false;
+				}
+
+				enum_->struct_.integerType = static_cast<ExprLiteral *>(enum_->integerType)->typeValue;
+				enum_->struct_.alignment = enum_->struct_.integerType->alignment;
+				enum_->struct_.size = enum_->struct_.integerType->size;
+				enum_->struct_.flags |= enum_->struct_.integerType->flags & TYPE_INTEGER_IS_SIGNED;
+
+				auto literal = inferMakeTypeLiteral(enum_->start, enum_->end, &enum_->struct_);
+
+				literal->valueOfDeclaration = enum_->valueOfDeclaration;
+
+				literal->typeValue->name = literal->valueOfDeclaration ? literal->valueOfDeclaration->name : (enum_->struct_.flags & TYPE_ENUM_IS_FLAGS ? "(enum_flags)" : "(enum)");
+
+				*exprPointer = literal;
+			}
+			break;
+		}
+		case ExprFlavor::ENUM_INCREMENT: {
+			auto increment = static_cast<ExprEnumIncrement *>(expr);
+
+			if (increment->previous->flags & DECLARATION_VALUE_IS_READY) {
+				auto value = static_cast<ExprLiteral *>(increment->previous->initialValue);
+
+				assert(value->flavor == ExprFlavor::INT_LITERAL);
+				assert(value->type->flavor == TypeFlavor::ENUM);
+
+				auto literal = new ExprLiteral;
+				literal->flavor = ExprFlavor::INT_LITERAL;
+				literal->start = increment->start;
+				literal->end = increment->end;
+				literal->type = value->type->flags & TYPE_INTEGER_IS_SIGNED ? &TYPE_SIGNED_INT_LITERAL : &TYPE_UNSIGNED_INT_LITERAL;
+				literal->unsignedValue = value->type->flags & TYPE_ENUM_IS_FLAGS ? value->unsignedValue * 2 : value->unsignedValue + 1;
+
+				*exprPointer = literal;
+			}
+			else {
+				goToSleep(job, &increment->previous->sleepingOnMe);
+
+				return true;
+			}
+
+			break;
+		}
+		default:
+			assert(false);
 		}
 
 	}
@@ -4103,20 +4116,37 @@ bool checkForUndeclaredIdentifier(Expr *haltedOn) {
 }
 
 static BucketedArenaAllocator inferJobAllocator(1024 * 2024);
-static InferJob *firstFreeInferJob;
 
-InferJob *allocateJob() {
-	if (firstFreeInferJob) {
-		auto result = firstFreeInferJob;
-		firstFreeInferJob = firstFreeInferJob->nextFree;
+static SizeJob *firstFreeSizeJob;
+static DeclarationJob *firstFreeDeclarationJob;
+static FunctionJob *firstFreeFunctionJob;
+
+SizeJob *allocateSizeJob() {
+	if (firstFreeSizeJob) {
+		auto result = firstFreeSizeJob;
+		firstFreeSizeJob = firstFreeSizeJob->nextFree;
+
+		result->sizingIndexInMembers = 0;
+		result->runningSize = 0;
+
+		result->sleeping = false;
+
+		return result;
+	}
+
+	return new (inferJobAllocator.allocate(sizeof(SizeJob))) SizeJob;
+}
+
+DeclarationJob *allocateDeclarationJob() {
+	if (firstFreeDeclarationJob) {
+		auto result = firstFreeDeclarationJob;;
+		firstFreeDeclarationJob = firstFreeDeclarationJob->nextFree;
 
 		result->type.flattened.clear();
 		result->type.index = 0;
 		result->value.flattened.clear();
 		result->value.index = 0;
 		result->sizeDependencies.clear();
-		result->sizingIndexInMembers = 0;
-		result->runningSize = 0;
 
 		result->type.sleeping = false;
 		result->value.sleeping = false;
@@ -4124,12 +4154,42 @@ InferJob *allocateJob() {
 		return result;
 	}
 
-	return new (inferJobAllocator.allocate(sizeof(InferJob))) InferJob;
+	return new (inferJobAllocator.allocate(sizeof(DeclarationJob))) DeclarationJob;
 }
 
-void freeJob(InferJob *job) {
-	job->nextFree = firstFreeInferJob;
-	firstFreeInferJob = job;
+FunctionJob *allocateFunctionJob() {
+	if (firstFreeFunctionJob) {
+		auto result = firstFreeFunctionJob;;
+		firstFreeFunctionJob = firstFreeFunctionJob->nextFree;
+
+		result->type.flattened.clear();
+		result->type.index = 0;
+		result->value.flattened.clear();
+		result->value.index = 0;
+		result->sizeDependencies.clear();
+
+		result->type.sleeping = false;
+		result->value.sleeping = false;
+
+		return result;
+	}
+
+	return new (inferJobAllocator.allocate(sizeof(FunctionJob))) FunctionJob;
+}
+
+void freeJob(SizeJob *job) {
+	job->nextFree = firstFreeSizeJob;
+	firstFreeSizeJob = job;
+}
+
+void freeJob(DeclarationJob *job) {
+	job->nextFree = firstFreeDeclarationJob;
+	firstFreeDeclarationJob = job;
+}
+
+void freeJob(FunctionJob *job) {
+	job->nextFree = firstFreeFunctionJob;
+	firstFreeFunctionJob = job;
 }
 
 bool addDeclaration(Declaration *declaration) {
@@ -4178,7 +4238,7 @@ bool addDeclaration(Declaration *declaration) {
 			}
 		}
 		else if (declaration->enclosingScope) {
-			if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::INT_LITERAL)  {
+			if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::INT_LITERAL) {
 				declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, declaration->initialValue->type);
 				declaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
 				wakeUpSleepers(&declaration->sleepingOnMe);
@@ -4197,10 +4257,9 @@ bool addDeclaration(Declaration *declaration) {
 
 	++totalDeclarations;
 
-	InferJob *job = allocateJob();
-	job->flavor = InferFlavor::DECLARATION;
-	job->infer.declaration = declaration;
-	job->infer.declaration->inferJob = job;
+	DeclarationJob *job = allocateDeclarationJob();
+	job->declaration = declaration;
+	job->declaration->inferJob = job;
 
 	if (declaration->type) {
 		flatten(job->type.flattened, &declaration->type);
@@ -4310,91 +4369,30 @@ void getHaltStatus(Declaration *declaration, Declaration *next, Expr **haltedOn,
 	}
 }
 
-Array<InferJob *> waitingOnSize;
+Array<FunctionJob *> functionWaitingOnSize;
+Array<DeclarationJob *> declarationWaitingOnSize;
 
-bool doInferJob(Array<InferJob *> *inferJobs, u64 *index, bool *madeProgress) {
-	InferJob *job = (*inferJobs)[*index];
+bool inferDeclaration(u64 *index, bool *madeProgress) {
+	auto job = declarationJobs[*index];
 
 	if (job->type.sleeping && job->value.sleeping) return true;
 
-	switch (job->flavor) {
-	case InferFlavor::FUNCTION_BODY: {
-		auto function = job->infer.function;
+	auto declaration = job->declaration;
 
-		if (!job->type.sleeping && !function->type) {
-			bool typesInferred = true;
-
-			for (auto argument : function->arguments.declarations) {
-				assert(argument);
-
-				if (!(argument->flags & DECLARATION_TYPE_IS_READY)) {
-					goToSleep(&job->type, &argument->sleepingOnMe);
-
-					typesInferred = false;
-					break;
-				}
-
-
-				if (argument->initialValue) {
-					if (argument->flags & DECLARATION_VALUE_IS_READY) {
-						if (!isLiteral(argument->initialValue)) {
-							reportError(argument, "Error: Default arguments must be a constant value");
-							return false;
-						}
-					}
-					else {
-						goToSleep(&job->type, &argument->sleepingOnMe);
-
-						typesInferred = false;
-						break;
-					}
-				}
-			}
-
-
-			for (auto return_ : function->returns.declarations) {
-				assert(return_);
-
-				if (!(return_->flags & DECLARATION_TYPE_IS_READY)) {
-					goToSleep(&job->type, &return_->sleepingOnMe);
-
-					typesInferred = false;
-					break;
-				}
-				else if (static_cast<ExprLiteral *>(return_->type)->typeValue == &TYPE_VOID && function->returns.declarations.count != 1) {
-					reportError(return_, "Error: Functions with multiple return values cannot return a void value");
-					return false;
-				}
-
-
-				if (return_->initialValue) {
-					if (return_->flags & DECLARATION_VALUE_IS_READY) {
-						if (!isLiteral(return_->initialValue)) {
-							reportError(return_, "Error: Default returns must be a constant value");
-							return false;
-						}
-					}
-					else {
-						goToSleep(&job->type, &return_->sleepingOnMe);
-
-						typesInferred = false;
-						break;
-					}
-				}
-			}
-
-			if (typesInferred) {
-				function->type = getFunctionType(function);
-
-				if (function->valueOfDeclaration && !function->valueOfDeclaration->type && !function->valueOfDeclaration->inferJob) {
-					function->valueOfDeclaration->type = inferMakeTypeLiteral(function->start, function->end, function->type);
-					function->valueOfDeclaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
-
-					wakeUpSleepers(&function->valueOfDeclaration->sleepingOnMe);
-				}
+	if (declaration->type) {
+		if (!inferFlattened(&job->type)) {
+			return false;
+		}
+#if BUILD_DEBUG // Catch yields where we don't go to sleep, this means we are probably doing wasted computations
+		else {
+			if (!job->type.sleeping && job->type.index != job->type.flattened.count) {
+				int aaa = 0;
 			}
 		}
+#endif
+	}
 
+	if (declaration->initialValue) {
 		if (!inferFlattened(&job->value, &job->sizeDependencies)) {
 			return false;
 		}
@@ -4405,141 +4403,238 @@ bool doInferJob(Array<InferJob *> *inferJobs, u64 *index, bool *madeProgress) {
 			}
 		}
 #endif
+	}
 
-		if (function->type) {
-			for (auto argument : job->infer.function->arguments.declarations) {
-				addSizeDependency(&job->sizeDependencies, static_cast<ExprLiteral *>(argument->type)->typeValue);
+	if (!(declaration->flags & (DECLARATION_TYPE_IS_READY | DECLARATION_IS_USING)) && declaration->type && job->type.index == job->type.flattened.count) {
+		if (declaration->type->type != &TYPE_TYPE) {
+			if (declaration->type->type->flavor == TypeFlavor::FUNCTION) {
+				reportError(declaration->type, "Error: Declaration type cannot be a function, did you miss a colon?");
 			}
-
-			for (auto return_ : job->infer.function->returns.declarations) {
-				addSizeDependency(&job->sizeDependencies, static_cast<ExprLiteral *>(return_->type)->typeValue);
+			else {
+				reportError(declaration->type, "Error: Declaration type must be a type, but got a %.*s", STRING_PRINTF(declaration->type->type->name));
 			}
+			return false;
+		}
+		if (declaration->type->flavor != ExprFlavor::TYPE_LITERAL) {
+			reportError(declaration->type, "Error: Declaration type must be a constant");
+			return false;
+		}
 
-			if (job->infer.function->flags & EXPR_FUNCTION_IS_EXTERNAL) {
-				assert(!job->infer.function->body);
-
-				if (!job->infer.declaration) {
-					reportError(job->infer.function, "Error: External functions must be named");
+		if (static_cast<ExprLiteral *>(declaration->type)->typeValue == &TYPE_VOID) {
+			if (declaration->flags & DECLARATION_IS_RETURN) {
+				if (declaration->enclosingScope->declarations.count != 1) {
+					reportError(declaration->type, "Error: Functions with multiple return values cannot return void");
 					return false;
 				}
-
-				CoffJob coff;
-				coff.isFunction = true;
-				coff.function = job->infer.function;
-
-				coffWriterQueue.add(coff);
-
-				inferJobs->unordered_remove((*index)--);
-				freeJob(job);
 			}
 			else {
-				assert(job->infer.function->body);
-				
-				if (function->valueOfDeclaration && !(function->valueOfDeclaration->flags & DECLARATION_TYPE_IS_READY)) {
-					reportError(function, "A");
-				}
-
-				if (job->value.index == job->value.flattened.count) {
-					inferJobs->unordered_remove((*index)--);
-					waitingOnSize.add(job);
-				}
+				reportError(declaration->type, "Error: Declaration cannot have type void");
+				return false;
 			}
 		}
-		break;
+
+		if (static_cast<ExprLiteral *>(declaration->type)->typeValue->flavor == TypeFlavor::NAMESPACE) {
+			reportError(declaration->type, "Error: Declaration type cannot be a namespace");
+			return false;
+		}
+
+		declaration->flags |= DECLARATION_TYPE_IS_READY;
+
+		*madeProgress = wakeUpSleepers(&declaration->sleepingOnMe);
 	}
-	case InferFlavor::DECLARATION: {
-		auto declaration = job->infer.declaration;
 
-		if (declaration->type) {
-			if (!inferFlattened(&job->type)) {
-				return false;
-			}
-#if BUILD_DEBUG // Catch yields where we don't go to sleep, this means we are probably doing wasted computations
-			else {
-				if (!job->type.sleeping && job->type.index != job->type.flattened.count) {
-					int aaa = 0;
-				}
-			}
-#endif
-		}
+	if (!(declaration->flags & DECLARATION_IS_USING) && declaration->type && declaration->initialValue) {
+		if (job->type.index == job->type.flattened.count && job->value.index == job->value.flattened.count) {
+			assert(declaration->initialValue->type);
 
-		if (declaration->initialValue) {
-			if (!inferFlattened(&job->value, &job->sizeDependencies)) {
-				return false;
-			}
-#if BUILD_DEBUG // Catch yields where we don't go to sleep, this means we are probably doing wasted computations
-			else {
-				if (!job->value.sleeping && job->value.index != job->value.flattened.count) {
-					int aaa = 0;
-				}
-			}
-#endif
-		}
+			Type *correct = static_cast<ExprLiteral *>(declaration->type)->typeValue;
 
-		if (!(declaration->flags & (DECLARATION_TYPE_IS_READY | DECLARATION_IS_USING)) && declaration->type && job->type.index == job->type.flattened.count) {
-			if (declaration->type->type != &TYPE_TYPE) {
-				if (declaration->type->type->flavor == TypeFlavor::FUNCTION) {
-					reportError(declaration->type, "Error: Declaration type cannot be a function, did you miss a colon?");
-				}
-				else {
-					reportError(declaration->type, "Error: Declaration type must be a type, but got a %.*s", STRING_PRINTF(declaration->type->type->name));
-				}
-				return false;
-			}
-			if (declaration->type->flavor != ExprFlavor::TYPE_LITERAL) {
-				reportError(declaration->type, "Error: Declaration type must be a constant");
-				return false;
-			}
+			if (declaration->flags & DECLARATION_IS_ENUM_VALUE) {
+				assert(correct->flavor == TypeFlavor::ENUM);
 
-			if (static_cast<ExprLiteral *>(declaration->type)->typeValue == &TYPE_VOID) {
-				if (declaration->flags & DECLARATION_IS_RETURN) {
-					if (declaration->enclosingScope->declarations.count != 1) {
-						reportError(declaration->type, "Error: Functions with multiple return values cannot return void");
+				if (declaration->initialValue->type == &TYPE_SIGNED_INT_LITERAL || declaration->initialValue->type == &TYPE_UNSIGNED_INT_LITERAL) {
+					assert(declaration->initialValue->flavor == ExprFlavor::INT_LITERAL);
+
+					if (!boundsCheckImplicitConversion(declaration->initialValue, static_cast<TypeEnum *>(correct)->integerType, static_cast<ExprLiteral *>(declaration->initialValue))) {
+						reportError(CAST_FROM_SUBSTRUCT(ExprEnum, struct_, static_cast<TypeEnum *>(correct))->integerType, "   ..: Here is the enum type declaration");
+
 						return false;
 					}
+
+					declaration->initialValue->type = correct;
 				}
-				else {
-					reportError(declaration->type, "Error: Declaration cannot have type void");
+			}
+
+			bool yield;
+			if (!assignOp(&job->sizeDependencies, &job->value, declaration->initialValue, correct, declaration->initialValue, &yield)) {
+				return yield;
+			}
+
+			if ((declaration->flags &
+				(DECLARATION_IS_CONSTANT | DECLARATION_IS_ARGUMENT | DECLARATION_IS_STRUCT_MEMBER | DECLARATION_IS_RETURN)) || declaration->enclosingScope == &globalBlock) {
+				if (!isLiteral(declaration->initialValue)) {
+					reportError(declaration->type, "Error: Declaration value must be a constant");
 					return false;
 				}
 			}
 
-			if (static_cast<ExprLiteral *>(declaration->type)->typeValue->flavor == TypeFlavor::NAMESPACE) {
-				reportError(declaration->type, "Error: Declaration type cannot be a namespace");
-				return false;
-			}
+			declarationJobs.unordered_remove((*index)--);
 
-			declaration->flags |= DECLARATION_TYPE_IS_READY;
+			declaration->flags |= DECLARATION_VALUE_IS_READY;
 
 			*madeProgress = wakeUpSleepers(&declaration->sleepingOnMe);
+
+			if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
+				declarationWaitingOnSize.add(job);
+			}
+			else {
+				freeJob(job);
+			}
 		}
+	}
+	else if (!(declaration->flags & DECLARATION_IS_USING) && declaration->type) {
 
-		if (!(declaration->flags & DECLARATION_IS_USING) && declaration->type && declaration->initialValue) {
-			if (job->type.index == job->type.flattened.count && job->value.index == job->value.flattened.count) {
-				assert(declaration->initialValue->type);
+		if (job->type.index == job->type.flattened.count) {
+			if (!(declaration->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_ITERATOR | DECLARATION_IS_ITERATOR_INDEX | DECLARATION_IS_ARGUMENT | DECLARATION_IS_RETURN))) {
+				auto type = static_cast<ExprLiteral *>(declaration->type)->typeValue;
 
-				Type *correct = static_cast<ExprLiteral *>(declaration->type)->typeValue;
+				bool yield;
+				declaration->initialValue = createDefaultValue(declaration, type, &yield);
 
-				if (declaration->flags & DECLARATION_IS_ENUM_VALUE) {
-					assert(correct->flavor == TypeFlavor::ENUM);
+				if (yield) return true;
 
-					if (declaration->initialValue->type == &TYPE_SIGNED_INT_LITERAL || declaration->initialValue->type == &TYPE_UNSIGNED_INT_LITERAL) {
-						assert(declaration->initialValue->flavor == ExprFlavor::INT_LITERAL);
-						
-						if (!boundsCheckImplicitConversion(declaration->initialValue, static_cast<TypeEnum *>(correct)->integerType, static_cast<ExprLiteral *>(declaration->initialValue))) {
-							reportError(CAST_FROM_SUBSTRUCT(ExprEnum, struct_, static_cast<TypeEnum *>(correct))->integerType, "   ..: Here is the enum type declaration");
-							
+				if (!declaration->initialValue) {
+					return false;
+				}
+
+				declaration->initialValue->valueOfDeclaration = declaration;
+
+				declaration->initialValue->start = declaration->start;
+				declaration->initialValue->end = declaration->end;
+			}
+
+			declarationJobs.unordered_remove((*index)--);
+
+			declaration->flags |= DECLARATION_VALUE_IS_READY;
+
+			*madeProgress = wakeUpSleepers(&declaration->sleepingOnMe);
+
+
+			if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
+				declarationWaitingOnSize.add(job);
+			}
+			else {
+				freeJob(job);
+			}
+		}
+	}
+	else if (declaration->initialValue) {
+		if (job->value.index == job->value.flattened.count) {
+			if (declaration->flags & DECLARATION_IS_USING) {
+				bool onlyConstants;
+				auto struct_ = getExpressionNamespace(declaration->initialValue, &onlyConstants, declaration->initialValue);
+
+				onlyConstants |= (declaration->flags & DECLARATION_IS_CONSTANT) != 0;
+
+				if (!struct_) {
+					return false;
+				}
+
+
+
+				if (declaration->initialValue->flavor != ExprFlavor::TYPE_LITERAL) {
+					auto identifier = static_cast<ExprIdentifier *>(declaration->initialValue);
+
+					while (identifier) {
+						if (identifier->flavor != ExprFlavor::IDENTIFIER) {
+							reportError(declaration->initialValue, "Error: You can only 'using' an identifier, a struct access of an identifier or a type");
 							return false;
 						}
 
-						declaration->initialValue->type = correct;
+						identifier = static_cast<ExprIdentifier *>(identifier->structAccess);
+					}
+
+					declaration->initialValue = pushStructAccessDown(static_cast<ExprIdentifier *>(declaration->initialValue), declaration->type, declaration->start, declaration->end);
+				}
+
+				for (auto member : struct_->members.declarations) {
+					if (checkForRedeclaration(declaration->enclosingScope, member, declaration->initialValue)) {
+						if (!(member->flags & (DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT))) {
+							if (!onlyConstants || (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_USING))) {
+								auto import = new Declaration;
+								import->start = member->start;
+								import->end = member->end;
+								import->name = member->name;
+								import->flags = member->flags;
+
+								if (member->flags & DECLARATION_IS_USING) {
+									if (onlyConstants) {
+										import->flags |= DECLARATION_IS_CONSTANT;
+									}
+
+									import->initialValue = member->initialValue;
+									import->type = declaration->initialValue;
+									import->flags &= ~DECLARATION_USING_IS_RESOLVED;
+								}
+								else {
+									if (member->flags & DECLARATION_IS_CONSTANT) {
+										import->type = member->type;
+										import->initialValue = member->initialValue;
+									}
+									else {
+										import->import = member;
+										import->initialValue = declaration->initialValue;
+									}
+
+									import->flags |= DECLARATION_IMPORTED_BY_USING;
+								}
+
+								addDeclarationToBlock(declaration->enclosingScope, import);
+								import->indexInBlock = declaration->indexInBlock;
+
+								if (import->name.length) {
+									*madeProgress = wakeUpSleepers(&declaration->enclosingScope->sleepingOnMe, import->name);
+								}
+
+								if (member->flags & DECLARATION_IS_USING) {
+									if (!addDeclaration(import)) {
+										return false;
+									}
+								}
+							}
+						}
+					}
+					else {
+						return false;
 					}
 				}
 
-				bool yield;
-				if (!assignOp(&job->sizeDependencies, &job->value, declaration->initialValue, correct, declaration->initialValue, &yield)) {
-					return yield;
+				declaration->enclosingScope->usings.unordered_remove(declaration);
+				declaration->flags |= DECLARATION_USING_IS_RESOLVED;
+				declarationJobs.unordered_remove((*index)--);
+				freeJob(job);
+			}
+			else {
+				assert(declaration->initialValue->type);
+
+				if (!(declaration->flags & DECLARATION_IS_CONSTANT)) {
+					trySolidifyNumericLiteralToDefault(declaration->initialValue);
 				}
+
+				if (declaration->initialValue->type == &TYPE_VOID) {
+					reportError(declaration->type, "Error: Declaration cannot have type void");
+					return false;
+				}
+				else if (declaration->initialValue->type == &TYPE_AUTO_CAST) {
+					reportError(declaration->type, "Error: Cannot infer the type of a declaration if the value is an auto cast");
+					return false;
+				}
+				else if (declaration->initialValue->type->flavor == TypeFlavor::NAMESPACE) {
+					reportError(declaration->type, "Error: Declaration type cannot be a namespace");
+					return false;
+				}
+
+				declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, declaration->initialValue->type);
 
 				if ((declaration->flags &
 					(DECLARATION_IS_CONSTANT | DECLARATION_IS_ARGUMENT | DECLARATION_IS_STRUCT_MEMBER | DECLARATION_IS_RETURN)) || declaration->enclosingScope == &globalBlock) {
@@ -4549,289 +4644,254 @@ bool doInferJob(Array<InferJob *> *inferJobs, u64 *index, bool *madeProgress) {
 					}
 				}
 
-				inferJobs->unordered_remove((*index)--);
+				declarationJobs.unordered_remove((*index)--);
 
 				declaration->flags |= DECLARATION_VALUE_IS_READY;
-
-				*madeProgress = wakeUpSleepers(&declaration->sleepingOnMe);
-
-				if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
-					waitingOnSize.add(job);
-				}
-				else {
-					freeJob(job);
-				}
-			}
-		}
-		else if (!(declaration->flags & DECLARATION_IS_USING) && declaration->type) {
-
-			if (job->type.index == job->type.flattened.count) {
-				if (!(declaration->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_ITERATOR | DECLARATION_IS_ITERATOR_INDEX | DECLARATION_IS_ARGUMENT | DECLARATION_IS_RETURN))) {
-					auto type = static_cast<ExprLiteral *>(declaration->type)->typeValue;
-
-					bool yield;
-					declaration->initialValue = createDefaultValue(declaration, type, &yield);
-
-					if (yield) return true;
-
-					if (!declaration->initialValue) {
-						return false;
-					}
-
-					declaration->initialValue->valueOfDeclaration = declaration;
-
-					declaration->initialValue->start = declaration->start;
-					declaration->initialValue->end = declaration->end;
-				}
-
-				inferJobs->unordered_remove((*index)--);
-
-				declaration->flags |= DECLARATION_VALUE_IS_READY;
-
+				declaration->flags |= DECLARATION_TYPE_IS_READY;
 				*madeProgress = wakeUpSleepers(&declaration->sleepingOnMe);
 
 
 				if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
-					waitingOnSize.add(job);
+					declarationWaitingOnSize.add(job);
 				}
 				else {
 					freeJob(job);
 				}
 			}
 		}
-		else if (declaration->initialValue) {
-			if (job->value.index == job->value.flattened.count) {
-				if (declaration->flags & DECLARATION_IS_USING) {
-					bool onlyConstants;
-					auto struct_ = getExpressionNamespace(declaration->initialValue, &onlyConstants, declaration->initialValue);
-
-					onlyConstants |= (declaration->flags & DECLARATION_IS_CONSTANT) != 0;
-
-					if (!struct_) {
-						return false;
-					}
-
-
-
-					if (declaration->initialValue->flavor != ExprFlavor::TYPE_LITERAL) {
-						auto identifier = static_cast<ExprIdentifier *>(declaration->initialValue);
-
-						while (identifier) {
-							if (identifier->flavor != ExprFlavor::IDENTIFIER) {
-								reportError(declaration->initialValue, "Error: You can only 'using' an identifier, a struct access of an identifier or a type");
-								return false;
-							}
-
-							identifier = static_cast<ExprIdentifier *>(identifier->structAccess);
-						}
-
-						declaration->initialValue = pushStructAccessDown(static_cast<ExprIdentifier *>(declaration->initialValue), declaration->type, declaration->start, declaration->end);
-					}
-
-					for (auto member : struct_->members.declarations) {
-						if (checkForRedeclaration(declaration->enclosingScope, member, declaration->initialValue)) {
-							if (!(member->flags & (DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT))) {
-								if (!onlyConstants || (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_USING))) {
-									auto import = new Declaration;
-									import->start = member->start;
-									import->end = member->end;
-									import->name = member->name;
-									import->flags = member->flags;
-
-									if (member->flags & DECLARATION_IS_USING) {
-										if (onlyConstants) {
-											import->flags |= DECLARATION_IS_CONSTANT;
-										}
-
-										import->initialValue = member->initialValue;
-										import->type = declaration->initialValue;
-										import->flags &= ~DECLARATION_USING_IS_RESOLVED;
-									}
-									else {
-										if (member->flags & DECLARATION_IS_CONSTANT) {
-											import->type = member->type;
-											import->initialValue = member->initialValue;
-										}
-										else {
-											import->import = member;
-											import->initialValue = declaration->initialValue;
-										}
-
-										import->flags |= DECLARATION_IMPORTED_BY_USING;
-									}
-
-									addDeclarationToBlock(declaration->enclosingScope, import);
-									import->indexInBlock = declaration->indexInBlock;
-
-									if (import->name.length) {
-										*madeProgress = wakeUpSleepers(&declaration->enclosingScope->sleepingOnMe, import->name);
-									}
-
-									if (member->flags & DECLARATION_IS_USING) {
-										if (!addDeclaration(import)) {
-											return false;
-										}
-									}
-								}
-							}
-						}
-						else {
-							return false;
-						}
-					}
-
-					declaration->enclosingScope->usings.unordered_remove(declaration);
-					declaration->flags |= DECLARATION_USING_IS_RESOLVED;
-					inferJobs->unordered_remove((*index)--);
-					freeJob(job);
-				}
-				else {
-					assert(declaration->initialValue->type);
-
-					if (!(declaration->flags & DECLARATION_IS_CONSTANT)) {
-						trySolidifyNumericLiteralToDefault(declaration->initialValue);
-					}
-
-					if (declaration->initialValue->type == &TYPE_VOID) {
-						reportError(declaration->type, "Error: Declaration cannot have type void");
-						return false;
-					}
-					else if (declaration->initialValue->type == &TYPE_AUTO_CAST) {
-						reportError(declaration->type, "Error: Cannot infer the type of a declaration if the value is an auto cast");
-						return false;
-					}
-					else if (declaration->initialValue->type->flavor == TypeFlavor::NAMESPACE) {
-						reportError(declaration->type, "Error: Declaration type cannot be a namespace");
-						return false;
-					}
-
-					declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, declaration->initialValue->type);
-
-					if ((declaration->flags &
-						(DECLARATION_IS_CONSTANT | DECLARATION_IS_ARGUMENT | DECLARATION_IS_STRUCT_MEMBER | DECLARATION_IS_RETURN)) || declaration->enclosingScope == &globalBlock) {
-						if (!isLiteral(declaration->initialValue)) {
-							reportError(declaration->type, "Error: Declaration value must be a constant");
-							return false;
-						}
-					}
-
-					inferJobs->unordered_remove((*index)--);
-
-					declaration->flags |= DECLARATION_VALUE_IS_READY;
-					declaration->flags |= DECLARATION_TYPE_IS_READY;
-					*madeProgress = wakeUpSleepers(&declaration->sleepingOnMe);
-
-
-					if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
-						waitingOnSize.add(job);
-					}
-					else {
-						freeJob(job);
-					}
-				}
-			}
-		}
-
-		break;
 	}
-	case InferFlavor::TYPE_TO_SIZE: {
-		if (job->type.sleeping) return true;
 
-		auto type = job->infer.type;
+	return true;
+}
 
-		if (type->flavor == TypeFlavor::STRUCT) {
-			totalSizes++;
+bool inferFunction(u64 *index) {
+	auto job = functionJobs[*index];
 
-			auto struct_ = static_cast<TypeStruct *>(type);
+	if (job->type.sleeping && job->value.sleeping) return true;
 
-			while (job->sizingIndexInMembers < struct_->members.declarations.count) {
-				auto member = struct_->members.declarations[job->sizingIndexInMembers];
+	auto function = job->function;
 
-				if (!(member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_USING | DECLARATION_IMPORTED_BY_USING))) {
-					if (!(member->flags & DECLARATION_TYPE_IS_READY)) {
-						goToSleep(&job->type, &member->sleepingOnMe);
+	if (!job->type.sleeping && !function->type) {
+		bool typesInferred = true;
 
-						break;
-					}
+		for (auto argument : function->arguments.declarations) {
+			assert(argument);
 
-					auto memberType = static_cast<ExprLiteral *>(member->type)->typeValue;
+			if (!(argument->flags & DECLARATION_TYPE_IS_READY)) {
+				goToSleep(&job->type, &argument->sleepingOnMe);
 
-					if (!memberType->size) {
-						goToSleep(&job->type, &memberType->sleepingOnMe);
-
-						break;
-					}
-
-					if (!(struct_->flags & TYPE_STRUCT_IS_PACKED)) {
-						struct_->alignment = my_max(struct_->alignment, memberType->alignment);
-					}
-
-					if (struct_->flags & TYPE_STRUCT_IS_UNION) {
-						job->runningSize = my_max(job->runningSize, memberType->size);
-
-						member->physicalStorage = 0;
-					}
-					else {
-						if (!(struct_->flags & TYPE_STRUCT_IS_PACKED)) {
-							job->runningSize = AlignPO2(job->runningSize, memberType->alignment);
-						}
-
-						member->physicalStorage = job->runningSize;
-
-						job->runningSize += memberType->size;
-					}
-				}
-
-				job->sizingIndexInMembers++;
+				typesInferred = false;
+				break;
 			}
 
-			if (job->sizingIndexInMembers == struct_->members.declarations.count) {
-				if (job->runningSize == 0) { // Empty structs are allowed, but we can't have size 0 types
-					struct_->alignment = 1;
 
-					_ReadWriteBarrier(); // Make sure we update the size after alignment, as having a non-zero size means that the size info is ready
-
-					struct_->size = 1;
+			if (argument->initialValue) {
+				if (argument->flags & DECLARATION_VALUE_IS_READY) {
+					if (!isLiteral(argument->initialValue)) {
+						reportError(argument, "Error: Default arguments must be a constant value");
+						return false;
+					}
 				}
 				else {
-					if (struct_->flags & TYPE_STRUCT_IS_PACKED) {
-						struct_->size = job->runningSize;
-					}
-					else {
-						struct_->size = AlignPO2(job->runningSize, struct_->alignment);
-					}
+					goToSleep(&job->type, &argument->sleepingOnMe);
+
+					typesInferred = false;
+					break;
 				}
-
-				*madeProgress = wakeUpSleepers(&struct_->sleepingOnMe);
-
-				freeJob(job);
-				inferJobs->unordered_remove((*index)--);
 			}
 		}
-		else if (type->flavor == TypeFlavor::ARRAY) {
-			auto array = static_cast<TypeArray *>(type);
 
-			assert(array->flags & TYPE_ARRAY_IS_FIXED);
 
-			if (array->arrayOf->size) {
-				array->size = array->arrayOf->size * array->count;
-				array->alignment = array->arrayOf->alignment;
+		for (auto return_ : function->returns.declarations) {
+			assert(return_);
 
-				*madeProgress = wakeUpSleepers(&array->sleepingOnMe);
-				freeJob(job);
-				inferJobs->unordered_remove((*index)--);
+			if (!(return_->flags & DECLARATION_TYPE_IS_READY)) {
+				goToSleep(&job->type, &return_->sleepingOnMe);
+
+				typesInferred = false;
+				break;
 			}
-			else {
-				goToSleep(&job->type, &array->arrayOf->sleepingOnMe);
+			else if (static_cast<ExprLiteral *>(return_->type)->typeValue == &TYPE_VOID && function->returns.declarations.count != 1) {
+				reportError(return_, "Error: Functions with multiple return values cannot return a void value");
+				return false;
 			}
+
+
+			if (return_->initialValue) {
+				if (return_->flags & DECLARATION_VALUE_IS_READY) {
+					if (!isLiteral(return_->initialValue)) {
+						reportError(return_, "Error: Default returns must be a constant value");
+						return false;
+					}
+				}
+				else {
+					goToSleep(&job->type, &return_->sleepingOnMe);
+
+					typesInferred = false;
+					break;
+				}
+			}
+		}
+
+		if (typesInferred) {
+			function->type = getFunctionType(function);
+
+			if (function->valueOfDeclaration && !function->valueOfDeclaration->type && !function->valueOfDeclaration->inferJob) {
+				function->valueOfDeclaration->type = inferMakeTypeLiteral(function->start, function->end, function->type);
+				function->valueOfDeclaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
+
+				wakeUpSleepers(&function->valueOfDeclaration->sleepingOnMe);
+			}
+		}
+	}
+
+	if (!job->value.sleeping) {
+		if (!inferFlattened(&job->value, &job->sizeDependencies)) {
+			return false;
+		}
+#if BUILD_DEBUG // Catch yields where we don't go to sleep, this means we are probably doing wasted computations
+		else {
+			if (!job->value.sleeping && job->value.index != job->value.flattened.count) {
+				int aaa = 0;
+			}
+		}
+#endif
+	}
+
+	if (function->type) {
+		for (auto argument : function->arguments.declarations) {
+			addSizeDependency(&job->sizeDependencies, static_cast<ExprLiteral *>(argument->type)->typeValue);
+		}
+
+		for (auto return_ : function->returns.declarations) {
+			addSizeDependency(&job->sizeDependencies, static_cast<ExprLiteral *>(return_->type)->typeValue);
+		}
+
+		if (function->flags & EXPR_FUNCTION_IS_EXTERNAL) {
+			assert(!job->function->body);
+
+			if (!function->valueOfDeclaration) {
+				reportError(function, "Error: External functions must be named");
+				return false;
+			}
+
+			CoffJob coff;
+			coff.isFunction = true;
+			coff.function = function;
+
+			coffWriterQueue.add(coff);
+
+			functionJobs.unordered_remove((*index)--);
+			freeJob(job);
 		}
 		else {
-			assert(false);
+			assert(job->function->body);
+
+			if (job->value.index == job->value.flattened.count) {
+				functionJobs.unordered_remove((*index)--);
+				functionWaitingOnSize.add(job);
+			}
+		}
+	}
+
+	return true;
+}
+
+
+bool inferSize(u64 *index, bool *madeProgress) {
+	SizeJob *job = sizeJobs[*index];
+
+	if (job->sleeping) return true;
+
+	auto type = job->type;
+
+	if (type->flavor == TypeFlavor::STRUCT) {
+		totalSizes++;
+
+		auto struct_ = static_cast<TypeStruct *>(type);
+
+		while (job->sizingIndexInMembers < struct_->members.declarations.count) {
+			auto member = struct_->members.declarations[job->sizingIndexInMembers];
+
+			if (!(member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_USING | DECLARATION_IMPORTED_BY_USING))) {
+				if (!(member->flags & DECLARATION_TYPE_IS_READY)) {
+					goToSleep(job, &member->sleepingOnMe);
+
+					break;
+				}
+
+				auto memberType = static_cast<ExprLiteral *>(member->type)->typeValue;
+
+				if (!memberType->size) {
+					goToSleep(job, &memberType->sleepingOnMe);
+
+					break;
+				}
+
+				if (!(struct_->flags & TYPE_STRUCT_IS_PACKED)) {
+					struct_->alignment = my_max(struct_->alignment, memberType->alignment);
+				}
+
+				if (struct_->flags & TYPE_STRUCT_IS_UNION) {
+					job->runningSize = my_max(job->runningSize, memberType->size);
+
+					member->physicalStorage = 0;
+				}
+				else {
+					if (!(struct_->flags & TYPE_STRUCT_IS_PACKED)) {
+						job->runningSize = AlignPO2(job->runningSize, memberType->alignment);
+					}
+
+					member->physicalStorage = job->runningSize;
+
+					job->runningSize += memberType->size;
+				}
+			}
+
+			job->sizingIndexInMembers++;
 		}
 
-		break;
+		if (job->sizingIndexInMembers == struct_->members.declarations.count) {
+			if (job->runningSize == 0) { // Empty structs are allowed, but we can't have size 0 types
+				struct_->alignment = 1;
+
+				_ReadWriteBarrier(); // Make sure we update the size after alignment, as having a non-zero size means that the size info is ready
+
+				struct_->size = 1;
+			}
+			else {
+				if (struct_->flags & TYPE_STRUCT_IS_PACKED) {
+					struct_->size = job->runningSize;
+				}
+				else {
+					struct_->size = AlignPO2(job->runningSize, struct_->alignment);
+				}
+			}
+
+			*madeProgress = wakeUpSleepers(&struct_->sleepingOnMe);
+
+			freeJob(job);
+			sizeJobs.unordered_remove((*index)--);
+		}
 	}
-	default:
+	else if (type->flavor == TypeFlavor::ARRAY) {
+		auto array = static_cast<TypeArray *>(type);
+
+		assert(array->flags & TYPE_ARRAY_IS_FIXED);
+
+		if (array->arrayOf->size) {
+			array->size = array->arrayOf->size * array->count;
+			array->alignment = array->arrayOf->alignment;
+
+			*madeProgress = wakeUpSleepers(&array->sleepingOnMe);
+			freeJob(job);
+			sizeJobs.unordered_remove((*index)--);
+		}
+		else {
+			goToSleep(job, &array->arrayOf->sleepingOnMe);
+		}
+	}
+	else {
 		assert(false);
 	}
 
@@ -4848,44 +4908,44 @@ void runInfer() {
 			break;
 		}
 		else if (declarations.type == DeclarationPackType::EXPRESSION) {
-			InferJob *body = allocateJob();
-
 			if (declarations.data.expr->flavor == ExprFlavor::FUNCTION) {
-				body->infer.function = static_cast<ExprFunction *>(declarations.data.expr);
-				body->flavor = InferFlavor::FUNCTION_BODY;
+				FunctionJob *body = allocateFunctionJob();
 
-				if (body->infer.function->body) {
-					flatten(body->value.flattened, &body->infer.function->body);
+				body->function = static_cast<ExprFunction *>(declarations.data.expr);
+
+				if (body->function->body) {
+					flatten(body->value.flattened, &body->function->body);
 				}
 
 				++totalFunctions;
 
-				inferJobs.add(body);
+				functionJobs.add(body);
 
-				u64 index = inferJobs.count - 1;
-				bool madeProgress = false;
-				if (!doInferJob(&inferJobs, &index, &madeProgress)) {
+				u64 index = functionJobs.count - 1;
+
+				if (!inferFunction(&index)) {
 					goto error;
 				}
 
 				continue;
 			}
 			else if (declarations.data.expr->flavor == ExprFlavor::TYPE_LITERAL) {
-				body->infer.type = static_cast<ExprLiteral *>(declarations.data.expr)->typeValue;
-				body->flavor = InferFlavor::TYPE_TO_SIZE;
+				SizeJob *body = allocateSizeJob();
 
-				if (body->infer.type->flavor == TypeFlavor::STRUCT) {
-					body->infer.type->name = declarations.data.expr->valueOfDeclaration ? declarations.data.expr->valueOfDeclaration->name : "(struct)";
-					addStruct(static_cast<TypeStruct *>(body->infer.type));
+				body->type = static_cast<ExprLiteral *>(declarations.data.expr)->typeValue;
+
+				if (body->type->flavor == TypeFlavor::STRUCT) {
+					body->type->name = declarations.data.expr->valueOfDeclaration ? declarations.data.expr->valueOfDeclaration->name : "(struct)";
+					addStruct(static_cast<TypeStruct *>(body->type));
 				}
 				else {
 					assert(false);
 				}
 
-				body->infer.type->sizeJob = body;
+				body->type->sizeJob = body;
 				++totalTypesSized;
 
-				inferJobs.add(body);
+				sizeJobs.add(body);
 			}
 			else {
 				assert(false);
@@ -4915,23 +4975,29 @@ void runInfer() {
 			madeProgress = false;
 
 			for (u64 i = 0; i < declarationJobs.count; i++) {
-				if (!doInferJob(&declarationJobs, &i, &madeProgress)) {
+				if (!inferDeclaration(&i, &madeProgress)) {
 					goto error;
 				}
 			}
 
-			for (u64 i = 0; i < inferJobs.count; i++) {
-				if (!doInferJob(&inferJobs, &i, &madeProgress)) {
+			for (u64 i = 0; i < sizeJobs.count; i++) {
+				if (!inferSize(&i, &madeProgress)) {
 					goto error;
 				}
 			}
-		} while (madeProgress && (inferJobs.count || declarationJobs.count));
+
+			for (u64 i = 0; i < functionJobs.count; i++) {
+				if (!inferFunction(&i)) {
+					goto error;
+				}
+			}
+		} while (madeProgress);
 
 		{
 			PROFILE_ZONE("Check size dependencies");
 
-			for (u64 i = 0; i < waitingOnSize.count; i++) {
-				auto job = waitingOnSize[i];
+			for (u64 i = 0; i < functionWaitingOnSize.count; i++) {
+				auto job = functionWaitingOnSize[i];
 
 				for (u64 j = 0; j < job->sizeDependencies.count; j++) {
 					auto depend = job->sizeDependencies[j];
@@ -4942,17 +5008,32 @@ void runInfer() {
 				}
 
 				if (job->sizeDependencies.count == 0) {
-					waitingOnSize.unordered_remove(i--);
+					functionWaitingOnSize.unordered_remove(i--);
 
-					if (job->flavor == InferFlavor::DECLARATION) {
-						CoffJob coffJob;
-						coffJob.declaration = job->infer.declaration;
-						coffJob.isFunction = false;
-						coffWriterQueue.add(coffJob);
+					irGeneratorQueue.add(job->function);
+
+					freeJob(job);
+				}
+			}
+
+			for (u64 i = 0; i < declarationWaitingOnSize.count; i++) {
+				auto job = declarationWaitingOnSize[i];
+
+				for (u64 j = 0; j < job->sizeDependencies.count; j++) {
+					auto depend = job->sizeDependencies[j];
+
+					if (depend->size) {
+						job->sizeDependencies.unordered_remove(j--);
 					}
-					else if (job->flavor == InferFlavor::FUNCTION_BODY) {
-						irGeneratorQueue.add(job->infer.function);
-					}
+				}
+
+				if (job->sizeDependencies.count == 0) {
+					declarationWaitingOnSize.unordered_remove(i--);
+
+					CoffJob coffJob;
+					coffJob.declaration = job->declaration;
+					coffJob.isFunction = false;
+					coffWriterQueue.add(coffJob);
 
 					freeJob(job);
 				}
@@ -4960,13 +5041,28 @@ void runInfer() {
 		}
 	}
 
-	if (inferJobs.count && !hadError) { // We didn't complete type inference, check for undeclared identifiers or circular dependencies! If we already had an error don't spam more
+	if ((sizeJobs.count || functionJobs.count || declarationJobs.count) && !hadError) { // We didn't complete type inference, check for undeclared identifiers or circular dependencies! If we already had an error don't spam more
 		// Check for undeclared identifiers
 
-		for (auto job : inferJobs) {
-			if (job->flavor == InferFlavor::TYPE_TO_SIZE) continue;
+		for (auto job : functionJobs) {
+			if (job->type.index != job->type.flattened.count) {
+				auto haltedOn = *job->type.flattened[job->type.index];
 
-			if (job->flavor == InferFlavor::TYPE_TO_SIZE) continue;
+				if (checkForUndeclaredIdentifier(haltedOn)) {
+					goto error;
+				}
+			}
+
+			if (job->value.index != job->value.flattened.count) {
+				auto haltedOn = *job->value.flattened[job->value.index];
+
+				if (checkForUndeclaredIdentifier(haltedOn)) {
+					goto error;
+				}
+			}
+		}
+
+		for (auto job : declarationJobs) {
 			if (job->type.index != job->type.flattened.count) {
 				auto haltedOn = *job->type.flattened[job->type.index];
 
@@ -4988,13 +5084,10 @@ void runInfer() {
 
 		Array<Declaration *> loop;
 
-		for (auto job : inferJobs) {
-			if (job->flavor == InferFlavor::TYPE_TO_SIZE) continue;
-			if (job->flavor == InferFlavor::FUNCTION_BODY) continue; // A circular dependency must contain a declaration, we start from there
-
+		for (auto job : declarationJobs) {
 			loop.clear();
 
-			s64 loopIndex = findLoop(loop, job->infer.declaration);
+			s64 loopIndex = findLoop(loop, job->declaration);
 
 			if (loopIndex == -1) continue;
 
@@ -5030,68 +5123,83 @@ void runInfer() {
 
 		reportError("Internal Compiler Error: Inference got stuck but no undelcared identifiers or circular dependencies were detected");
 
-		for (auto job : inferJobs) {
-			if (job->flavor == InferFlavor::TYPE_TO_SIZE) {
-				auto type = job->infer.type;
+		for (auto job : sizeJobs) {
+			auto type = job->type;
 
-				if (type->flavor == TypeFlavor::STRUCT) {
-					auto haltedOn = static_cast<TypeStruct *>(type)->members.declarations[job->sizingIndexInMembers];
+			if (type->flavor == TypeFlavor::STRUCT) {
+				auto haltedOn = static_cast<TypeStruct *>(type)->members.declarations[job->sizingIndexInMembers];
 
-					reportError(haltedOn, "%.*s sizing halted here", STRING_PRINTF(type->name));
-				}
-				else {
-					reportError("%.*s sizing halted", STRING_PRINTF(type->name));
-				}
+				reportError(haltedOn, "%.*s sizing halted here", STRING_PRINTF(type->name));
 			}
 			else {
-				const char *type = job->flavor == InferFlavor::DECLARATION ? "declaration" : "function body";
+				reportError("%.*s sizing halted", STRING_PRINTF(type->name));
+			}
+		}
 
-				String name = job->flavor == InferFlavor::DECLARATION ? job->infer.declaration->name :
-					(job->infer.function->valueOfDeclaration ? job->infer.function->valueOfDeclaration->name : "(function)");
+		for (auto job : functionJobs) {
+			String name = (job->function->valueOfDeclaration ? job->function->valueOfDeclaration->name : "(function)");
 
-				if (job->type.index != job->type.flattened.count) {
-					auto haltedOn = *job->type.flattened[job->type.index];
+			if (job->type.index != job->type.flattened.count) {
+				auto haltedOn = *job->type.flattened[job->type.index];
 
-					reportError(haltedOn, "%.*s %s type halted here", STRING_PRINTF(name), type);
+				reportError(haltedOn, "%.*s type halted here", STRING_PRINTF(name));
+			}
+
+			if (job->value.index != job->value.flattened.count) {
+				auto haltedOn = *job->value.flattened[job->value.index];
+
+				reportError(haltedOn, "%.*s value halted here", STRING_PRINTF(name));
+
+				if (haltedOn->flavor == ExprFlavor::IDENTIFIER) {
+					auto identifier = static_cast<ExprIdentifier *>(haltedOn);
 				}
+			}
 
-				if (job->value.index != job->value.flattened.count) {
-					auto haltedOn = *job->value.flattened[job->value.index];
+			if (job->type.index == job->type.flattened.count && job->value.index == job->value.flattened.count) {
+				reportError(job->function, "Function halted after completing infer: value.sleeping = %d type.sleeping = %d", job->value.sleeping, job->type.sleeping);
 
-					reportError(haltedOn, "%.*s %s value halted here", STRING_PRINTF(name), type);
-					
-					if (haltedOn->flavor == ExprFlavor::IDENTIFIER) {
-						auto identifier = static_cast<ExprIdentifier *>(haltedOn);
+				for (auto declaration : job->function->arguments.declarations) {
+					if (declaration->sleepingOnMe.count) {
+						reportError(declaration, "Declaration has sleepers, flags: %llx", declaration->flags);
 					}
 				}
 
-				if (job->type.index == job->type.flattened.count && job->value.index == job->value.flattened.count) {
-					if (job->flavor == InferFlavor::DECLARATION) {
-						reportError(job->infer.declaration, "Declaration halted after completing infer: value.sleeping = %d type.sleeping = %d", job->value.sleeping, job->type.sleeping);
-					}
-					else {
-						reportError(job->infer.function, "Function halted after completing infer: value.sleeping = %d type.sleeping = %d", job->value.sleeping, job->type.sleeping);
-
-						for (auto declaration : job->infer.function->arguments.declarations) {
-							if (declaration->sleepingOnMe.count) {
-								reportError(declaration, "Declaration has sleepers, flags: %llx", declaration->flags);
-							}
-						}
-
-						for (auto declaration : job->infer.function->returns.declarations) {
-							if (declaration->sleepingOnMe.count) {
-								reportError(declaration, "Declaration has sleepers, flags: %llx", declaration->flags);
-							}
-						}
+				for (auto declaration : job->function->returns.declarations) {
+					if (declaration->sleepingOnMe.count) {
+						reportError(declaration, "Declaration has sleepers, flags: %llx", declaration->flags);
 					}
 				}
+			}
+		}
+
+		for (auto job : declarationJobs) {
+			String name = job->declaration->name;
+
+			if (job->type.index != job->type.flattened.count) {
+				auto haltedOn = *job->type.flattened[job->type.index];
+
+				reportError(haltedOn, "%.*s type halted here", STRING_PRINTF(name));
+			}
+
+			if (job->value.index != job->value.flattened.count) {
+				auto haltedOn = *job->value.flattened[job->value.index];
+
+				reportError(haltedOn, "%.*s value halted here", STRING_PRINTF(name));
+
+				if (haltedOn->flavor == ExprFlavor::IDENTIFIER) {
+					auto identifier = static_cast<ExprIdentifier *>(haltedOn);
+				}
+			}
+
+			if (job->type.index == job->type.flattened.count && job->value.index == job->value.flattened.count) {
+				reportError(job->declaration, "Declaration halted after completing infer: value.sleeping = %d type.sleeping = %d", job->value.sleeping, job->type.sleeping);
 			}
 		}
 
 		goto error;
 	}
 
-	if (waitingOnSize.count) {
+	if (functionWaitingOnSize.count || declarationWaitingOnSize.count) {
 		reportError("Error: waiting on size @Incomplete");
 		goto error;
 	}

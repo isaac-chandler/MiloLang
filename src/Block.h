@@ -39,7 +39,7 @@ struct Declaration {
 	struct Block *enclosingScope;
 	u64 indexInBlock;
 
-	struct InferJob *inferJob = nullptr;
+	struct DeclarationJob *inferJob = nullptr;
 
 	Array<struct SubJob *> sleepingOnMe;
 
