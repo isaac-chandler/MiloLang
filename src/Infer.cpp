@@ -69,6 +69,7 @@ struct InferJob {
 	InferJob() {}
 };
 
+Array<InferJob *> declarationJobs;
 Array<InferJob *> inferJobs;
 
 
@@ -1439,9 +1440,13 @@ bool assignOpForFloatAndIntLiteral(ExprBinaryOperator *binary) {
 }
 
 bool isAssignable(Expr *expr) {
-	if ((expr->flavor == ExprFlavor::UNARY_OPERATOR && static_cast<ExprUnaryOperator *>(expr)->op == TokenT::SHIFT_LEFT) ||
-		(expr->flavor == ExprFlavor::BINARY_OPERATOR && static_cast<ExprBinaryOperator *>(expr)->op == TOKEN('['))) {
+	if ((expr->flavor == ExprFlavor::UNARY_OPERATOR && static_cast<ExprUnaryOperator *>(expr)->op == TokenT::SHIFT_LEFT)) {
 		return true;
+	}
+	else if (expr->flavor == ExprFlavor::BINARY_OPERATOR && static_cast<ExprBinaryOperator *>(expr)->op == TOKEN('[')) {
+		auto binary = static_cast<ExprBinaryOperator *>(expr);
+
+		return !(binary->left->type->flags & TYPE_ARRAY_IS_FIXED) || isAssignable(binary->left);
 	}
 	else if (expr->flavor == ExprFlavor::IDENTIFIER) {
 		auto identifier = static_cast<ExprIdentifier *>(expr);
@@ -1856,8 +1861,10 @@ bool assignOp(Array<Type *> *sizeDependencies, SubJob *job, Expr *location, Type
 }
 
 bool isAddressable(Expr *expr) {
-	if (expr->flavor == ExprFlavor::BINARY_OPERATOR) {
-		return static_cast<ExprBinaryOperator *>(expr)->op == TOKEN('[');
+	if (expr->flavor == ExprFlavor::BINARY_OPERATOR && static_cast<ExprBinaryOperator *>(expr)->op == TOKEN('[')) {
+		auto binary = static_cast<ExprBinaryOperator *>(expr);
+
+		return !(binary->left->type->flags & TYPE_ARRAY_IS_FIXED) || isAddressable(binary->left);
 	}
 	else if (expr->flavor == ExprFlavor::IDENTIFIER) {
 		auto identifier = static_cast<ExprIdentifier *>(expr);
@@ -4203,7 +4210,7 @@ bool addDeclaration(Declaration *declaration) {
 		flatten(job->value.flattened, &declaration->initialValue);
 	}
 
-	inferJobs.add(job);
+	declarationJobs.add(job);
 
 	return true;
 }
@@ -4305,8 +4312,8 @@ void getHaltStatus(Declaration *declaration, Declaration *next, Expr **haltedOn,
 
 Array<InferJob *> waitingOnSize;
 
-bool doInferJob(u64 *index, bool *madeProgress) {
-	InferJob *job = inferJobs[*index];
+bool doInferJob(Array<InferJob *> *inferJobs, u64 *index, bool *madeProgress) {
+	InferJob *job = (*inferJobs)[*index];
 
 	if (job->type.sleeping && job->value.sleeping) return true;
 
@@ -4422,7 +4429,7 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 
 				coffWriterQueue.add(coff);
 
-				inferJobs.unordered_remove((*index)--);
+				inferJobs->unordered_remove((*index)--);
 				freeJob(job);
 			}
 			else {
@@ -4433,7 +4440,7 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 				}
 
 				if (job->value.index == job->value.flattened.count) {
-					inferJobs.unordered_remove((*index)--);
+					inferJobs->unordered_remove((*index)--);
 					waitingOnSize.add(job);
 				}
 			}
@@ -4542,7 +4549,7 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 					}
 				}
 
-				inferJobs.unordered_remove((*index)--);
+				inferJobs->unordered_remove((*index)--);
 
 				declaration->flags |= DECLARATION_VALUE_IS_READY;
 
@@ -4577,7 +4584,7 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 					declaration->initialValue->end = declaration->end;
 				}
 
-				inferJobs.unordered_remove((*index)--);
+				inferJobs->unordered_remove((*index)--);
 
 				declaration->flags |= DECLARATION_VALUE_IS_READY;
 
@@ -4675,7 +4682,7 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 
 					declaration->enclosingScope->usings.unordered_remove(declaration);
 					declaration->flags |= DECLARATION_USING_IS_RESOLVED;
-					inferJobs.unordered_remove((*index)--);
+					inferJobs->unordered_remove((*index)--);
 					freeJob(job);
 				}
 				else {
@@ -4708,7 +4715,7 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 						}
 					}
 
-					inferJobs.unordered_remove((*index)--);
+					inferJobs->unordered_remove((*index)--);
 
 					declaration->flags |= DECLARATION_VALUE_IS_READY;
 					declaration->flags |= DECLARATION_TYPE_IS_READY;
@@ -4798,7 +4805,7 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 				*madeProgress = wakeUpSleepers(&struct_->sleepingOnMe);
 
 				freeJob(job);
-				inferJobs.unordered_remove((*index)--);
+				inferJobs->unordered_remove((*index)--);
 			}
 		}
 		else if (type->flavor == TypeFlavor::ARRAY) {
@@ -4812,7 +4819,7 @@ bool doInferJob(u64 *index, bool *madeProgress) {
 
 				*madeProgress = wakeUpSleepers(&array->sleepingOnMe);
 				freeJob(job);
-				inferJobs.unordered_remove((*index)--);
+				inferJobs->unordered_remove((*index)--);
 			}
 			else {
 				goToSleep(&job->type, &array->arrayOf->sleepingOnMe);
@@ -4857,7 +4864,7 @@ void runInfer() {
 
 				u64 index = inferJobs.count - 1;
 				bool madeProgress = false;
-				if (!doInferJob(&index, &madeProgress)) {
+				if (!doInferJob(&inferJobs, &index, &madeProgress)) {
 					goto error;
 				}
 
@@ -4907,15 +4914,18 @@ void runInfer() {
 		do {
 			madeProgress = false;
 
-			for (u64 i = 0; i < inferJobs.count; i++) {
-
-				auto job = inferJobs[i];
-
-				if (!doInferJob(&i, &madeProgress)) {
+			for (u64 i = 0; i < declarationJobs.count; i++) {
+				if (!doInferJob(&declarationJobs, &i, &madeProgress)) {
 					goto error;
 				}
 			}
-		} while (madeProgress && inferJobs.count);
+
+			for (u64 i = 0; i < inferJobs.count; i++) {
+				if (!doInferJob(&inferJobs, &i, &madeProgress)) {
+					goto error;
+				}
+			}
+		} while (madeProgress && (inferJobs.count || declarationJobs.count));
 
 		{
 			PROFILE_ZONE("Check size dependencies");
