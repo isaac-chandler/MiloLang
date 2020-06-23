@@ -267,6 +267,8 @@ struct ExprFunction : Expr {
 
 	Expr *body;
 
+	Array<struct SubJob *> sleepingOnMe;
+
 	union Symbol *symbol;
 	u32 physicalStorage;
 };

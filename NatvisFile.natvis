@@ -55,4 +55,8 @@
   <Type Name="Declaration">
     <DisplayString>Decl{{{name}}}</DisplayString>
   </Type>
+
+  <Type Name="DeclarationJob">
+    <DisplayString>{next}</DisplayString>
+  </Type>
 </AutoVisualizer>
