@@ -502,7 +502,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				case TokenT::CAST: {
 					assert(binary->left->flavor == ExprFlavor::TYPE_LITERAL);
 
-					u64 rightReg = generateIr(state, right, dest);
+					u64 rightReg = generateIr(state, right, state->nextRegister++);
 
 					Type *castTo = binary->type;
 
@@ -510,6 +510,33 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 						return rightReg;
 
 					switch(castTo->flavor) {
+						case TypeFlavor::STRUCT: {
+							assert(castTo == TYPE_ANY);
+
+							u64 storage = allocateSpaceForType(state, TYPE_ANY);
+
+							Ir &copy = state->ir.add();
+							copy.op = IrOp::SET;
+							copy.dest = storage;
+							copy.a = rightReg;
+							copy.opSize = right->type->size;
+							copy.destSize = copy.opSize;
+							
+							Ir &address = state->ir.add();
+							address.op = IrOp::ADDRESS_OF_LOCAL;
+							address.dest = dest;
+							address.a = storage;
+							address.b = 0;
+							address.opSize = 8;
+
+							Ir &type = state->ir.add();
+							type.op = IrOp::TYPE;
+							type.dest = dest + 1;
+							type.type = right->type;
+							type.opSize = 8;
+
+							return dest;
+						}
 						case TypeFlavor::BOOL: {
 							u64 src;
 							u64 size;
@@ -1682,6 +1709,11 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 					read.destSize = unary->type->size;
 					read.a = addressReg;
 					read.dest = dest;
+
+					return dest;
+				}
+				case TokenT::TYPE_INFO: {
+					generateIr(state, unary->value, dest);
 
 					return dest;
 				}

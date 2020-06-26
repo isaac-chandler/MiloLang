@@ -16,9 +16,9 @@ load_image :: (filename: string) -> u32 {
 	file, success := read_entire_file(filename)
 	
 	if !success {
-		print_string("Failed to load image ")
-		print_string(filename)
-		print_string("\n")
+		print("Failed to load image ")
+		print(filename)
+		print("\n")
 		return 0
 	}
 	
@@ -563,10 +563,10 @@ _main :: () {
 			window_width = client_rect.right - client_rect.left
 			window_height = client_rect.bottom - client_rect.top
 			
-			print_u64(cast() window_width)
-			print_string("x")
+			print_u64(window_width)
+			print("x")
 			print_u64(cast() window_height)
-			print_string("\n----------\n")
+			print("\n----------\n")
 			
 		} else if uMsg == WM_KEYDOWN {
 			if wParam == VK_LEFT
@@ -600,8 +600,8 @@ _main :: () {
 	
 	
 	if RegisterClassW(*window_class) == 0 {
-		print_string("Failed to register window class\n")
-		print_string(u64_to_string(GetLastError()))
+		print("Failed to register window class\n")
+		print_u64(GetLastError())
 		return
 	}
 	
@@ -621,8 +621,8 @@ _main :: () {
 		nWidth = window_rect.right - window_rect.left, nHeight = window_rect.bottom - window_rect.top, hInstance = instance)
 	
 	if window_handle == null {
-		print_string("Failed to open window\n")
-		print_string(u64_to_string(GetLastError()))
+		print("Failed to open window\n")
+		print_u64(GetLastError())
 		return
 	}
 	
@@ -637,14 +637,14 @@ _main :: () {
 	found_format := ChoosePixelFormat(device_context, *desired_format)
 	
 	if found_format == 0 {
-		print_string("Could not find a pixel format\n")
+		print("Could not find a pixel format\n")
 		return
 	}
 	
 	used_format: PIXELFORMATDESCRIPTOR
 	
 	if !SetPixelFormat(device_context, found_format, *used_format) {
-		print_string("Failed to set pixel format")
+		print("Failed to set pixel format")
 		return
 	}
 	
@@ -652,7 +652,7 @@ _main :: () {
 	gl_context = wglCreateContext(device_context)
 	
 	if !gl_context {
-		print_string("Failed to create gl context")
+		print("Failed to create gl context")
 		return
 	}
 	
@@ -968,7 +968,7 @@ _main :: () {
 		
 		if (cast() (delta * 1000_000) > 20_000) {
 			print_u64(cast() (delta * 1000_000))
-			print_string("\n")
+			print("\n")
 		}
 		
 		// print_u64(cast() (delta * 1000_000))

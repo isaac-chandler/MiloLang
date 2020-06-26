@@ -51,7 +51,8 @@ struct Type {
 	Array<struct SubJob *> sleepingOnMe;
 	struct SizeJob *sizeJob = nullptr;
 
-	u64 runtimeValue;
+	union Symbol *symbol = nullptr;
+	u32 physicalStorage;
 };
 
 struct TypePointer : Type {
@@ -145,3 +146,120 @@ TypeArray *getStaticArray(Type *type, u64 count);
 TypeFunction *getFunctionType(struct ExprFunction *expr);
 
 void setupTypeTable();
+
+struct TypeTableEntry {
+	Type *value;
+	u32 hash = 0;
+};
+
+inline TypeTableEntry *typeTableEntries;
+inline u32 typeTableCapacity;
+
+// These structs are parallel to the ones defined in runtime.milo
+
+template<typename T> 
+struct MiloArray {
+	T *storage;
+	u64 count;
+
+	T &operator[](u64 index) {
+		return storage[index];
+	}
+
+	const T &operator[](u64 index) const {
+		return storage[index];
+	}
+};
+
+struct Type_Info {
+	enum class Tag : u64 {
+		VOID = 0,
+		INTEGER = 1,
+		FLOAT = 2,
+		POINTER = 3,
+		BOOL = 4,
+		FUNCTION = 5,
+		TYPE = 6,
+		STRING = 7,
+		ARRAY = 8,
+		STRUCT = 9,
+		ENUM = 10
+	};
+
+	Tag tag;
+	u64 size;
+	u64 alignment;
+	char *name;
+};
+
+struct Type_Info_Integer : Type_Info {
+	bool signed_;
+};
+
+struct Type_Info_Pointer : Type_Info {
+	Type_Info *value_type;
+};
+
+struct Type_Info_Function : Type_Info {
+	struct Argument {
+		Type_Info *argument_type;
+		char *name;
+
+		struct Flags {
+			constexpr static u64 MUST        = 0x1;
+			constexpr static u64 HAS_DEFAULT = 0x2;
+			constexpr static u64 USING       = 0x4;
+		};
+
+		u64 flags;
+	};
+
+	MiloArray<Argument> arguments;
+	MiloArray<Argument> returns;
+};
+
+struct Type_Info_Array : Type_Info {
+	enum class Flavor : u64 {
+		FIXED   =  0, 
+		NORMAL  = 1, 
+		DYNMAIC = 2
+	};
+
+	Flavor flavor;
+	Type_Info *element_type;
+	u64 count;
+};
+
+struct Type_Info_Struct : Type_Info {
+	struct Member {
+		struct Flags {
+			constexpr static u64 UNINITIALIZED = 0x1;
+			constexpr static u64 CONSTANT      = 0x2;
+			constexpr static u64 USING         = 0x4;
+		};
+
+		char *name;
+		u64 offset;
+		Type_Info *member_type;
+		u64 flags;
+	};
+
+	struct Flags {
+		constexpr static u64 UNION  = 0x1;
+		constexpr static u64 PACKED = 0x2;
+	};
+
+	u64 flags;
+	MiloArray<Member> members;
+};
+
+struct Type_Info_Enum : Type_Info {
+	struct Member {
+		char *name;
+		u64 value;
+	};
+
+	Type_Info_Integer *base_type;
+	bool is_flags;
+	MiloArray<Member> members;
+};

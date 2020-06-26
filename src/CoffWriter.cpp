@@ -549,6 +549,26 @@ u32 *addRelocationToUnkownSymbol(BucketedArenaAllocator *allocator, u32 virtualA
 }
 Block externalsBlock;
 
+u32 createRdataPointer(BucketedArenaAllocator *stringTable, BucketArray<Symbol> *symbols, BucketedArenaAllocator *rdata) {
+	Symbol symbol;
+	setSymbolName(stringTable, &symbol.name, symbols->count());
+	symbol.value = static_cast<u32>(rdata->totalSize);
+	symbol.sectionNumber = RDATA_SECTION_NUMBER;
+	symbol.type = 0;
+	symbol.storageClass = IMAGE_SYM_CLASS_STATIC;
+	symbol.numberOfAuxSymbols = 0;
+
+	symbols->add(symbol);
+
+	return symbols->count() - 1;
+}
+
+void addPointerRelocation(BucketedArenaAllocator *relocations, u32 address, u32 symbol) {
+	relocations->add4(address);
+	relocations->add4(symbol);
+	relocations->add2(IMAGE_REL_AMD64_ADDR64);
+}
+
 u32 createSymbolForFunction(BucketArray<Symbol> *symbols, ExprFunction *function, bool *success) {
 	*success = true;
 	if (!(function->flags & EXPR_HAS_STORAGE)) {
@@ -561,7 +581,7 @@ u32 createSymbolForFunction(BucketArray<Symbol> *symbols, ExprFunction *function
 				assert(!(declaration->flags & DECLARATION_IMPORTED_BY_USING));
 
 				if (declaration->initialValue->type != function->type) {
-					reportError(function, "Error: Cannot define external function %.*s with different types, it was defined as %.*s", 
+					reportError(function, "Error: Cannot define external function %.*s with different types, it was defined as %.*s",
 						STRING_PRINTF(function->valueOfDeclaration->name), STRING_PRINTF(function->type->name));
 					reportError(declaration->initialValue, "   ..: but was previously %.*s", STRING_PRINTF(declaration->initialValue->type->name));
 					*success = false;
@@ -622,6 +642,15 @@ u32 createSymbolForString(s64 *emptyStringSymbolIndex, BucketArray<Symbol> *symb
 	return string->physicalStorage;
 }
 
+u32 createSymbolForType(BucketArray<Symbol> *symbols, Type *type) {
+	if (!type->symbol) {
+		type->physicalStorage = symbols->count();
+		type->symbol = reinterpret_cast<Symbol *>(symbols->allocator.allocateUnaligned(sizeof(Symbol)));
+	}
+
+	return type->physicalStorage;
+}
+
 
 u32 createSymbolForDeclaration(BucketArray<Symbol> *symbols, Declaration *declaration) {
 	if (!(declaration->flags & DECLARATION_HAS_STORAGE)) {
@@ -643,8 +672,6 @@ struct TypePatch {
 	Type *type;
 	u64 *location;
 };
-
-Array<TypePatch> typePatches;
 
 
 bool writeValue(BucketedArenaAllocator *data, BucketedArenaAllocator *dataRelocations, BucketArray<Symbol> *symbols, BucketedArenaAllocator *stringTable, Expr *value, s64 *emptyStringSymbolIndex, BucketedArenaAllocator *rdata) {
@@ -728,7 +755,11 @@ bool writeValue(BucketedArenaAllocator *data, BucketedArenaAllocator *dataReloca
 		}
 	}
 	else if (value->flavor == ExprFlavor::TYPE_LITERAL) {
-		typePatches.add({ static_cast<ExprLiteral *>(value)->typeValue, data->add8(0) });
+		dataRelocations->add4(data->totalSize);
+		dataRelocations->add4(createSymbolForType(symbols, static_cast<ExprLiteral *>(value)->typeValue));
+		dataRelocations->add2(IMAGE_REL_AMD64_ADDR64);
+
+		data->add8(0);
 	}
 	else {
 		assert(false);
@@ -764,7 +795,7 @@ void addLineInfo(Array<LineInfo> *lineInfo, Array<ColumnInfo> *columnInfo, u32 o
 	auto &line = lineInfo->add();
 
 	line.offset = offset;
-	line.line=  (start.line & 0xFFF) | ((delta & 0x7F) << 24) | (1 << 31);
+	line.line = (start.line & 0xFFF) | ((delta & 0x7F) << 24) | (1 << 31);
 
 
 	auto &column = columnInfo->add();
@@ -773,31 +804,31 @@ void addLineInfo(Array<LineInfo> *lineInfo, Array<ColumnInfo> *columnInfo, u32 o
 	column.end = end.column + 1;
 }
 
-const u32 S_UDT       = 0x1108;
-const u32 T_VOID      = 0x0003;
-const u32 T_64PVOID   = 0x0603;
-const u32 T_64PUCHAR  = 0x0620;
-const u32 T_INT1      = 0x0068;
-const u32 T_64PINT1   = 0x0668;
-const u32 T_UINT1     = 0x0069;
-const u32 T_64PUINT1  = 0x0669;
-const u32 T_INT2      = 0x0072;
-const u32 T_64PINT2   = 0x0672;
-const u32 T_UINT2     = 0x0073;
-const u32 T_64PUINT2  = 0x0673;
-const u32 T_INT4      = 0x0074;
-const u32 T_64PINT4   = 0x0674;
-const u32 T_UINT4     = 0x0075;
-const u32 T_64PUINT4  = 0x0675;
-const u32 T_INT8      = 0x0076;
-const u32 T_64PINT8   = 0x0676;
-const u32 T_UINT8     = 0x0077;
-const u32 T_64PUINT8  = 0x0677;
-const u32 T_REAL32    = 0x0040;
+const u32 S_UDT = 0x1108;
+const u32 T_VOID = 0x0003;
+const u32 T_64PVOID = 0x0603;
+const u32 T_64PUCHAR = 0x0620;
+const u32 T_INT1 = 0x0068;
+const u32 T_64PINT1 = 0x0668;
+const u32 T_UINT1 = 0x0069;
+const u32 T_64PUINT1 = 0x0669;
+const u32 T_INT2 = 0x0072;
+const u32 T_64PINT2 = 0x0672;
+const u32 T_UINT2 = 0x0073;
+const u32 T_64PUINT2 = 0x0673;
+const u32 T_INT4 = 0x0074;
+const u32 T_64PINT4 = 0x0674;
+const u32 T_UINT4 = 0x0075;
+const u32 T_64PUINT4 = 0x0675;
+const u32 T_INT8 = 0x0076;
+const u32 T_64PINT8 = 0x0676;
+const u32 T_UINT8 = 0x0077;
+const u32 T_64PUINT8 = 0x0677;
+const u32 T_REAL32 = 0x0040;
 const u32 T_64PREAL32 = 0x0640;
-const u32 T_REAL64    = 0x0041;
+const u32 T_REAL64 = 0x0041;
 const u32 T_64PREAL64 = 0x0641;
-const u32 T_BOOL08    = 0x0030;
+const u32 T_BOOL08 = 0x0030;
 const u32 T_64PBOOL08 = 0x0630;
 
 u32 getCoffTypeIndex(Type *type) {
@@ -956,6 +987,7 @@ void runCoffWriter() {
 	BucketedArenaAllocator data(4096);
 	BucketedArenaAllocator dataRelocations(4096);
 	BucketedArenaAllocator rdata(4096);
+	BucketedArenaAllocator rdataRelocations(4096);
 	BucketedArenaAllocator stringTable(4096);
 	BucketedArenaAllocator debugSymbols(4096);
 	BucketedArenaAllocator debugSymbolsRelocations(4096);
@@ -1111,7 +1143,7 @@ void runCoffWriter() {
 
 			for (u32 i = 0; i < my_min(4 - paramOffset, function->arguments.declarations.count + function->returns.declarations.count - 1); i++) {
 				Type *type;
-				
+
 				if (i < function->arguments.declarations.count) {
 					type = static_cast<ExprLiteral *>(function->arguments.declarations[i]->type)->typeValue;
 				}
@@ -1211,76 +1243,52 @@ void runCoffWriter() {
 				instructionOffsets.add(code.totalSize);
 
 				switch (ir.op) {
-					case IrOp::TYPE: {
-						code.add1(0x48);
-						code.add1(0xB8);
+				case IrOp::TYPE: {
+					code.add1(0x48);
+					code.add1(0xB8);
 
-						typePatches.add({ ir.type, code.add8(0) });
+					codeRelocations.add4(code.totalSize);
+					codeRelocations.add4(createSymbolForType(&symbols, ir.type));
+					codeRelocations.add2(IMAGE_REL_AMD64_ADDR64);
 
-						break;
+					code.add8(0);
+
+					storeFromIntRegister(&code, function, 8, ir.dest, RAX);
+
+					break;
+				}
+				case IrOp::ADD: {
+					if (ir.a == 0) {
+						writeSet(&code, function, ir.opSize, ir.dest, ir.b);
 					}
-					case IrOp::ADD: {
-						if (ir.a == 0) {
-							writeSet(&code, function, ir.opSize, ir.dest, ir.b);
-						}
-						else if (ir.b == 0) {
-							writeSet(&code, function, ir.opSize, ir.dest, ir.a);
-						}
-						else {
-							if (ir.flags & IR_FLOAT_OP) {
-								loadIntoFloatRegister(&code, function, ir.opSize, 0, ir.a);
+					else if (ir.b == 0) {
+						writeSet(&code, function, ir.opSize, ir.dest, ir.a);
+					}
+					else {
+						if (ir.flags & IR_FLOAT_OP) {
+							loadIntoFloatRegister(&code, function, ir.opSize, 0, ir.a);
 
-								if (ir.opSize == 8) {
-									code.add1(0xF2);
-								}
-								else {
-									code.add1(0xF3);
-								}
-
-								code.add1(0x0F);
-								code.add1(0x58);
-								writeRSPRegisterByte(&code, function, 0, ir.b);
-
-								storeFromFloatRegister(&code, function, ir.opSize, ir.dest, 0);
+							if (ir.opSize == 8) {
+								code.add1(0xF2);
 							}
 							else {
-								loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
-
-								if (ir.opSize == 8) {
-									code.add1(0x48);
-								}
-								else if (ir.opSize == 2) {
-									code.add1(0x66);
-								}
-
-								if (ir.opSize == 1) {
-									code.add1(0x02);
-								}
-								else {
-									code.add1(0x03);
-								}
-
-								writeRSPRegisterByte(&code, function, RAX, ir.b);
-
-								storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
+								code.add1(0xF3);
 							}
-						}
-					} break;
-					case IrOp::ADD_CONSTANT: {
-						if (ir.a == 0) {
-							storeImmediate(&code, function, ir.opSize, ir.dest, ir.b);
-						}
-						else if (ir.b == 0) {
-							writeSet(&code, function, ir.opSize, ir.dest, ir.a);
+
+							code.add1(0x0F);
+							code.add1(0x58);
+							writeRSPRegisterByte(&code, function, 0, ir.b);
+
+							storeFromFloatRegister(&code, function, ir.opSize, ir.dest, 0);
 						}
 						else {
-							loadImmediateIntoRAX(&code, ir.b);
+							loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
 
 							if (ir.opSize == 8) {
 								code.add1(0x48);
 							}
 							else if (ir.opSize == 2) {
-								code.add1(0x48);
+								code.add1(0x66);
 							}
 
 							if (ir.opSize == 1) {
@@ -1290,32 +1298,116 @@ void runCoffWriter() {
 								code.add1(0x03);
 							}
 
-							writeRSPRegisterByte(&code, function, RAX, ir.a);
+							writeRSPRegisterByte(&code, function, RAX, ir.b);
 
 							storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
 						}
-					} break;
-					case IrOp::SUB: {
-						if (ir.b == 0) {
-							writeSet(&code, function, ir.opSize, ir.dest, ir.a);
+					}
+				} break;
+				case IrOp::ADD_CONSTANT: {
+					if (ir.a == 0) {
+						storeImmediate(&code, function, ir.opSize, ir.dest, ir.b);
+					}
+					else if (ir.b == 0) {
+						writeSet(&code, function, ir.opSize, ir.dest, ir.a);
+					}
+					else {
+						loadImmediateIntoRAX(&code, ir.b);
+
+						if (ir.opSize == 8) {
+							code.add1(0x48);
+						}
+						else if (ir.opSize == 2) {
+							code.add1(0x48);
+						}
+
+						if (ir.opSize == 1) {
+							code.add1(0x02);
 						}
 						else {
-							if (ir.flags & IR_FLOAT_OP) {
-								loadIntoFloatRegister(&code, function, ir.opSize, 0, ir.a);
+							code.add1(0x03);
+						}
 
-								if (ir.opSize == 8) {
-									code.add1(0xF2);
-								}
-								else {
-									code.add1(0xF3);
-								}
+						writeRSPRegisterByte(&code, function, RAX, ir.a);
 
-								code.add1(0x0F);
-								code.add1(0x5C);
+						storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
+					}
+				} break;
+				case IrOp::SUB: {
+					if (ir.b == 0) {
+						writeSet(&code, function, ir.opSize, ir.dest, ir.a);
+					}
+					else {
+						if (ir.flags & IR_FLOAT_OP) {
+							loadIntoFloatRegister(&code, function, ir.opSize, 0, ir.a);
 
-								writeRSPRegisterByte(&code, function, 0, ir.b);
+							if (ir.opSize == 8) {
+								code.add1(0xF2);
+							}
+							else {
+								code.add1(0xF3);
+							}
 
-								storeFromFloatRegister(&code, function, ir.opSize, ir.dest, 0);
+							code.add1(0x0F);
+							code.add1(0x5C);
+
+							writeRSPRegisterByte(&code, function, 0, ir.b);
+
+							storeFromFloatRegister(&code, function, ir.opSize, ir.dest, 0);
+						}
+						else {
+							loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
+
+							if (ir.opSize == 8) {
+								code.add1(0x48);
+							}
+							else if (ir.opSize == 2) {
+								code.add1(0x66);
+							}
+
+							if (ir.opSize == 1) {
+								code.add1(0x2A);
+							}
+							else {
+								code.add1(0x2B);
+							}
+
+							writeRSPRegisterByte(&code, function, RAX, ir.b);
+
+							storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
+						}
+					}
+				} break;
+				case IrOp::MUL: {
+					if (ir.a == 0 || ir.b == 0) {
+						storeImmediate(&code, function, ir.opSize, ir.dest, 0);
+					}
+					else {
+						if (ir.flags & IR_FLOAT_OP) {
+							loadIntoFloatRegister(&code, function, ir.opSize, 0, ir.a);
+
+							if (ir.opSize == 8) {
+								code.add1(0xF2);
+							}
+							else {
+								code.add1(0xF3);
+							}
+
+							code.add1(0x0F);
+							code.add1(0x59);
+
+							writeRSPRegisterByte(&code, function, 0, ir.b);
+
+							storeFromFloatRegister(&code, function, ir.opSize, ir.dest, 0);
+						}
+						else {
+							if (ir.opSize == 1) {
+								loadIntoIntRegister(&code, function, 1, RAX, ir.a);
+
+								code.add1(0xF6);
+								writeRSPRegisterByte(&code, function, 5, ir.b);
+
+								storeFromIntRegister(&code, function, 1, ir.dest, RAX);
 							}
 							else {
 								loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
@@ -1327,488 +1419,1102 @@ void runCoffWriter() {
 									code.add1(0x66);
 								}
 
-								if (ir.opSize == 1) {
-									code.add1(0x2A);
-								}
-								else {
-									code.add1(0x2B);
-								}
-
+								code.add1(0x0F);
+								code.add1(0xAF);
 								writeRSPRegisterByte(&code, function, RAX, ir.b);
 
 								storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
 							}
 						}
-					} break;
-					case IrOp::MUL: {
-						if (ir.a == 0 || ir.b == 0) {
-							storeImmediate(&code, function, ir.opSize, ir.dest, 0);
-						}
-						else {
-							if (ir.flags & IR_FLOAT_OP) {
-								loadIntoFloatRegister(&code, function, ir.opSize, 0, ir.a);
+					}
+				} break;
+				case IrOp::MUL_BY_CONSTANT: {
+					assert(ir.opSize == 8);
 
-								if (ir.opSize == 8) {
-									code.add1(0xF2);
-								}
-								else {
-									code.add1(0xF3);
-								}
-
-								code.add1(0x0F);
-								code.add1(0x59);
-
-								writeRSPRegisterByte(&code, function, 0, ir.b);
-
-								storeFromFloatRegister(&code, function, ir.opSize, ir.dest, 0);
-							}
-							else {
-								if (ir.opSize == 1) {
-									loadIntoIntRegister(&code, function, 1, RAX, ir.a);
-
-									code.add1(0xF6);
-									writeRSPRegisterByte(&code, function, 5, ir.b);
-
-									storeFromIntRegister(&code, function, 1, ir.dest, RAX);
-								}
-								else {
-									loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
-
-									if (ir.opSize == 8) {
-										code.add1(0x48);
-									}
-									else if (ir.opSize == 2) {
-										code.add1(0x66);
-									}
-
-									code.add1(0x0F);
-									code.add1(0xAF);
-									writeRSPRegisterByte(&code, function, RAX, ir.b);
-
-									storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
-								}
-							}
-						}
-					} break;
-					case IrOp::MUL_BY_CONSTANT: {
-						assert(ir.opSize == 8);
-
-						if (ir.a == 0 || ir.b == 0) {
-							storeImmediate(&code, function, ir.opSize, ir.dest, 0);
-						}
-						else {
-							loadImmediateIntoRAX(&code, ir.b);
-
-							code.add1(0x48);
-							code.add1(0x0F);
-							code.add1(0xAF);
-							writeRSPRegisterByte(&code, function, RAX, ir.a);
-
-							storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
-						}
-					} break;
-					case IrOp::DIV: {
-						if (ir.flags & IR_FLOAT_OP) {
-							loadIntoFloatRegister(&code, function, ir.opSize, 0, ir.a);
-							loadIntoFloatRegister(&code, function, ir.opSize, 1, ir.b);
-
-							if (ir.opSize == 8) {
-								code.add1(0xF2);
-							}
-							else {
-								code.add1(0xF3);
-							}
-							code.add1(0x0F);
-							code.add1(0x5E);
-							code.add1(0xC1);
-
-							storeFromFloatRegister(&code, function, ir.opSize, ir.dest, 0);
-						}
-						else {
-							loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
-							loadIntoIntRegister(&code, function, ir.opSize, RCX, ir.b);
-
-							if (ir.flags & IR_SIGNED_OP) {
-								if (ir.opSize == 1) {
-									code.add1(0x66); // cbw
-									code.add1(0x98);
-
-									code.add1(0xF6); // idiv cl
-									code.add1(0xF9);
-
-								}
-								else {
-									if (ir.opSize == 2) {
-										code.add1(0x66);
-									}
-									else if (ir.opSize == 8) {
-										code.add1(0x48);
-									}
-
-									code.add1(0x99);
-
-									if (ir.opSize == 2) {
-										code.add1(0x66);
-									}
-									else if (ir.opSize == 8) {
-										code.add1(0x48);
-									}
-									code.add1(0xF7);
-									code.add1(0xF9);
-								}
-							}
-							else {
-								if (ir.opSize == 1) {
-									code.add1(0x66); // movzx ax, al
-									code.add1(0x0F);
-									code.add1(0xB6);
-									code.add1(0xC0);
-
-									code.add1(0xF6); // div cl
-									code.add1(0xF1);
-
-								}
-								else {
-									if (ir.opSize == 2) {
-										code.add1(0x66);
-									}
-									else if (ir.opSize == 8) {
-										code.add1(0x48);
-									}
-
-									code.add1(0x31);
-									code.add1(0xD2);
-
-									if (ir.opSize == 2) {
-										code.add1(0x66);
-									}
-									else if (ir.opSize == 8) {
-										code.add1(0x48);
-									}
-									code.add1(0xF7);
-									code.add1(0xF1);
-								}
-							}
-
-							storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
-						}
-					} break;
-					case IrOp::DIVIDE_BY_CONSTANT: {
+					if (ir.a == 0 || ir.b == 0) {
+						storeImmediate(&code, function, ir.opSize, ir.dest, 0);
+					}
+					else {
 						loadImmediateIntoRAX(&code, ir.b);
 
-						code.add1(0x48); // mov rcx, rax
-						code.add1(0x89);
+						code.add1(0x48);
+						code.add1(0x0F);
+						code.add1(0xAF);
+						writeRSPRegisterByte(&code, function, RAX, ir.a);
+
+						storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
+					}
+				} break;
+				case IrOp::DIV: {
+					if (ir.flags & IR_FLOAT_OP) {
+						loadIntoFloatRegister(&code, function, ir.opSize, 0, ir.a);
+						loadIntoFloatRegister(&code, function, ir.opSize, 1, ir.b);
+
+						if (ir.opSize == 8) {
+							code.add1(0xF2);
+						}
+						else {
+							code.add1(0xF3);
+						}
+						code.add1(0x0F);
+						code.add1(0x5E);
 						code.add1(0xC1);
 
-						loadIntoIntRegister(&code, function, 8, RAX, ir.a);
-
-						code.add1(0x48); // cqo
-						code.add1(0x99);
-
-						code.add1(0x48); // div rcx
-						code.add1(0xF7);
-						code.add1(0xF1);
-
-						storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
-					} break;
-					case IrOp::MOD: {
-						if (ir.flags & IR_FLOAT_OP) {
-							// @Incomplete: x64 doesn't have native fmod, call out to fmod in crt or implement our own
-							assert(false);
-						}
-						else {
-							loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
-							loadIntoIntRegister(&code, function, ir.opSize, RCX, ir.b);
-
-							if (ir.flags & IR_SIGNED_OP) {
-								if (ir.opSize == 1) {
-									code.add1(0x66); // cbw
-									code.add1(0x98);
-
-									code.add1(0xF6); // idiv cl
-									code.add1(0xF9);
-
-								}
-								else {
-									if (ir.opSize == 2) {
-										code.add1(0x66);
-									}
-									else if (ir.opSize == 8) {
-										code.add1(0x48);
-									}
-
-									code.add1(0x99);
-
-									if (ir.opSize == 2) {
-										code.add1(0x66);
-									}
-									else if (ir.opSize == 8) {
-										code.add1(0x48);
-									}
-									code.add1(0xF7);
-									code.add1(0xF9);
-								}
-							}
-							else {
-								if (ir.opSize == 1) {
-									code.add1(0x66); // movzx ax, al
-									code.add1(0x0F);
-									code.add1(0xB6);
-									code.add1(0xC0);
-
-									code.add1(0xF6); // div cl
-									code.add1(0xF1);
-
-								}
-								else {
-									if (ir.opSize == 2) {
-										code.add1(0x66);
-									}
-									else if (ir.opSize == 8) {
-										code.add1(0x48);
-									}
-
-									code.add1(0x31);
-									code.add1(0xD2);
-
-									if (ir.opSize == 2) {
-										code.add1(0x66);
-									}
-									else if (ir.opSize == 8) {
-										code.add1(0x48);
-									}
-									code.add1(0xF7);
-									code.add1(0xF1);
-								}
-							}
-
-							storeFromIntRegister(&code, function, ir.opSize, ir.dest, ir.opSize == 1 ? AH : RDX);
-						}
-					} break;
-					case IrOp::AND: {
-						if (ir.a == 0 || ir.b == 0) {
-							storeImmediate(&code, function, ir.opSize, ir.dest, 0);
-						}
-						else {
-							loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
-
-							if (ir.opSize == 8) {
-								code.add1(0x48);
-							}
-							else if (ir.opSize == 2) {
-								code.add1(0x66);
-							}
-
-							if (ir.opSize == 1) {
-								code.add1(0x22);
-							}
-							else {
-								code.add1(0x23);
-							}
-							writeRSPRegisterByte(&code, function, RAX, ir.b);
-
-							storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
-						}
-					} break;
-					case IrOp::OR: {
-						if (ir.a == 0) {
-							writeSet(&code, function, ir.opSize, ir.dest, ir.b);
-						}
-						else if (ir.b == 0) {
-							writeSet(&code, function, ir.opSize, ir.dest, ir.a);
-						}
-						else {
-							loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
-
-							if (ir.opSize == 8) {
-								code.add1(0x48);
-							}
-							else if (ir.opSize == 2) {
-								code.add1(0x66);
-							}
-
-							if (ir.opSize == 1) {
-								code.add1(0x0A);
-							}
-							else {
-								code.add1(0x0B);
-							}
-							writeRSPRegisterByte(&code, function, RAX, ir.b);
-
-							storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
-						}
-					} break;
-					case IrOp::XOR: {
-						if (ir.a == 0) {
-							writeSet(&code, function, ir.opSize, ir.dest, ir.b);
-						}
-						else if (ir.b == 0) {
-							writeSet(&code, function, ir.opSize, ir.dest, ir.a);
-						}
-						else {
-							loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
-
-							if (ir.opSize == 8) {
-								code.add1(0x48);
-							}
-							else if (ir.opSize == 2) {
-								code.add1(0x66);
-							}
-
-							if (ir.opSize == 1) {
-								code.add1(0x32);
-							}
-							else {
-								code.add1(0x33);
-							}
-							writeRSPRegisterByte(&code, function, RAX, ir.b);
-
-							storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
-						}
-					} break;
-					case IrOp::NOT: {
-						loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
-						if (ir.opSize == 8) {
-							code.add1(0x48);
-						}
-						else if (ir.opSize == 2) {
-							code.add1(0x66);
-						}
-
-						if (ir.opSize == 1) {
-							code.add1(0xF6);
-						}
-						else {
-							code.add1(0xF7);
-						}
-
-						code.add1(0xD0);
-
-						storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
-					} break;
-					case IrOp::SHIFT_LEFT: {
+						storeFromFloatRegister(&code, function, ir.opSize, ir.dest, 0);
+					}
+					else {
 						loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
 						loadIntoIntRegister(&code, function, ir.opSize, RCX, ir.b);
-
-						if (ir.opSize == 8) {
-							code.add1(0x48);
-						}
-						else if (ir.opSize == 2) {
-							code.add1(0x66);
-						}
-
-						if (ir.opSize == 1) {
-							code.add1(0xD2);
-						}
-						else {
-							code.add1(0xD3);
-						}
-
-						code.add1(0xE0);
-
-						storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
-					} break;
-					case IrOp::SHIFT_RIGHT: {
-
-						loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
-						loadIntoIntRegister(&code, function, ir.opSize, RCX, ir.b);
-
-						if (ir.opSize == 8) {
-							code.add1(0x48);
-						}
-						else if (ir.opSize == 2) {
-							code.add1(0x66);
-						}
-
-						if (ir.opSize == 1) {
-							code.add1(0xD2);
-						}
-						else {
-							code.add1(0xD3);
-						}
 
 						if (ir.flags & IR_SIGNED_OP) {
-							code.add1(0xF8);
+							if (ir.opSize == 1) {
+								code.add1(0x66); // cbw
+								code.add1(0x98);
+
+								code.add1(0xF6); // idiv cl
+								code.add1(0xF9);
+
+							}
+							else {
+								if (ir.opSize == 2) {
+									code.add1(0x66);
+								}
+								else if (ir.opSize == 8) {
+									code.add1(0x48);
+								}
+
+								code.add1(0x99);
+
+								if (ir.opSize == 2) {
+									code.add1(0x66);
+								}
+								else if (ir.opSize == 8) {
+									code.add1(0x48);
+								}
+								code.add1(0xF7);
+								code.add1(0xF9);
+							}
 						}
 						else {
-							code.add1(0xE8);
+							if (ir.opSize == 1) {
+								code.add1(0x66); // movzx ax, al
+								code.add1(0x0F);
+								code.add1(0xB6);
+								code.add1(0xC0);
+
+								code.add1(0xF6); // div cl
+								code.add1(0xF1);
+
+							}
+							else {
+								if (ir.opSize == 2) {
+									code.add1(0x66);
+								}
+								else if (ir.opSize == 8) {
+									code.add1(0x48);
+								}
+
+								code.add1(0x31);
+								code.add1(0xD2);
+
+								if (ir.opSize == 2) {
+									code.add1(0x66);
+								}
+								else if (ir.opSize == 8) {
+									code.add1(0x48);
+								}
+								code.add1(0xF7);
+								code.add1(0xF1);
+							}
 						}
 
 						storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
-					} break;
-					case IrOp::READ: {
-						assert(ir.opSize == 8);
+					}
+				} break;
+				case IrOp::DIVIDE_BY_CONSTANT: {
+					loadImmediateIntoRAX(&code, ir.b);
 
-						if (isStandardSize(ir.destSize)) {
-							loadIntoIntRegister(&code, function, 8, RAX, ir.a);
+					code.add1(0x48); // mov rcx, rax
+					code.add1(0x89);
+					code.add1(0xC1);
 
-							if (ir.destSize == 8) {
-								code.add1(0x48);
-							}
-							else if (ir.destSize == 2) {
-								code.add1(0x66);
-							}
+					loadIntoIntRegister(&code, function, 8, RAX, ir.a);
 
-							if (ir.destSize == 1) {
-								code.add1(0x8A);
+					code.add1(0x48); // cqo
+					code.add1(0x99);
+
+					code.add1(0x48); // div rcx
+					code.add1(0xF7);
+					code.add1(0xF1);
+
+					storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
+				} break;
+				case IrOp::MOD: {
+					if (ir.flags & IR_FLOAT_OP) {
+						// @Incomplete: x64 doesn't have native fmod, call out to fmod in crt or implement our own
+						assert(false);
+					}
+					else {
+						loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
+						loadIntoIntRegister(&code, function, ir.opSize, RCX, ir.b);
+
+						if (ir.flags & IR_SIGNED_OP) {
+							if (ir.opSize == 1) {
+								code.add1(0x66); // cbw
+								code.add1(0x98);
+
+								code.add1(0xF6); // idiv cl
+								code.add1(0xF9);
+
 							}
 							else {
-								code.add1(0x8B);
+								if (ir.opSize == 2) {
+									code.add1(0x66);
+								}
+								else if (ir.opSize == 8) {
+									code.add1(0x48);
+								}
+
+								code.add1(0x99);
+
+								if (ir.opSize == 2) {
+									code.add1(0x66);
+								}
+								else if (ir.opSize == 8) {
+									code.add1(0x48);
+								}
+								code.add1(0xF7);
+								code.add1(0xF9);
 							}
-
-							code.add1(0x00);
-
-							storeFromIntRegister(&code, function, ir.destSize, ir.dest, RAX);
 						}
 						else {
+							if (ir.opSize == 1) {
+								code.add1(0x66); // movzx ax, al
+								code.add1(0x0F);
+								code.add1(0xB6);
+								code.add1(0xC0);
 
-							loadIntoIntRegister(&code, function, 8, RSI, ir.a);
+								code.add1(0xF6); // div cl
+								code.add1(0xF1);
 
+							}
+							else {
+								if (ir.opSize == 2) {
+									code.add1(0x66);
+								}
+								else if (ir.opSize == 8) {
+									code.add1(0x48);
+								}
+
+								code.add1(0x31);
+								code.add1(0xD2);
+
+								if (ir.opSize == 2) {
+									code.add1(0x66);
+								}
+								else if (ir.opSize == 8) {
+									code.add1(0x48);
+								}
+								code.add1(0xF7);
+								code.add1(0xF1);
+							}
+						}
+
+						storeFromIntRegister(&code, function, ir.opSize, ir.dest, ir.opSize == 1 ? AH : RDX);
+					}
+				} break;
+				case IrOp::AND: {
+					if (ir.a == 0 || ir.b == 0) {
+						storeImmediate(&code, function, ir.opSize, ir.dest, 0);
+					}
+					else {
+						loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
+
+						if (ir.opSize == 8) {
+							code.add1(0x48);
+						}
+						else if (ir.opSize == 2) {
+							code.add1(0x66);
+						}
+
+						if (ir.opSize == 1) {
+							code.add1(0x22);
+						}
+						else {
+							code.add1(0x23);
+						}
+						writeRSPRegisterByte(&code, function, RAX, ir.b);
+
+						storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
+					}
+				} break;
+				case IrOp::OR: {
+					if (ir.a == 0) {
+						writeSet(&code, function, ir.opSize, ir.dest, ir.b);
+					}
+					else if (ir.b == 0) {
+						writeSet(&code, function, ir.opSize, ir.dest, ir.a);
+					}
+					else {
+						loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
+
+						if (ir.opSize == 8) {
+							code.add1(0x48);
+						}
+						else if (ir.opSize == 2) {
+							code.add1(0x66);
+						}
+
+						if (ir.opSize == 1) {
+							code.add1(0x0A);
+						}
+						else {
+							code.add1(0x0B);
+						}
+						writeRSPRegisterByte(&code, function, RAX, ir.b);
+
+						storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
+					}
+				} break;
+				case IrOp::XOR: {
+					if (ir.a == 0) {
+						writeSet(&code, function, ir.opSize, ir.dest, ir.b);
+					}
+					else if (ir.b == 0) {
+						writeSet(&code, function, ir.opSize, ir.dest, ir.a);
+					}
+					else {
+						loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
+
+						if (ir.opSize == 8) {
+							code.add1(0x48);
+						}
+						else if (ir.opSize == 2) {
+							code.add1(0x66);
+						}
+
+						if (ir.opSize == 1) {
+							code.add1(0x32);
+						}
+						else {
+							code.add1(0x33);
+						}
+						writeRSPRegisterByte(&code, function, RAX, ir.b);
+
+						storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
+					}
+				} break;
+				case IrOp::NOT: {
+					loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
+					if (ir.opSize == 8) {
+						code.add1(0x48);
+					}
+					else if (ir.opSize == 2) {
+						code.add1(0x66);
+					}
+
+					if (ir.opSize == 1) {
+						code.add1(0xF6);
+					}
+					else {
+						code.add1(0xF7);
+					}
+
+					code.add1(0xD0);
+
+					storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
+				} break;
+				case IrOp::SHIFT_LEFT: {
+					loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
+					loadIntoIntRegister(&code, function, ir.opSize, RCX, ir.b);
+
+					if (ir.opSize == 8) {
+						code.add1(0x48);
+					}
+					else if (ir.opSize == 2) {
+						code.add1(0x66);
+					}
+
+					if (ir.opSize == 1) {
+						code.add1(0xD2);
+					}
+					else {
+						code.add1(0xD3);
+					}
+
+					code.add1(0xE0);
+
+					storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
+				} break;
+				case IrOp::SHIFT_RIGHT: {
+
+					loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
+					loadIntoIntRegister(&code, function, ir.opSize, RCX, ir.b);
+
+					if (ir.opSize == 8) {
+						code.add1(0x48);
+					}
+					else if (ir.opSize == 2) {
+						code.add1(0x66);
+					}
+
+					if (ir.opSize == 1) {
+						code.add1(0xD2);
+					}
+					else {
+						code.add1(0xD3);
+					}
+
+					if (ir.flags & IR_SIGNED_OP) {
+						code.add1(0xF8);
+					}
+					else {
+						code.add1(0xE8);
+					}
+
+					storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
+				} break;
+				case IrOp::READ: {
+					assert(ir.opSize == 8);
+
+					if (isStandardSize(ir.destSize)) {
+						loadIntoIntRegister(&code, function, 8, RAX, ir.a);
+
+						if (ir.destSize == 8) {
+							code.add1(0x48);
+						}
+						else if (ir.destSize == 2) {
+							code.add1(0x66);
+						}
+
+						if (ir.destSize == 1) {
+							code.add1(0x8A);
+						}
+						else {
+							code.add1(0x8B);
+						}
+
+						code.add1(0x00);
+
+						storeFromIntRegister(&code, function, ir.destSize, ir.dest, RAX);
+					}
+					else {
+
+						loadIntoIntRegister(&code, function, 8, RSI, ir.a);
+
+						code.add1(0x48);
+						code.add1(0x8D);
+						writeRSPRegisterByte(&code, function, RDI, ir.dest);
+
+						if (ir.destSize % 8 == 0) {
+							loadImmediateIntoIntRegister(&code, RCX, ir.destSize / 8);
+
+							code.add1(0xF3); // rep movsq
+							code.add1(0x48);
+							code.add1(0xA5);
+						}
+						else {
+							loadImmediateIntoIntRegister(&code, RCX, ir.destSize);
+
+							code.add1(0xF3); // rep movsb
+							code.add1(0x48);
+							code.add1(0xA4);
+						}
+					}
+				} break;
+				case IrOp::WRITE: {
+					if (isStandardSize(ir.opSize)) {
+						loadIntoIntRegister(&code, function, 8, RAX, ir.a);
+						loadIntoIntRegister(&code, function, ir.opSize, RCX, ir.b);
+
+						if (ir.opSize == 2) {
+							code.add1(0x66);
+						}
+						else if (ir.opSize == 8) {
+							code.add1(0x48);
+						}
+
+						if (ir.opSize == 1) {
+							code.add1(0x88);
+						}
+						else {
+							code.add1(0x89);
+						}
+
+						code.add1(0x08);
+					}
+					else {
+						if (ir.b == 0) {
+							loadIntoIntRegister(&code, function, 8, RDI, ir.a);
+
+							if (ir.opSize % 8 == 0) {
+								loadImmediateIntoIntRegister(&code, RCX, ir.opSize / 8);
+
+								code.add1(0x31); // xor eax, eax
+								code.add1(0xC0);
+
+								code.add1(0xF3); // rep stosq
+								code.add1(0x48);
+								code.add1(0xAB);
+							}
+							else {
+								loadImmediateIntoIntRegister(&code, RCX, ir.opSize);
+
+								code.add1(0x30); // xor al, al
+								code.add1(0xC0);
+
+								code.add1(0xF3); // rep stosb
+								code.add1(0x48);
+								code.add1(0xAA);
+							}
+						}
+						else {
 							code.add1(0x48);
 							code.add1(0x8D);
-							writeRSPRegisterByte(&code, function, RDI, ir.dest);
+							writeRSPRegisterByte(&code, function, RSI, ir.b);
 
-							if (ir.destSize % 8 == 0) {
-								loadImmediateIntoIntRegister(&code, RCX, ir.destSize / 8);
+							loadIntoIntRegister(&code, function, 8, RDI, ir.a);
+
+							if (ir.opSize % 8 == 0) {
+								loadImmediateIntoIntRegister(&code, RCX, ir.opSize / 8);
 
 								code.add1(0xF3); // rep movsq
 								code.add1(0x48);
 								code.add1(0xA5);
 							}
 							else {
-								loadImmediateIntoIntRegister(&code, RCX, ir.destSize);
+								loadImmediateIntoIntRegister(&code, RCX, ir.opSize);
 
 								code.add1(0xF3); // rep movsb
 								code.add1(0x48);
 								code.add1(0xA4);
 							}
 						}
-					} break;
-					case IrOp::WRITE: {
-						if (isStandardSize(ir.opSize)) {
-							loadIntoIntRegister(&code, function, 8, RAX, ir.a);
-							loadIntoIntRegister(&code, function, ir.opSize, RCX, ir.b);
+					}
+				} break;
+				case IrOp::SET: {
+					if (ir.opSize == ir.destSize || ir.a == 0) {
+						writeSet(&code, function, ir.opSize, ir.dest, ir.a);
+					}
+					else {
+						if (ir.flags & IR_FLOAT_OP) {
+							if (ir.opSize == 8) {
+								assert(ir.destSize == 4);
 
-							if (ir.opSize == 2) {
-								code.add1(0x66);
+								code.add1(0xF2);
 							}
-							else if (ir.opSize == 8) {
+							else {
+								assert(ir.opSize == 4);
+								assert(ir.destSize == 8);
+
+								code.add1(0xF3);
+							}
+
+							code.add1(0x0F);
+							code.add1(0x5A);
+
+							writeRSPRegisterByte(&code, function, 0, ir.a);
+							storeFromFloatRegister(&code, function, ir.destSize, ir.dest, 0);
+						}
+						else {
+							if (ir.destSize < ir.opSize) {
+								writeSet(&code, function, ir.destSize, ir.dest, ir.a);
+							}
+							else {
+								if (ir.flags & IR_SIGNED_OP) {
+									if (ir.opSize == 1) {
+										if (ir.destSize == 2) {
+											code.add1(0x66);
+										}
+										else if (ir.destSize == 8) {
+											code.add1(0x48);
+										}
+
+										code.add1(0x0F);
+										code.add1(0xBE);
+										writeRSPRegisterByte(&code, function, RAX, ir.a);
+									}
+									else if (ir.opSize == 2) {
+										if (ir.destSize == 8) {
+											code.add1(0x48);
+										}
+
+										code.add1(0x0F);
+										code.add1(0xBF);
+										writeRSPRegisterByte(&code, function, RAX, ir.a);
+									}
+									else if (ir.opSize == 4) {
+										code.add1(0x48);
+										code.add1(0x63);
+										writeRSPRegisterByte(&code, function, RAX, ir.a);
+									}
+								}
+								else {
+									if (ir.opSize == 1) {
+										if (ir.destSize == 2) {
+											code.add1(0x66);
+										}
+
+										code.add1(0x0F);
+										code.add1(0xB6);
+										writeRSPRegisterByte(&code, function, RAX, ir.a);
+
+
+									}
+									else if (ir.opSize == 2) {
+										code.add1(0x0F);
+										code.add1(0xB7);
+										writeRSPRegisterByte(&code, function, RAX, ir.a);
+									}
+									else if (ir.opSize == 4) {
+										loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
+									}
+								}
+
+								storeFromIntRegister(&code, function, ir.destSize, ir.dest, RAX);
+							}
+						}
+					}
+				} break;
+				case IrOp::GOTO: {
+					code.add1(0xE9);
+
+					JumpPatch patch;
+					patch.opToPatch = ir.b;
+					patch.location = reinterpret_cast<s32 *>(code.add4(0));
+					patch.rip = code.totalSize;
+
+					jumpPatches.add(patch);
+				} break;
+				case IrOp::IF_Z_GOTO: {
+					loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
+
+					if (ir.opSize == 8) {
+						code.add1(0x48);
+					}
+					else if (ir.opSize == 2) {
+						code.add1(0x66);
+					}
+
+					if (ir.opSize == 1) {
+						code.add1(0x84);
+					}
+					else {
+						code.add1(0x85);
+					}
+					code.add1(0xC0);
+
+					code.add1(0x0F);
+					code.add1(0x80 | C_Z);
+
+					JumpPatch patch;
+					patch.opToPatch = ir.b;
+					patch.location = reinterpret_cast<s32 *>(code.add4(0));
+					patch.rip = code.totalSize;
+
+					jumpPatches.add(patch);
+				} break;
+				case IrOp::IF_NZ_GOTO: {
+					loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
+
+					if (ir.opSize == 8) {
+						code.add1(0x48);
+					}
+					else if (ir.opSize == 2) {
+						code.add1(0x66);
+					}
+
+					if (ir.opSize == 1) {
+						code.add1(0x84);
+					}
+					else {
+						code.add1(0x85);
+					}
+					code.add1(0xC0);
+
+					code.add1(0x0F);
+					code.add1(0x80 | C_NZ);
+
+					JumpPatch patch;
+					patch.opToPatch = ir.b;
+					patch.location = reinterpret_cast<s32 *>(code.add4(0));
+					patch.rip = code.totalSize;
+
+					jumpPatches.add(patch);
+				} break;
+				case IrOp::LESS: {
+					if (ir.flags & IR_FLOAT_OP) {
+						setConditionFloat(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_B);
+					}
+					else {
+						if (ir.flags & IR_SIGNED_OP) {
+							setConditionInt(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_L);
+						}
+						else {
+							setConditionInt(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_B);
+						}
+					}
+				} break;
+				case IrOp::GREATER: {
+					if (ir.flags & IR_FLOAT_OP) {
+						setConditionFloat(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_A);
+					}
+					else {
+						if (ir.flags & IR_SIGNED_OP) {
+							setConditionInt(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_G);
+						}
+						else {
+							setConditionInt(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_A);
+						}
+					}
+				} break;
+				case IrOp::LESS_EQUAL: {
+					if (ir.flags & IR_FLOAT_OP) {
+						setConditionFloat(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_BE);
+					}
+					else {
+						if (ir.flags & IR_SIGNED_OP) {
+							setConditionInt(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_LE);
+						}
+						else {
+							setConditionInt(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_BE);
+						}
+					}
+				} break;
+				case IrOp::GREATER_EQUAL: {
+					if (ir.flags & IR_FLOAT_OP) {
+						setConditionFloat(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_AE);
+					}
+					else {
+						if (ir.flags & IR_SIGNED_OP) {
+							setConditionInt(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_GE);
+						}
+						else {
+							setConditionInt(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_AE);
+						}
+					}
+				} break;
+				case IrOp::NOT_EQUAL: {
+					if (ir.flags & IR_FLOAT_OP) {
+						setConditionFloat(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_NE);
+					}
+					else {
+						setConditionInt(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_NE);
+					}
+				} break;
+				case IrOp::EQUAL: {
+					if (ir.flags & IR_FLOAT_OP) {
+						setConditionFloat(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_E);
+					}
+					else {
+						setConditionInt(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_E);
+					}
+				} break;
+				case IrOp::ADDRESS_OF_GLOBAL: {
+					assert(ir.declaration->enclosingScope == &globalBlock);
+					assert(!(ir.declaration->flags & DECLARATION_IS_CONSTANT));
+
+					code.add1(0x48);
+					code.add1(0x8D);
+					code.add1(0x05);
+
+					codeRelocations.add4(static_cast<u32>(code.totalSize));
+					codeRelocations.add4(createSymbolForDeclaration(&symbols, ir.declaration));
+					codeRelocations.add2(IMAGE_REL_AMD64_REL32);
+
+					code.add4(0);
+
+					storeFromIntRegister(&code, function, 8, ir.dest, RAX);
+				} break;
+				case IrOp::ADDRESS_OF_LOCAL: {
+					code.add1(0x48);
+					code.add1(0x8D);
+
+					writeRSPRegisterByte(&code, function, RAX, ir.a, ir.b);
+					storeFromIntRegister(&code, function, 8, ir.dest, RAX);
+				} break;
+				case IrOp::IMMEDIATE: {
+					storeImmediate(&code, function, ir.opSize, ir.dest, ir.a);
+				} break;
+				case IrOp::FLOAT_TO_INT: {
+					if (ir.a == 0) {
+						writeSet(&code, function, ir.destSize, ir.dest, 0);
+						break;
+					}
+
+					if (ir.flags & IR_SIGNED_OP) {
+						if (ir.opSize == 8) {
+							code.add1(0xF2);
+						}
+						else {
+							code.add1(0xF3);
+						}
+
+						if (ir.destSize == 8) {
+							code.add1(0x48);
+						}
+
+						code.add1(0x0F);
+						code.add1(0x2C);
+						writeRSPRegisterByte(&code, function, RAX, ir.a);
+						storeFromIntRegister(&code, function, ir.destSize, ir.dest, RAX);
+					}
+					else {
+						if (ir.destSize == 8) { // Aww sheet
+							loadIntoFloatRegister(&code, function, ir.opSize, 0, ir.a);
+
+							if (ir.opSize == 8) {
+								if (f64ToU64ConstantSymbolIndex == -1) {
+									f64ToU64ConstantSymbolIndex = symbols.count();
+
+									rdata.allocateUnaligned(AlignPO2(rdata.totalSize, 8) - rdata.totalSize);
+
+									Symbol f64ToU64Constant;
+									setSymbolName(&stringTable, &f64ToU64Constant.name, "@f64ToU64Constant");
+									f64ToU64Constant.value = static_cast<u32>(rdata.totalSize);
+									f64ToU64Constant.sectionNumber = RDATA_SECTION_NUMBER;
+									f64ToU64Constant.type = 0;
+									f64ToU64Constant.storageClass = IMAGE_SYM_CLASS_STATIC;
+									f64ToU64Constant.numberOfAuxSymbols = 0;
+
+									symbols.add(f64ToU64Constant);
+
+									rdata.add8(0x43E0000000000000);
+								}
+
+								code.add1(0xF2); // movsd xmm1, f32ToU64Constant
+								code.add1(0x0F);
+								code.add1(0x10);
+								code.add1(0x0D);
+
+								codeRelocations.add4(static_cast<u32>(code.totalSize));
+								codeRelocations.add4(static_cast<u32>(f64ToU64ConstantSymbolIndex));
+								codeRelocations.add2(IMAGE_REL_AMD64_REL32);
+
+								code.add4(0);
+
+								code.add1(0x31); // xor eax, eax
+								code.add1(0xC0);
+
+								code.add1(0x66); // comisd xmm0, xmm1
+								code.add1(0x0F);
+								code.add1(0x2F);
+								code.add1(0xC1);
+
+								code.add1(0x70 | C_B); // jb .cvt
+								u8 *firstJumpPatch = code.add1(0);
+								u64 firstJumpRel = code.totalSize;
+
+								code.add1(0xF2); // subsd xmm0, xmm1
+								code.add1(0x0F);
+								code.add1(0x5C);
+								code.add1(0xC1);
+
+								code.add1(0x66); // comisd xmm0, xmm1
+								code.add1(0x0F);
+								code.add1(0x2F);
+								code.add1(0xC1);
+
+								code.add1(0x70 | C_AE); // jae .cvt
+								u8 *secondJumpPatch = code.add1(0);
+								u64 secondJumpRel = code.totalSize;
+
+								code.add1(0x48); // mov rax, 0x8000'0000'0000'0000
+								code.add1(0xB8);
+								code.add8(0x8000'0000'0000'0000);
+
+								*firstJumpPatch = static_cast<u8>(code.totalSize - firstJumpRel);
+								*secondJumpPatch = static_cast<u8>(code.totalSize - secondJumpRel);
+
+								// .cvt
+								code.add1(0xF2); // cvttsd2si rcx, xmm0
+								code.add1(0x48);
+								code.add1(0x0F);
+								code.add1(0x2C);
+								code.add1(0xC8);
+
+								code.add1(0x48); // add rax, rcx
+								code.add1(0x01);
+								code.add1(0xC8);
+							}
+							else {
+								if (f32ToU64ConstantSymbolIndex == -1) {
+									f32ToU64ConstantSymbolIndex = symbols.count();
+
+									rdata.allocateUnaligned(AlignPO2(rdata.totalSize, 4) - rdata.totalSize);
+
+									Symbol f32ToU64Constant;
+									setSymbolName(&stringTable, &f32ToU64Constant.name, "@f32ToU64Constant");
+									f32ToU64Constant.value = static_cast<u32>(rdata.totalSize);
+									f32ToU64Constant.sectionNumber = RDATA_SECTION_NUMBER;
+									f32ToU64Constant.type = 0;
+									f32ToU64Constant.storageClass = IMAGE_SYM_CLASS_STATIC;
+									f32ToU64Constant.numberOfAuxSymbols = 0;
+
+									symbols.add(f32ToU64Constant);
+
+									rdata.add4(0x5F000000);
+								}
+
+								code.add1(0xF3); // movss xmm1, f32ToU64Constant
+								code.add1(0x0F);
+								code.add1(0x10);
+								code.add1(0x0D);
+
+								codeRelocations.add4(code.totalSize);
+								codeRelocations.add4(f32ToU64ConstantSymbolIndex);
+								codeRelocations.add2(IMAGE_REL_AMD64_REL32);
+
+								code.add4(0);
+
+								code.add1(0x31); // xor eax, eax
+								code.add1(0xC0);
+
+								code.add1(0x0F); // comiss xmm0, xmm1
+								code.add1(0x2F);
+								code.add1(0xC1);
+
+								code.add1(0x70 | C_B); // jb .cvt
+								u8 *firstJumpPatch = code.add1(0);
+								u64 firstJumpRel = code.totalSize;
+
+								code.add1(0xF3); // subss xmm0, xmm1
+								code.add1(0x0F);
+								code.add1(0x5C);
+								code.add1(0xC1);
+
+								code.add1(0x0F); // comiss xmm0, xmm1
+								code.add1(0x2F);
+								code.add1(0xC1);
+
+								code.add1(0x70 | C_AE); // jae .cvt
+								u8 *secondJumpPatch = code.add1(0);
+								u64 secondJumpRel = code.totalSize;
+
+								code.add1(0x48); // mov rax, 0x8000'0000'0000'0000
+								code.add1(0xB8);
+								code.add8(0x8000'0000'0000'0000);
+
+								*firstJumpPatch = static_cast<u8>(code.totalSize - firstJumpRel);
+								*secondJumpPatch = static_cast<u8>(code.totalSize - secondJumpRel);
+
+								// .cvt
+								code.add1(0xF3); // cvttss2si rcx, xmm0
+								code.add1(0x48);
+								code.add1(0x0F);
+								code.add1(0x2C);
+								code.add1(0xC8);
+
+								code.add1(0x48); // add rax, rcx
+								code.add1(0x01);
+								code.add1(0xC8);
+							}
+
+							storeFromIntRegister(&code, function, ir.destSize, ir.dest, RAX);
+						}
+
+						else {
+							if (ir.opSize == 8) {
+								code.add1(0xF2);
+							}
+							else {
+								code.add1(0xF3);
+							}
+
+							if (ir.destSize == 4) {
 								code.add1(0x48);
 							}
 
-							if (ir.opSize == 1) {
-								code.add1(0x88);
+							code.add1(0x0F);
+							code.add1(0x2C);
+
+
+							writeRSPRegisterByte(&code, function, RAX, ir.a);
+							storeFromIntRegister(&code, function, ir.destSize, ir.dest, RAX);
+						}
+					}
+				} break;
+				case IrOp::INT_TO_FLOAT: {
+					if (ir.a == 0) {
+						writeSet(&code, function, ir.destSize, ir.dest, 0);
+						break;
+					}
+
+					if (ir.flags & IR_SIGNED_OP) {
+						if (ir.opSize >= 4) {
+							if (ir.destSize == 8) {
+								code.add1(0xF2);
 							}
 							else {
-								code.add1(0x89);
+								code.add1(0xF3);
 							}
 
-							code.add1(0x08);
+							if (ir.opSize == 8) {
+								code.add1(0x48);
+							}
+
+							code.add1(0x0F);
+							code.add1(0x2A);
+							writeRSPRegisterByte(&code, function, 0, ir.a);
+							storeFromFloatRegister(&code, function, ir.destSize, ir.dest, 0);
 						}
 						else {
-							if (ir.b == 0) {
-								loadIntoIntRegister(&code, function, 8, RDI, ir.a);
+							code.add1(0x0F);
+							if (ir.opSize == 2) {
+								code.add1(0xBF);
+							}
+							else {
+								code.add1(0xBE);
+							}
+							writeRSPRegisterByte(&code, function, RAX, ir.a);
 
+							if (ir.destSize == 8) {
+								code.add1(0xF2);
+							}
+							else {
+								code.add1(0xF3);
+							}
+
+							code.add1(0x0F);
+							code.add1(0x2A);
+							code.add1(0xC0);
+
+							storeFromFloatRegister(&code, function, ir.destSize, ir.dest, 0);
+						}
+					}
+					else {
+						if (ir.opSize == 8) { // Aww sheet
+							loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
+
+							code.add1(0x48); // test rax, rax
+							code.add1(0x85);
+							code.add1(0xC0);
+
+							code.add1(0x70 | C_S); // js .large
+
+							u8 *firstJumpPatch = code.add1(0);
+							u64 firstJumpRel = code.totalSize;
+
+							code.add1(0x0F);
+
+							if (ir.destSize == 8) {
+								code.add1(0xF2);
+							}
+							else {
+								code.add1(0xF3);
+							}
+
+							code.add1(0x2a);
+							code.add1(0xC0);
+
+							code.add1(0xEB); // jmp .done
+
+							u8 *secondJumpPatch = code.add1(0);
+							u64 secondJumpRel = code.totalSize;
+
+
+							*firstJumpPatch = code.totalSize - firstJumpRel;
+
+							// .large
+							code.add1(0x48); // mov rcx, rax
+							code.add1(0x89);
+							code.add1(0xC1);
+
+							code.add1(0x83); // and ecx, 1
+							code.add1(0E1);
+							code.add1(0x01);
+
+							code.add1(0x48); // shr rax, 1
+							code.add1(0xD1);
+							code.add1(0xE8);
+
+							code.add1(0x48); // or rax, rcx
+							code.add1(0x09);
+							code.add1(0xC8);
+
+							if (ir.destSize == 8) {
+								code.add1(0xF2);
+							}
+							else {
+								code.add1(0xF3);
+							}
+
+							code.add1(0x0F);
+							code.add1(0x2A);
+							code.add1(0xC0);
+
+							if (ir.destSize == 8) {
+								code.add1(0xF2);
+							}
+							else {
+								code.add1(0xF3);
+							}
+
+							code.add1(0x0F);
+							code.add1(0x58);
+							code.add1(0xC0);
+
+							*secondJumpPatch = code.totalSize - secondJumpRel;
+
+							// .done
+							storeFromFloatRegister(&code, function, ir.destSize, ir.dest, 0);
+						}
+						else if (ir.opSize == 4) {
+							loadIntoIntRegister(&code, function, 4, RAX, ir.a);
+
+							if (ir.destSize == 8) {
+								code.add1(0xF2);
+							}
+							else {
+								code.add1(0xF3);
+							}
+
+							code.add1(0x48);
+
+							code.add1(0x0F);
+							code.add1(0x2A);
+							code.add1(0xC0);
+							storeFromFloatRegister(&code, function, ir.destSize, ir.dest, 0);
+						}
+						else {
+							code.add1(0x0F);
+							if (ir.opSize == 2) {
+								code.add1(0xB7);
+							}
+							else {
+								code.add1(0xB6);
+							}
+							writeRSPRegisterByte(&code, function, RAX, ir.a);
+
+							if (ir.destSize == 8) {
+								code.add1(0xF2);
+							}
+							else {
+								code.add1(0xF3);
+							}
+
+							code.add1(0x0F);
+							code.add1(0x2A);
+							code.add1(0xC0);
+
+							storeFromFloatRegister(&code, function, ir.destSize, ir.dest, 0);
+						}
+					}
+				} break;
+				case IrOp::RETURN: {
+					if (ir.opSize) {
+						if (isStandardSize(ir.opSize)) {
+							if (ir.flags & IR_FLOAT_OP) {
+								loadIntoFloatRegister(&code, function, ir.opSize, 0, ir.a);
+							}
+							else {
+								loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
+							}
+						}
+						else {
+							loadIntoIntRegister(&code, function, 8, RDI, 1);
+
+							if (ir.a == 0) {
 								if (ir.opSize % 8 == 0) {
 									loadImmediateIntoIntRegister(&code, RCX, ir.opSize / 8);
 
@@ -1833,9 +2539,7 @@ void runCoffWriter() {
 							else {
 								code.add1(0x48);
 								code.add1(0x8D);
-								writeRSPRegisterByte(&code, function, RSI, ir.b);
-
-								loadIntoIntRegister(&code, function, 8, RDI, ir.a);
+								writeRSPRegisterByte(&code, function, RSI, ir.a);
 
 								if (ir.opSize % 8 == 0) {
 									loadImmediateIntoIntRegister(&code, RCX, ir.opSize / 8);
@@ -1852,982 +2556,316 @@ void runCoffWriter() {
 									code.add1(0xA4);
 								}
 							}
+
+							loadIntoIntRegister(&code, function, 8, RAX, 1);
 						}
-					} break;
-					case IrOp::SET: {
-						if (ir.opSize == ir.destSize || ir.a == 0) {
-							writeSet(&code, function, ir.opSize, ir.dest, ir.a);
+					}
+
+					code.add1(0xE9);
+
+					JumpPatch patch;
+					patch.opToPatch = function->state.ir.count;
+					patch.location = reinterpret_cast<s32 *>(code.add4(0));
+					patch.rip = code.totalSize;
+
+					jumpPatches.add(patch);
+				} break;
+				case IrOp::CALL: {
+					u64 parameterOffset;
+
+					if (!isStandardSize(ir.arguments->returnType->size)) {
+						parameterOffset = 1;
+					}
+					else {
+						parameterOffset = 0;
+					}
+
+					u64 parameterSpace = my_max(4, ir.arguments->argCount + parameterOffset);
+
+					u64 largeStorage = parameterSpace;
+
+					for (u64 i = 0; i < ir.arguments->argCount; i++) {
+						u64 size = ir.arguments->args[i].type->size;
+						u64 reg = ir.arguments->args[i].number;
+
+						if (reg == static_cast<u64>(-1LL)) {
+							continue;
 						}
-						else {
-							if (ir.flags & IR_FLOAT_OP) {
-								if (ir.opSize == 8) {
-									assert(ir.destSize == 4);
 
-									code.add1(0xF2);
-								}
-								else {
-									assert(ir.opSize == 4);
-									assert(ir.destSize == 8);
-
-									code.add1(0xF3);
-								}
-
-								code.add1(0x0F);
-								code.add1(0x5A);
-
-								writeRSPRegisterByte(&code, function, 0, ir.a);
-								storeFromFloatRegister(&code, function, ir.destSize, ir.dest, 0);
+						if (!isStandardSize(size)) {
+							if (largeStorage & 1) {
+								++largeStorage; // Align to 16 bytes
 							}
-							else {
-								if (ir.destSize < ir.opSize) {
-									writeSet(&code, function, ir.destSize, ir.dest, ir.a);
-								}
-								else {
-									if (ir.flags & IR_SIGNED_OP) {
-										if (ir.opSize == 1) {
-											if (ir.destSize == 2) {
-												code.add1(0x66);
-											}
-											else if (ir.destSize == 8) {
-												code.add1(0x48);
-											}
 
-											code.add1(0x0F);
-											code.add1(0xBE);
-											writeRSPRegisterByte(&code, function, RAX, ir.a);
-										}
-										else if (ir.opSize == 2) {
-											if (ir.destSize == 8) {
-												code.add1(0x48);
-											}
-
-											code.add1(0x0F);
-											code.add1(0xBF);
-											writeRSPRegisterByte(&code, function, RAX, ir.a);
-										}
-										else if (ir.opSize == 4) {
-											code.add1(0x48);
-											code.add1(0x63);
-											writeRSPRegisterByte(&code, function, RAX, ir.a);
-										}
-									}
-									else {
-										if (ir.opSize == 1) {
-											if (ir.destSize == 2) {
-												code.add1(0x66);
-											}
-
-											code.add1(0x0F);
-											code.add1(0xB6);
-											writeRSPRegisterByte(&code, function, RAX, ir.a);
-
-
-										}
-										else if (ir.opSize == 2) {
-											code.add1(0x0F);
-											code.add1(0xB7);
-											writeRSPRegisterByte(&code, function, RAX, ir.a);
-										}
-										else if (ir.opSize == 4) {
-											loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
-										}
-									}
-
-									storeFromIntRegister(&code, function, ir.destSize, ir.dest, RAX);
-								}
-							}
-						}
-					} break;
-					case IrOp::GOTO: {
-						code.add1(0xE9);
-
-						JumpPatch patch;
-						patch.opToPatch = ir.b;
-						patch.location = reinterpret_cast<s32 *>(code.add4(0));
-						patch.rip = code.totalSize;
-
-						jumpPatches.add(patch);
-					} break;
-					case IrOp::IF_Z_GOTO: {
-						loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
-
-						if (ir.opSize == 8) {
 							code.add1(0x48);
-						}
-						else if (ir.opSize == 2) {
-							code.add1(0x66);
-						}
+							code.add1(0x8D);
+							writeRSPOffsetByte(&code, RDI, largeStorage * 8);
 
-						if (ir.opSize == 1) {
-							code.add1(0x84);
-						}
-						else {
-							code.add1(0x85);
-						}
-						code.add1(0xC0);
-
-						code.add1(0x0F);
-						code.add1(0x80 | C_Z);
-
-						JumpPatch patch;
-						patch.opToPatch = ir.b;
-						patch.location = reinterpret_cast<s32 *>(code.add4(0));
-						patch.rip = code.totalSize;
-
-						jumpPatches.add(patch);
-					} break;
-					case IrOp::IF_NZ_GOTO: {
-						loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
-
-						if (ir.opSize == 8) {
-							code.add1(0x48);
-						}
-						else if (ir.opSize == 2) {
-							code.add1(0x66);
-						}
-
-						if (ir.opSize == 1) {
-							code.add1(0x84);
-						}
-						else {
-							code.add1(0x85);
-						}
-						code.add1(0xC0);
-
-						code.add1(0x0F);
-						code.add1(0x80 | C_NZ);
-
-						JumpPatch patch;
-						patch.opToPatch = ir.b;
-						patch.location = reinterpret_cast<s32 *>(code.add4(0));
-						patch.rip = code.totalSize;
-
-						jumpPatches.add(patch);
-					} break;
-					case IrOp::LESS: {
-						if (ir.flags & IR_FLOAT_OP) {
-							setConditionFloat(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_B);
-						}
-						else {
-							if (ir.flags & IR_SIGNED_OP) {
-								setConditionInt(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_L);
-							}
-							else {
-								setConditionInt(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_B);
-							}
-						}
-					} break;
-					case IrOp::GREATER: {
-						if (ir.flags & IR_FLOAT_OP) {
-							setConditionFloat(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_A);
-						}
-						else {
-							if (ir.flags & IR_SIGNED_OP) {
-								setConditionInt(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_G);
-							}
-							else {
-								setConditionInt(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_A);
-							}
-						}
-					} break;
-					case IrOp::LESS_EQUAL: {
-						if (ir.flags & IR_FLOAT_OP) {
-							setConditionFloat(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_BE);
-						}
-						else {
-							if (ir.flags & IR_SIGNED_OP) {
-								setConditionInt(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_LE);
-							}
-							else {
-								setConditionInt(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_BE);
-							}
-						}
-					} break;
-					case IrOp::GREATER_EQUAL: {
-						if (ir.flags & IR_FLOAT_OP) {
-							setConditionFloat(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_AE);
-						}
-						else {
-							if (ir.flags & IR_SIGNED_OP) {
-								setConditionInt(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_GE);
-							}
-							else {
-								setConditionInt(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_AE);
-							}
-						}
-					} break;
-					case IrOp::NOT_EQUAL: {
-						if (ir.flags & IR_FLOAT_OP) {
-							setConditionFloat(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_NE);
-						}
-						else {
-							setConditionInt(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_NE);
-						}
-					} break;
-					case IrOp::EQUAL: {
-						if (ir.flags & IR_FLOAT_OP) {
-							setConditionFloat(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_E);
-						}
-						else {
-							setConditionInt(&code, function, ir.opSize, ir.dest, ir.a, ir.b, C_E);
-						}
-					} break;
-					case IrOp::ADDRESS_OF_GLOBAL: {
-						assert(ir.declaration->enclosingScope == &globalBlock);
-						assert(!(ir.declaration->flags & DECLARATION_IS_CONSTANT));
-
-						code.add1(0x48);
-						code.add1(0x8D);
-						code.add1(0x05);
-
-						codeRelocations.add4(static_cast<u32>(code.totalSize));
-						codeRelocations.add4(createSymbolForDeclaration(&symbols, ir.declaration));
-						codeRelocations.add2(IMAGE_REL_AMD64_REL32);
-
-						code.add4(0);
-
-						storeFromIntRegister(&code, function, 8, ir.dest, RAX);
-					} break;
-					case IrOp::ADDRESS_OF_LOCAL: {
-						code.add1(0x48);
-						code.add1(0x8D);
-
-						writeRSPRegisterByte(&code, function, RAX, ir.a, ir.b);
-						storeFromIntRegister(&code, function, 8, ir.dest, RAX);
-					} break;
-					case IrOp::IMMEDIATE: {
-						storeImmediate(&code, function, ir.opSize, ir.dest, ir.a);
-					} break;
-					case IrOp::FLOAT_TO_INT: {
-						if (ir.a == 0) {
-							writeSet(&code, function, ir.destSize, ir.dest, 0);
-							break;
-						}
-
-						if (ir.flags & IR_SIGNED_OP) {
-							if (ir.opSize == 8) {
-								code.add1(0xF2);
-							}
-							else {
-								code.add1(0xF3);
-							}
-
-							if (ir.destSize == 8) {
-								code.add1(0x48);
-							}
-
-							code.add1(0x0F);
-							code.add1(0x2C);
-							writeRSPRegisterByte(&code, function, RAX, ir.a);
-							storeFromIntRegister(&code, function, ir.destSize, ir.dest, RAX);
-						}
-						else {
-							if (ir.destSize == 8) { // Aww sheet
-								loadIntoFloatRegister(&code, function, ir.opSize, 0, ir.a);
-
-								if (ir.opSize == 8) {
-									if (f64ToU64ConstantSymbolIndex == -1) {
-										f64ToU64ConstantSymbolIndex = symbols.count();
-
-										rdata.allocateUnaligned(AlignPO2(rdata.totalSize, 8) - rdata.totalSize);
-
-										Symbol f64ToU64Constant;
-										setSymbolName(&stringTable, &f64ToU64Constant.name, "@f64ToU64Constant");
-										f64ToU64Constant.value = static_cast<u32>(rdata.totalSize);
-										f64ToU64Constant.sectionNumber = RDATA_SECTION_NUMBER;
-										f64ToU64Constant.type = 0;
-										f64ToU64Constant.storageClass = IMAGE_SYM_CLASS_STATIC;
-										f64ToU64Constant.numberOfAuxSymbols = 0;
-
-										symbols.add(f64ToU64Constant);
-
-										rdata.add8(0x43E0000000000000);
-									}
-
-									code.add1(0xF2); // movsd xmm1, f32ToU64Constant
-									code.add1(0x0F);
-									code.add1(0x10);
-									code.add1(0x0D);
-
-									codeRelocations.add4(static_cast<u32>(code.totalSize));
-									codeRelocations.add4(static_cast<u32>(f64ToU64ConstantSymbolIndex));
-									codeRelocations.add2(IMAGE_REL_AMD64_REL32);
-
-									code.add4(0);
+							if (reg == 0) {
+								if (size % 8 == 0) {
+									loadImmediateIntoIntRegister(&code, RCX, size / 8);
 
 									code.add1(0x31); // xor eax, eax
 									code.add1(0xC0);
 
-									code.add1(0x66); // comisd xmm0, xmm1
-									code.add1(0x0F);
-									code.add1(0x2F);
-									code.add1(0xC1);
-
-									code.add1(0x70 | C_B); // jb .cvt
-									u8 *firstJumpPatch = code.add1(0);
-									u64 firstJumpRel = code.totalSize;
-
-									code.add1(0xF2); // subsd xmm0, xmm1
-									code.add1(0x0F);
-									code.add1(0x5C);
-									code.add1(0xC1);
-
-									code.add1(0x66); // comisd xmm0, xmm1
-									code.add1(0x0F);
-									code.add1(0x2F);
-									code.add1(0xC1);
-
-									code.add1(0x70 | C_AE); // jae .cvt
-									u8 *secondJumpPatch = code.add1(0);
-									u64 secondJumpRel = code.totalSize;
-
-									code.add1(0x48); // mov rax, 0x8000'0000'0000'0000
-									code.add1(0xB8);
-									code.add8(0x8000'0000'0000'0000);
-
-									*firstJumpPatch = static_cast<u8>(code.totalSize - firstJumpRel);
-									*secondJumpPatch = static_cast<u8>(code.totalSize - secondJumpRel);
-
-									// .cvt
-									code.add1(0xF2); // cvttsd2si rcx, xmm0
+									code.add1(0xF3); // rep stosq
 									code.add1(0x48);
-									code.add1(0x0F);
-									code.add1(0x2C);
-									code.add1(0xC8);
-
-									code.add1(0x48); // add rax, rcx
-									code.add1(0x01);
-									code.add1(0xC8);
+									code.add1(0xAB);
 								}
 								else {
-									if (f32ToU64ConstantSymbolIndex == -1) {
-										f32ToU64ConstantSymbolIndex = symbols.count();
+									loadImmediateIntoIntRegister(&code, RCX, size);
 
-										rdata.allocateUnaligned(AlignPO2(rdata.totalSize, 4) - rdata.totalSize);
-
-										Symbol f32ToU64Constant;
-										setSymbolName(&stringTable, &f32ToU64Constant.name, "@f32ToU64Constant");
-										f32ToU64Constant.value = static_cast<u32>(rdata.totalSize);
-										f32ToU64Constant.sectionNumber = RDATA_SECTION_NUMBER;
-										f32ToU64Constant.type = 0;
-										f32ToU64Constant.storageClass = IMAGE_SYM_CLASS_STATIC;
-										f32ToU64Constant.numberOfAuxSymbols = 0;
-
-										symbols.add(f32ToU64Constant);
-
-										rdata.add4(0x5F000000);
-									}
-
-									code.add1(0xF3); // movss xmm1, f32ToU64Constant
-									code.add1(0x0F);
-									code.add1(0x10);
-									code.add1(0x0D);
-
-									codeRelocations.add4(code.totalSize);
-									codeRelocations.add4(f32ToU64ConstantSymbolIndex);
-									codeRelocations.add2(IMAGE_REL_AMD64_REL32);
-
-									code.add4(0);
-
-									code.add1(0x31); // xor eax, eax
+									code.add1(0x30); // xor al, al
 									code.add1(0xC0);
 
-									code.add1(0x0F); // comiss xmm0, xmm1
-									code.add1(0x2F);
-									code.add1(0xC1);
-
-									code.add1(0x70 | C_B); // jb .cvt
-									u8 *firstJumpPatch = code.add1(0);
-									u64 firstJumpRel = code.totalSize;
-
-									code.add1(0xF3); // subss xmm0, xmm1
-									code.add1(0x0F);
-									code.add1(0x5C);
-									code.add1(0xC1);
-
-									code.add1(0x0F); // comiss xmm0, xmm1
-									code.add1(0x2F);
-									code.add1(0xC1);
-
-									code.add1(0x70 | C_AE); // jae .cvt
-									u8 *secondJumpPatch = code.add1(0);
-									u64 secondJumpRel = code.totalSize;
-
-									code.add1(0x48); // mov rax, 0x8000'0000'0000'0000
-									code.add1(0xB8);
-									code.add8(0x8000'0000'0000'0000);
-
-									*firstJumpPatch = static_cast<u8>(code.totalSize - firstJumpRel);
-									*secondJumpPatch = static_cast<u8>(code.totalSize - secondJumpRel);
-
-									// .cvt
-									code.add1(0xF3); // cvttss2si rcx, xmm0
+									code.add1(0xF3); // rep stosb
 									code.add1(0x48);
-									code.add1(0x0F);
-									code.add1(0x2C);
-									code.add1(0xC8);
-
-									code.add1(0x48); // add rax, rcx
-									code.add1(0x01);
-									code.add1(0xC8);
+									code.add1(0xAA);
 								}
-
-								storeFromIntRegister(&code, function, ir.destSize, ir.dest, RAX);
-							}
-
-							else {
-								if (ir.opSize == 8) {
-									code.add1(0xF2);
-								}
-								else {
-									code.add1(0xF3);
-								}
-
-								if (ir.destSize == 4) {
-									code.add1(0x48);
-								}
-
-								code.add1(0x0F);
-								code.add1(0x2C);
-
-
-								writeRSPRegisterByte(&code, function, RAX, ir.a);
-								storeFromIntRegister(&code, function, ir.destSize, ir.dest, RAX);
-							}
-						}
-					} break;
-					case IrOp::INT_TO_FLOAT: {
-						if (ir.a == 0) {
-							writeSet(&code, function, ir.destSize, ir.dest, 0);
-							break;
-						}
-
-						if (ir.flags & IR_SIGNED_OP) {
-							if (ir.opSize >= 4) {
-								if (ir.destSize == 8) {
-									code.add1(0xF2);
-								}
-								else {
-									code.add1(0xF3);
-								}
-
-								if (ir.opSize == 8) {
-									code.add1(0x48);
-								}
-
-								code.add1(0x0F);
-								code.add1(0x2A);
-								writeRSPRegisterByte(&code, function, 0, ir.a);
-								storeFromFloatRegister(&code, function, ir.destSize, ir.dest, 0);
 							}
 							else {
-								code.add1(0x0F);
-								if (ir.opSize == 2) {
-									code.add1(0xBF);
-								}
-								else {
-									code.add1(0xBE);
-								}
-								writeRSPRegisterByte(&code, function, RAX, ir.a);
-
-								if (ir.destSize == 8) {
-									code.add1(0xF2);
-								}
-								else {
-									code.add1(0xF3);
-								}
-
-								code.add1(0x0F);
-								code.add1(0x2A);
-								code.add1(0xC0);
-
-								storeFromFloatRegister(&code, function, ir.destSize, ir.dest, 0);
-							}
-						}
-						else {
-							if (ir.opSize == 8) { // Aww sheet
-								loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
-
-								code.add1(0x48); // test rax, rax
-								code.add1(0x85);
-								code.add1(0xC0);
-
-								code.add1(0x70 | C_S); // js .large
-
-								u8 *firstJumpPatch = code.add1(0);
-								u64 firstJumpRel = code.totalSize;
-
-								code.add1(0x0F);
-
-								if (ir.destSize == 8) {
-									code.add1(0xF2);
-								}
-								else {
-									code.add1(0xF3);
-								}
-
-								code.add1(0x2a);
-								code.add1(0xC0);
-
-								code.add1(0xEB); // jmp .done
-
-								u8 *secondJumpPatch = code.add1(0);
-								u64 secondJumpRel = code.totalSize;
-
-
-								*firstJumpPatch = code.totalSize - firstJumpRel;
-
-								// .large
-								code.add1(0x48); // mov rcx, rax
-								code.add1(0x89);
-								code.add1(0xC1);
-
-								code.add1(0x83); // and ecx, 1
-								code.add1(0E1);
-								code.add1(0x01);
-
-								code.add1(0x48); // shr rax, 1
-								code.add1(0xD1);
-								code.add1(0xE8);
-
-								code.add1(0x48); // or rax, rcx
-								code.add1(0x09);
-								code.add1(0xC8);
-
-								if (ir.destSize == 8) {
-									code.add1(0xF2);
-								}
-								else {
-									code.add1(0xF3);
-								}
-
-								code.add1(0x0F);
-								code.add1(0x2A);
-								code.add1(0xC0);
-
-								if (ir.destSize == 8) {
-									code.add1(0xF2);
-								}
-								else {
-									code.add1(0xF3);
-								}
-
-								code.add1(0x0F);
-								code.add1(0x58);
-								code.add1(0xC0);
-
-								*secondJumpPatch = code.totalSize - secondJumpRel;
-
-								// .done
-								storeFromFloatRegister(&code, function, ir.destSize, ir.dest, 0);
-							}
-							else if (ir.opSize == 4) {
-								loadIntoIntRegister(&code, function, 4, RAX, ir.a);
-
-								if (ir.destSize == 8) {
-									code.add1(0xF2);
-								}
-								else {
-									code.add1(0xF3);
-								}
-
 								code.add1(0x48);
+								code.add1(0x8D);
+								writeRSPRegisterByte(&code, function, RSI, reg);
 
-								code.add1(0x0F);
-								code.add1(0x2A);
-								code.add1(0xC0);
-								storeFromFloatRegister(&code, function, ir.destSize, ir.dest, 0);
-							}
-							else {
-								code.add1(0x0F);
-								if (ir.opSize == 2) {
-									code.add1(0xB7);
-								}
-								else {
-									code.add1(0xB6);
-								}
-								writeRSPRegisterByte(&code, function, RAX, ir.a);
+								if (size % 8 == 0) {
+									loadImmediateIntoIntRegister(&code, RCX, size / 8);
 
-								if (ir.destSize == 8) {
-									code.add1(0xF2);
-								}
-								else {
-									code.add1(0xF3);
-								}
-
-								code.add1(0x0F);
-								code.add1(0x2A);
-								code.add1(0xC0);
-
-								storeFromFloatRegister(&code, function, ir.destSize, ir.dest, 0);
-							}
-						}
-					} break;
-					case IrOp::RETURN: {
-						if (ir.opSize) {
-							if (isStandardSize(ir.opSize)) {
-								if (ir.flags & IR_FLOAT_OP) {
-									loadIntoFloatRegister(&code, function, ir.opSize, 0, ir.a);
-								}
-								else {
-									loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
-								}
-							}
-							else {
-								loadIntoIntRegister(&code, function, 8, RDI, 1);
-
-								if (ir.a == 0) {
-									if (ir.opSize % 8 == 0) {
-										loadImmediateIntoIntRegister(&code, RCX, ir.opSize / 8);
-
-										code.add1(0x31); // xor eax, eax
-										code.add1(0xC0);
-
-										code.add1(0xF3); // rep stosq
-										code.add1(0x48);
-										code.add1(0xAB);
-									}
-									else {
-										loadImmediateIntoIntRegister(&code, RCX, ir.opSize);
-
-										code.add1(0x30); // xor al, al
-										code.add1(0xC0);
-
-										code.add1(0xF3); // rep stosb
-										code.add1(0x48);
-										code.add1(0xAA);
-									}
-								}
-								else {
+									code.add1(0xF3); // rep movsq
 									code.add1(0x48);
-									code.add1(0x8D);
-									writeRSPRegisterByte(&code, function, RSI, ir.a);
-
-									if (ir.opSize % 8 == 0) {
-										loadImmediateIntoIntRegister(&code, RCX, ir.opSize / 8);
-
-										code.add1(0xF3); // rep movsq
-										code.add1(0x48);
-										code.add1(0xA5);
-									}
-									else {
-										loadImmediateIntoIntRegister(&code, RCX, ir.opSize);
-
-										code.add1(0xF3); // rep movsb
-										code.add1(0x48);
-										code.add1(0xA4);
-									}
+									code.add1(0xA5);
 								}
+								else {
+									loadImmediateIntoIntRegister(&code, RCX, size);
 
-								loadIntoIntRegister(&code, function, 8, RAX, 1);
+									code.add1(0xF3); // rep movsb
+									code.add1(0x48);
+									code.add1(0xA4);
+								}
 							}
+
+							largeStorage += (size + 7) / 8;
 						}
+					}
 
-						code.add1(0xE9);
+					u64 dumpSpace = largeStorage;
 
-						JumpPatch patch;
-						patch.opToPatch = function->state.ir.count;
-						patch.location = reinterpret_cast<s32 *>(code.add4(0));
-						patch.rip = code.totalSize;
+					largeStorage = parameterSpace;
 
-						jumpPatches.add(patch);
-					} break;
-					case IrOp::CALL: {
-						u64 parameterOffset;
+					constexpr int intRegisters[4] = { RCX, RDX, 8, 9 };
 
-						if (!isStandardSize(ir.arguments->returnType->size)) {
-							parameterOffset = 1;
+
+					for (u8 i = 0; i < my_min(4 - parameterOffset, ir.arguments->argCount); i++) {
+						auto type = ir.arguments->args[i].type;
+
+
+						if (ir.arguments->args[i].number == static_cast<u64>(-1LL)) {
+
+							code.add1(intRegisters[i + parameterOffset] >= 8 ? 0x4C : 0x48);
+							code.add1(0x8D);
+							writeRSPOffsetByte(&code, intRegisters[i + parameterOffset] & 7, dumpSpace * 8);
+						}
+						else if (type->flavor == TypeFlavor::FLOAT) {
+							loadIntoFloatRegister(&code, function, type->size, i + parameterOffset, ir.arguments->args[i].number);
 						}
 						else {
-							parameterOffset = 0;
-						}
-
-						u64 parameterSpace = my_max(4, ir.arguments->argCount + parameterOffset);
-
-						u64 largeStorage = parameterSpace;
-
-						for (u64 i = 0; i < ir.arguments->argCount; i++) {
-							u64 size = ir.arguments->args[i].type->size;
-							u64 reg = ir.arguments->args[i].number;
-
-							if (reg == static_cast<u64>(-1LL)) {
-								continue;
+							if (isStandardSize(type->size)) {
+								loadIntoIntRegister(&code, function, type->size, intRegisters[i + parameterOffset], ir.arguments->args[i].number);
 							}
-
-							if (!isStandardSize(size)) {
+							else {
 								if (largeStorage & 1) {
 									++largeStorage; // Align to 16 bytes
 								}
-
-								code.add1(0x48);
-								code.add1(0x8D);
-								writeRSPOffsetByte(&code, RDI, largeStorage * 8);
-
-								if (reg == 0) {
-									if (size % 8 == 0) {
-										loadImmediateIntoIntRegister(&code, RCX, size / 8);
-
-										code.add1(0x31); // xor eax, eax
-										code.add1(0xC0);
-
-										code.add1(0xF3); // rep stosq
-										code.add1(0x48);
-										code.add1(0xAB);
-									}
-									else {
-										loadImmediateIntoIntRegister(&code, RCX, size);
-
-										code.add1(0x30); // xor al, al
-										code.add1(0xC0);
-
-										code.add1(0xF3); // rep stosb
-										code.add1(0x48);
-										code.add1(0xAA);
-									}
-								}
-								else {
-									code.add1(0x48);
-									code.add1(0x8D);
-									writeRSPRegisterByte(&code, function, RSI, reg);
-
-									if (size % 8 == 0) {
-										loadImmediateIntoIntRegister(&code, RCX, size / 8);
-
-										code.add1(0xF3); // rep movsq
-										code.add1(0x48);
-										code.add1(0xA5);
-									}
-									else {
-										loadImmediateIntoIntRegister(&code, RCX, size);
-
-										code.add1(0xF3); // rep movsb
-										code.add1(0x48);
-										code.add1(0xA4);
-									}
-								}
-
-								largeStorage += (size + 7) / 8;
-							}
-						}
-
-						u64 dumpSpace = largeStorage;
-
-						largeStorage = parameterSpace;
-
-						constexpr int intRegisters[4] = { RCX, RDX, 8, 9 };
-
-
-						for (u8 i = 0; i < my_min(4 - parameterOffset, ir.arguments->argCount); i++) {
-							auto type = ir.arguments->args[i].type;
-
-
-							if (ir.arguments->args[i].number == static_cast<u64>(-1LL)) {
 
 								code.add1(intRegisters[i + parameterOffset] >= 8 ? 0x4C : 0x48);
 								code.add1(0x8D);
-								writeRSPOffsetByte(&code, intRegisters[i + parameterOffset] & 7, dumpSpace * 8);
-							}
-							else if (type->flavor == TypeFlavor::FLOAT) {
-								loadIntoFloatRegister(&code, function, type->size, i + parameterOffset, ir.arguments->args[i].number);
-							}
-							else {
-								if (isStandardSize(type->size)) {
-									loadIntoIntRegister(&code, function, type->size, intRegisters[i + parameterOffset], ir.arguments->args[i].number);
-								}
-								else {
-									if (largeStorage & 1) {
-										++largeStorage; // Align to 16 bytes
-									}
+								writeRSPOffsetByte(&code, intRegisters[i + parameterOffset] & 7, largeStorage * 8);
 
-									code.add1(intRegisters[i + parameterOffset] >= 8 ? 0x4C : 0x48);
-									code.add1(0x8D);
-									writeRSPOffsetByte(&code, intRegisters[i + parameterOffset] & 7, largeStorage * 8);
-
-									u64 size = type->size;
-									largeStorage += (size + 7) / 8;
-								}
+								u64 size = type->size;
+								largeStorage += (size + 7) / 8;
 							}
 						}
+					}
 
-						for (u32 i = 4 - parameterOffset; i < ir.arguments->argCount; i++) {
-							u64 size = ir.arguments->args[i].type->size;
+					for (u32 i = 4 - parameterOffset; i < ir.arguments->argCount; i++) {
+						u64 size = ir.arguments->args[i].type->size;
 
-							if (ir.arguments->args[i].number == static_cast<u64>(-1LL)) {
+						if (ir.arguments->args[i].number == static_cast<u64>(-1LL)) {
 
-								code.add1(0x48);
-								code.add1(0x8D);
-								writeRSPOffsetByte(&code, RAX, dumpSpace * 8);
-							}
-							else if (isStandardSize(size)) {
-								loadIntoIntRegister(&code, function, ir.arguments->args[i].type->size, RAX, ir.arguments->args[i].number);
-							}
-							else {
-								if (largeStorage & 1) {
-									++largeStorage; // Align to 16 bytes
-								}
-
-								code.add1(0x48);
-								code.add1(0x8D);
-								writeRSPOffsetByte(&code, RAX, largeStorage * 8);
-
-								largeStorage += (largeStorage + 7) / 8;
-							}
-
-							code.add1(0x48);
-							code.add1(0x89);
-							writeRSPOffsetByte(&code, RAX, (i + parameterOffset) * 8);
-						}
-
-						if (!isStandardSize(ir.arguments->returnType->size)) {
 							code.add1(0x48);
 							code.add1(0x8D);
-
-							if (ir.dest) {
-								writeRSPRegisterByte(&code, function, RCX, ir.dest);
-							}
-							else {
-								writeRSPOffsetByte(&code, RCX, dumpSpace * 8);
-							}
+							writeRSPOffsetByte(&code, RAX, dumpSpace * 8);
 						}
-
-						code.add1(0xFF);
-						writeRSPRegisterByte(&code, function, 2, ir.a);
-
-						if (ir.dest != 0) {
-							if (isStandardSize(ir.arguments->returnType->size)) {
-								if (ir.arguments->returnType->flavor == TypeFlavor::FLOAT) {
-									storeFromFloatRegister(&code, function, ir.arguments->returnType->size, ir.dest, 0);
-								}
-								else {
-									storeFromIntRegister(&code, function, ir.arguments->returnType->size, ir.dest, RAX);
-								}
-							}
-						}
-					} break;
-					case IrOp::NEG: {
-						if (ir.a == 0) {
-							storeImmediate(&code, function, ir.opSize, ir.dest, 0);
-						}
-						else if (ir.flags & IR_FLOAT_OP) {
-							code.add1(0x0F); // xorps xmm0, xmm0
-							code.add1(0x57);
-							code.add1(0xC0);
-
-							if (ir.opSize == 8) {
-								code.add1(0xF2);
-							}
-							else {
-								code.add1(0xF3);
-							}
-
-							code.add1(0x0F);
-							code.add1(0x5C);
-							writeRSPRegisterByte(&code, function, 0, ir.a);
-
-							storeFromFloatRegister(&code, function, ir.opSize, ir.dest, 0);
+						else if (isStandardSize(size)) {
+							loadIntoIntRegister(&code, function, ir.arguments->args[i].type->size, RAX, ir.arguments->args[i].number);
 						}
 						else {
-							loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
-							if (ir.opSize == 8) {
-								code.add1(0x48);
-							}
-							else if (ir.opSize == 2) {
-								code.add1(0x66);
+							if (largeStorage & 1) {
+								++largeStorage; // Align to 16 bytes
 							}
 
-							if (ir.opSize == 1) {
-								code.add1(0xF6);
+							code.add1(0x48);
+							code.add1(0x8D);
+							writeRSPOffsetByte(&code, RAX, largeStorage * 8);
+
+							largeStorage += (largeStorage + 7) / 8;
+						}
+
+						code.add1(0x48);
+						code.add1(0x89);
+						writeRSPOffsetByte(&code, RAX, (i + parameterOffset) * 8);
+					}
+
+					if (!isStandardSize(ir.arguments->returnType->size)) {
+						code.add1(0x48);
+						code.add1(0x8D);
+
+						if (ir.dest) {
+							writeRSPRegisterByte(&code, function, RCX, ir.dest);
+						}
+						else {
+							writeRSPOffsetByte(&code, RCX, dumpSpace * 8);
+						}
+					}
+
+					code.add1(0xFF);
+					writeRSPRegisterByte(&code, function, 2, ir.a);
+
+					if (ir.dest != 0) {
+						if (isStandardSize(ir.arguments->returnType->size)) {
+							if (ir.arguments->returnType->flavor == TypeFlavor::FLOAT) {
+								storeFromFloatRegister(&code, function, ir.arguments->returnType->size, ir.dest, 0);
 							}
 							else {
-								code.add1(0xF7);
+								storeFromIntRegister(&code, function, ir.arguments->returnType->size, ir.dest, RAX);
 							}
-
-							code.add1(0xD8);
-
-							storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
 						}
-					} break;
-					case IrOp::NOOP: {
-						// we are done
-					} break;
-					case IrOp::FUNCTION: {
-						code.add1(0x48);
-						code.add1(0x8D);
-						code.add1(0x05);
-
-						codeRelocations.add4(code.totalSize);
-
-						bool success;
-						codeRelocations.add4(createSymbolForFunction(&symbols, ir.function, &success));
-
-						if (!success)
-							goto error;
-
-						codeRelocations.add2(IMAGE_REL_AMD64_REL32);
-
-						code.add4(0);
-
-						storeFromIntRegister(&code, function, 8, ir.dest, RAX);
-					} break;
-					case IrOp::STRING: {
-						code.add1(0x48);
-						code.add1(0x8D);
-						code.add1(0x05);
-
-						codeRelocations.add4(code.totalSize);
-						codeRelocations.add4(createSymbolForString(&emptyStringSymbolIndex, &symbols, &stringTable, &rdata, ir.string));
-						codeRelocations.add2(IMAGE_REL_AMD64_REL32);
-
-						code.add4(0);
-
-						storeFromIntRegister(&code, function, 8, ir.dest, RAX);
-					} break;
-					case IrOp::STRING_EQUAL: {
-
-						loadIntoIntRegister(&code, function, 8, RAX, ir.a);
-						loadIntoIntRegister(&code, function, 8, RCX, ir.b);
-
-						code.add1(0x48); // sub rcx, rax
-						code.add1(0x29);
-						code.add1(0xC1);
-
-						// early out if pointers are the same
-						code.add1(0x74); // je .set
-						code.add1(0x0E);
-
-						// .loop
-						code.add1(0x8A); // mov dl, byte ptr[rax]
-						code.add1(0x10);
-
-						code.add1(0x3A);  // cmp dl, byte ptr[rax+rcx*1]
-						code.add1(0x14);
-						code.add1(0x08);
-
-						code.add1(0x70 | C_NE); // jne .set
-						code.add1(0x07);
-
-
-						code.add1(0x48); // inc rax
-						code.add1(0xFF);
+					}
+				} break;
+				case IrOp::NEG: {
+					if (ir.a == 0) {
+						storeImmediate(&code, function, ir.opSize, ir.dest, 0);
+					}
+					else if (ir.flags & IR_FLOAT_OP) {
+						code.add1(0x0F); // xorps xmm0, xmm0
+						code.add1(0x57);
 						code.add1(0xC0);
 
-						code.add1(0x84); // test dl, dl
-						code.add1(0xD2);
+						if (ir.opSize == 8) {
+							code.add1(0xF2);
+						}
+						else {
+							code.add1(0xF3);
+						}
 
-						code.add1(0x70 | C_NE); // jne .loop
-						code.add1(0xF2);
-
-						// .set
 						code.add1(0x0F);
-						code.add1(0x94);
-						writeRSPRegisterByte(&code, function, RAX, ir.dest);
-					} break;
-					case IrOp::LINE_MARKER: {
-						addLineInfo(&lineInfo, &columnInfo, code.totalSize - functionStart, ir.location.start, ir.location.end);
-					} break;
-					default: {
-						assert(false);
+						code.add1(0x5C);
+						writeRSPRegisterByte(&code, function, 0, ir.a);
+
+						storeFromFloatRegister(&code, function, ir.opSize, ir.dest, 0);
 					}
+					else {
+						loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
+						if (ir.opSize == 8) {
+							code.add1(0x48);
+						}
+						else if (ir.opSize == 2) {
+							code.add1(0x66);
+						}
+
+						if (ir.opSize == 1) {
+							code.add1(0xF6);
+						}
+						else {
+							code.add1(0xF7);
+						}
+
+						code.add1(0xD8);
+
+						storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
+					}
+				} break;
+				case IrOp::NOOP: {
+					// we are done
+				} break;
+				case IrOp::FUNCTION: {
+					code.add1(0x48);
+					code.add1(0x8D);
+					code.add1(0x05);
+
+					codeRelocations.add4(code.totalSize);
+
+					bool success;
+					codeRelocations.add4(createSymbolForFunction(&symbols, ir.function, &success));
+
+					if (!success)
+						goto error;
+
+					codeRelocations.add2(IMAGE_REL_AMD64_REL32);
+
+					code.add4(0);
+
+					storeFromIntRegister(&code, function, 8, ir.dest, RAX);
+				} break;
+				case IrOp::STRING: {
+					code.add1(0x48);
+					code.add1(0x8D);
+					code.add1(0x05);
+
+					codeRelocations.add4(code.totalSize);
+					codeRelocations.add4(createSymbolForString(&emptyStringSymbolIndex, &symbols, &stringTable, &rdata, ir.string));
+					codeRelocations.add2(IMAGE_REL_AMD64_REL32);
+
+					code.add4(0);
+
+					storeFromIntRegister(&code, function, 8, ir.dest, RAX);
+				} break;
+				case IrOp::STRING_EQUAL: {
+
+					loadIntoIntRegister(&code, function, 8, RAX, ir.a);
+					loadIntoIntRegister(&code, function, 8, RCX, ir.b);
+
+					code.add1(0x48); // sub rcx, rax
+					code.add1(0x29);
+					code.add1(0xC1);
+
+					// early out if pointers are the same
+					code.add1(0x74); // je .set
+					code.add1(0x0E);
+
+					// .loop
+					code.add1(0x8A); // mov dl, byte ptr[rax]
+					code.add1(0x10);
+
+					code.add1(0x3A);  // cmp dl, byte ptr[rax+rcx*1]
+					code.add1(0x14);
+					code.add1(0x08);
+
+					code.add1(0x70 | C_NE); // jne .set
+					code.add1(0x07);
+
+
+					code.add1(0x48); // inc rax
+					code.add1(0xFF);
+					code.add1(0xC0);
+
+					code.add1(0x84); // test dl, dl
+					code.add1(0xD2);
+
+					code.add1(0x70 | C_NE); // jne .loop
+					code.add1(0xF2);
+
+					// .set
+					code.add1(0x0F);
+					code.add1(0x94);
+					writeRSPRegisterByte(&code, function, RAX, ir.dest);
+				} break;
+				case IrOp::LINE_MARKER: {
+					addLineInfo(&lineInfo, &columnInfo, code.totalSize - functionStart, ir.location.start, ir.location.end);
+				} break;
+				default: {
+					assert(false);
+				}
 				}
 			}
 
@@ -2865,7 +2903,7 @@ void runCoffWriter() {
 					auto subsectionSizePatch = debugSymbols.add4(0);
 					u32 subsectionOffset = debugSymbols.totalSize;
 
-					
+
 					debugSymbols.add2(sizeof(PROCSYM32) + function->valueOfDeclaration->name.length - 1);
 					debugSymbols.add2(0x1147); // S_GPROC32_ID
 					debugSymbols.add4(0);
@@ -2970,7 +3008,7 @@ void runCoffWriter() {
 			symbol->type = 0;
 
 			if ((declaration->flags & DECLARATION_IS_UNINITIALIZED) ||
-				((declaration->initialValue->flavor == ExprFlavor::INT_LITERAL || declaration->initialValue->flavor == ExprFlavor::FLOAT_LITERAL) 
+				((declaration->initialValue->flavor == ExprFlavor::INT_LITERAL || declaration->initialValue->flavor == ExprFlavor::FLOAT_LITERAL)
 					&& static_cast<ExprLiteral *>(declaration->initialValue)->unsignedValue == 0)) {
 				bssSection.virtualSize = AlignPO2(bssSection.virtualSize, type->alignment);
 
@@ -2991,22 +3029,91 @@ void runCoffWriter() {
 
 			symbol->numberOfAuxSymbols = 0;
 		}
-		else if (job.flavor == CoffJobFlavor::TYPE) {
-			assert(job.type->flavor != TypeFlavor::NAMESPACE);
-			assert(job.type->flavor != TypeFlavor::AUTO_CAST);
-
-			job.type->runtimeValue = nextTypeValue++;
-		}
 	}
 
 	{
-		PROFILE_ZONE("Do patches");
+		PROFILE_ZONE("Write types");
 
-		for (auto patch : typePatches) {
-			assert(patch.type->flavor != TypeFlavor::NAMESPACE);
-			assert(patch.type->flavor != TypeFlavor::AUTO_CAST);
+		for (u64 i = 0; i < typeTableCapacity; i++) {
+			auto entry = typeTableEntries[i];
 
-			*patch.location = patch.type->runtimeValue;
+			if (entry.hash && entry.value->symbol) {
+				auto type = entry.value;
+				auto symbol = type->symbol;
+
+				u32 name = createRdataPointer(&stringTable, &symbols, &rdata);
+
+				rdata.addNullTerminatedString(type->name);
+
+
+				setSymbolName(&stringTable, &symbol->name, entry.value->physicalStorage);
+				symbol->storageClass = IMAGE_SYM_CLASS_STATIC;
+				symbol->type = 0;
+
+				rdata.allocateUnaligned(AlignPO2(rdata.totalSize, 8) - rdata.totalSize);
+
+				symbol->value = rdata.totalSize;
+				symbol->sectionNumber = RDATA_SECTION_NUMBER;
+
+				Type_Info info;
+
+				addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(Type_Info, name), name);
+
+				switch (type->flavor) {
+				case TypeFlavor::VOID: {
+					info.tag = Type_Info::Tag::VOID;
+					break;
+				}
+				case TypeFlavor::INTEGER: {
+					info.tag = Type_Info::Tag::INTEGER;
+					break;
+				}
+				case TypeFlavor::FLOAT: {
+					info.tag = Type_Info::Tag::FLOAT; 
+					break; 
+				}
+				case TypeFlavor::POINTER: {
+					info.tag = Type_Info::Tag::POINTER; 
+					break; 
+				}
+				case TypeFlavor::BOOL: {
+					info.tag = Type_Info::Tag::BOOL; 
+					break; 
+				}
+				case TypeFlavor::FUNCTION: {
+					info.tag = Type_Info::Tag::FUNCTION; 
+					break; 
+				}
+				case TypeFlavor::TYPE: {
+					info.tag = Type_Info::Tag::TYPE; 
+					break; 
+				}
+				case TypeFlavor::STRING: {
+					info.tag = Type_Info::Tag::STRING; 
+					break; 
+				}
+				case TypeFlavor::ARRAY: {
+					info.tag = Type_Info::Tag::ARRAY; 
+					break; 
+				}
+				case TypeFlavor::STRUCT: {
+					info.tag = Type_Info::Tag::STRUCT; 
+					break; 
+				}
+				case TypeFlavor::ENUM: {
+					info.tag = Type_Info::Tag::ENUM; 
+					break; 
+				}
+				default:
+					assert(false);
+				}
+
+				info.size = type->size;
+				info.alignment = type->alignment;
+				info.name = nullptr;
+
+				rdata.add(&info, sizeof(info));
+			}
 		}
 	}
 
@@ -3080,7 +3187,7 @@ void runCoffWriter() {
 		setSectionName(debugTypeSection.name, sizeof(debugTypeSection.name), ".debug$T");
 		debugTypeSection.characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_DISCARDABLE;
 
-		sections.add({ &rdataSection, &rdata });
+		sections.add({ &rdataSection, &rdata, &rdataRelocations });
 		sections.add({ &bssSection });
 		sections.add({ &dataSection, &data, &dataRelocations });
 		sections.add({ &textSection, &code, &codeRelocations });
@@ -3108,9 +3215,15 @@ void runCoffWriter() {
 				section.header->virtualAddress = 0;
 
 				if (section.data) {
-					section.header->virtualSize = section.data->totalSize;
-
 					section.header->sizeOfRawData = section.data->totalSize;
+					section.header->virtualSize = 0;
+				}
+				else {
+					section.header->sizeOfRawData = section.header->virtualSize;
+					section.header->virtualSize = 0;
+				}
+
+				if (section.header->sizeOfRawData) {
 					section.header->pointerToRawData = sectionPointer;
 
 					sectionPointer += AlignPO2(section.header->sizeOfRawData, 4);
@@ -3128,7 +3241,6 @@ void runCoffWriter() {
 					}
 				}
 				else {
-					section.header->sizeOfRawData = 0;
 					section.header->pointerToRawData = 0;
 					section.header->pointerToRelocations = 0;
 					section.header->numberOfRelocations = 0;
@@ -3172,6 +3284,15 @@ void runCoffWriter() {
 					writeAllocator(out, *section.data);
 
 					WriteFile(out, &alignmentPadding, AlignPO2(section.data->totalSize, 4) - section.data->totalSize, &written, 0);
+				}
+				else if (section.header->sizeOfRawData) {
+					u64 zero = 0;
+
+					for (s64 write = section.header->sizeOfRawData; write > 0; write -= sizeof(zero)) {
+						WriteFile(out, &zero, my_min(sizeof(zero), write), &written, 0);
+					}
+
+					WriteFile(out, &alignmentPadding, AlignPO2(section.header->sizeOfRawData, 4) - section.header->sizeOfRawData, &written, 0);
 				}
 
 				if (section.relocations) {

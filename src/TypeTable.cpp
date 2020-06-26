@@ -19,21 +19,14 @@ BucketedArenaAllocator typeArena(1024 * 1024);
 
 static u32 nextStructHash = STRUCT_HASH_PRIME;
 
-struct Entry {
-	Type *value;
-	u32 hash = 0;
-};
-
-static Entry *entries;
 static u32 count;
-static u32 capacity;
 
 void rehash() {
-	u32 newCapacity = capacity * 2;
-	Entry *newEntries = new Entry[newCapacity];
+	u32 newCapacity = typeTableCapacity * 2;
+	TypeTableEntry *newEntries = new TypeTableEntry[newCapacity];
 
-	for (u32 i = 0; i < capacity; i++) {
-		Entry entry = entries[i];
+	for (u32 i = 0; i < typeTableCapacity; i++) {
+		TypeTableEntry entry = typeTableEntries[i];
 
 		if (entry.hash == 0) continue;
 
@@ -47,24 +40,24 @@ void rehash() {
 		newEntries[slot].value = entry.value;
 	}
 
-	delete[] entries;
-	entries = newEntries;
-	capacity = newCapacity;
+	delete[] typeTableEntries;
+	typeTableEntries = newEntries;
+	typeTableCapacity = newCapacity;
 }
 
 void insertIntoTable(Type *type, u32 slot) {
-	if (count * 10 > capacity * 7) {
+	if (count * 10 > typeTableCapacity * 7) {
 		rehash();
 
-		slot = type->hash & (capacity - 1);
+		slot = type->hash & (typeTableCapacity - 1);
 
-		while (entries[slot].hash) {
-			if (++slot == capacity) slot = 0;
+		while (typeTableEntries[slot].hash) {
+			if (++slot == typeTableCapacity) slot = 0;
 		}
 	}
 
-	entries[slot].value = type;
-	entries[slot].hash = type->hash;
+	typeTableEntries[slot].value = type;
+	typeTableEntries[slot].hash = type->hash;
 
 	CoffJob job;
 	job.type = type;
@@ -74,18 +67,18 @@ void insertIntoTable(Type *type, u32 slot) {
 }
 
 void insertIntoTable(Type *type) {
-	if (count * 10 > capacity * 7) {
+	if (count * 10 > typeTableCapacity * 7) {
 		rehash();
 	}
 
-	u32 slot = type->hash & (capacity - 1);
+	u32 slot = type->hash & (typeTableCapacity - 1);
 
-	while (entries[slot].hash) {
-		if (++slot == capacity) slot = 0;
+	while (typeTableEntries[slot].hash) {
+		if (++slot == typeTableCapacity) slot = 0;
 	}
 
-	entries[slot].value = type;
-	entries[slot].hash = type->hash;
+	typeTableEntries[slot].value = type;
+	typeTableEntries[slot].hash = type->hash;
 
 	if (type->size) {
 		CoffJob job;
@@ -113,15 +106,15 @@ TypePointer *getPointerDelayAdd(Type *type, u32 *returnSlot) {
 	u32 hash = (type->hash + 1) * POINTER_HASH_PRIME;
 	if (hash == 0) hash = 1;
 
-	u32 slot = hash & (capacity - 1);
+	u32 slot = hash & (typeTableCapacity - 1);
 
-	for (Entry entry = entries[slot]; entry.hash; entry = entries[slot]) {
+	for (TypeTableEntry entry = typeTableEntries[slot]; entry.hash; entry = typeTableEntries[slot]) {
 		if (entry.hash == hash && entry.value->flavor == TypeFlavor::POINTER && static_cast<TypePointer *>(entry.value)->pointerTo == type) {
-			*returnSlot = capacity;
+			*returnSlot = typeTableCapacity;
 			return static_cast<TypePointer *>(entry.value);
 		}
 
-		if (++slot == capacity) slot = 0;
+		if (++slot == typeTableCapacity) slot = 0;
 	}
 
 	auto result = TYPE_NEW(TypePointer);
@@ -147,7 +140,7 @@ TypePointer *getPointer(Type *type) {
 
 	auto result = getPointerDelayAdd(type, &slot);
 
-	if (slot != capacity) { // Returns capacity if pointer is already in table
+	if (slot != typeTableCapacity) { // Returns capacity if pointer is already in table
 		insertIntoTable(result, slot);
 	}
 
@@ -178,7 +171,7 @@ Declaration *createDataDeclaration(Type *type, Type **toAdd) {
 	dataDeclaration->physicalStorage = 0;
 	dataDeclaration->flags |= DECLARATION_IS_STRUCT_MEMBER | DECLARATION_TYPE_IS_READY;
 
-	*toAdd = slot == capacity ? nullptr : dataType->typeValue; // Returns capacity if pointer is already in table
+	*toAdd = slot == typeTableCapacity ? nullptr : dataType->typeValue; // Returns capacity if pointer is already in table
 
 	return dataDeclaration;
 }
@@ -187,9 +180,9 @@ TypeArray *getArray(Type *type) {
 	u32 hash = (type->hash + 1) * ARRAY_HASH_PRIME;
 	if (hash == 0) hash = 1;
 
-	u32 slot = hash & (capacity - 1);
+	u32 slot = hash & (typeTableCapacity - 1);
 
-	for (Entry entry = entries[slot]; entry.hash; entry = entries[slot]) {
+	for (TypeTableEntry entry = typeTableEntries[slot]; entry.hash; entry = typeTableEntries[slot]) {
 		if (entry.hash == hash && entry.value->flavor == TypeFlavor::ARRAY) {
 			auto array = static_cast<TypeArray *>(entry.value);
 			
@@ -198,7 +191,7 @@ TypeArray *getArray(Type *type) {
 			}
 		}
 
-		if (++slot == capacity) slot = 0;
+		if (++slot == typeTableCapacity) slot = 0;
 	}
 
 	auto result = TYPE_NEW(TypeArray);
@@ -235,9 +228,9 @@ TypeArray *getDynamicArray(Type *type) {
 	u32 hash = (type->hash + 1) * DYNAMIC_ARRAY_HASH_PRIME;
 	if (hash == 0) hash = 1;
 
-	u32 slot = hash & (capacity - 1);
+	u32 slot = hash & (typeTableCapacity - 1);
 
-	for (Entry entry = entries[slot]; entry.hash; entry = entries[slot]) {
+	for (TypeTableEntry entry = typeTableEntries[slot]; entry.hash; entry = typeTableEntries[slot]) {
 		if (entry.hash == hash && entry.value->flavor == TypeFlavor::ARRAY) {
 			auto array = static_cast<TypeArray *>(entry.value);
 
@@ -246,7 +239,7 @@ TypeArray *getDynamicArray(Type *type) {
 			}
 		}
 
-		if (++slot == capacity) slot = 0;
+		if (++slot == typeTableCapacity) slot = 0;
 	}
 
 	auto result = TYPE_NEW(TypeArray);
@@ -286,9 +279,9 @@ TypeArray *getStaticArray(Type *type, u64 count) {
 	u32 hash = type->hash * STATIC_ARRAY_TYPE_HASH_PRIME + count * STATIC_ARRAY_SIZE_HASH_PRIME;
 	if (hash == 0) hash = 1;
 
-	u32 slot = hash & (capacity - 1);
+	u32 slot = hash & (typeTableCapacity - 1);
 
-	for (Entry entry = entries[slot]; entry.hash; entry = entries[slot]) {
+	for (TypeTableEntry entry = typeTableEntries[slot]; entry.hash; entry = typeTableEntries[slot]) {
 		if (entry.hash == hash && entry.value->flavor == TypeFlavor::ARRAY) {
 			auto array = static_cast<TypeArray *>(entry.value);
 
@@ -297,7 +290,7 @@ TypeArray *getStaticArray(Type *type, u64 count) {
 			}
 		}
 
-		if (++slot == capacity) slot = 0;
+		if (++slot == typeTableCapacity) slot = 0;
 	}
 
 	auto result = TYPE_NEW(TypeArray);
@@ -435,9 +428,9 @@ TypeFunction *getFunctionType(ExprFunction *expr) {
 
 	if (hash == 0) hash = 1;
 
-	u32 slot = hash & (capacity - 1);
+	u32 slot = hash & (typeTableCapacity - 1);
 
-	for (Entry entry = entries[slot]; entry.hash; entry = entries[slot]) {
+	for (TypeTableEntry entry = typeTableEntries[slot]; entry.hash; entry = typeTableEntries[slot]) {
 		if (entry.hash == hash && entry.value->flavor == TypeFlavor::FUNCTION) {
 			auto function = static_cast<TypeFunction *>(entry.value);
 
@@ -459,7 +452,7 @@ TypeFunction *getFunctionType(ExprFunction *expr) {
 		}
 
 		cont:
-		if (++slot == capacity) slot = 0;
+		if (++slot == typeTableCapacity) slot = 0;
 	}
 
 	auto result = TYPE_NEW(TypeFunction);
@@ -488,8 +481,8 @@ TypeFunction *getFunctionType(ExprFunction *expr) {
 }
 
 void setupTypeTable() {
-	capacity = 1024;
-	entries = new Entry[capacity];
+	typeTableCapacity = 1024;
+	typeTableEntries = new TypeTableEntry[typeTableCapacity];
 	count = 0;
 
 	insertIntoTable(&TYPE_VOID);

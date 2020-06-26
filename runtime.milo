@@ -2,23 +2,24 @@
 
 // These are the struct definitions for the values returned by type_info
 Type_Info :: struct {
-	Tag :: enum {
-		VOID
-		INTEGER
-		FLOAT
-		POINTER
-		BOOL
-		FUNCTION
-		TYPE
-		STRING
-		ARRAY
-		STRUCT
-		ENUM
+	Tag :: enum u64 {
+		VOID     :: 0
+		INTEGER  :: 1
+		FLOAT    :: 2
+		POINTER  :: 3
+		BOOL     :: 4
+		FUNCTION :: 5
+		TYPE     :: 6
+		STRING   :: 7
+		ARRAY    :: 8
+		STRUCT   :: 9
+		ENUM     :: 10
 	}
 
 	tag: Tag
 	size: u64
 	alignment: u64
+	name: string
 }
 
 Type_Info_Integer :: struct {
@@ -36,26 +37,28 @@ Type_Info_Function :: struct {
 	
 	Argument :: struct {
 		argument_type: *Type_Info
+		name: string
 		
-		Flags :: enum_flags {
-			MUST
-			HAS_DEFAULT
+		Flags :: enum_flags u64 {
+			MUST        :: 0x1
+			HAS_DEFAULT :: 0x2
+			USING       :: 0x4
 		}
 		
 		flags: Flags
 	}
 	
-	arguments: []*Type_Info
-	returns: []*Type_Info
+	arguments: []Argument
+	returns: []Argument
 }
 
 Type_Info_Array :: struct {
 	using base: Type_Info
 	
-	Flavor :: enum {
-		FIXED
-		NORMAL
-		DYNAMIC
+	Flavor :: enum u64 {
+		FIXED   :: 0
+		NORMAL  :: 1
+		DYNAMIC :: 2
 	}
 	
 	flavor: Flavor
@@ -67,19 +70,21 @@ Type_Info_Struct :: struct {
 	using base: Type_Info
 	
 	Member :: struct {
-		Flags : enum_flags {
-			UNINITIALIZED
-			CONSTANT
+		Flags :: enum_flags u64 {
+			UNINITIALIZED :: 0x1
+			CONSTANT      :: 0x2
+			USING         :: 0x4
 		}
 	
 		name: string
 		offset: u64
 		member_type: *Type_Info
+		flags: Flags
 	}
 	
-	Flags :: enum_flags {
-		UNION
-		PACKED
+	Flags :: enum_flags u64 {
+		UNION  :: 0x1
+		PACKED :: 0x2
 	}
 	
 	flags: Flags

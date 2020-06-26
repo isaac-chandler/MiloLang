@@ -269,3 +269,39 @@ print_s64 :: (num: s64) {
 	
 	deallocate(cast() s)	
 }
+
+print :: (using val: any) {
+	info := type_info(value_type)
+
+	if (value_type == void) {
+	
+		print_string("void")
+		
+	} else if (value_type == type) {
+	
+		print_string(type_info(<<cast(*type) value_pointer).name)
+		
+	} else if (value_type == bool) {
+		value := <<cast(*bool) value_pointer
+	
+		if (value) {
+			print_string("true")
+		} else {
+			print_string("false")
+		}
+		
+	} else if (value_type == type) {
+	
+		print_string(type_info(<<cast(*type) value_pointer).name)
+		
+	} else if (value_type == string) {
+	
+		print_string(<<cast(*string) value_pointer)
+		
+	} else {
+	
+		print_string("Cannot print ")
+		print_string(info.name)
+		
+	}
+}

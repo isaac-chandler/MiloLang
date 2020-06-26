@@ -570,6 +570,10 @@ bool isValidCast(Type *to, Type *from) {
 		return true;
 	}
 
+	if (from != &TYPE_VOID && from != &TYPE_AUTO_CAST && from->flavor != TypeFlavor::NAMESPACE && to == TYPE_ANY) {
+		return true;
+	}
+
 	if (from->flavor == TypeFlavor::BOOL) {
 		return to->flavor == TypeFlavor::INTEGER;
 	}
@@ -1694,7 +1698,7 @@ Expr *createDefaultValue(SubJob *job, Declaration *location, Type *type, bool *s
 				goToSleep(job, &first->sleepingOnMe);
 
 				*shouldYield = true;
-				return false;
+				return nullptr;
 			}
 		}
 
@@ -1844,8 +1848,14 @@ bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yi
 					if (*yield) {
 						return false;
 					}
+
+					if (correct == TYPE_ANY && given->type != TYPE_ANY) {
+						insertImplicitCast(job->sizeDependencies, &given, TYPE_ANY);
+						return true;
+					}
 				}
 				else {
+
 					addSizeDependency(job->sizeDependencies, given->type);
 				}
 
@@ -1908,8 +1918,14 @@ bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yi
 					if (*yield) {
 						return false;
 					}
+
+					if (correct == TYPE_ANY && given->type != TYPE_ANY) {
+						insertImplicitCast(job->sizeDependencies, &given, TYPE_ANY);
+						return true;
+					}
 				}
 				else {
+
 					addSizeDependency(job->sizeDependencies, given->type);
 				}
 
@@ -4094,10 +4110,12 @@ bool inferFlattened(SubJob *job) {
 
 					unary->type = getPointer(TYPE_TYPE_INFO);
 				}
+
+				break;
 			}
 			case TokenT::SHIFT_LEFT: {
 				if (value->type->flavor != TypeFlavor::POINTER) {
-					reportError(value, "Error: Cannot only read from a pointer, given a %.*s", STRING_PRINTF(value->type->name));
+					reportError(value, "Error: Can only read from a pointer, given a %.*s", STRING_PRINTF(value->type->name));
 					return false;
 				}
 
