@@ -563,7 +563,7 @@ _main :: () {
 			window_width = client_rect.right - client_rect.left
 			window_height = client_rect.bottom - client_rect.top
 			
-			print_u64(window_width)
+			print_u64(cast() window_width)
 			print("x")
 			print_u64(cast() window_height)
 			print("\n----------\n")
