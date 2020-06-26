@@ -50,6 +50,8 @@ struct Type {
 	TypeFlavor flavor;
 	Array<struct SubJob *> sleepingOnMe;
 	struct SizeJob *sizeJob = nullptr;
+
+	u64 runtimeValue;
 };
 
 struct TypePointer : Type {
@@ -62,6 +64,7 @@ struct TypeStruct : Type {
 
 struct TypeEnum : TypeStruct {
 	Type *integerType;
+	Block *values;
 };
 
 struct TypeArray : TypeStruct {
@@ -119,6 +122,15 @@ inline Type TYPE_AUTO_CAST = { 0, 0, "<auto cast>", 59, TYPE_IS_INTERNAL, TypeFl
 inline Type TYPE_STRING = { 8, 8, "string", 61, 0, TypeFlavor::STRING };
 
 inline Type *TYPE_VOID_POINTER;
+
+inline Type *TYPE_ANY;
+inline Type *TYPE_TYPE_INFO;
+inline Type *TYPE_TYPE_INFO_INTEGER;
+inline Type *TYPE_TYPE_INFO_POINTER;
+inline Type *TYPE_TYPE_INFO_FUNCTION;
+inline Type *TYPE_TYPE_INFO_ARRAY;
+inline Type *TYPE_TYPE_INFO_STRUCT;
+inline Type *TYPE_TYPE_INFO_ENUM;
 
 void addStruct(TypeStruct *struct_);
 

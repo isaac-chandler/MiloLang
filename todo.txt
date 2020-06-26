@@ -39,7 +39,9 @@ Compile option for runtime checking
  - Cast bounds checking
  - 
  
-Syntax for casting float to int and int to float bitwise
+Syntax for casting float to int and int to float bitwise (maybe allow this casting to work with any types that are the same size)
+
+Function inlining
 
 Rotate operators
 

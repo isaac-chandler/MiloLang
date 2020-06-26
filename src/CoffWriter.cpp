@@ -639,16 +639,24 @@ struct JumpPatch {
 	u64 rip;
 };
 
+struct TypePatch {
+	Type *type;
+	u64 *location;
+};
+
+Array<TypePatch> typePatches;
+
+
 bool writeValue(BucketedArenaAllocator *data, BucketedArenaAllocator *dataRelocations, BucketArray<Symbol> *symbols, BucketedArenaAllocator *stringTable, Expr *value, s64 *emptyStringSymbolIndex, BucketedArenaAllocator *rdata) {
 	auto type = value->type;
 
-	data->allocateUnaligned(AlignPO2(data->totalSize, type->alignment) - data->totalSize);
 
 	assert(value->flavor == ExprFlavor::FLOAT_LITERAL ||
 		value->flavor == ExprFlavor::INT_LITERAL ||
 		value->flavor == ExprFlavor::FUNCTION ||
 		value->flavor == ExprFlavor::STRING_LITERAL ||
-		value->flavor == ExprFlavor::ARRAY);
+		value->flavor == ExprFlavor::ARRAY ||
+		value->flavor == ExprFlavor::TYPE_LITERAL);
 
 	if (value->flavor == ExprFlavor::FUNCTION) {
 		assert(type->size == 8);
@@ -718,6 +726,9 @@ bool writeValue(BucketedArenaAllocator *data, BucketedArenaAllocator *dataReloca
 		else {
 			data->add(&static_cast<ExprLiteral *>(value)->unsignedValue, type->size);
 		}
+	}
+	else if (value->flavor == ExprFlavor::TYPE_LITERAL) {
+		typePatches.add({ static_cast<ExprLiteral *>(value)->typeValue, data->add8(0) });
 	}
 	else {
 		assert(false);
@@ -935,6 +946,7 @@ void emitBasicTypeDebugInfo(BucketedArenaAllocator *debugSymbols) {
 	alignAllocator(debugSymbols, 4);
 }
 
+u64 nextTypeValue;
 
 void runCoffWriter() {
 	PROFILE_FUNC();
@@ -987,7 +999,7 @@ void runCoffWriter() {
 		u32 subsectionOffset = debugSymbols.totalSize;
 
 		COMPILESYM3 compileFlags;
-		compileFlags.flags.iLanguage = 20; // Check noone uses this
+		compileFlags.flags.iLanguage = 20; // @Cleanup Check noone uses this
 		compileFlags.flags.unused = 0;
 
 		const char *compilerName = "Milo Compiler 0.1.1 (Windows-x64)";
@@ -1010,7 +1022,7 @@ void runCoffWriter() {
 
 		if (!job.function)
 			break;
-		if (job.isFunction) {
+		if (job.flavor == CoffJobFlavor::FUNCTION) {
 			PROFILE_ZONE("Write Function");
 			auto function = job.function;
 
@@ -1199,6 +1211,14 @@ void runCoffWriter() {
 				instructionOffsets.add(code.totalSize);
 
 				switch (ir.op) {
+					case IrOp::TYPE: {
+						code.add1(0x48);
+						code.add1(0xB8);
+
+						typePatches.add({ ir.type, code.add8(0) });
+
+						break;
+					}
 					case IrOp::ADD: {
 						if (ir.a == 0) {
 							writeSet(&code, function, ir.opSize, ir.dest, ir.b);
@@ -2932,7 +2952,7 @@ void runCoffWriter() {
 			function->state.loopStack.free();
 			function->state.ir.free();
 		}
-		else {
+		else if (job.flavor == CoffJobFlavor::GLOBAL_DECLARATION) {
 			PROFILE_ZONE("Write Declaration");
 			auto declaration = job.declaration;
 
@@ -2949,7 +2969,9 @@ void runCoffWriter() {
 			symbol->storageClass = IMAGE_SYM_CLASS_EXTERNAL;
 			symbol->type = 0;
 
-			if (declaration->flags & DECLARATION_IS_UNINITIALIZED) {
+			if ((declaration->flags & DECLARATION_IS_UNINITIALIZED) ||
+				((declaration->initialValue->flavor == ExprFlavor::INT_LITERAL || declaration->initialValue->flavor == ExprFlavor::FLOAT_LITERAL) 
+					&& static_cast<ExprLiteral *>(declaration->initialValue)->unsignedValue == 0)) {
 				bssSection.virtualSize = AlignPO2(bssSection.virtualSize, type->alignment);
 
 				symbol->value = bssSection.virtualSize;
@@ -2969,8 +2991,24 @@ void runCoffWriter() {
 
 			symbol->numberOfAuxSymbols = 0;
 		}
+		else if (job.flavor == CoffJobFlavor::TYPE) {
+			assert(job.type->flavor != TypeFlavor::NAMESPACE);
+			assert(job.type->flavor != TypeFlavor::AUTO_CAST);
+
+			job.type->runtimeValue = nextTypeValue++;
+		}
 	}
 
+	{
+		PROFILE_ZONE("Do patches");
+
+		for (auto patch : typePatches) {
+			assert(patch.type->flavor != TypeFlavor::NAMESPACE);
+			assert(patch.type->flavor != TypeFlavor::AUTO_CAST);
+
+			*patch.location = patch.type->runtimeValue;
+		}
+	}
 
 	{
 		PROFILE_ZONE("Write output");

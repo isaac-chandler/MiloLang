@@ -18,6 +18,8 @@ BucketedArenaAllocator parserArena(1024 * 1024);
 
 Block *currentBlock = nullptr;
 
+Array<DeclarationPack> packsToAdd;
+
 static bool addDeclarationToCurrentBlock(Declaration *declaration) {
 	return addDeclarationToBlock(currentBlock, declaration);
 }
@@ -61,7 +63,7 @@ static void pushBlock(Block *block) {
 }
 
 static void queueBlock(Block *block) {
-	inferQueue.add(makeDeclarationPack(block)); // Queue the entire block at once to avoid locking the mutex too much
+	packsToAdd.add(makeDeclarationPack(block)); // Queue the entire block at once to avoid locking the mutex too much
 }
 
 static void popBlock(Block *block) { // This only takes the parameter to make sure we are always popping the block we think we are in debug
@@ -994,8 +996,7 @@ bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *u
 
 		popBlock(&function->arguments);
 
-		_ReadWriteBarrier();
-		inferQueue.add(makeDeclarationPack(function));
+		packsToAdd.add(makeDeclarationPack(function));
 	}
 	else if (lexer->token.type == TokenT::EXTERNAL) {
 		lexer->advance();
@@ -1020,8 +1021,7 @@ bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *u
 		pushBlock(&function->arguments); // @Cleanup: These functions deal with properly setting up the blocks parent and queueing the block for infer even if we don't need to 
 		popBlock(&function->arguments);
 
-		_ReadWriteBarrier();
-		inferQueue.add(makeDeclarationPack(function));
+		packsToAdd.add(makeDeclarationPack(function));
 	}
 	else { // This is a function type
 		function->end = lexer->previousTokenEnd;
@@ -1427,11 +1427,13 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 		lexer->advance();
 	}
-	else if (expectAndConsume(lexer, TokenT::SIZE_OF)) {
+	else if (lexer->token.type == TokenT::SIZE_OF || lexer->token.type == TokenT::TYPE_INFO) {
 		ExprUnaryOperator *unary = PARSER_NEW(ExprUnaryOperator);
 		unary->flavor = ExprFlavor::UNARY_OPERATOR;
-		unary->op = TokenT::SIZE_OF;
+		unary->op = lexer->token.type;
 		unary->start = start;
+
+		lexer->advance();
 
 		if (!expectAndConsume(lexer, '(')) {
 			reportExpectedError(&lexer->token, "Error: Expected '(' after size_of");
@@ -1577,7 +1579,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		popBlock(&type->members);
 		expr = parserMakeTypeLiteral(start, lexer->previousTokenEnd, type);
 
-		inferQueue.add(makeDeclarationPack(expr));
+		packsToAdd.add(makeDeclarationPack(expr));
 	}
 	else if (lexer->token.type == TokenT::ENUM || lexer->token.type == TokenT::ENUM_FLAGS) {
 		auto enum_ = PARSER_NEW(ExprEnum);
@@ -1617,6 +1619,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		members->name = "members";
 		members->members.flags |= BLOCK_IS_STRUCT;
 
+		enum_->struct_.values = &members->members;
 
 		auto membersDeclaration = PARSER_NEW(Declaration);
 		membersDeclaration->start = lexer->token.start;
@@ -1718,9 +1721,15 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		}
 		popBlock(&members->members);
 
+
 		enum_->end = lexer->previousTokenEnd;
 
 		popBlock(&enum_->struct_.members);
+
+
+		if (members->members.declarations.count == 0) {
+			reportError(enum_, "Error: Cannot have an enum with no values");
+		}
 
 		expr = enum_;
 	}
@@ -2165,6 +2174,12 @@ void parseFile(FileInfo *file) {
 	lexer.advance();
 
 	while (!hadError) {
+		for (auto pack : packsToAdd) {
+			inferQueue.add(pack);
+		}
+
+		packsToAdd.clear();
+
 		if (lexer.token.type == TokenT::IDENTIFIER) {
 			Declaration *declaration = parseDeclaration(&lexer);
 			if (!declaration) {
@@ -2180,7 +2195,7 @@ void parseFile(FileInfo *file) {
 
 			assert(!(declaration->flags & DECLARATION_MARKED_AS_USING));
 
-			inferQueue.add(makeDeclarationPack(declaration));
+			packsToAdd.add(makeDeclarationPack(declaration));
 		}
 		else if (lexer.token.type == TokenT::USING) {
 			TokenT peek[2];
@@ -2194,11 +2209,11 @@ void parseFile(FileInfo *file) {
 
 				_ReadWriteBarrier();
 
-				inferQueue.add(makeDeclarationPack(declaration));
+				packsToAdd.add(makeDeclarationPack(declaration));
 
 				assert(declaration->flags & DECLARATION_MARKED_AS_USING);
 
-				inferQueue.add(makeDeclarationPack(createDeclarationForUsing(declaration, currentBlock)));
+				packsToAdd.add(makeDeclarationPack(createDeclarationForUsing(declaration, currentBlock)));
 
 
 			}
@@ -2227,7 +2242,7 @@ void parseFile(FileInfo *file) {
 
 				_ReadWriteBarrier();
 
-				inferQueue.add(makeDeclarationPack(declaration));
+				packsToAdd.add(makeDeclarationPack(declaration));
 			}
 		}
 		else if (lexer.token.type == TokenT::LOAD) {

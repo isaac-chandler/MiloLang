@@ -8,13 +8,6 @@
 #include "TypeTable.h"
 #include "ArraySet.h"
 
-
-u64 totalDeclarations = 0;
-u64 totalFunctions = 0;
-u64 totalTypesSized = 0;
-u64 totalInfers = 0;
-u64 totalSizes = 0;
-
 enum class JobFlavor {
 	SIZE, 
 	DECLARATION_TYPE, 
@@ -345,7 +338,6 @@ void trySolidifyNumericLiteralToDefault(Expr *expr) {
 	}
 }
 
-// @Incomplete more specific handling so we can print the bounds that were violated
 bool boundsCheckImplicitConversion(Expr *location, Type *convertTo, ExprLiteral *convertFrom) {
 	if (convertTo->flags & TYPE_INTEGER_IS_SIGNED) {
 		s64 max = static_cast<s64>((1ULL << (convertTo->size * 8 - 1)) - 1);
@@ -1603,9 +1595,6 @@ bool defaultValueIsZero(SubJob *job, Type *type, bool *yield) {
 
 		return true;
 	}
-	case TypeFlavor::ENUM: {
-		return type->flags & TYPE_ENUM_IS_FLAGS ? true : false;
-	}
 	default: {
 		return false;
 	}
@@ -1617,6 +1606,7 @@ Expr *createDefaultValue(SubJob *job, Declaration *location, Type *type, bool *s
 	bool yield;
 
 	if (defaultValueIsZero(job, type, &yield)) {
+	zero:
 		ExprLiteral *zero = new ExprLiteral;
 		zero->flavor = ExprFlavor::INT_LITERAL;
 		zero->unsignedValue = 0;
@@ -1690,14 +1680,28 @@ Expr *createDefaultValue(SubJob *job, Declaration *location, Type *type, bool *s
 
 		return defaults;
 	}
-	case TypeFlavor::TYPE: {
-		reportError(location, "Error: There is no default value for a type");
+	case TypeFlavor::ENUM: {
+		if (type->flags & TYPE_ENUM_IS_FLAGS) {
+			goto zero;
+		}
+		else {
+			auto first = static_cast<TypeEnum *>(type)->values->declarations[0];
+
+			if ((first->flags & DECLARATION_VALUE_IS_READY)) {
+				return first->initialValue;
+			}
+			else {
+				goToSleep(job, &first->sleepingOnMe);
+
+				*shouldYield = true;
+				return false;
+			}
+		}
+
 		return nullptr;
 	}
-	case TypeFlavor::ENUM: {
-		// Enum flags will be handled by the defaultIsZero case
-		reportError(location, "Error: Enums do not have a default value");
-		return nullptr;
+	case TypeFlavor::TYPE: {
+		return inferMakeTypeLiteral(location->start, location->end, &TYPE_VOID);
 	}
 	default: {
 		assert(false);
@@ -1833,9 +1837,7 @@ bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yi
 				break;
 			}
 			case TypeFlavor::TYPE: {
-				// @Incomplete make this work
-				assert(false);
-				return false;
+				break;
 			}
 			case TypeFlavor::STRUCT: {
 				if (!tryUsingConversion(job, correct, &given, yield)) {
@@ -2247,9 +2249,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 				break;
 			}
 			case TypeFlavor::TYPE: {
-				// @Incomplete make this work
-				assert(false);
-				return false;
+				break;
 			}
 			default:
 				assert(false);
@@ -3280,7 +3280,9 @@ bool inferFlattened(SubJob *job) {
 		}
 		case ExprFlavor::FUNCTION: {
 			if (!expr->type) {
-				goToSleep(job, &static_cast<ExprFunction *>(expr)->sleepingOnMe);
+				auto function = static_cast<ExprFunction *>(expr);
+				
+				goToSleep(job, &function->sleepingOnMe);
 
 				return true;
 			}
@@ -3992,6 +3994,107 @@ bool inferFlattened(SubJob *job) {
 
 				break;
 			}
+			case TokenT::TYPE_INFO: {
+				if (value->type != &TYPE_TYPE) {
+					reportError(value, "Error: Can only get type_info for a type");
+					return false;
+				}
+
+				if (value->flavor == ExprFlavor::TYPE_LITERAL) {
+					auto type = static_cast<ExprLiteral *>(value)->typeValue;
+
+					switch (type->flavor) {
+					case TypeFlavor::NAMESPACE: {
+						reportError(value, "Error: Cannot get type_info for a namespace");
+						return false;
+					}
+					case TypeFlavor::VOID:
+					case TypeFlavor::FLOAT:
+					case TypeFlavor::BOOL:
+					case TypeFlavor::TYPE:
+					case TypeFlavor::STRING: {
+						if (!TYPE_TYPE_INFO) {
+							reportError(unary, "Internal Compiler Error: Type_Info was used before it's declaration was found");
+							return false;
+						}
+
+						unary->type = getPointer(TYPE_TYPE_INFO);
+						
+						break;
+					}
+					case TypeFlavor::INTEGER: {
+						if (!TYPE_TYPE_INFO_INTEGER) {
+							reportError(unary, "Internal Compiler Error: Type_Info_Integer was used before it's declaration was found");
+							return false;
+						}
+
+						unary->type = getPointer(TYPE_TYPE_INFO_INTEGER);
+
+						break;
+					}
+					case TypeFlavor::POINTER: {
+						if (!TYPE_TYPE_INFO_POINTER) {
+							reportError(unary, "Internal Compiler Error: Type_Info_Pointer was used before it's declaration was found");
+							return false;
+						}
+
+						unary->type = getPointer(TYPE_TYPE_INFO_POINTER);
+
+						break;
+					}
+					case TypeFlavor::FUNCTION: {
+						if (!TYPE_TYPE_INFO_FUNCTION) {
+							reportError(unary, "Internal Compiler Error: Type_Info_Function was used before it's declaration was found");
+							return false;
+						}
+
+						unary->type = getPointer(TYPE_TYPE_INFO_FUNCTION);
+
+						break;
+					}
+					case TypeFlavor::ARRAY: {
+						if (!TYPE_TYPE_INFO_ARRAY) {
+							reportError(unary, "Internal Compiler Error: Type_Info_Array was used before it's declaration was found");
+							return false;
+						}
+
+						unary->type = getPointer(TYPE_TYPE_INFO_ARRAY);
+
+						break;
+					}
+					case TypeFlavor::STRUCT: {
+						if (!TYPE_TYPE_INFO_STRUCT) {
+							reportError(unary, "Internal Compiler Error: Type_Info_Struct was used before it's declaration was found");
+							return false;
+						}
+
+						unary->type = getPointer(TYPE_TYPE_INFO_STRUCT);
+
+						break;
+					}
+					case TypeFlavor::ENUM: {
+						if (!TYPE_TYPE_INFO) {
+							reportError(unary, "Internal Compiler Error: Type_Info_Enum was used before it's declaration was found");
+							return false;
+						}
+
+						unary->type = getPointer(TYPE_TYPE_INFO_ENUM);
+
+						break;
+					}
+					default:
+						assert(false);
+					}
+				}
+				else {
+					if (!TYPE_TYPE_INFO) {
+						reportError(unary, "Internal Compiler Error: Type_Info was used before it's declaration was found");
+						return false;
+					}
+
+					unary->type = getPointer(TYPE_TYPE_INFO);
+				}
+			}
 			case TokenT::SHIFT_LEFT: {
 				if (value->type->flavor != TypeFlavor::POINTER) {
 					reportError(value, "Error: Cannot only read from a pointer, given a %.*s", STRING_PRINTF(value->type->name));
@@ -4237,20 +4340,54 @@ void freeJob(FunctionJob *job) {
 	firstFreeFunctionJob = job;
 }
 
-bool addDeclaration(Declaration *declaration) {
-	if (declaration->name == "__remove" && !declaration->enclosingScope) {
+bool checkStructDeclaration(Declaration *declaration, Type *&value, String name) {
+	if (declaration->name == name) {
 		if (!(declaration->flags & DECLARATION_IS_CONSTANT)) {
-			reportError(declaration, "Declaration for __remove must be a constant");
+			reportError(declaration, "Internal Compiler Error: Declaration for %.*s must be a constant", STRING_PRINTF(name));
+			return false;
+		}
+		else if (!declaration->initialValue || declaration->initialValue->flavor != ExprFlavor::TYPE_LITERAL) {
+			reportError("Internal Compiler Error: %.s must be a type");
+			return false;
+		}
+
+		value = static_cast<ExprLiteral *>(declaration->initialValue)->typeValue;
+	}
+
+	return true;
+}
+
+bool checkBuiltinDeclaration(Declaration *declaration) {
+#define STRUCT_DECLARATION(value, name)		\
+else if (!checkStructDeclaration(declaration, value, name)) {	\
+	return false;                                               \
+}                                             
+	if (declaration->name == "__remove") {
+		if (!(declaration->flags & DECLARATION_IS_CONSTANT)) {
+			reportError(declaration, "Internal Compiler Error: Declaration for __remove must be a constant");
 			return false;
 		}
 		else if (!declaration->initialValue || declaration->initialValue->flavor != ExprFlavor::FUNCTION) {
-			reportError(declaration, "__remove must be a function");
+			reportError(declaration, "Internal Compiler Error: __remove must be a function");
 			return false;
 		}
 
 		removeFunction = static_cast<ExprFunction *>(declaration->initialValue);
 	}
+	STRUCT_DECLARATION(TYPE_ANY, "any")
+		STRUCT_DECLARATION(TYPE_TYPE_INFO, "Type_Info")
+		STRUCT_DECLARATION(TYPE_TYPE_INFO_INTEGER, "Type_Info_Integer")
+		STRUCT_DECLARATION(TYPE_TYPE_INFO_POINTER, "Type_Info_Pointer")
+		STRUCT_DECLARATION(TYPE_TYPE_INFO_FUNCTION, "Type_Info_Function")
+		STRUCT_DECLARATION(TYPE_TYPE_INFO_ARRAY, "Type_Info_Array")
+		STRUCT_DECLARATION(TYPE_TYPE_INFO_STRUCT, "Type_Info_Struct")
+		STRUCT_DECLARATION(TYPE_TYPE_INFO_ENUM, "Type_Info_Enum")
 
+		return true;
+#undef STRUCT_DECLARATION
+}
+
+bool addDeclaration(Declaration *declaration) {
 	declaration->inferJob = nullptr;
 
 	if (declaration->flags & (DECLARATION_IS_ITERATOR | DECLARATION_IS_ITERATOR_INDEX | DECLARATION_IS_IN_COMPOUND))
@@ -4258,6 +4395,10 @@ bool addDeclaration(Declaration *declaration) {
 
 	if (!declaration->enclosingScope) {
 		if (!addDeclarationToBlock(&globalBlock, declaration)) {
+			return false;
+		}
+
+		if (declaration->start.fileUid == 0 && !checkBuiltinDeclaration(declaration)) {
 			return false;
 		}
 
@@ -4785,7 +4926,7 @@ bool inferFunction(FunctionJob *job) {
 			}
 
 			CoffJob coff;
-			coff.isFunction = true;
+			coff.flavor = CoffJobFlavor::FUNCTION;
 			coff.function = function;
 
 			coffWriterQueue.add(coff);
@@ -4983,8 +5124,8 @@ void runInfer() {
 		do {
 			madeProgress = false;
 
-			while (subJobs.count) {
-				auto job = subJobs.pop();
+			for (u64 i = 0; i < subJobs.count; i++) {
+				auto job = subJobs[i];
 
 				if (!inferFlattened(job)) {
 					goto error;
@@ -5007,6 +5148,8 @@ void runInfer() {
 					}
 				}
 			}
+
+			subJobs.clear();
 
 			for (auto job : declarationsToWorkOn) {
 				if (!inferDeclaration(job))
@@ -5070,7 +5213,7 @@ void runInfer() {
 
 					CoffJob coffJob;
 					coffJob.declaration = job->declaration;
-					coffJob.isFunction = false;
+					coffJob.flavor = CoffJobFlavor::GLOBAL_DECLARATION;
 					coffWriterQueue.add(coffJob);
 
 					freeJob(job);
@@ -5243,18 +5386,7 @@ void runInfer() {
 	}
 
 	irGeneratorQueue.add(nullptr);
-	if (!hadError) {
-		u64 totalQueued = totalDeclarations + totalFunctions + totalTypesSized;
-
-		printf(
-			"Total queued: %llu\n"
-			"  %llu declarations\n"
-			"  %llu functions\n"
-			"  %llu types\n"
-			"Total infers: %llu, %.1f infers/queued\n"
-			"Total sizes: %llu, %.1f sizes/type\n",
-			totalQueued, totalDeclarations, totalFunctions, totalTypesSized, totalInfers, static_cast<float>(totalInfers) / totalQueued, totalSizes, static_cast<float>(totalSizes) / totalTypesSized);
-	}
+	
 	return;
 error:;
 	assert(hadError);

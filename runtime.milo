@@ -1,4 +1,110 @@
-// This file is required by the compiler to correctly run!
+// The definitions in this file are required for all the compiler features to successfully run, modify with care!
+
+// These are the struct definitions for the values returned by type_info
+Type_Info :: struct {
+	Tag :: enum {
+		VOID
+		INTEGER
+		FLOAT
+		POINTER
+		BOOL
+		FUNCTION
+		TYPE
+		STRING
+		ARRAY
+		STRUCT
+		ENUM
+	}
+
+	tag: Tag
+	size: u64
+	alignment: u64
+}
+
+Type_Info_Integer :: struct {
+	using base: Type_Info
+	signed: bool
+}
+
+Type_Info_Pointer :: struct {
+	using base: Type_Info
+	value_type: *Type_Info
+}
+
+Type_Info_Function :: struct {
+	using base: Type_Info
+	
+	Argument :: struct {
+		argument_type: *Type_Info
+		
+		Flags :: enum_flags {
+			MUST
+			HAS_DEFAULT
+		}
+		
+		flags: Flags
+	}
+	
+	arguments: []*Type_Info
+	returns: []*Type_Info
+}
+
+Type_Info_Array :: struct {
+	using base: Type_Info
+	
+	Flavor :: enum {
+		FIXED
+		NORMAL
+		DYNAMIC
+	}
+	
+	flavor: Flavor
+	element_type: *Type_Info
+	count: u64
+}
+
+Type_Info_Struct :: struct {
+	using base: Type_Info
+	
+	Member :: struct {
+		Flags : enum_flags {
+			UNINITIALIZED
+			CONSTANT
+		}
+	
+		name: string
+		offset: u64
+		member_type: *Type_Info
+	}
+	
+	Flags :: enum_flags {
+		UNION
+		PACKED
+	}
+	
+	flags: Flags
+	members: []Member
+}
+
+Type_Info_Enum :: struct {
+	using base: Type_Info
+	
+	Member :: struct {
+		name: string
+		value: u64
+	}
+	
+	base_type: *Type_Info_Integer
+	is_flags: bool
+	members: []Member
+}
+
+
+// This is the declaration of the any type, all values can implicitly cast to any
+any :: struct {
+	value_pointer: *void
+	value_type: type
+}
 
 // The function called to remove an item from an array when a remove statement is encountered
 __remove :: (array: *[]u8, value: *u8, size: u64) -> *u8 {

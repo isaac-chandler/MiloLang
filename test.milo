@@ -110,7 +110,7 @@ Enemy :: struct {
 		DEAD
 	}
 	
-	state: State = State.LEFT
+	state := State.LEFT
 }
 
 Particle :: struct {

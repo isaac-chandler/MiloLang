@@ -1104,6 +1104,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 			if (!removeFunction) {
 				reportError(expr, "Internal Compiler Error: Removing something before __remove is declared");
+				assert(false);
 				exit(1); // @Cleanup Forceful exit since we don't have good error handling here and its an internal compiler error
 			}
 
@@ -1603,8 +1604,22 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			return dest;
 		}
 		case ExprFlavor::TYPE_LITERAL: {
-			assert(false); // @Incomplete
-			return DEST_NONE;
+			if (dest == DEST_NONE) return DEST_NONE;
+
+			auto type = static_cast<ExprLiteral *>(expr)->typeValue;
+
+			if (type->flavor == TypeFlavor::NAMESPACE) {
+				reportError(expr, "Error: Cannot operate on a namespace");
+				return dest;
+			}
+
+			Ir &ir = state->ir.add();
+			ir.op = IrOp::TYPE;
+			ir.dest = dest;
+			ir.type = type;
+			ir.opSize = 8;
+
+			return dest;
 		}
 		case ExprFlavor::UNARY_OPERATOR: {
 			ExprUnaryOperator *unary = static_cast<ExprUnaryOperator *>(expr);
@@ -1863,16 +1878,21 @@ void runIrGenerator() {
 
 		generateIr(&function->state, function->body, DEST_NONE);
 
+		if (hadError) {
+			goto error;
+		}
+
 		//addLineMarker(&function->state, function->body->start.fileUid, function->body->end);
 
 		// @Incomplete @ErrorMessage check wether the function actually returns
 
 		CoffJob job;
 		job.function = function;
-		job.isFunction = true;
+		job.flavor = CoffJobFlavor::FUNCTION;
 
 		coffWriterQueue.add(job);
 	}
 
-	coffWriterQueue.add({ nullptr, true });
+	error:
+	coffWriterQueue.add({ nullptr, CoffJobFlavor::FUNCTION });
 }

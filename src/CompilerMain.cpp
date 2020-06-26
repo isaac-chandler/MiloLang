@@ -48,11 +48,12 @@ bool loadNewFile(String file) {
 	info.handle = handle;
 	info.volumeSerialNumber = fileInfo.dwVolumeSerialNumber;
 	info.fileIndex = (static_cast<u64>(fileInfo.nFileIndexHigh) << 32ULL) | static_cast<u64>(fileInfo.nFileIndexLow);
-	info.fileUid = static_cast<u32>(files.size());
 
 
 	{
 		ScopeLock fileLock(filesMutex);
+		info.fileUid = static_cast<u32>(files.size());
+			
 		if (!files.add(info)) {
 			CloseHandle(handle);
 		}
@@ -316,26 +317,39 @@ int main(int argc, char *argv[]) {
 	}
 
 #if BUILD_WINDOWS
-	wchar_t buffer[1024];
-
-	{
-		PROFILE_ZONE("Find linker");
-
-		Find_Result result = find_visual_studio_and_windows_sdk();
-
-		if (!result.vs_exe_path) {
-			reportError("Couldn't find linker");
-			return 1;
-		}
-		else if (!result.windows_sdk_um_library_path) {
-			reportError("Couldn't find libraries");
-			return 1;
-		}
-
-		_snwprintf(buffer, 1024, L"\"%s\\link.exe\" out.obj /debug /entry:main kernel32.lib user32.lib gdi32.lib opengl32.lib \"/libpath:%s\" /incremental:no /nologo", result.vs_exe_path, result.windows_sdk_um_library_path);
-	}
 
 	if (!hadError) {
+		u64 totalQueued = totalDeclarations + totalFunctions + totalTypesSized;
+
+		printf(
+			"Total queued: %llu\n"
+			"  %llu declarations\n"
+			"  %llu functions\n"
+			"  %llu types\n"
+			"Total infers: %llu, %.1f infers/queued\n"
+			"Total sizes: %llu, %.1f sizes/type\n",
+			totalQueued, totalDeclarations, totalFunctions, totalTypesSized, totalInfers, static_cast<float>(totalInfers) / totalQueued, totalSizes, static_cast<float>(totalSizes) / totalTypesSized);
+
+		wchar_t buffer[1024];
+
+		{
+			PROFILE_ZONE("Find linker");
+
+			Find_Result result = find_visual_studio_and_windows_sdk();
+
+			if (!result.vs_exe_path) {
+				reportError("Couldn't find linker");
+				return 1;
+			}
+			else if (!result.windows_sdk_um_library_path) {
+				reportError("Couldn't find libraries");
+				return 1;
+			}
+
+			_snwprintf(buffer, 1024, L"\"%s\\link.exe\" out.obj /debug /entry:main kernel32.lib user32.lib gdi32.lib opengl32.lib \"/libpath:%s\" /incremental:no /nologo", result.vs_exe_path, result.windows_sdk_um_library_path);
+		}
+
+
 		fwprintf(stdout, L"Linker command: %s\n", buffer);
 
 		STARTUPINFOW startup = {};

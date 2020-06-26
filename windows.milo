@@ -196,7 +196,7 @@ POINT :: struct {
 
 MSG :: struct {
 	hwnd: HWND
-	message := Message.WM_NULL
+	message: Message
 	wParam: u64
 	lParam: s64
 	time: u32
@@ -407,7 +407,7 @@ PIXELFORMATDESCRIPTOR :: struct {
 	nSize: u16 = size_of(PIXELFORMATDESCRIPTOR)
 	nVersion: u16 = 1
 	dwFlags: Flags
-	iPixelType := Pixel_Type.PFD_TYPE_RGBA
+	iPixelType: Pixel_Type
 	cColorBits: u8
 	cRedBits: u8
 	cRedShift: u8
@@ -424,7 +424,7 @@ PIXELFORMATDESCRIPTOR :: struct {
 	cDepthBits: u8
 	cStencilBits: u8
 	cAuxBuffers: u8
-	iLayerType := Plane.PFD_MAIN_PLANE
+	iLayerType: Plane
 	bReserved: u8
 	dwLayerMask: u32
 	dwVisibleMask: u32

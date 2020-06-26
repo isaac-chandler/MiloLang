@@ -4,6 +4,7 @@
 #include "TypeTable.h"
 #include "Ast.h"
 #include "Parser.h" // For addDeclarationToBlock, that shouldn't be in parser
+#include "CoffWriter.h"
 
 BucketedArenaAllocator typeArena(1024 * 1024);
 
@@ -64,6 +65,12 @@ void insertIntoTable(Type *type, u32 slot) {
 
 	entries[slot].value = type;
 	entries[slot].hash = type->hash;
+
+	CoffJob job;
+	job.type = type;
+	job.flavor = CoffJobFlavor::TYPE;
+
+	coffWriterQueue.add(job);
 }
 
 void insertIntoTable(Type *type) {
@@ -79,6 +86,14 @@ void insertIntoTable(Type *type) {
 
 	entries[slot].value = type;
 	entries[slot].hash = type->hash;
+
+	if (type->size) {
+		CoffJob job;
+		job.type = type;
+		job.flavor = CoffJobFlavor::TYPE;
+
+		coffWriterQueue.add(job);
+	}
 }
 
 void addStruct(TypeStruct *struct_) {
@@ -477,6 +492,8 @@ void setupTypeTable() {
 	entries = new Entry[capacity];
 	count = 0;
 
+	insertIntoTable(&TYPE_VOID);
+
 	insertIntoTable(&TYPE_U8);
 	insertIntoTable(&TYPE_U16);
 	insertIntoTable(&TYPE_U32);
@@ -491,7 +508,6 @@ void setupTypeTable() {
 	insertIntoTable(&TYPE_F64);
 
 	insertIntoTable(&TYPE_BOOL);
-	insertIntoTable(&TYPE_VOID);
 	insertIntoTable(&TYPE_STRING);
 	insertIntoTable(&TYPE_TYPE);
 

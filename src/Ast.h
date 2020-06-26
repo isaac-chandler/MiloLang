@@ -7,6 +7,23 @@
 #include "Block.h"
 #include "TypeTable.h"
 
+
+enum class CoffJobFlavor : u8 {
+	FUNCTION,
+	GLOBAL_DECLARATION,
+	TYPE
+};
+
+struct CoffJob {
+	union {
+		struct Declaration *declaration;
+		struct ExprFunction *function;
+		struct Type *type;
+	};
+
+	CoffJobFlavor flavor;
+};
+
 enum class IrOp : u8 {
 	ADD,
 	ADD_CONSTANT,
@@ -46,7 +63,8 @@ enum class IrOp : u8 {
 	FUNCTION, 
 	STRING, 
 	STRING_EQUAL, 
-	LINE_MARKER
+	LINE_MARKER, 
+	TYPE
 };
 
 #define IR_SIGNED_OP 0x1
@@ -80,6 +98,7 @@ struct Ir {
 				struct Declaration *declaration;
 				struct ExprFunction *function;
 				struct ExprStringLiteral *string;
+				struct Type *type;
 			};
 
 			union {

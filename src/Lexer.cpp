@@ -49,7 +49,8 @@ static const Keyword keywords[] = {
 	{"using", TokenT::USING},
 	{"enum", TokenT::ENUM}, 
 	{"enum_flags", TokenT::ENUM_FLAGS}, 
-	{"#must", TokenT::MUST}
+	{"#must", TokenT::MUST}, 
+	{"type_info", TokenT::TYPE_INFO}
 };
 
 void BigInt::zero() {

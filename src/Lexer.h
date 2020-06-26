@@ -106,7 +106,8 @@ enum class TokenT : u8 {
 	USING, 
 	ENUM, 
 	ENUM_FLAGS, 
-	MUST
+	MUST, 
+	TYPE_INFO
 };
 
 struct Token {
