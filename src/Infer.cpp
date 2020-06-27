@@ -3925,6 +3925,8 @@ bool inferFlattened(SubJob *job) {
 					reportError(unary, "Error: Cannot invert a %.*s", STRING_PRINTF(value->type->name));
 					return false;
 				}
+
+				break;
 			}
 			case TOKEN('!'): {
 				if (value->type != &TYPE_BOOL) {

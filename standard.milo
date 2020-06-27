@@ -271,37 +271,62 @@ print_s64 :: (num: s64) {
 }
 
 print :: (using val: any) {
-	info := type_info(value_type)
-
-	if (value_type == void) {
-	
+	if value_type == type_info(void) 
 		print_string("void")
-		
-	} else if (value_type == type) {
+	else if value_type == type_info(type) {
 	
 		print_string(type_info(<<cast(*type) value_pointer).name)
 		
-	} else if (value_type == bool) {
+	} else if value_type == type_info(bool) {
 		value := <<cast(*bool) value_pointer
 	
-		if (value) {
+		if value
 			print_string("true")
-		} else {
+		else
 			print_string("false")
-		}
 		
-	} else if (value_type == type) {
+	} else if value_type == type_info(type) {
 	
 		print_string(type_info(<<cast(*type) value_pointer).name)
 		
-	} else if (value_type == string) {
+	} else if value_type == type_info(string) {
 	
 		print_string(<<cast(*string) value_pointer)
 		
-	} else {
+	} else if value_type.tag == Type_Info.Tag.INTEGER {		
+		mask: u64 = --
+		value: u64 = --
+
+		if value_type.size == 1 {
+			value = <<cast(*u8) value_pointer
+			mask = 0x80
+		} else if value_type.size == 2 {
+			value = <<cast(*u16) value_pointer
+			mask = 0x8000
+		} else if value_type.size == 4 {
+			value = <<cast(*u32) value_pointer
+			mask = 0x8000_0000
+		} else if value_type.size == 8 {
+			value = <<cast(*u64) value_pointer
+			mask = 0x8000_0000_0000_0000
+		}
+		
+		negative := (cast(*Type_Info_Integer) value_type).signed && (value & mask)
+		
+		if negative {
+			value |= ~(mask | (mask - 1))
+			value = -value
+			
+			print_string("-")
+		}
+		
+		print_u64(value)
+	} 
+	
+	else {
 	
 		print_string("Cannot print ")
-		print_string(info.name)
+		print_string(value_type.name)
 		
 	}
 }

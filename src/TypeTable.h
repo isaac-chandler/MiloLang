@@ -159,16 +159,8 @@ inline u32 typeTableCapacity;
 
 template<typename T> 
 struct MiloArray {
-	T *storage;
+	T *data;
 	u64 count;
-
-	T &operator[](u64 index) {
-		return storage[index];
-	}
-
-	const T &operator[](u64 index) const {
-		return storage[index];
-	}
 };
 
 struct Type_Info {
@@ -201,21 +193,8 @@ struct Type_Info_Pointer : Type_Info {
 };
 
 struct Type_Info_Function : Type_Info {
-	struct Argument {
-		Type_Info *argument_type;
-		char *name;
-
-		struct Flags {
-			constexpr static u64 MUST        = 0x1;
-			constexpr static u64 HAS_DEFAULT = 0x2;
-			constexpr static u64 USING       = 0x4;
-		};
-
-		u64 flags;
-	};
-
-	MiloArray<Argument> arguments;
-	MiloArray<Argument> returns;
+	MiloArray<Type_Info *> arguments;
+	MiloArray<Type_Info *> returns;
 };
 
 struct Type_Info_Array : Type_Info {

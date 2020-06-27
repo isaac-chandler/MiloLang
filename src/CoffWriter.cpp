@@ -2893,7 +2893,7 @@ void runCoffWriter() {
 			instructionOffsets.add(functionPostambleStart);
 
 			for (auto patch : jumpPatches) {
-				*patch.location = static_cast<s32>(static_cast<s64>(instructionOffsets[patch.opToPatch]) - static_cast<s64>(patch.rip));
+				*patch.location = static_cast<s32>(instructionOffsets[patch.opToPatch]) - static_cast<s32>(patch.rip);
 			}
 
 			{
@@ -3050,69 +3050,302 @@ void runCoffWriter() {
 				symbol->storageClass = IMAGE_SYM_CLASS_STATIC;
 				symbol->type = 0;
 
-				rdata.allocateUnaligned(AlignPO2(rdata.totalSize, 8) - rdata.totalSize);
-
-				symbol->value = rdata.totalSize;
 				symbol->sectionNumber = RDATA_SECTION_NUMBER;
+				symbol->numberOfAuxSymbols = 0;
 
-				Type_Info info;
-
-				addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(Type_Info, name), name);
+				Type_Info::Tag infoTag;
 
 				switch (type->flavor) {
 				case TypeFlavor::VOID: {
-					info.tag = Type_Info::Tag::VOID;
+					infoTag = Type_Info::Tag::VOID;
 					break;
 				}
 				case TypeFlavor::INTEGER: {
-					info.tag = Type_Info::Tag::INTEGER;
+					infoTag = Type_Info::Tag::INTEGER;
 					break;
 				}
 				case TypeFlavor::FLOAT: {
-					info.tag = Type_Info::Tag::FLOAT; 
+					infoTag = Type_Info::Tag::FLOAT; 
 					break; 
 				}
 				case TypeFlavor::POINTER: {
-					info.tag = Type_Info::Tag::POINTER; 
+					infoTag = Type_Info::Tag::POINTER; 
 					break; 
 				}
 				case TypeFlavor::BOOL: {
-					info.tag = Type_Info::Tag::BOOL; 
+					infoTag = Type_Info::Tag::BOOL; 
 					break; 
 				}
 				case TypeFlavor::FUNCTION: {
-					info.tag = Type_Info::Tag::FUNCTION; 
+					infoTag = Type_Info::Tag::FUNCTION; 
 					break; 
 				}
 				case TypeFlavor::TYPE: {
-					info.tag = Type_Info::Tag::TYPE; 
+					infoTag = Type_Info::Tag::TYPE; 
 					break; 
 				}
 				case TypeFlavor::STRING: {
-					info.tag = Type_Info::Tag::STRING; 
+					infoTag = Type_Info::Tag::STRING; 
 					break; 
 				}
 				case TypeFlavor::ARRAY: {
-					info.tag = Type_Info::Tag::ARRAY; 
+					infoTag = Type_Info::Tag::ARRAY; 
 					break; 
 				}
 				case TypeFlavor::STRUCT: {
-					info.tag = Type_Info::Tag::STRUCT; 
+					infoTag = Type_Info::Tag::STRUCT; 
 					break; 
 				}
 				case TypeFlavor::ENUM: {
-					info.tag = Type_Info::Tag::ENUM; 
+					infoTag = Type_Info::Tag::ENUM; 
 					break; 
 				}
 				default:
 					assert(false);
 				}
 
-				info.size = type->size;
-				info.alignment = type->alignment;
-				info.name = nullptr;
+				switch (infoTag) {
+				case Type_Info::Tag::VOID:
+				case Type_Info::Tag::FLOAT:
+				case Type_Info::Tag::BOOL:
+				case Type_Info::Tag::TYPE:
+				case Type_Info::Tag::STRING: {
+					Type_Info info;
 
-				rdata.add(&info, sizeof(info));
+					rdata.allocateUnaligned(AlignPO2(rdata.totalSize, 8) - rdata.totalSize);
+
+					symbol->value = rdata.totalSize;
+
+					info.tag = infoTag;
+					info.size = type->size;
+					info.alignment = type->alignment;
+					info.name = nullptr;
+
+					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
+
+					rdata.add(&info, sizeof(info));
+
+					break;
+				}
+				case Type_Info::Tag::INTEGER: {
+					Type_Info_Integer info;
+
+					rdata.allocateUnaligned(AlignPO2(rdata.totalSize, 8) - rdata.totalSize);
+
+					symbol->value = rdata.totalSize;
+
+					info.tag = infoTag;
+					info.size = type->size;
+					info.alignment = type->alignment;
+					info.name = nullptr;
+					info.signed_ = type->flags & TYPE_INTEGER_IS_SIGNED;
+
+					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
+
+					rdata.add(&info, sizeof(info));
+
+					break;
+				}
+				case Type_Info::Tag::POINTER: {
+					Type_Info_Pointer info;
+
+					rdata.allocateUnaligned(AlignPO2(rdata.totalSize, 8) - rdata.totalSize);
+
+					symbol->value = rdata.totalSize;
+
+					info.tag = infoTag;
+					info.size = type->size;
+					info.alignment = type->alignment;
+					info.name = nullptr;
+					info.value_type = nullptr;
+
+					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
+					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), value_type),
+						createSymbolForType(&symbols, static_cast<TypePointer *>(type)->pointerTo));
+
+					rdata.add(&info, sizeof(info));
+
+					break;
+				}
+				case Type_Info::Tag::FUNCTION: {
+					auto function = static_cast<TypeFunction *>(type);
+
+					rdata.allocateUnaligned(AlignPO2(rdata.totalSize, 8) - rdata.totalSize);
+
+					u32 arguments = createRdataPointer(&stringTable, &symbols, &rdata);
+
+					for (u64 i = 0; i < function->argumentCount; i++) {
+						addPointerRelocation(&rdataRelocations, rdata.totalSize, createSymbolForType(&symbols, function->argumentTypes[i]));
+						rdata.add8(0);
+					}
+					
+					u32 returns = createRdataPointer(&stringTable, &symbols, &rdata);
+
+					for (u64 i = 0; i < function->returnCount; i++) {
+						addPointerRelocation(&rdataRelocations, rdata.totalSize, createSymbolForType(&symbols, function->returnTypes[i]));
+						rdata.add8(0);
+					}
+
+					Type_Info_Function info;
+
+					symbol->value = rdata.totalSize;
+
+					info.tag = infoTag;
+					info.size = type->size;
+					info.alignment = type->alignment;
+					info.name = nullptr;
+					info.arguments.data = nullptr;
+					info.arguments.count = function->argumentCount;
+					info.returns.data = nullptr;
+					info.returns.count = function->returnCount;
+
+					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
+					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), arguments.data), arguments);
+					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), returns.data), returns);
+
+					rdata.add(&info, sizeof(info));
+
+					break;
+				}
+				case Type_Info::Tag::ARRAY: {
+					Type_Info_Array info;
+
+					rdata.allocateUnaligned(AlignPO2(rdata.totalSize, 8) - rdata.totalSize);
+
+					symbol->value = rdata.totalSize;
+
+					info.tag = infoTag;
+					info.size = type->size;
+					info.alignment = type->alignment;
+					info.name = nullptr;
+					info.flavor = type->flags & TYPE_ARRAY_IS_FIXED ?
+						Type_Info_Array::Flavor::FIXED : type->flags & TYPE_ARRAY_IS_DYNAMIC ?
+						Type_Info_Array::Flavor::DYNMAIC : Type_Info_Array::Flavor::NORMAL;
+					info.count = type->flags & TYPE_ARRAY_IS_FIXED ? static_cast<TypeArray *>(type)->count : 0;
+					info.element_type = nullptr;
+
+					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
+					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), element_type),
+						createSymbolForType(&symbols, static_cast<TypeArray *>(type)->arrayOf));
+
+					rdata.add(&info, sizeof(info));
+
+					break;
+				}
+				case Type_Info::Tag::STRUCT: {
+					auto struct_ = static_cast<TypeStruct *>(type);
+
+					u64 names = symbols.count();
+
+					for (auto member : struct_->members.declarations) {
+						if (member->flags & (DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_USING)) continue;
+
+
+						createRdataPointer(&stringTable, &symbols, &rdata);
+						rdata.addNullTerminatedString(member->name);
+					}
+
+					rdata.allocateUnaligned(AlignPO2(rdata.totalSize, 8) - rdata.totalSize);
+					u32 members = createRdataPointer(&stringTable, &symbols, &rdata);
+
+					u64 count = 0;
+
+					for (auto member : struct_->members.declarations) {
+						if (member->flags & (DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_USING)) continue;
+
+
+						Type_Info_Struct::Member data;
+
+						data.name = nullptr;
+						data.offset = (member->flags & DECLARATION_IS_CONSTANT) ? 0 : member->physicalStorage;
+						data.member_type = nullptr;
+						data.flags = 0;
+
+						if (member->flags & DECLARATION_IS_UNINITIALIZED) data.flags |= Type_Info_Struct::Member::Flags::UNINITIALIZED;
+						if (member->flags & DECLARATION_IS_CONSTANT) data.flags |= Type_Info_Struct::Member::Flags::CONSTANT;
+						if (member->flags & DECLARATION_MARKED_AS_USING) data.flags |= Type_Info_Struct::Member::Flags::USING;
+
+
+						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), name), names + count);
+						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), member_type), 
+							createSymbolForType(&symbols, static_cast<ExprLiteral *>(member->type)->typeValue));
+
+						++count;
+					}
+
+					Type_Info_Struct info;
+
+					symbol->value = rdata.totalSize;
+
+					info.tag = infoTag;
+					info.size = type->size;
+					info.alignment = type->alignment;
+					info.name = nullptr;
+					info.flags = 0;
+
+					if (struct_->flags & TYPE_STRUCT_IS_UNION) info.flags |= Type_Info_Struct::Flags::UNION;
+					if (struct_->flags & TYPE_STRUCT_IS_PACKED) info.flags |= Type_Info_Struct::Flags::PACKED;
+
+					info.members.data = nullptr;
+					info.members.count = count;
+
+					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
+					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), members.data), members);
+
+					rdata.add(&info, sizeof(info));
+
+					break;
+				}
+				case Type_Info::Tag::ENUM: {
+					auto enum_ = static_cast<TypeEnum *>(type);
+
+					u64 names = symbols.count();
+
+					for (auto member : enum_->values->declarations) {
+						createRdataPointer(&stringTable, &symbols, &rdata);
+						rdata.addNullTerminatedString(member->name);
+					}
+
+					rdata.allocateUnaligned(AlignPO2(rdata.totalSize, 8) - rdata.totalSize);
+					u32 members = createRdataPointer(&stringTable, &symbols, &rdata);
+
+					for (u64 i = 0; i < enum_->values->declarations.count; i++) {
+						auto member = enum_->values->declarations[i];
+
+						Type_Info_Enum::Member data;
+
+						data.name = nullptr;
+						data.value = static_cast<ExprLiteral *>(member->initialValue)->unsignedValue;
+
+						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), name), names + i);
+					}
+
+					Type_Info_Enum info;
+
+					symbol->value = rdata.totalSize;
+
+					info.tag = infoTag;
+					info.size = type->size;
+					info.alignment = type->alignment;
+					info.name = nullptr;
+					info.base_type = nullptr;
+					info.is_flags = enum_->flags & TYPE_ENUM_IS_FLAGS ? true : false;
+				
+					info.members.data = nullptr;
+					info.members.count = enum_->values->declarations.count;
+
+					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
+					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), base_type), 
+						createSymbolForType(&symbols, enum_->integerType));
+					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), members.data), members);
+
+					rdata.add(&info, sizeof(info));
+
+					break;
+				}
+				default:
+					assert(false);
+				}
 			}
 		}
 	}

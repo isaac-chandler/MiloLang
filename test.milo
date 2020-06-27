@@ -563,9 +563,9 @@ _main :: () {
 			window_width = client_rect.right - client_rect.left
 			window_height = client_rect.bottom - client_rect.top
 			
-			print_u64(cast() window_width)
+			print(cast() window_width)
 			print("x")
-			print_u64(cast() window_height)
+			print(cast() window_height)
 			print("\n----------\n")
 			
 		} else if uMsg == WM_KEYDOWN {
@@ -601,7 +601,7 @@ _main :: () {
 	
 	if RegisterClassW(*window_class) == 0 {
 		print("Failed to register window class\n")
-		print_u64(GetLastError())
+		print(GetLastError())
 		return
 	}
 	
@@ -622,7 +622,7 @@ _main :: () {
 	
 	if window_handle == null {
 		print("Failed to open window\n")
-		print_u64(GetLastError())
+		print(GetLastError())
 		return
 	}
 	
@@ -773,12 +773,7 @@ _main :: () {
 		if player {
 			particle_systems[right_particles].active = left_is_down
 			particle_systems[left_particles].active = right_is_down
-		} else {
-			particle_systems[right_particles].active = false
-			particle_systems[left_particles].active = false
-		}
 		
-		if player {
 			if left_is_down {
 				player.x -= PLAYER_SPEED * delta
 			}
@@ -792,9 +787,7 @@ _main :: () {
 			} else if player.x > cast() window_width - player.width * 0.5 {
 				player.x = cast() window_width - player.width * 0.5
 			}
-		}
-		
-		if player {
+			
 			time_to_fire -= delta
 			
 			if space_is_down && time_to_fire <= 0 {
@@ -806,6 +799,10 @@ _main :: () {
 			
 			if time_to_fire < 0
 				time_to_fire = 0
+			
+		} else {
+			particle_systems[right_particles].active = false
+			particle_systems[left_particles].active = false
 		}
 			
 		
@@ -967,12 +964,12 @@ _main :: () {
 		}
 		
 		if (cast() (delta * 1000_000) > 20_000) {
-			print_u64(cast() (delta * 1000_000))
+			print(cast(s64) (delta * 1000_000))
 			print("\n")
 		}
 		
-		// print_u64(cast() (delta * 1000_000))
-		// print_string("\n")
+		// print(cast() (delta * 1000_000))
+		// print("\n")
 		
 		SwapBuffers(device_context)
 		

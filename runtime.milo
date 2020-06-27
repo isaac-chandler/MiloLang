@@ -35,21 +35,8 @@ Type_Info_Pointer :: struct {
 Type_Info_Function :: struct {
 	using base: Type_Info
 	
-	Argument :: struct {
-		argument_type: *Type_Info
-		name: string
-		
-		Flags :: enum_flags u64 {
-			MUST        :: 0x1
-			HAS_DEFAULT :: 0x2
-			USING       :: 0x4
-		}
-		
-		flags: Flags
-	}
-	
-	arguments: []Argument
-	returns: []Argument
+	arguments: *Type_Info
+	returns: *Type_Info
 }
 
 Type_Info_Array :: struct {
@@ -108,7 +95,7 @@ Type_Info_Enum :: struct {
 // This is the declaration of the any type, all values can implicitly cast to any
 any :: struct {
 	value_pointer: *void
-	value_type: type
+	value_type: *Type_Info
 }
 
 // The function called to remove an item from an array when a remove statement is encountered
