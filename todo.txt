@@ -72,8 +72,8 @@ function overloading
 
 performance
  - Profile TypeTable.cpp
- - Call infer fewer times - go through fewer InferJobs each iteration 
-   - graph theory?
+ - Call infer fewer times - go through fewer InferJobs each iteration -- significantly improved since todo orignally added but can still be better
+   - graph theory
  - More fast paths for trival type inference
  - Allocator in Infer.cpp, TypeTable.cpp
  - Ensure sufficient space to write all instructions in coff writer so we don't do a bounds check for each byte written
@@ -92,8 +92,6 @@ defer
 switch if
  - #complete
  
-make for 0..5 not lex as for 0. . 5
- 
 unary .
 
 runtime manipulation of type values
@@ -111,6 +109,7 @@ debug info
 improve external function interface
  - don't hardcode lib files to link with
  - separate function types for external functions (so our calling convention doesn't need to be C-compatible)
+ - parse C header files so we don't need to manually declare external functions
  
 change completed keyword (its ugly and completed is something you want to call an identifer)
  

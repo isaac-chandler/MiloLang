@@ -3,8 +3,8 @@
 
 ITERATIONS :: 256
 
-width :: 8192
-height :: 8192	
+width :: 2048
+height :: 2048
 
 x_min :: -0.77
 x_max :: -0.702
@@ -15,7 +15,7 @@ mandelbrot:: (c_re: f32, c_im: f32) -> #must u64 {
 	z_re := c_re
 	z_im := c_im
 
-	for 0 .. ITERATIONS {
+	for ITERATIONS {
 		if z_re * z_re + z_im * z_im > 4
 			return cast() it
 			
@@ -40,7 +40,7 @@ thread_proc :: (data: *void) -> u32 {
 	job: *Job = data
 	
 	for y: job.start_row .. job.end_row {
-		for x: 0 .. width {
+		for x: width {
 			count := mandelbrot(cast(f32) x / width * (x_max - x_min) + x_min, cast(f32) y / height * (y_max - y_min) + y_min)
 		
 			if count == ITERATIONS {

@@ -197,6 +197,8 @@ static TokenT advanceTokenType(LexerFile *lexer) {
 	u64 base;
 	u64 exponentBase;
 
+	CodeLocation decimalPointUndoLocation;
+
 whitespace:
 	c = readCharacter(lexer, &endOfFile, true);
 
@@ -578,7 +580,9 @@ zero:
 		goto integerLiteral;
 	}
 	else if (c == '.') {
-		goto decimalPoint;
+		decimalPointUndoLocation = lexer->undoLocation;
+
+		goto decimalPointFirst;
 	}
 	else if (c == '_') {
 		goto integerLiteral;
@@ -701,7 +705,9 @@ integerLiteral:
 		goto integerLiteral;
 	}
 	else if (c == '.') {
-		goto decimalPoint;
+		decimalPointUndoLocation = lexer->undoLocation;
+
+		goto decimalPointFirst;
 	}
 	else if (c == '_') {
 		goto integerLiteral;
@@ -718,6 +724,38 @@ integerLiteral:
 		undoReadChar(lexer, c);
 		return TokenT::INT_LITERAL;
 	}
+
+
+decimalPointFirst:
+	c = readCharacter(lexer, &endOfFile, true);
+
+	digit = getDigitForBase(c, base);
+
+	if (digit >= 0) {
+		goto decimalPoint;
+	}
+	else if (c == '_') {
+		goto decimalPoint;
+	}
+	else if (c == 'e' || c == 'E') {
+		exponentBase = 10;
+		goto exponentSign;
+	}
+	else if (c == 'p' || c == 'P') {
+		exponentBase = 2;
+		goto exponentSign;
+	}
+	else if (c == '.') {
+		lexer->bytesRemaining += lexer->location.locationInMemory - decimalPointUndoLocation.locationInMemory;
+		lexer->location = decimalPointUndoLocation;
+
+		return TokenT::INT_LITERAL;
+	}
+	else {
+		undoReadChar(lexer, c);
+		return TokenT::FLOAT_LITERAL;
+	}
+
 
 
 decimalPoint:
@@ -849,6 +887,8 @@ void LexerFile::advance() {
 	previousTokenEnd = token.end;
 
 	bigInt.zero();
+
+	CodeLocation decimalPointUndoLocation;
 
 whitespace:
 	c = readCharacter(this, &endOfFile);
@@ -1466,7 +1506,9 @@ zero:
 		goto integerLiteral;
 	}
 	else if (c == '.') {
-		goto decimalPoint;
+		decimalPointUndoLocation = undoLocation;
+
+		goto decimalPointFirst;
 	}
 	else if (c == '_') {
 		goto integerLiteral;
@@ -1655,7 +1697,9 @@ integerLiteral:
 		goto integerLiteral;
 	}
 	else if (c == '.') {
-		goto decimalPoint;
+		decimalPointUndoLocation = undoLocation;
+
+		goto decimalPointFirst;
 	}
 	else if (c == '_') {
 		goto integerLiteral;
@@ -1679,6 +1723,53 @@ integerLiteral:
 			reportError(&location, "Error: integer literal too large, the maximum value is %" PRIu64, UINT64_MAX);
 		}
 
+		return;
+	}
+
+decimalPointFirst:
+	c = readCharacter(this, &endOfFile);
+
+	digit = getDigitForBase(c, base);
+
+	if (digit >= 0) {
+		bigInt.multiplyAdd(base, digit);
+		++digitsAfterDecimal;
+		goto decimalPoint;
+	}
+	else if (c == '_') {
+		goto decimalPoint;
+	}
+	else if (c == 'e' || c == 'E') {
+		exponentBase = 10;
+		goto exponentSign;
+	}
+	else if (c == 'p' || c == 'P') {
+		token.flags |= LITERAL_IS_BINARY_EXPONENT;
+		exponentBase = 2;
+		goto exponentSign;
+	}
+	else if (c == '.') {
+		token.type == TokenT::INT_LITERAL;
+
+		bytesRemaining += location.locationInMemory - decimalPointUndoLocation.locationInMemory;
+		location = decimalPointUndoLocation;
+
+		token.end = location;
+		token.type = TokenT::INT_LITERAL;
+
+		if (!bigInt.getU64(&token.unsignedValue)) {
+			token.type = TokenT::INVALID;
+			reportError(&location, "Error: integer literal too large, the maximum value is %" PRIu64, UINT64_MAX);
+		}
+
+		return;
+	}
+	else {
+		undoReadChar(this, c);
+		token.end = location;
+		token.type = TokenT::FLOAT_LITERAL; // @Incomplete: bounds check float literals
+		token.floatValue = bigInt.getDouble() *          // @Improvement, do this calculation in such a way that we get the maximum possible precision for float literals
+			pow(static_cast<double>(base), -digitsAfterDecimal);
 		return;
 	}
 
