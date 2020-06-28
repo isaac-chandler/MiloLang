@@ -293,14 +293,6 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 		flattenTo.add(expr);
 		break;
 	}
-	case ExprFlavor::ENUM: {
-		auto enum_ = static_cast<ExprEnum *>(*expr);
-
-		flatten(flattenTo, &enum_->integerType);
-
-		flattenTo.add(expr);
-		break;
-	}
 	default:
 		assert(false);
 	}
@@ -1920,6 +1912,7 @@ bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yi
 					}
 
 					if (correct == TYPE_ANY && given->type != TYPE_ANY) {
+						trySolidifyNumericLiteralToDefault(given);
 						insertImplicitCast(job->sizeDependencies, &given, TYPE_ANY);
 						return true;
 					}
@@ -4199,45 +4192,6 @@ bool inferFlattened(SubJob *job) {
 
 			break;
 		}
-		case ExprFlavor::ENUM: {
-			auto enum_ = static_cast<ExprEnum *>(expr);
-
-			if (enum_->struct_.integerType) {
-				*exprPointer = inferMakeTypeLiteral(enum_->start, enum_->end, &enum_->struct_);
-			}
-			else {
-				if (enum_->integerType->type != &TYPE_TYPE) {
-					reportError(enum_->integerType, "Error: enum type must be a type");
-					return false;
-				}
-				else if (enum_->integerType->flavor != ExprFlavor::TYPE_LITERAL) {
-					reportError(enum_->integerType, "Error: enum type must be a constant");
-					return false;
-				}
-				else if (static_cast<ExprLiteral *>(enum_->integerType)->typeValue->flavor != TypeFlavor::INTEGER) {
-					reportError(enum_->integerType, "Error: enum type must be an integer");
-					return false;
-				}
-				else if ((static_cast<ExprLiteral *>(enum_->integerType)->typeValue->flags & TYPE_INTEGER_IS_SIGNED) && (enum_->struct_.flags & TYPE_ENUM_IS_FLAGS)) {
-					reportError(enum_->integerType, "Error: enum_flags cannot have a signed type");
-					return false;
-				}
-
-				enum_->struct_.integerType = static_cast<ExprLiteral *>(enum_->integerType)->typeValue;
-				enum_->struct_.alignment = enum_->struct_.integerType->alignment;
-				enum_->struct_.size = enum_->struct_.integerType->size;
-				enum_->struct_.flags |= enum_->struct_.integerType->flags & TYPE_INTEGER_IS_SIGNED;
-
-				auto literal = inferMakeTypeLiteral(enum_->start, enum_->end, &enum_->struct_);
-
-				literal->valueOfDeclaration = enum_->valueOfDeclaration;
-
-				literal->typeValue->name = literal->valueOfDeclaration ? literal->valueOfDeclaration->name : (enum_->struct_.flags & TYPE_ENUM_IS_FLAGS ? "(enum_flags)" : "(enum)");
-
-				*exprPointer = literal;
-			}
-			break;
-		}
 		case ExprFlavor::ENUM_INCREMENT: {
 			auto increment = static_cast<ExprEnumIncrement *>(expr);
 
@@ -4445,6 +4399,7 @@ bool addDeclaration(Declaration *declaration) {
 		}
 		else if (declaration->enclosingScope) {
 			if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::INT_LITERAL) {
+				trySolidifyNumericLiteralToDefault(declaration->initialValue);
 				declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, declaration->initialValue->type);
 				declaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
 				wakeUpSleepers(&declaration->sleepingOnMe);
@@ -4637,6 +4592,12 @@ bool inferDeclaration(DeclarationJob *job) {
 				if (declaration->initialValue->type == &TYPE_SIGNED_INT_LITERAL || declaration->initialValue->type == &TYPE_UNSIGNED_INT_LITERAL) {
 					assert(declaration->initialValue->flavor == ExprFlavor::INT_LITERAL);
 
+					if (!static_cast<TypeEnum *>(correct)->integerType) {
+						goToSleep(&job->type, &correct->sleepingOnMe);
+
+						return true;
+					}
+
 					if (!boundsCheckImplicitConversion(declaration->initialValue, static_cast<TypeEnum *>(correct)->integerType, static_cast<ExprLiteral *>(declaration->initialValue))) {
 						reportError(CAST_FROM_SUBSTRUCT(ExprEnum, struct_, static_cast<TypeEnum *>(correct))->integerType, "   ..: Here is the enum type declaration");
 
@@ -4683,7 +4644,8 @@ bool inferDeclaration(DeclarationJob *job) {
 				bool yield;
 				declaration->initialValue = createDefaultValue(&job->value, declaration, type, &yield);
 
-				if (yield) return true;
+				if (yield) 
+					return true;
 
 				if (!declaration->initialValue) {
 					return false;
@@ -4778,7 +4740,7 @@ bool inferDeclaration(DeclarationJob *job) {
 									wakeUpSleepers(&declaration->enclosingScope->sleepingOnMe, import->name);
 								}
 
-								if (member->flags & DECLARATION_IS_USING) {
+								if (member->flags & (DECLARATION_IS_USING | DECLARATION_IS_CONSTANT)) {
 									if (!addDeclaration(import)) {
 										return false;
 									}
@@ -4799,6 +4761,10 @@ bool inferDeclaration(DeclarationJob *job) {
 			}
 			else {
 				assert(declaration->initialValue->type);
+
+				if (declaration->name == "base") {
+					int aaa = 0;
+				}
 
 				if (!(declaration->flags & DECLARATION_IS_CONSTANT)) {
 					trySolidifyNumericLiteralToDefault(declaration->initialValue);
@@ -5053,12 +5019,45 @@ bool inferSize(SizeJob *job) {
 			array->alignment = array->arrayOf->alignment;
 
 			wakeUpSleepers(&array->sleepingOnMe);
-			freeJob(job);
 			removeJob(&sizeJobs, job);
+			freeJob(job);
 		}
 		else {
 			goToSleep(job, &array->arrayOf->sleepingOnMe);
 		}
+	}
+	else if (type->flavor == TypeFlavor::ENUM) {
+		auto struct_ = static_cast<TypeEnum *>(type);
+
+		auto enum_ = CAST_FROM_SUBSTRUCT(ExprEnum, struct_, struct_);
+		
+		if (enum_->integerType->type != &TYPE_TYPE) {
+			reportError(enum_->integerType, "Error: enum type must be a type");
+			return false;
+		}
+		else if (enum_->integerType->flavor != ExprFlavor::TYPE_LITERAL) {
+			reportError(enum_->integerType, "Error: enum type must be a constant");
+			return false;
+		}
+		else if (static_cast<ExprLiteral *>(enum_->integerType)->typeValue->flavor != TypeFlavor::INTEGER) {
+			reportError(enum_->integerType, "Error: enum type must be an integer");
+			return false;
+		}
+		else if ((static_cast<ExprLiteral *>(enum_->integerType)->typeValue->flags &TYPE_INTEGER_IS_SIGNED) && (enum_->struct_.flags & TYPE_ENUM_IS_FLAGS)) {
+			reportError(enum_->integerType, "Error: enum_flags cannot have a signed type");
+			return false;
+		}
+
+
+		enum_->struct_.integerType = static_cast<ExprLiteral *>(enum_->integerType)->typeValue;
+		enum_->struct_.alignment = enum_->struct_.integerType->alignment;
+		enum_->struct_.size = enum_->struct_.integerType->size;
+		enum_->struct_.flags |= enum_->struct_.integerType->flags & TYPE_INTEGER_IS_SIGNED;
+
+		wakeUpSleepers(&struct_->sleepingOnMe);
+
+		removeJob(&sizeJobs, job);
+		freeJob(job);
 	}
 	else {
 		assert(false);
@@ -5098,6 +5097,7 @@ void runInfer() {
 				addJob(&functionJobs, body);
 			}
 			else if (declarations.data.expr->flavor == ExprFlavor::TYPE_LITERAL) {
+
 				SizeJob *body = allocateSizeJob();
 
 				body->type = static_cast<ExprLiteral *>(declarations.data.expr)->typeValue;
@@ -5105,6 +5105,14 @@ void runInfer() {
 				if (body->type->flavor == TypeFlavor::STRUCT) {
 					body->type->name = declarations.data.expr->valueOfDeclaration ? declarations.data.expr->valueOfDeclaration->name : "(struct)";
 					addStruct(static_cast<TypeStruct *>(body->type));
+				}
+				else if (body->type->flavor == TypeFlavor::ENUM) {
+					body->type->name = declarations.data.expr->valueOfDeclaration ? declarations.data.expr->valueOfDeclaration->name : "(enum)";
+					addStruct(static_cast<TypeEnum *>(body->type));
+
+					auto enum_ = CAST_FROM_SUBSTRUCT(ExprEnum, struct_, static_cast<TypeEnum *>(body->type));
+
+					flatten(body->flattened, &enum_->integerType);
 				}
 				else {
 					assert(false);

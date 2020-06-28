@@ -701,14 +701,18 @@ bool writeValue(BucketedArenaAllocator *data, BucketedArenaAllocator *dataReloca
 		data->add8(0);
 	}
 	else if (value->flavor == ExprFlavor::STRING_LITERAL) {
+
+		u32 string = createSymbolForString(emptyStringSymbolIndex, symbols, stringTable, rdata, static_cast<ExprStringLiteral *>(value));
+
+
 		assert(type->size == 8);
 		dataRelocations->add4(data->totalSize);
-		dataRelocations->add4(createSymbolForString(emptyStringSymbolIndex, symbols, stringTable, rdata, static_cast<ExprStringLiteral *>(value)));
+		dataRelocations->add4(string);
 		dataRelocations->add2(IMAGE_REL_AMD64_ADDR64);
 
 		data->add8(0);
 	}
-	else if (value->flavor == ExprFlavor::ARRAY) {
+	else if (value->flavor == ExprFlavor::ARRAY) { // @Robustnes this will fail if we try to write an array of strings and data and rdata are the same pointer
 		auto array = static_cast<ExprArray *>(value);
 
 		if (value->type->flags & TYPE_ARRAY_IS_FIXED) {
@@ -3037,14 +3041,16 @@ void runCoffWriter() {
 		for (u64 i = 0; i < typeTableCapacity; i++) {
 			auto entry = typeTableEntries[i];
 
-			if (entry.hash && entry.value->symbol) {
+			if (entry.hash) {
 				auto type = entry.value;
+
+				createSymbolForType(&symbols, type);
 				auto symbol = type->symbol;
 
 				u32 name = createRdataPointer(&stringTable, &symbols, &rdata);
-
 				rdata.addNullTerminatedString(type->name);
 
+				assert(name.length);
 
 				setSymbolName(&stringTable, &symbol->name, entry.value->physicalStorage);
 				symbol->storageClass = IMAGE_SYM_CLASS_STATIC;
@@ -3121,7 +3127,8 @@ void runCoffWriter() {
 					info.alignment = type->alignment;
 					info.name = nullptr;
 
-					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
+					if (name)
+						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
 
 					rdata.add(&info, sizeof(info));
 
@@ -3140,7 +3147,8 @@ void runCoffWriter() {
 					info.name = nullptr;
 					info.signed_ = type->flags & TYPE_INTEGER_IS_SIGNED;
 
-					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
+					if (name)
+						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
 
 					rdata.add(&info, sizeof(info));
 
@@ -3159,7 +3167,9 @@ void runCoffWriter() {
 					info.name = nullptr;
 					info.value_type = nullptr;
 
-					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
+					if (name)
+						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
+
 					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), value_type),
 						createSymbolForType(&symbols, static_cast<TypePointer *>(type)->pointerTo));
 
@@ -3199,7 +3209,9 @@ void runCoffWriter() {
 					info.returns.data = nullptr;
 					info.returns.count = function->returnCount;
 
-					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
+					if (name)
+						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
+
 					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), arguments.data), arguments);
 					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), returns.data), returns);
 
@@ -3224,7 +3236,9 @@ void runCoffWriter() {
 					info.count = type->flags & TYPE_ARRAY_IS_FIXED ? static_cast<TypeArray *>(type)->count : 0;
 					info.element_type = nullptr;
 
-					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
+					if (name)
+						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
+
 					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), element_type),
 						createSymbolForType(&symbols, static_cast<TypeArray *>(type)->arrayOf));
 
@@ -3245,10 +3259,27 @@ void runCoffWriter() {
 						rdata.addNullTerminatedString(member->name);
 					}
 
+					u64 values = symbols.count();
+
+					for (auto member : struct_->members.declarations) {
+						if (member->flags & (DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_USING)) continue;
+
+						if (!member->initialValue) continue;
+
+						auto type = static_cast<ExprLiteral *>(member->type)->typeValue;
+
+						rdata.allocateUnaligned(AlignPO2(rdata.totalSize, type->alignment) - rdata.totalSize);
+
+						createRdataPointer(&stringTable, &symbols, &rdata);
+
+						writeValue(&rdata, &rdataRelocations, &symbols, &stringTable, member->initialValue, &emptyStringSymbolIndex, &rdata);
+					}
+
 					rdata.allocateUnaligned(AlignPO2(rdata.totalSize, 8) - rdata.totalSize);
 					u32 members = createRdataPointer(&stringTable, &symbols, &rdata);
 
-					u64 count = 0;
+					u64 nameCount = 0;
+					u64 valueCount = 0;
 
 					for (auto member : struct_->members.declarations) {
 						if (member->flags & (DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_USING)) continue;
@@ -3259,6 +3290,7 @@ void runCoffWriter() {
 						data.name = nullptr;
 						data.offset = (member->flags & DECLARATION_IS_CONSTANT) ? 0 : member->physicalStorage;
 						data.member_type = nullptr;
+						data.initial_value = nullptr;
 						data.flags = 0;
 
 						if (member->flags & DECLARATION_IS_UNINITIALIZED) data.flags |= Type_Info_Struct::Member::Flags::UNINITIALIZED;
@@ -3266,11 +3298,19 @@ void runCoffWriter() {
 						if (member->flags & DECLARATION_MARKED_AS_USING) data.flags |= Type_Info_Struct::Member::Flags::USING;
 
 
-						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), name), names + count);
+						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), name), names + nameCount);
 						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), member_type), 
 							createSymbolForType(&symbols, static_cast<ExprLiteral *>(member->type)->typeValue));
 
-						++count;
+						if (member->initialValue) {
+							addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), initial_value), values + valueCount);
+							expf(1);
+							++valueCount;
+						}
+
+						rdata.add(&data, sizeof(data));
+
+						++nameCount;
 					}
 
 					Type_Info_Struct info;
@@ -3287,9 +3327,11 @@ void runCoffWriter() {
 					if (struct_->flags & TYPE_STRUCT_IS_PACKED) info.flags |= Type_Info_Struct::Flags::PACKED;
 
 					info.members.data = nullptr;
-					info.members.count = count;
+					info.members.count = nameCount;
 
-					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
+					if (name)
+						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
+
 					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), members.data), members);
 
 					rdata.add(&info, sizeof(info));
@@ -3307,17 +3349,19 @@ void runCoffWriter() {
 					}
 
 					rdata.allocateUnaligned(AlignPO2(rdata.totalSize, 8) - rdata.totalSize);
-					u32 members = createRdataPointer(&stringTable, &symbols, &rdata);
+					u32 values = createRdataPointer(&stringTable, &symbols, &rdata);
 
 					for (u64 i = 0; i < enum_->values->declarations.count; i++) {
 						auto member = enum_->values->declarations[i];
 
-						Type_Info_Enum::Member data;
+						Type_Info_Enum::Value data;
 
 						data.name = nullptr;
 						data.value = static_cast<ExprLiteral *>(member->initialValue)->unsignedValue;
 
 						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), name), names + i);
+
+						rdata.add(&data, sizeof(data));
 					}
 
 					Type_Info_Enum info;
@@ -3331,13 +3375,15 @@ void runCoffWriter() {
 					info.base_type = nullptr;
 					info.is_flags = enum_->flags & TYPE_ENUM_IS_FLAGS ? true : false;
 				
-					info.members.data = nullptr;
-					info.members.count = enum_->values->declarations.count;
+					info.values.data = nullptr;
+					info.values.count = enum_->values->declarations.count;
 
-					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
+					if (name)
+						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
+
 					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), base_type), 
 						createSymbolForType(&symbols, enum_->integerType));
-					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), members.data), members);
+					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), values.data), values);
 
 					rdata.add(&info, sizeof(info));
 

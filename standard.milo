@@ -7,6 +7,14 @@ Vector2 :: union {
 	}
 	
 	elements: [2]f32 = --
+	
+	print_me :: (using vector: *Vector2) {
+		print("(")
+		print(x)
+		print(", ")
+		print(y)
+		print(")")
+	}
 }
 
 
@@ -20,6 +28,16 @@ Vector3 :: union {
 	elements: [3]f32 = --
 	
 	xy: Vector2 = --
+	
+	print_me :: (using vector: *Vector3) {
+		print("(")
+		print(x)
+		print(", ")
+		print(y)
+		print(", ")
+		print(z)
+		print(")")
+	}
 }
 
 Vector4 :: union {
@@ -41,6 +59,19 @@ Vector4 :: union {
 	
 	xyz: Vector3 = --
 	xy: Vector2 = --
+	
+	
+	print_me :: (using vector: *Vector4) {
+		print("(")
+		print(x)
+		print(", ")
+		print(y)
+		print(", ")
+		print(z)
+		print(", ")
+		print(w)
+		print(")")
+	}
 }
 
 
@@ -169,58 +200,13 @@ get_command_line_arguments :: () -> []string {
 	return args
 }
 
-s64_to_string :: (value: s64) -> #must string {
-	if value == 0 {
-		result := cast(*u8) allocate(2)
-		result[0] = '0'
-		result[1] = 0
-		
-		return cast() result
-	}
-	
-	negative := value < 0
-	
-	unsigned: u64 = cast()value
-	
-	if negative
-		unsigned = -unsigned
-		
-	digitCount: u64
-	
-	remaining := unsigned
-	
-	while remaining {
-		digitCount += 1
-		
-		remaining /= 10
-	}
-	
-	if negative
-		digitCount += 1
-	
-	result := cast(*u8) allocate(digitCount + 1)
-	
-	result += digitCount;
-	
-	<<result = 0
-	remaining = unsigned
-	
-	while remaining {
-		result -= 1;
-		
-		<<result = cast() (remaining % 10 + '0')
-		remaining /= 10
-	}
-	
-	if negative {
-		result -= 1;
-		<< result = '-'
-	}
-	
-	return cast() result
-}
+DIGIT_TABLE :: "0123456789abcdefghijklmnopqrstuvwxyz"
 
-u64_to_string :: (value: u64) -> #must string {
+u64_to_string :: (value: u64, base: u64 = 10) -> #must string {
+	if base > 36 {
+		return ""
+	}
+
 	if value == 0 {
 		result := cast(*u8) allocate(2)
 		result[0] = '0'
@@ -236,7 +222,7 @@ u64_to_string :: (value: u64) -> #must string {
 	while remaining {
 		digitCount += 1
 		
-		remaining /= 10
+		remaining /= base
 	}
 	
 	result := cast(*u8) allocate(digitCount + 1)
@@ -249,25 +235,114 @@ u64_to_string :: (value: u64) -> #must string {
 	while remaining {
 		result -= 1;
 		
-		<<result = cast() (remaining % 10 + '0')
-		remaining /= 10
+		<<result = cast() (DIGIT_TABLE[remaining % base])
+		remaining /= base
 	}
 	
 	return cast() result
 }
 
-print_u64 :: (num: u64) {
-	s := u64_to_string(num)
+print_u64 :: (num: u64, base: u64 = 10) {
+	s := u64_to_string(num, base)
 	print_string(s)
 	
 	deallocate(cast() s)	
 }
 
-print_s64 :: (num: s64) {
-	s := s64_to_string(num)
-	print_string(s)
+read_integer :: (info: *Type_Info_Integer, value: *void) -> u64 {
+	mask: u64 = --
+	number: u64 = --
+
+	if info.size == 1 {
+		number = <<cast(*u8) value
+		mask = 1 << 7
+	} else if info.size == 2 {
+		number = <<cast(*u16) value
+		mask = 1 << 15
+	} else if info.size == 4 {
+		number = <<cast(*u32) value
+		mask = 1 << 31
+	} else if info.size == 8 {
+		number = <<cast(*u64) value
+		mask = 1 << 63
+	}
 	
-	deallocate(cast() s)	
+	if info.signed && (number & mask)
+		number |= ~(mask | (mask - 1))
+	
+	return number
+}
+
+// @Unicode
+print_char :: (value: u8) {
+	char := value
+	buffer: []u8
+	buffer.count = 1
+	buffer.data = *char
+	
+	print_buffer(buffer)
+}
+
+is_infinity :: (num: f64) -> bool {
+	val := num
+	
+	bits := <<cast(*u64)*val
+	bits |= 1 << 63
+	
+	MANTISSA: u64: 0x000F_FFFF_FFFF_FFFF
+	
+	return (bits & ~MANTISSA) == ~MANTISSA && (bits & MANTISSA) == 0
+}
+
+
+is_nan :: (num: f64) -> bool {
+	val := num
+	
+	bits := <<cast(*u64)*val
+	bits |= 1 << 63
+	
+	MANTISSA: u64: 0x000F_FFFF_FFFF_FFFF
+	
+	return (bits & ~MANTISSA) == ~MANTISSA && (bits & MANTISSA) != 0
+}
+// This function is terrible
+
+print_f64 :: (num: f64, decimal_places: u64 = 6) {
+	value := num
+
+	if is_nan(value) {
+		print_string("NaN")
+		return
+	}
+
+	if (value < 0) {
+		print_string("-")
+		value = -value
+	}
+	
+	if is_infinity(value) {
+		print_string("infinity")
+		return
+	}
+	
+	if num >= 1p64 {
+		print_string("unhandled case in print_f64")
+		return
+	}
+	
+	integer_part := cast(u64) value
+	
+	print_u64(integer_part)
+	
+	print_string(".")
+	
+	for decimal_places {
+		value *= 10
+		
+		integer := cast(u64) value
+		
+		print_char(cast() ('0' + integer % 10))
+	}
 }
 
 print :: (using val: any) {
@@ -294,36 +369,154 @@ print :: (using val: any) {
 		print_string(<<cast(*string) value_pointer)
 		
 	} else if value_type.tag == Type_Info.Tag.INTEGER {		
-		mask: u64 = --
-		value: u64 = --
-
-		if value_type.size == 1 {
-			value = <<cast(*u8) value_pointer
-			mask = 0x80
-		} else if value_type.size == 2 {
-			value = <<cast(*u16) value_pointer
-			mask = 0x8000
-		} else if value_type.size == 4 {
-			value = <<cast(*u32) value_pointer
-			mask = 0x8000_0000
-		} else if value_type.size == 8 {
-			value = <<cast(*u64) value_pointer
-			mask = 0x8000_0000_0000_0000
-		}
+		value := read_integer(cast() value_type, value_pointer)
 		
-		negative := (cast(*Type_Info_Integer) value_type).signed && (value & mask)
-		
-		if negative {
-			value |= ~(mask | (mask - 1))
-			value = -value
-			
+		if (cast(*Type_Info_Integer) value_type).signed && (value & (1 << 63)) {
 			print_string("-")
+			value = -value
 		}
 		
 		print_u64(value)
-	} 
-	
-	else {
+	} else if value_type.tag == Type_Info.Tag.ENUM {
+		info := cast(*Type_Info_Enum) value_type
+		
+		value := read_integer(info.base_type, value_pointer)
+
+		if info.is_flags {
+			first := true
+			
+			for info.values {
+				if value & it.value {
+					value &= ~it.value
+				
+					if !first print_string(" | ")
+					
+					if info.name {
+						if first
+							print_string(info.name)
+							
+						print_string(".")
+					}
+					
+					first = false
+					
+					print_string(it.name)
+				}
+			}
+			
+			if first {
+				if value {
+					if info.name {
+						print_string(info.name)
+						print_string(".")
+					}
+					
+					print_string("(INVALID enum_flags ")
+					print_u64(value, 16)
+					print_string(")")
+				} else
+					print_string("0")
+			} else if value {
+				print_string(" | ")
+				
+				if info.name
+					print_string(".")
+				
+				print_string("(INVALID enum_flags ")
+				print_u64(value, 16)
+				print_string(")")
+			}
+		} else {
+			for info.values {
+				if value == it.value {
+					if info.name {
+						print_string(info.name)
+						print_string(".")
+					}
+				
+					print_string(it.name)
+					break
+				}
+			} completed {
+				print_string("(INVALID enum ")
+				
+				num: any = --
+				num.value_pointer = value_pointer
+				num.value_type = info.base_type
+				
+				print(num)
+				
+				print_string(")")
+			}
+		}
+		
+		
+	} else if value_type.tag == Type_Info.Tag.POINTER || value_type.tag == Type_Info.Tag.FUNCTION {
+		print_u64(<<cast(*u64) value_pointer)
+	} else if value_type.tag == Type_Info.Tag.ARRAY {
+		info := cast(*Type_Info_Array) value_type
+		
+		count: u64 = --
+		
+		if info.flavor == Type_Info_Array.Flavor.FIXED {
+			count = info.count
+		} else {
+			count = (cast(*[]u8) value_pointer).count
+		}
+		
+		print_string("[")
+		print_u64(count)
+		print_string("]")
+		print_string(info.element_type.name)
+	} else if value_type.tag == Type_Info.Tag.STRUCT {	
+		info := cast(*Type_Info_Struct) value_type
+		
+		for info.members {
+			if it.name == "print_me" && it.member_type.tag == Type_Info.Tag.FUNCTION{
+				func := cast(*Type_Info_Function) it.member_type
+				
+				if func.arguments.count == 1 && func.arguments[0].tag == Type_Info.Tag.POINTER && 
+					(cast(*Type_Info_Pointer) func.arguments[0]).value_type == cast() info && 
+					func.returns.count == 1 && func.returns[0] == type_info(void) {
+					f: (*void) -> void 
+					
+					if it.flags & Type_Info_Struct.Member.Flags.CONSTANT {
+						f = <<cast(*type_of(f)) it.initial_value
+					} else {
+						f = <<cast(*type_of(f)) (value_pointer + it.offset)
+					}
+					
+					f(value_pointer)
+					break
+				}
+			}
+		} completed {
+		
+			print_string("{ ")
+		
+			for info.members {
+				if !(it.flags & Type_Info_Struct.Member.Flags.CONSTANT) {
+					print_string(it.name)
+					print_string(" = ")
+				
+					val: any = --
+					val.value_pointer = value_pointer + it.offset
+					val.value_type = it.member_type
+					
+					print(val)
+					
+					print_string(" ")
+				}
+			}
+			
+			print_string("}")
+
+		}		
+	} else if value_type == type_info(f64) {
+		print_f64(<<cast(*f64)value_type)
+	} else if value_type == type_info(f32) {
+		print_f64(cast()<<cast(*f32)value_type)
+	} else {
 	
 		print_string("Cannot print ")
 		print_string(value_type.name)

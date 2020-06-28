@@ -1591,6 +1591,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		enum_->struct_.flavor = TypeFlavor::ENUM;
 		enum_->struct_.members.flags |= BLOCK_IS_STRUCT;
 		enum_->struct_.integerType = nullptr;
+		enum_->struct_.hash = 0;
 
 		if (lexer->token.type == TokenT::ENUM_FLAGS) {
 			enum_->struct_.flags |= TYPE_ENUM_IS_FLAGS;
@@ -1645,6 +1646,8 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 		addDeclarationToCurrentBlock(integer);
 
+		auto typeLiteral = parserMakeTypeLiteral(enum_->start, enum_->end, &enum_->struct_);
+
 		pushBlock(&members->members);
 
 
@@ -1666,7 +1669,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 				auto declaration = PARSER_NEW(Declaration);
 				declaration->name = lexer->token.text;
 				declaration->start = lexer->token.start;
-				declaration->type = enum_;
+				declaration->type = typeLiteral;
 				declaration->inferJob = nullptr;
 				declaration->flags |= DECLARATION_IS_CONSTANT | DECLARATION_IS_ENUM_VALUE;
 
@@ -1731,7 +1734,9 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 			reportError(enum_, "Error: Cannot have an enum with no values");
 		}
 
-		expr = enum_;
+		packsToAdd.add(makeDeclarationPack(typeLiteral));
+
+		expr = typeLiteral;
 	}
 	else {
 		if (lexer->token.type == TokenT::DOUBLE_DASH) {

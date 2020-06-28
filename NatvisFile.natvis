@@ -57,6 +57,48 @@
   </Type>
 
   <Type Name="DeclarationJob">
-    <DisplayString>{next}</DisplayString>
+    <Expand>
+      <CustomListItems>
+        <Variable Name="current" InitialValue="this"/>
+
+        <Loop>
+          <Break Condition="current == nullptr"/>
+          <Item>*current,!</Item>
+          <Exec>current = current->next</Exec>
+        </Loop>
+      </CustomListItems>
+    </Expand>
   </Type>
+
+
+  <Type Name="SizeJob">
+    <Expand>
+      <CustomListItems>
+        <Variable Name="current" InitialValue="this"/>
+
+        <Loop>
+          <Break Condition="current == nullptr"/>
+          <Item>*current,!</Item>
+          <Exec>current = current->next</Exec>
+        </Loop>
+      </CustomListItems>
+    </Expand>
+  </Type>
+
+
+
+  <Type Name="FunctionJob">
+    <Expand>
+      <CustomListItems>
+        <Variable Name="current" InitialValue="this"/>
+
+        <Loop>
+          <Break Condition="current == nullptr"/>
+          <Item>*current,!</Item>
+          <Exec>current = current->next</Exec>
+        </Loop>
+      </CustomListItems>
+    </Expand>
+  </Type>
+
 </AutoVisualizer>

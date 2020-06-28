@@ -598,6 +598,11 @@ _main :: () {
 	window_class.lpszClassName = class_name
 	window_class.hbrBackground = GetStockObject(BLACK_BRUSH)
 	
+	print(null_entity)
+	print("\n")
+	
+	ExitProcess(0)
+	
 	
 	if RegisterClassW(*window_class) == 0 {
 		print("Failed to register window class\n")

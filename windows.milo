@@ -383,6 +383,7 @@ init_runtime :: () {
 	std_out = GetStdHandle(STD_OUTPUT_HANDLE)
 }
 
+// @Unicode
 print_buffer :: (buffer: []u8) {
 	WriteConsoleA(std_out, buffer.data, cast() buffer.count)
 }

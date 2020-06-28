@@ -23,23 +23,14 @@ String::String(const char *begin, const char *end) {
 bool String::operator==(const String &other) const {
 	if (length != other.length) return false;
 
-	char *a = characters;
-	char *b = other.characters;
+	return memcmp(characters, other.characters, length) == 0;
+}
 
-	for (u64 i = 0; i < other.length / sizeof(u64); i++) {
-		if (*reinterpret_cast<u64 *>(a) != *reinterpret_cast<u64 *>(b))
-			return false;
 
-		a += sizeof(u64);
-		b += sizeof(u64);
-	}
+bool String::operator!=(const String &other) const {
+	if (length != other.length) return true;
 
-	while (a < characters + length) {
-		if (*a++ != *b++)
-			return false;
-	}
-
-	return true;
+	return memcmp(characters, other.characters, length) != 0;
 }
 
 std::ostream &operator<<(std::ostream &out, const String &str) {

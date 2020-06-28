@@ -19,6 +19,7 @@ struct String {
 
 
 	bool operator==(const String &other) const;
+	bool operator!=(const String &other) const;
 
 	operator bool() const {
 		return length != 0;

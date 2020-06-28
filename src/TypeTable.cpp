@@ -58,12 +58,6 @@ void insertIntoTable(Type *type, u32 slot) {
 
 	typeTableEntries[slot].value = type;
 	typeTableEntries[slot].hash = type->hash;
-
-	CoffJob job;
-	job.type = type;
-	job.flavor = CoffJobFlavor::TYPE;
-
-	coffWriterQueue.add(job);
 }
 
 void insertIntoTable(Type *type) {
@@ -79,20 +73,12 @@ void insertIntoTable(Type *type) {
 
 	typeTableEntries[slot].value = type;
 	typeTableEntries[slot].hash = type->hash;
-
-	if (type->size) {
-		CoffJob job;
-		job.type = type;
-		job.flavor = CoffJobFlavor::TYPE;
-
-		coffWriterQueue.add(job);
-	}
 }
 
 void addStruct(TypeStruct *struct_) {
 	if (!struct_->hash) {
+		if (nextStructHash == 0) nextStructHash = 1;
 		u32 hash = nextStructHash;
-		if (hash == 0) hash = 1;
 		nextStructHash *= STRUCT_HASH_PRIME;
 
 		struct_->hash = hash;

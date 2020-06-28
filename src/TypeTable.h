@@ -220,6 +220,7 @@ struct Type_Info_Struct : Type_Info {
 		char *name;
 		u64 offset;
 		Type_Info *member_type;
+		void *initial_value;
 		u64 flags;
 	};
 
@@ -233,12 +234,12 @@ struct Type_Info_Struct : Type_Info {
 };
 
 struct Type_Info_Enum : Type_Info {
-	struct Member {
+	struct Value {
 		char *name;
 		u64 value;
 	};
 
 	Type_Info_Integer *base_type;
 	bool is_flags;
-	MiloArray<Member> members;
+	MiloArray<Value> values;
 };

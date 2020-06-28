@@ -35,8 +35,8 @@ Type_Info_Pointer :: struct {
 Type_Info_Function :: struct {
 	using base: Type_Info
 	
-	arguments: *Type_Info
-	returns: *Type_Info
+	arguments: []*Type_Info
+	returns: []*Type_Info
 }
 
 Type_Info_Array :: struct {
@@ -66,6 +66,7 @@ Type_Info_Struct :: struct {
 		name: string
 		offset: u64
 		member_type: *Type_Info
+		initial_value: *void
 		flags: Flags
 	}
 	
@@ -81,14 +82,14 @@ Type_Info_Struct :: struct {
 Type_Info_Enum :: struct {
 	using base: Type_Info
 	
-	Member :: struct {
+	Value :: struct {
 		name: string
 		value: u64
 	}
 	
 	base_type: *Type_Info_Integer
 	is_flags: bool
-	members: []Member
+	values: []Value
 }
 
 
