@@ -673,9 +673,32 @@ struct TypePatch {
 	u64 *location;
 };
 
+Type *getTypeForExpr(Expr *expr) {
+	auto type = expr->type;
 
-bool writeValue(BucketedArenaAllocator *data, BucketedArenaAllocator *dataRelocations, BucketArray<Symbol> *symbols, BucketedArenaAllocator *stringTable, Expr *value, s64 *emptyStringSymbolIndex, BucketedArenaAllocator *rdata) {
-	auto type = value->type;
+	if (type == &TYPE_SIGNED_INT_LITERAL) {
+		return &TYPE_S64;
+	}
+	else if (type == &TYPE_UNSIGNED_INT_LITERAL) {
+		assert(expr->flavor == ExprFlavor::INT_LITERAL);
+
+		if (static_cast<ExprLiteral *>(expr)->unsignedValue < static_cast<u64>(INT64_MAX)) {
+			return &TYPE_S64;
+		}
+		else {
+			return &TYPE_U64;
+		}
+	}
+	else if (type == &TYPE_FLOAT_LITERAL) {
+		return &TYPE_F64;
+	}
+
+	return type;
+}
+
+
+bool writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataRelocations, BucketArray<Symbol> *symbols, BucketedArenaAllocator *stringTable, Expr *value, s64 *emptyStringSymbolIndex, BucketedArenaAllocator *rdata) {
+	auto type = getTypeForExpr(value);
 
 
 	assert(value->flavor == ExprFlavor::FLOAT_LITERAL ||
@@ -683,11 +706,12 @@ bool writeValue(BucketedArenaAllocator *data, BucketedArenaAllocator *dataReloca
 		value->flavor == ExprFlavor::FUNCTION ||
 		value->flavor == ExprFlavor::STRING_LITERAL ||
 		value->flavor == ExprFlavor::ARRAY ||
-		value->flavor == ExprFlavor::TYPE_LITERAL);
+		value->flavor == ExprFlavor::TYPE_LITERAL || 
+		value->flavor == ExprFlavor::STRUCT_DEFAULT);
 
 	if (value->flavor == ExprFlavor::FUNCTION) {
 		assert(type->size == 8);
-		dataRelocations->add4(data->totalSize);
+		dataRelocations->add4(dataSize);
 
 		bool success;
 
@@ -698,7 +722,7 @@ bool writeValue(BucketedArenaAllocator *data, BucketedArenaAllocator *dataReloca
 
 		dataRelocations->add2(IMAGE_REL_AMD64_ADDR64);
 
-		data->add8(0);
+		*reinterpret_cast<u64 *>(data) = 0;
 	}
 	else if (value->flavor == ExprFlavor::STRING_LITERAL) {
 
@@ -706,41 +730,39 @@ bool writeValue(BucketedArenaAllocator *data, BucketedArenaAllocator *dataReloca
 
 
 		assert(type->size == 8);
-		dataRelocations->add4(data->totalSize);
+		dataRelocations->add4(dataSize);
 		dataRelocations->add4(string);
 		dataRelocations->add2(IMAGE_REL_AMD64_ADDR64);
 
-		data->add8(0);
+		*reinterpret_cast<u64 *>(data) = 0;
 	}
-	else if (value->flavor == ExprFlavor::ARRAY) { // @Robustnes this will fail if we try to write an array of strings and data and rdata are the same pointer
+	else if (value->flavor == ExprFlavor::ARRAY) {
 		auto array = static_cast<ExprArray *>(value);
 
 		if (value->type->flags & TYPE_ARRAY_IS_FIXED) {
+			auto elementSize = static_cast<TypeArray *>(type)->arrayOf->size;
+
 			for (u64 i = 0; i < array->count; i++) {
-				if (!writeValue(data, dataRelocations, symbols, stringTable, array->storage[i], emptyStringSymbolIndex, rdata)) {
+				if (!writeValue(dataSize, data, dataRelocations, symbols, stringTable, array->storage[i], emptyStringSymbolIndex, rdata)) {
 					return false;
 				}
+
+				dataSize += elementSize;
+				data += elementSize;
 			}
 		}
 		else {
 			assert(array->count == 0);
 
-			data->add8(0);
-			data->add8(0);
-
-			if (value->type->flags & TYPE_ARRAY_IS_DYNAMIC) {
-				data->add8(0);
-			}
+			memset(data, 0, type->size);
 		}
 	}
 	else if (value->flavor == ExprFlavor::FLOAT_LITERAL) {
 		if (value->type->size == 4) {
-			float num = static_cast<float>(static_cast<ExprLiteral *>(value)->floatValue);
-
-			data->add4(*reinterpret_cast<u32 *>(&num));
+			*reinterpret_cast<float *>(data) = static_cast<float>(static_cast<ExprLiteral *>(value)->floatValue);
 		}
 		else if (value->type->size == 8) {
-			data->add8(static_cast<ExprLiteral *>(value)->floatValue);
+			*reinterpret_cast<double *>(data) = static_cast<ExprLiteral *>(value)->floatValue;
 		}
 		else {
 			assert(false);
@@ -750,20 +772,33 @@ bool writeValue(BucketedArenaAllocator *data, BucketedArenaAllocator *dataReloca
 		if (!isStandardSize(type->size)) {
 			assert(static_cast<ExprLiteral *>(value)->unsignedValue == 0);
 
-			auto zero = data->allocateUnaligned(type->size);
-
-			memset(zero, 0, type->size);
+			memset(data, 0, type->size);
 		}
 		else {
-			data->add(&static_cast<ExprLiteral *>(value)->unsignedValue, type->size);
+			memcpy(data, &static_cast<ExprLiteral *>(value)->unsignedValue, type->size);
 		}
 	}
 	else if (value->flavor == ExprFlavor::TYPE_LITERAL) {
-		dataRelocations->add4(data->totalSize);
+		dataRelocations->add4(dataSize);
 		dataRelocations->add4(createSymbolForType(symbols, static_cast<ExprLiteral *>(value)->typeValue));
 		dataRelocations->add2(IMAGE_REL_AMD64_ADDR64);
 
-		data->add8(0);
+		*reinterpret_cast<u64 *>(data) = 0;
+	}
+	else if (value->flavor == ExprFlavor::STRUCT_DEFAULT) {
+		auto struct_ = static_cast<TypeStruct *>(type);
+
+		for (auto member : struct_->members.declarations) {
+			if (member->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_CONSTANT | DECLARATION_IS_USING | DECLARATION_IMPORTED_BY_USING)) continue;
+
+
+			if (!writeValue(dataSize + member->physicalStorage, data + member->physicalStorage, dataRelocations, symbols, stringTable, 
+				member->initialValue, emptyStringSymbolIndex, rdata)) {
+
+				return false;
+
+			}
+		}
 	}
 	else {
 		assert(false);
@@ -980,8 +1015,6 @@ void emitBasicTypeDebugInfo(BucketedArenaAllocator *debugSymbols) {
 	*subsectionSizePatch = debugSymbols->totalSize - previousSize;
 	alignAllocator(debugSymbols, 4);
 }
-
-u64 nextTypeValue;
 
 void runCoffWriter() {
 	PROFILE_FUNC();
@@ -3027,7 +3060,10 @@ void runCoffWriter() {
 				symbol->value = data.totalSize;
 				symbol->sectionNumber = DATA_SECTION_NUMBER;
 
-				if (!writeValue(&data, &dataRelocations, &symbols, &stringTable, declaration->initialValue, &emptyStringSymbolIndex, &rdata))
+				u32 dataSize = data.totalSize;
+				u8 *allocation = static_cast<u8 *>(data.allocateUnaligned(type->size));
+
+				if (!writeValue(dataSize, allocation, &dataRelocations, &symbols, &stringTable, declaration->initialValue, &emptyStringSymbolIndex, &rdata))
 					goto error;
 			}
 
@@ -3050,7 +3086,7 @@ void runCoffWriter() {
 				u32 name = createRdataPointer(&stringTable, &symbols, &rdata);
 				rdata.addNullTerminatedString(type->name);
 
-				assert(name.length);
+				assert(type->name.length);
 
 				setSymbolName(&stringTable, &symbol->name, entry.value->physicalStorage);
 				symbol->storageClass = IMAGE_SYM_CLASS_STATIC;
@@ -3266,13 +3302,20 @@ void runCoffWriter() {
 
 						if (!member->initialValue) continue;
 
-						auto type = static_cast<ExprLiteral *>(member->type)->typeValue;
+						auto type = getTypeForExpr(member->initialValue);
+
+						if (type == &TYPE_UNSIGNED_INT_LITERAL) {
+
+						}
 
 						rdata.allocateUnaligned(AlignPO2(rdata.totalSize, type->alignment) - rdata.totalSize);
 
 						createRdataPointer(&stringTable, &symbols, &rdata);
 
-						writeValue(&rdata, &rdataRelocations, &symbols, &stringTable, member->initialValue, &emptyStringSymbolIndex, &rdata);
+						u32 dataSize = rdata.totalSize;
+						u8 *allocation = static_cast<u8 *>(rdata.allocateUnaligned(type->size));
+
+						writeValue(dataSize, allocation, &rdataRelocations, &symbols, &stringTable, member->initialValue, &emptyStringSymbolIndex, &rdata);
 					}
 
 					rdata.allocateUnaligned(AlignPO2(rdata.totalSize, 8) - rdata.totalSize);
@@ -3299,8 +3342,15 @@ void runCoffWriter() {
 
 
 						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), name), names + nameCount);
-						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), member_type), 
-							createSymbolForType(&symbols, static_cast<ExprLiteral *>(member->type)->typeValue));
+
+						if (member->initialValue) {
+							addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), member_type),
+								createSymbolForType(&symbols, getTypeForExpr(member->initialValue)));
+						}
+						else {
+							addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), member_type),
+								createSymbolForType(&symbols, static_cast<ExprLiteral *>(member->type)->typeValue));
+						}
 
 						if (member->initialValue) {
 							addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), initial_value), values + valueCount);

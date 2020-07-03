@@ -9,10 +9,10 @@
 #include "ArraySet.h"
 
 enum class JobFlavor {
-	SIZE, 
-	DECLARATION_TYPE, 
-	DECLARATION_VALUE, 
-	FUNCTION_TYPE, 
+	SIZE,
+	DECLARATION_TYPE,
+	DECLARATION_VALUE,
+	FUNCTION_TYPE,
 	FUNCTION_VALUE
 };
 
@@ -52,7 +52,7 @@ void removeJob(T **first, T *job) {
 	}
 	else {
 		*first = job->next;
-		
+
 	}
 
 	if (job->next) {
@@ -102,8 +102,8 @@ struct FunctionJob {
 	FunctionJob *next = nullptr;
 	FunctionJob *previous = nullptr;
 
-	FunctionJob() : type(JobFlavor::FUNCTION_TYPE, nullptr), 
-			value(JobFlavor::FUNCTION_VALUE, &sizeDependencies) {}
+	FunctionJob() : type(JobFlavor::FUNCTION_TYPE, nullptr),
+		value(JobFlavor::FUNCTION_VALUE, &sizeDependencies) {}
 };
 
 struct SizeJob : SubJob {
@@ -130,6 +130,9 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 	switch ((*expr)->flavor) {
 	case ExprFlavor::IDENTIFIER: {
 		auto identifier = static_cast<ExprIdentifier *>(*expr);
+
+		if (identifier->type == &TYPE_UNARY_DOT)
+			return;
 
 		if (identifier->structAccess) {
 			flatten(flattenTo, &identifier->structAccess);
@@ -863,7 +866,7 @@ bool inferIdentifier(SubJob *job, Expr **exprPointer, ExprIdentifier *identifier
 	if ((identifier->declaration->flags & DECLARATION_IMPORTED_BY_USING) && !(identifier->declaration->flags & DECLARATION_IS_CONSTANT)) {
 		auto current = static_cast<ExprIdentifier *>(identifier->declaration->initialValue);
 
-		if (job->sizeDependencies) {
+		if (job->sizeDependencies) {			
 			while (current->structAccess) {
 				bool onlyConstants;
 				addSizeDependency(job->sizeDependencies, getExpressionNamespace(current->structAccess, &onlyConstants, current->structAccess));
@@ -925,6 +928,42 @@ bool inferIdentifier(SubJob *job, Expr **exprPointer, ExprIdentifier *identifier
 		}
 
 
+	}
+
+	return true;
+}
+
+bool inferUnaryDot(SubJob *job, TypeEnum *enum_, Expr **exprPointer, bool *yield) {
+	auto identifier = static_cast<ExprIdentifier *>(*exprPointer);
+	assert(identifier->flavor == ExprFlavor::IDENTIFIER);
+
+	if (!identifier->declaration) {
+		bool yield;
+		u64 index;
+		auto member = findDeclaration(&enum_->members, identifier->name, &index, &yield);
+
+		if (yield) {
+			goToSleep(job, &enum_->members.sleepingOnMe, identifier->name);
+
+			return true;
+		}
+
+		if (!member) {
+			reportError(identifier, "Error: %.*s does not have member %.*s", STRING_PRINTF(enum_->name), STRING_PRINTF(identifier->name));
+			return false;
+		}
+		else if (!(member->flags & DECLARATION_IS_CONSTANT)) {
+			reportError(identifier, "Error: Can only access constant members of %.*s from a unary dot", STRING_PRINTF(enum_->name));
+			return false;
+		}
+		
+		identifier->declaration = member;
+	}
+
+	assert(identifier->declaration);
+
+	if (!inferIdentifier(job, exprPointer, identifier, yield)) {
+		return *yield;
 	}
 
 	return true;
@@ -1383,7 +1422,7 @@ bool binaryOpForAutoCast(SubJob *job, ExprBinaryOperator *binary, bool *yield) {
 	auto &left = binary->left;
 	auto &right = binary->right;
 
-	if (left->type->flavor == TypeFlavor::AUTO_CAST) {
+	if (left->type == &TYPE_AUTO_CAST) {
 		trySolidifyNumericLiteralToDefault(right);
 
 		if (!tryAutoCast(job, &left, right->type, yield)) {
@@ -1398,7 +1437,7 @@ bool binaryOpForAutoCast(SubJob *job, ExprBinaryOperator *binary, bool *yield) {
 
 		return true;
 	}
-	else if (right->type->flavor == TypeFlavor::AUTO_CAST) {
+	else if (right->type == &TYPE_AUTO_CAST) {
 		trySolidifyNumericLiteralToDefault(left);
 
 		if (!tryAutoCast(job, &right, left->type, yield)) {
@@ -1420,7 +1459,7 @@ bool binaryOpForAutoCast(SubJob *job, ExprBinaryOperator *binary, bool *yield) {
 bool assignOpForAutoCast(SubJob *job, ExprBinaryOperator *binary, bool *yield) {
 	auto &right = binary->right;
 
-	if (right->type->flavor == TypeFlavor::AUTO_CAST) {
+	if (right->type == &TYPE_AUTO_CAST) {
 		auto &left = binary->left;
 
 		if (!tryAutoCast(job, &right, left->type, yield)) {
@@ -1869,7 +1908,7 @@ bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yi
 			}
 		}
 		else {
-			if (given->type->flavor == TypeFlavor::AUTO_CAST) {
+			if (given->type == &TYPE_AUTO_CAST) {
 				if (!tryAutoCast(job, &given, correct, yield)) {
 					if (!yield)
 						reportError(location, "Error: Cannot cast from %.*s to %.*s", STRING_PRINTF(static_cast<ExprBinaryOperator *>(given)->right->type->name), STRING_PRINTF(correct->name));
@@ -1904,6 +1943,15 @@ bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yi
 				}
 				else if ((given->type == TYPE_VOID_POINTER && correct->flavor == TypeFlavor::FUNCTION) || (given->type->flavor == TypeFlavor::FUNCTION && correct == TYPE_VOID_POINTER)) {
 					insertImplicitCast(job->sizeDependencies, &given, correct);
+				}
+				else if (correct->flavor == TypeFlavor::ENUM && given->type == &TYPE_UNARY_DOT) {
+					if (!inferUnaryDot(job, static_cast<TypeEnum *>(correct), &given, yield)) {
+						return false;
+					}
+
+					if (*yield) {
+						return false;
+					}
 				}
 
 				if (!tryUsingConversion(job, correct, &given, yield)) {
@@ -2086,9 +2134,21 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 
 	assert(right);
 
-	if (left && right && left->type->flavor == right->type->flavor && left->type->flavor == TypeFlavor::AUTO_CAST) {
-		reportError(binary, "Error: Cannot infer the type of an expression when both sides are an auto cast");
-		return false;
+	if (left && right) {
+		if (left->type == right->type) {
+			if (left->type == &TYPE_AUTO_CAST) {
+				reportError(binary, "Error: Cannot infer the type of an expression when both sides are an auto cast");
+				return false;
+			}
+			else if (left->type == &TYPE_UNARY_DOT) {
+				reportError(binary, "Error: Cannot infer the type of an expression when both sides are a unary dot");
+				return false;
+			}
+		}
+		else if (left->type->flavor == right->type->flavor && left->type->flavor == TypeFlavor::AUTO_CAST) {
+			reportError(binary, "Error: Cannot infer the type of an expression when the sides are an auto cast and a unary dot");
+			return false;
+		}
 	}
 
 	if (left && left->type->flavor == TypeFlavor::VOID) {
@@ -2132,7 +2192,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 
 		if (!tryUsingConversion(job, castTo, &right, yield)) {
 			if (*yield) {
-				return false;
+				return true;
 			}
 
 			if (!isValidCast(castTo, right->type)) {
@@ -2278,6 +2338,24 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 			else if (right->type->flavor == TypeFlavor::ENUM && (right->type->flags & TYPE_ENUM_IS_FLAGS) &&
 				left->type->flavor == TypeFlavor::INTEGER && left->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(left)->unsignedValue == 0) {
 				insertImplicitCast(job->sizeDependencies, &left, right->type);
+			}
+			else if (left->type->flavor == TypeFlavor::ENUM && right->type == &TYPE_UNARY_DOT) {
+				if (!inferUnaryDot(job, static_cast<TypeEnum *>(left->type), &right, yield)) {
+					return false;
+				}
+
+				if (*yield) {
+					return true;
+				}
+			}
+			else if (right->type->flavor == TypeFlavor::ENUM && left->type == &TYPE_UNARY_DOT) {
+				if (!inferUnaryDot(job, static_cast<TypeEnum *>(left->type), &left, yield)) {
+					return false;
+				}
+
+				if (*yield) {
+					return true;
+				}
 			}
 
 			if (right->type != left->type) {
@@ -2539,6 +2617,24 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 			else if (right->type->flavor == TypeFlavor::ENUM && (right->type->flags & TYPE_ENUM_IS_FLAGS) &&
 				left->type->flavor == TypeFlavor::INTEGER && left->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(left)->unsignedValue == 0) {
 				insertImplicitCast(job->sizeDependencies, &left, right->type);
+			}
+			else if ((left->type->flavor == TypeFlavor::ENUM && (left->type->flags & TYPE_ENUM_IS_FLAGS)) && right->type == &TYPE_UNARY_DOT) {
+				if (!inferUnaryDot(job, static_cast<TypeEnum *>(left->type), &right, yield)) {
+					return false;
+				}
+
+				if (*yield) {
+					return true;
+				}
+			}
+			else if ((right->type->flavor == TypeFlavor::ENUM && (right->type->flags & TYPE_ENUM_IS_FLAGS)) && left->type == &TYPE_UNARY_DOT) {
+				if (!inferUnaryDot(job, static_cast<TypeEnum *>(right->type), &left, yield)) {
+					return false;
+				}
+
+				if (*yield) {
+					return true;
+				}
 			}
 
 			if (right->type != left->type) {
@@ -2914,6 +3010,15 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 				right->type->flavor == TypeFlavor::INTEGER && right->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(right)->unsignedValue == 0) {
 				insertImplicitCast(job->sizeDependencies, &right, left->type);
 			}
+			else if ((left->type->flavor == TypeFlavor::ENUM && (left->type->flags & TYPE_ENUM_IS_FLAGS)) && right->type == &TYPE_UNARY_DOT) {
+				if (!inferUnaryDot(job, static_cast<TypeEnum *>(left->type), &right, yield)) {
+					return false;
+				}
+
+				if (*yield) {
+					return true;
+				}
+			}
 
 			if (right->type != left->type) {
 				reportError(binary, "Error: Cannot %s %.*s and %.*s", opName, STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
@@ -3202,7 +3307,9 @@ bool inferFlattened(SubJob *job) {
 					}
 					identifier->declaration = member;
 
-					addSizeDependency(job->sizeDependencies, struct_);
+					if (!(identifier->declaration->flags & DECLARATION_IS_CONSTANT)) {
+						addSizeDependency(job->sizeDependencies, struct_);
+					}
 				}
 				else {
 					for (; identifier->resolveFrom; identifier->resolveFrom = identifier->resolveFrom->parentBlock) {
@@ -3290,7 +3397,7 @@ bool inferFlattened(SubJob *job) {
 		case ExprFlavor::FUNCTION: {
 			if (!expr->type) {
 				auto function = static_cast<ExprFunction *>(expr);
-				
+
 				goToSleep(job, &function->sleepingOnMe);
 
 				return true;
@@ -4030,7 +4137,7 @@ bool inferFlattened(SubJob *job) {
 						}
 
 						unary->type = getPointer(TYPE_TYPE_INFO);
-						
+
 						break;
 					}
 					case TypeFlavor::INTEGER: {
@@ -4300,12 +4407,12 @@ FunctionJob *allocateFunctionJob() {
 }
 
 void freeJob(SizeJob *job) {
-	job->next= firstFreeSizeJob;
+	job->next = firstFreeSizeJob;
 	firstFreeSizeJob = job;
 }
 
 void freeJob(DeclarationJob *job) {
-	job->next= firstFreeDeclarationJob;
+	job->next = firstFreeDeclarationJob;
 	firstFreeDeclarationJob = job;
 }
 
@@ -4644,7 +4751,7 @@ bool inferDeclaration(DeclarationJob *job) {
 				bool yield;
 				declaration->initialValue = createDefaultValue(&job->value, declaration, type, &yield);
 
-				if (yield) 
+				if (yield)
 					return true;
 
 				if (!declaration->initialValue) {
@@ -5030,7 +5137,7 @@ bool inferSize(SizeJob *job) {
 		auto struct_ = static_cast<TypeEnum *>(type);
 
 		auto enum_ = CAST_FROM_SUBSTRUCT(ExprEnum, struct_, struct_);
-		
+
 		if (enum_->integerType->type != &TYPE_TYPE) {
 			reportError(enum_->integerType, "Error: enum type must be a type");
 			return false;
@@ -5043,7 +5150,7 @@ bool inferSize(SizeJob *job) {
 			reportError(enum_->integerType, "Error: enum type must be an integer");
 			return false;
 		}
-		else if ((static_cast<ExprLiteral *>(enum_->integerType)->typeValue->flags &TYPE_INTEGER_IS_SIGNED) && (enum_->struct_.flags & TYPE_ENUM_IS_FLAGS)) {
+		else if ((static_cast<ExprLiteral *>(enum_->integerType)->typeValue->flags & TYPE_INTEGER_IS_SIGNED) && (enum_->struct_.flags & TYPE_ENUM_IS_FLAGS)) {
 			reportError(enum_->integerType, "Error: enum_flags cannot have a signed type");
 			return false;
 		}
@@ -5414,7 +5521,7 @@ void runInfer() {
 	}
 
 	irGeneratorQueue.add(nullptr);
-	
+
 	return;
 error:;
 	assert(hadError);

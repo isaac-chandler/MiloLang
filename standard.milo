@@ -282,29 +282,6 @@ print_char :: (value: u8) {
 	
 	print_buffer(buffer)
 }
-
-is_infinity :: (num: f64) -> bool {
-	val := num
-	
-	bits := <<cast(*u64)*val
-	bits |= 1 << 63
-	
-	MANTISSA: u64: 0x000F_FFFF_FFFF_FFFF
-	
-	return (bits & ~MANTISSA) == ~MANTISSA && (bits & MANTISSA) == 0
-}
-
-
-is_nan :: (num: f64) -> bool {
-	val := num
-	
-	bits := <<cast(*u64)*val
-	bits |= 1 << 63
-	
-	MANTISSA: u64: 0x000F_FFFF_FFFF_FFFF
-	
-	return (bits & ~MANTISSA) == ~MANTISSA && (bits & MANTISSA) != 0
-}
 // This function is terrible
 
 print_f64 :: (num: f64, decimal_places: u64 = 6) {
@@ -320,7 +297,7 @@ print_f64 :: (num: f64, decimal_places: u64 = 6) {
 		value = -value
 	}
 	
-	if is_infinity(value) {
+	if is_infinite(value) {
 		print_string("infinity")
 		return
 	}
@@ -368,7 +345,7 @@ print :: (using val: any) {
 	
 		print_string(<<cast(*string) value_pointer)
 		
-	} else if value_type.tag == Type_Info.Tag.INTEGER {		
+	} else if value_type.tag == .INTEGER {		
 		value := read_integer(cast() value_type, value_pointer)
 		
 		if (cast(*Type_Info_Integer) value_type).signed && (value & (1 << 63)) {
@@ -377,7 +354,7 @@ print :: (using val: any) {
 		}
 		
 		print_u64(value)
-	} else if value_type.tag == Type_Info.Tag.ENUM {
+	} else if value_type.tag == .ENUM {
 		info := cast(*Type_Info_Enum) value_type
 		
 		value := read_integer(info.base_type, value_pointer)
@@ -451,14 +428,17 @@ print :: (using val: any) {
 		}
 		
 		
-	} else if value_type.tag == Type_Info.Tag.POINTER || value_type.tag == Type_Info.Tag.FUNCTION {
+	} else if value_type.tag == .POINTER || value_type.tag == .FUNCTION {
+	
 		print_u64(<<cast(*u64) value_pointer)
-	} else if value_type.tag == Type_Info.Tag.ARRAY {
+		
+	} else if value_type.tag == .ARRAY {
+	
 		info := cast(*Type_Info_Array) value_type
 		
 		count: u64 = --
 		
-		if info.flavor == Type_Info_Array.Flavor.FIXED {
+		if info.flavor == .FIXED {
 			count = info.count
 		} else {
 			count = (cast(*[]u8) value_pointer).count
@@ -468,19 +448,20 @@ print :: (using val: any) {
 		print_u64(count)
 		print_string("]")
 		print_string(info.element_type.name)
-	} else if value_type.tag == Type_Info.Tag.STRUCT {	
+		
+	} else if value_type.tag == .STRUCT {	
 		info := cast(*Type_Info_Struct) value_type
 		
 		for info.members {
-			if it.name == "print_me" && it.member_type.tag == Type_Info.Tag.FUNCTION{
+			if it.name == "print_me" && it.member_type.tag == .FUNCTION {
 				func := cast(*Type_Info_Function) it.member_type
 				
-				if func.arguments.count == 1 && func.arguments[0].tag == Type_Info.Tag.POINTER && 
+				if func.arguments.count == 1 && func.arguments[0].tag == .POINTER && 
 					(cast(*Type_Info_Pointer) func.arguments[0]).value_type == cast() info && 
 					func.returns.count == 1 && func.returns[0] == type_info(void) {
 					f: (*void) -> void 
 					
-					if it.flags & Type_Info_Struct.Member.Flags.CONSTANT {
+					if it.flags & .CONSTANT {
 						f = <<cast(*type_of(f)) it.initial_value
 					} else {
 						f = <<cast(*type_of(f)) (value_pointer + it.offset)
@@ -495,7 +476,7 @@ print :: (using val: any) {
 			print_string("{ ")
 		
 			for info.members {
-				if !(it.flags & Type_Info_Struct.Member.Flags.CONSTANT) {
+				if !(it.flags & .CONSTANT) {
 					print_string(it.name)
 					print_string(" = ")
 				
@@ -513,9 +494,13 @@ print :: (using val: any) {
 
 		}		
 	} else if value_type == type_info(f64) {
+	
 		print_f64(<<cast(*f64)value_type)
+		
 	} else if value_type == type_info(f32) {
+	
 		print_f64(cast()<<cast(*f32)value_type)
+		
 	} else {
 	
 		print_string("Cannot print ")

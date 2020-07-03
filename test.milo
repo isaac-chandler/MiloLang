@@ -36,7 +36,7 @@ load_image :: (filename: string) -> u32 {
 	}
 	
 	if dib_header.bits_per_pixel != 32 || 
-		dib_header.compression_method != Bmp_Dib_Header.Compression.BI_BITFIELDS || 
+		dib_header.compression_method != .BI_BITFIELDS || 
 		dib_header.alpha_mask != 0xFF000000 ||
 		dib_header.red_mask   != 0x00FF0000 ||
 		dib_header.green_mask != 0x0000FF00 ||
@@ -207,18 +207,18 @@ create_explosion_particle :: (using particle_system: *Particle_System) {
 }
 
 update_particle :: (using particle: *Particle, delta: f32) {
-	particle.lifetime -= delta
+	lifetime -= delta
 
 	
-	particle.x      += delta * particle.location_step.x
-	particle.y      += delta * particle.location_step.y
-	particle.width  += delta * particle.location_step.width
-	particle.height += delta * particle.location_step.height
+	x      += delta * location_step.x
+	y      += delta * location_step.y
+	width  += delta * location_step.width
+	height += delta * location_step.height
 	
-	particle.current_color.r += delta * particle.color_step.r
-	particle.current_color.g += delta * particle.color_step.g
-	particle.current_color.b += delta * particle.color_step.b
-	particle.current_color.a += delta * particle.color_step.a
+	current_color.r += delta * color_step.r
+	current_color.g += delta * color_step.g
+	current_color.b += delta * color_step.b
+	current_color.a += delta * color_step.a
 }
 
 update_particle_system :: (using particle_system: *Particle_System, delta: f32) {
@@ -399,7 +399,7 @@ create_bullet :: (x: f32, y: f32, vy: f32, color: Vector4, enemy: bool) {
 
 	entity: Entity
 	
-	//entity.flags = Entity.Flags.DRAW_RECTANGLE entity.color = make_vector4(1, 0, 1, 1)
+	//entity.flags = .DRAW_RECTANGLE entity.color = make_vector4(1, 0, 1, 1)
 	entity.x = x
 	entity.y = y
 	entity.width = 10
@@ -441,7 +441,7 @@ ENEMY_SPEED :: 200
 create_enemy :: (texture_handle: u32) {
 	entity: Entity
 	
-	entity.flags = Entity.Flags.DRAW_RECTANGLE
+	entity.flags = .DRAW_RECTANGLE
 	entity.x = (random_f32(*rng) + 0.125) * 0.8 * cast()window_width
 	entity.y = (random_f32(*rng) + 1.25) * 0.4 * cast() window_height
 	entity.width = 96
@@ -477,7 +477,7 @@ create_explosion :: (x: f32, y: f32) {
 	particles.spawn_mean_velocity = make_vector2(300, 0)
 	particles.spawn_velocity_range = make_vector2(30, 0)
 	particles.active = true
-	particles.mode = Particle_System.Mode.EXPLOSION
+	particles.mode = .EXPLOSION
 		
 	explosion.particle_system = add_particle_system(*particles)
 	
@@ -598,11 +598,6 @@ _main :: () {
 	window_class.lpszClassName = class_name
 	window_class.hbrBackground = GetStockObject(BLACK_BRUSH)
 	
-	print(null_entity)
-	print("\n")
-	
-	ExitProcess(0)
-	
 	
 	if RegisterClassW(*window_class) == 0 {
 		print("Failed to register window class\n")
@@ -678,7 +673,7 @@ _main :: () {
 		entity.y = 150
 		entity.width = 128
 		entity.height = 128
-		entity.flags = Entity.Flags.DRAW_RECTANGLE
+		entity.flags = .DRAW_RECTANGLE
 		entity.texture_handle = texture
 		entity.color = make_vector4(1, 1, 1, 1)
 	
@@ -816,11 +811,11 @@ _main :: () {
 			
 			enemy.cooldown -= delta
 			
-			if enemy.state == Enemy.State.LEFT {
+			if enemy.state == .LEFT {
 				entity.x -= ENEMY_SPEED * delta
-			} else if enemy.state == Enemy.State.RIGHT {
+			} else if enemy.state == .RIGHT {
 				entity.x += ENEMY_SPEED * delta
-			} else if enemy.state == Enemy.State.DEAD {
+			} else if enemy.state == .DEAD {
 				if enemy.cooldown < 0 {
 					remove_entity(enemy.entity)
 				
@@ -832,10 +827,10 @@ _main :: () {
 			
 			if entity.x < entity.width * 0.5 {
 				entity.x = entity.width * 0.5
-				enemy.state = Enemy.State.RIGHT
+				enemy.state = .RIGHT
 			} else if entity.x > cast() window_width - entity.width * 0.5 {
 				entity.x = cast() window_width - entity.width * 0.5
-				enemy.state = Enemy.State.LEFT
+				enemy.state = .LEFT
 			}
 			
 			
@@ -872,8 +867,8 @@ _main :: () {
 					
 						remove;
 						
-						if enemy.state != Enemy.State.DEAD {
-							enemy.state = Enemy.State.DEAD
+						if enemy.state != .DEAD {
+							enemy.state = .DEAD
 							enemy.cooldown = 0.05
 							
 							create_explosion(entities[enemy.entity].x, entities[enemy.entity].y)
@@ -942,7 +937,7 @@ _main :: () {
 		for * entity: entities {
 			if !entity.occupied continue
 		
-			if entity.flags & Entity.Flags.DRAW_RECTANGLE {		
+			if entity.flags & .DRAW_RECTANGLE {		
 				
 			
 				if entity.texture_handle {

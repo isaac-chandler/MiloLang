@@ -5,6 +5,10 @@ enums
  - is_indexable -> do the enum values go in order from 0..N, so the names array can be indexed directly with the enum value
  - largest_value
  - smallest_value 
+ 
+array literals
+
+struct literals
 
 // Maybe this if fine
 currently this doesn't do what you'd expect
@@ -33,11 +37,13 @@ currently this doesn't do what you'd expect
 Make it a compile time error to out of bounds index a static array if the index is a constant
  - Compile time error for constant negative index of normal and dynamic arrays?
  - Compile time error for things that are an array literal of normal or dynamic type
- 
+
+Allow casting any to any type
+
 Compile option for runtime checking
  - Array bounds checking
  - Cast bounds checking
- - 
+ - Check casts from any to a type
  
 Syntax for casting float to int and int to float bitwise (maybe allow this casting to work with any types that are the same size)
 
@@ -92,12 +98,6 @@ defer
 switch if
  - #complete
  
-unary .
-
-runtime manipulation of type values
- - ==, !=
- - get runtime type info (shouldn't require a constant type)
- 
 debug info
  - show locals
  - emit struct information
@@ -115,18 +115,13 @@ change completed keyword (its ugly and completed is something you want to call a
  
 llvm
 
-runtime type information
- - size, struct members, signedness, arguments, pointer to, etc.
- 
-box type
- - struct containing pointer to value and type information
  
 predefined constant variables
  - BUILD_WINDOWS, BUILD_LINUX, etc...
  
 #tag
  - Mark an if statement as #tag, if a struct member is compared to a type, the struct will imlicitly convert to that type in the if body
- - Make it work using box type?
+ - Make it work using box type
  - Work with switch if
  
 utf8 identifiers?

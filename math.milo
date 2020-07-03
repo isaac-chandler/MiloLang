@@ -1,31 +1,115 @@
+/*
 
-// Slow square root implementation
-sqrt :: (val: f32) -> f32 {
-	if val <= 0
-		return 0
+sincof :: {
+	1.58962301576546568060E-10,
+	-2.50507477628578072866E-8,
+	2.75573136213857245213E-6,
+	-1.98412698295895385996E-4,
+	8.33333333332211858878E-3,
+	-1.66666666666666307295E-1,
+}
 
-	low: f32 = --
-	high: f32 = --
-	
-	if val < 1 {
-		low = val
-		high = 1
-	} else {
-		low = 1
-		high = val
+coscof :: {
+	-1.13585365213876817300E-11,
+	2.08757008419747316778E-9,
+	-2.75573141792967388112E-7,
+	2.48015872888517045348E-5,
+	-1.38888888888730564116E-3,
+	4.16666666666665929218E-2,
+}
+
+DP1 :: 7.85398125648498535156E-1
+DP2 :: 3.77489470793079817668E-8
+DP3 :: 2.69515142907905952645E-15LOSSTH :: 1.073741824e9
+
+PIO4 :: 7.85398163397448309616E-1
+
+F64_NAN :: 0x7FFF_FFFF_FFFF_FFFF
+
+floor :: (x: f64) -> f64 {
+	if x > 1p53 || x < -1p53 {
+		return x
 	}
 	
-	for 23 { // I think 23 is the number of iterations to get perfect precision for f32 @Audit
-		mid := (low + high) * 0.5
+	if is_nan(x)
+		return x
 		
-		if mid * mid >= val {
-			high = mid
-		} else {
-			low = mid
-		}
+	if x < 0
+		return -cast(f64) cast(s64) x
+	else
+		return cast(f64) cast(s64) x
+}
+
+sin :: (x: f64) -> f64 {
+	if x == 0
+		return x
+		
+	if is_nan(x)
+		return x
+		
+	if is_infinite(x)
+		return <<cast(*f64) *F64_NAN
+		
+	sign := false
+	
+	if x < 0 {
+		x = -x
+		sign = !sign
 	}
 	
-	return low
+	if x > LOSSTH {
+		return 0
+	}
+	
+	y := cast(f64) cast(s64) (x / PIO4)
+	
+	z := y * 0.0625
+	z = cast(f64) cast(s64) z
+	z = y - z * 16
+	
+	j := cast(s64) z
+	
+	if j & 1 {
+		j += 1
+		y += 1
+	}
+	
+	j &= 7
+	
+	if j > 3 {
+		sign = -sign
+		j -= 4
+	}
+	
+	z = ((x - y * DP1) - y * DP2) - y * DP3
+	
+	zz := z * z
+	
+	if j == 2 {
+		
+	} else {
+	
+	}
+	
+	if sign return -x
+	else    return  x
+}
+*/
+
+is_infinite :: (x: f64) -> bool {
+	val := x
+	
+	bits := <<cast(*u64) *val
+	
+	return (bits & 0x7FF0_0000_0000_0000) == 0x7FF0_0000_0000_0000 && (bits & 0x000F_FFFF_FFFF_FFFF) == 0
+}
+
+is_nan :: (x: f64) -> bool {
+	val := x
+	
+	bits := <<cast(*u64) *val
+	
+	return (bits & 0x7FF0_0000_0000_0000) == 0x7FF0_0000_0000_0000 && (bits & 0x000F_FFFF_FFFF_FFFF)
 }
 
 // very approximate square root - 2 significant figures at best, not thoroughly tested, use at your own risk

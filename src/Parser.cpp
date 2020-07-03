@@ -1375,6 +1375,31 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		if (!expr)
 			return nullptr;
 	}
+	else if (expectAndConsume(lexer, '.')) {
+		if (lexer->token.type != TokenT::IDENTIFIER) {
+			reportExpectedError(&lexer->token, "Error: Expected identifier after unary '.'");
+			return nullptr;
+		}
+
+		ExprIdentifier *identifier = PARSER_NEW(ExprIdentifier);
+		identifier->start = start;
+		identifier->end = lexer->token.end;
+		identifier->name = lexer->token.text;
+		identifier->flavor = ExprFlavor::IDENTIFIER;
+
+
+		identifier->resolveFrom = nullptr;
+		identifier->enclosingScope = nullptr;
+		identifier->declaration = nullptr;
+		identifier->structAccess = nullptr;
+		identifier->type = &TYPE_UNARY_DOT;
+
+		identifier->indexInBlock = 0;
+
+		expr = identifier;
+
+		lexer->advance();
+	}
 	else if (lexer->token.type == TokenT::IDENTIFIER) {
 		ExprIdentifier *identifier = PARSER_NEW(ExprIdentifier);
 		identifier->start = start;
