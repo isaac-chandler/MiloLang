@@ -222,6 +222,46 @@ void reportError(Token *location, CHECK_PRINTF const char *format, ...) {
 	displayErrorLocation(&location->start, &location->end);
 }
 
+char *mprintf(const char *format, ...) {
+
+	va_list args1;
+	va_start(args1, format);
+
+	va_list args2;
+	va_copy(args2, args1);
+
+	s64 size = 1LL + vsnprintf(NULL, 0, format, args1);
+	va_end(args1);
+
+	char *buffer = static_cast<char *>(malloc(size));
+
+	vsprintf_s(buffer, size, format, args2);
+
+	va_end(args2);
+
+	return buffer;
+}
+
+wchar_t *mprintf(const wchar_t *format, ...) {
+
+	va_list args1;
+	va_start(args1, format);
+
+	va_list args2;
+	va_copy(args2, args1);
+
+	s64 size = 1LL + _vsnwprintf(NULL, 0, format, args1);
+	va_end(args1);
+
+	wchar_t *buffer = static_cast<wchar_t *>(malloc(sizeof(wchar_t) * size));
+
+	vswprintf_s(buffer, size, format, args2);
+
+	va_end(args2);
+
+	return buffer;
+}
+
 void reportExpectedError(Token *location, CHECK_PRINTF const char *format, ...) {
 	if (location->type == TokenT::INVALID) { // If it was invalid assume that the lexer already reported an error, don't print the error so we don't double report
 		assert(hadError);
@@ -246,6 +286,42 @@ void reportExpectedError(Token *location, CHECK_PRINTF const char *format, ...) 
 	}
 }
 
+void stompLastBackslash(char *name) {
+	char *lastBackslash = nullptr;
+	for (char *cursor = name; *cursor; ++cursor) {
+		if (*cursor == '\\') lastBackslash = cursor;
+	}
+
+	if (lastBackslash) {
+		*lastBackslash = 0;
+	}
+}
+
+void stompLastBackslash(wchar_t *name) {
+	wchar_t *lastBackslash = nullptr;
+	for (wchar_t *cursor = name; *cursor; ++cursor) {
+		if (*cursor == '\\') lastBackslash = cursor;
+	}
+
+	if (lastBackslash) {
+		*lastBackslash = 0;
+	}
+}
+
+bool fileExists(wchar_t *file) {
+	DWORD attributes = GetFileAttributesW(file);
+
+	return (attributes != INVALID_FILE_ATTRIBUTES &&
+		!(attributes & FILE_ATTRIBUTE_DIRECTORY));
+}
+
+bool directoryExists(wchar_t *file) {
+	DWORD attributes = GetFileAttributesW(file);
+
+	return (attributes != INVALID_FILE_ATTRIBUTES &&
+		(attributes & FILE_ATTRIBUTE_DIRECTORY));
+}
+
 int main(int argc, char *argv[]) {
 #if BUILD_WINDOWS
 	{
@@ -262,6 +338,8 @@ int main(int argc, char *argv[]) {
 	}
 #endif
 
+	using namespace std::chrono;
+
 #if BUILD_PROFILE
 	u64 startTime;
 	QueryPerformanceCounter(reinterpret_cast<LARGE_INTEGER *>(&startTime));
@@ -274,7 +352,7 @@ int main(int argc, char *argv[]) {
 
 	char *input = argv[1];
 
-	auto start = std::chrono::high_resolution_clock::now();
+	auto start = high_resolution_clock::now();
 
 	if (!hadError && loadNewFile("runtime.milo") && loadNewFile(String(input))) {
 		setupTypeTable();
@@ -311,9 +389,6 @@ int main(int argc, char *argv[]) {
 		}
 		coffWriter.join();
 
-
-		std::cout << "It took me " << (std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::duration<double>(
-			std::chrono::high_resolution_clock::now() - start)).count() / 1000.0) << "ms\n";
 	}
 
 #if BUILD_WINDOWS
@@ -330,23 +405,113 @@ int main(int argc, char *argv[]) {
 			"Total sizes: %llu, %.1f sizes/type\n",
 			totalQueued, totalDeclarations, totalFunctions, totalTypesSized, totalInfers, static_cast<float>(totalInfers) / totalQueued, totalSizes, static_cast<float>(totalSizes) / totalTypesSized);
 
+		std::cout << "Compiler Time: " << (duration_cast<microseconds>(duration<double>(
+			high_resolution_clock::now() - start)).count() / 1000.0) << "ms\n";
+
+		auto linkerStart = high_resolution_clock::now();
+
 		wchar_t buffer[1024];
 
+		wchar_t *linkerPath;
+		wchar_t *libPath;
+
+
 		{
-			PROFILE_ZONE("Find linker");
+			wchar_t name[1024];
+			GetModuleFileNameW(NULL, name, sizeof(name));
 
-			Find_Result result = find_visual_studio_and_windows_sdk();
+			stompLastBackslash(name);
 
-			if (!result.vs_exe_path) {
-				reportError("Couldn't find linker");
-				return 1;
+			wchar_t *cacheFile = mprintf(L"%s\\%s", name, L"linker.cache");
+
+			bool linkerFindFailed = false;
+
+			if (FILE *cache = _wfopen(cacheFile, L"rb")) {
+				u16 length;
+
+#define read(dest, count) ((count) == fread(dest, sizeof(*(dest)), count, cache))
+
+				if (!read(&length, 1)) {
+					printf("Failed to read linker cache\n");
+					fclose(cache);
+					goto linkerCacheFail;
+				}
+
+				linkerPath = new wchar_t[length];
+
+				if (!read(linkerPath, length)) {
+					printf("Failed to read linker cache\n");
+					fclose(cache);
+					goto linkerCacheFail;
+				}
+
+				if (!read(&length, 1)) {
+					printf("Failed to read linker cache\n");
+					fclose(cache);
+					goto linkerCacheFail;
+				}
+
+				libPath = new wchar_t[length];
+
+				if (!read(libPath, length)) {
+					printf("Failed to read linker cache\n");
+					fclose(cache);
+					goto linkerCacheFail;
+				}
+
+				fclose(cache);
+
+				if (!fileExists(linkerPath)) {
+					printf("Linker cache had invalid linker\n");
+					goto linkerCacheFail;
+				}
+
+				if (!directoryExists(libPath)) {
+					printf("Linker cache had invalid library path\n");
+					goto linkerCacheFail;
+				}
 			}
-			else if (!result.windows_sdk_um_library_path) {
-				reportError("Couldn't find libraries");
-				return 1;
+			else {
+				printf("Failed to find cached linker, searching for linker\n");
+
+			linkerCacheFail:
+
+				PROFILE_ZONE("Find linker");
+
+
+				Find_Result result = find_visual_studio_and_windows_sdk();
+
+				if (!result.vs_exe_path) {
+					reportError("Couldn't find linker");
+					return 1;
+				}
+				else if (!result.windows_sdk_um_library_path) {
+					reportError("Couldn't find libraries");
+					return 1;
+				}
+
+				linkerPath = mprintf(L"%s\\%s", result.vs_exe_path, L"link.exe");
+				libPath = result.windows_sdk_um_library_path;
+
+				if (FILE *cache = _wfopen(cacheFile, L"wb")) {
+					u16 length = lstrlenW(linkerPath) + 1;
+
+#define write(src, count) fwrite(src, sizeof(*(src)), count, cache)
+
+					write(&length, 1);
+					write(linkerPath, length);
+
+
+					length = lstrlenW(libPath) + 1;
+
+					write(&length, 1);
+					write(libPath, length);
+
+					fclose(cache);
+				}
 			}
 
-			_snwprintf(buffer, 1024, L"\"%s\\link.exe\" out.obj /debug /entry:main kernel32.lib user32.lib gdi32.lib opengl32.lib \"/libpath:%s\" /incremental:no /nologo", result.vs_exe_path, result.windows_sdk_um_library_path);
+			_snwprintf(buffer, 1024, L"\"%s\" out.obj /debug /entry:main kernel32.lib user32.lib gdi32.lib opengl32.lib \"/libpath:%s\" /incremental:no /nologo", linkerPath, libPath);
 		}
 
 
@@ -367,6 +532,9 @@ int main(int argc, char *argv[]) {
 			WaitForSingleObject(info.hProcess, INFINITE);
 		}
 		CloseHandle(info.hProcess);
+
+		std::cout << "Linker Time: " << (duration_cast<microseconds>(duration<double>(
+			high_resolution_clock::now() - linkerStart)).count() / 1000.0) << "ms\n";
 	}
 #else
 	// @Platform
