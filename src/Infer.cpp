@@ -559,7 +559,7 @@ bool isValidCast(Type *to, Type *from) {
 		}
 
 		if (to->flavor == TypeFlavor::STRUCT) {
-			return to == from;
+			return to == from || to == TYPE_ANY;
 		}
 
 		return true;

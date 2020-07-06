@@ -85,6 +85,7 @@ Rectangle :: struct {
 
 Entity :: struct {
 	using rectangle: Rectangle
+	mesh: [][3]Vector2
 	
 	Flags :: enum_flags u64 {
 		DRAW_RECTANGLE
@@ -168,7 +169,66 @@ create_particle :: (using particle_system: *Particle_System) {
 	
 	particle.lifetime = spawn_lifetime
 	
-	array_add_generic(cast() *particles, *particle, size_of(Particle))
+	array_add(cast() *particles, particle)
+}
+
+sub_vector2 :: (a: Vector2, b: Vector2) -> Vector2 {
+	return make_vector2(a.x - b.x, a.y - b.y)
+}
+
+dot_vector2 :: (a: Vector2, b: Vector2) -> f32 {
+	return a.x * b.x + a.y * b.y
+}
+
+triangles_intersect :: (a: [3]Vector2, a_offset: Vector2, b: [3]Vector2, b_offset: Vector2) -> bool {
+	v0 := sub_vector2(a[2], a[0])
+	v1 := sub_vector2(a[1], a[0])
+	
+	dot00 := dot_vector2(v0, v0)
+	dot01 := dot_vector2(v0, v1)
+	dot11 := dot_vector2(v1, v1)
+	
+	offset := sub_vector2(a_offset, b_offset)
+	
+	invDenom := 1 / (dot00 * dot11 - dot01 * dot01)
+	
+	{
+		v2 := sub_vector2(sub_vector2(b[0], a[0]), offset)
+		
+		dot02 := dot_vector2(v0, v2)
+		dot12 := dot_vector2(v1, v2)
+		
+		u := (dot11 * dot02 - dot01 * dot12) * invDenom
+		v := (dot00 * dot12 - dot01 * dot02) * invDenom
+		
+		if u >= 0 && v >= 0 && u + v < 1 return true
+	}
+	
+	{
+		v2 := sub_vector2(sub_vector2(b[1], a[0]), offset)
+		
+		dot02 := dot_vector2(v0, v2)
+		dot12 := dot_vector2(v1, v2)
+		
+		u := (dot11 * dot02 - dot01 * dot12) * invDenom
+		v := (dot00 * dot12 - dot01 * dot02) * invDenom
+		
+		if u >= 0 && v >= 0 && u + v < 1 return true
+	}
+	
+	{
+		v2 := sub_vector2(sub_vector2(b[2], a[0]), offset)
+		
+		dot02 := dot_vector2(v0, v2)
+		dot12 := dot_vector2(v1, v2)
+		
+		u := (dot11 * dot02 - dot01 * dot12) * invDenom
+		v := (dot00 * dot12 - dot01 * dot02) * invDenom
+		
+		if u >= 0 && v >= 0 && u + v < 1 return true
+	}
+	
+	return false
 }
 
 create_explosion_particle :: (using particle_system: *Particle_System) {
@@ -203,7 +263,7 @@ create_explosion_particle :: (using particle_system: *Particle_System) {
 	
 	particle.lifetime = spawn_lifetime
 	
-	array_add_generic(cast() *particles, *particle, size_of(Particle))
+	array_add(cast() *particles, particle)
 }
 
 update_particle :: (using particle: *Particle, delta: f32) {
@@ -296,7 +356,7 @@ add_entity :: (entity: *Entity) -> u64 {
 		}
 	}
 	
-	array_add_generic(cast() *entities, entity, size_of(Entity))
+	array_add(cast() *entities, <<entity)
 	entities[entities.count - 1].occupied = true
 	
 	return entities.count - 1
@@ -320,7 +380,7 @@ add_particle_system :: (particle_system: *Particle_System) -> u64 {
 		}
 	}
 	
-	array_add_generic(cast() *particle_systems, particle_system, size_of(Particle_System))
+	array_add(cast() *particle_systems, <<particle_system)
 	particle_systems[particle_systems.count - 1].occupied = true
 	
 	return particle_systems.count - 1
@@ -386,6 +446,8 @@ Bullet :: struct {
 	particle_system: u64
 	velocity: Vector2
 	enemy: bool
+	occupied: bool
+	mesh: [2][3]Vector2
 }
 
 Explosion :: struct {
@@ -399,11 +461,12 @@ create_bullet :: (x: f32, y: f32, vy: f32, color: Vector4, enemy: bool) {
 
 	entity: Entity
 	
-	//entity.flags = .DRAW_RECTANGLE entity.color = make_vector4(1, 0, 1, 1)
+	// entity.flags = .DRAW_RECTANGLE 
+	// entity.color = make_vector4(1, 0, 1, 1)
 	entity.x = x
 	entity.y = y
 	entity.width = 10
-	entity.height = 0.06 * vy * 2
+	entity.height = 0.12 * vy
 	
 	particles: Particle_System
 	
@@ -412,6 +475,22 @@ create_bullet :: (x: f32, y: f32, vy: f32, color: Vector4, enemy: bool) {
 	particles.y = entity.height * 0.5
 	
 	if entity.height < 0 entity.height = -entity.height
+	
+	bullet.mesh[0][0].x = entity.width * -0.5
+	bullet.mesh[0][0].y = entity.height * -0.5
+	bullet.mesh[0][1].x = entity.width * -0.5
+	bullet.mesh[0][1].y = entity.height * 0.5
+	bullet.mesh[0][2].x = entity.width * 0.5
+	bullet.mesh[0][2].y = entity.height * -0.5
+	
+	bullet.mesh[1][0].x = entity.width * -0.5
+	bullet.mesh[1][0].y = entity.height * 0.5
+	bullet.mesh[1][1].x = entity.width * 0.5
+	bullet.mesh[1][1].y = entity.height * -0.5
+	bullet.mesh[1][2].x = entity.width * 0.5
+	bullet.mesh[1][2].y = entity.height * 0.5
+	
+	entity.mesh = bullet.mesh
 	
 	bullet.entity = add_entity(*entity)
 	
@@ -431,14 +510,16 @@ create_bullet :: (x: f32, y: f32, vy: f32, color: Vector4, enemy: bool) {
 	bullet.velocity = make_vector2(0, vy)
 	bullet.enemy = enemy
 	
-	array_add_generic(cast() *bullets, *bullet, size_of(Bullet))
+	
+	
+	array_add(cast() *bullets, bullet)
 }
 
 ENEMY_FIRE_SPEED :: 1.6
 ENEMY_SPEED :: 200
 
 
-create_enemy :: (texture_handle: u32) {
+create_enemy :: (texture_handle: u32, mesh: [][3]Vector2) {
 	entity: Entity
 	
 	entity.flags = .DRAW_RECTANGLE
@@ -446,6 +527,7 @@ create_enemy :: (texture_handle: u32) {
 	entity.y = (random_f32(*rng) + 1.25) * 0.4 * cast() window_height
 	entity.width = 96
 	entity.height = 96
+	entity.mesh = mesh
 	
 	entity.texture_handle = texture_handle
 	entity.color = make_vector4(1, 1, 1, 1)
@@ -457,7 +539,7 @@ create_enemy :: (texture_handle: u32) {
 	
 	enemy.entity = add_entity(*entity)
 	
-	array_add_generic(cast() *enemies, *enemy, size_of(Enemy))
+	array_add(cast() *enemies, enemy)
 }
 
 create_explosion :: (x: f32, y: f32) {
@@ -481,7 +563,7 @@ create_explosion :: (x: f32, y: f32) {
 		
 	explosion.particle_system = add_particle_system(*particles)
 	
-	array_add_generic(cast() *explosions, *explosion, size_of(Explosion))
+	array_add(cast() *explosions, explosion)
 }
 
 
@@ -495,11 +577,26 @@ FIRE_COOLDOWN :: 0.6
 
 time_to_fire: f32 = 0
 
-intersect :: (a: Rectangle, b: Rectangle) -> bool {
-	return !(a.x + a.width  * 0.5 < b.x - b.width  * 0.5 || 
-			 a.x - a.width  * 0.5 > b.x + b.width  * 0.5 ||
-			 a.y + a.height * 0.5 < b.y - b.height * 0.5 ||
-			 a.y - a.height * 0.5 > b.y + b.height * 0.5)
+intersect :: (bullet: *Bullet, b: *Entity) -> bool {
+	a := *entities[bullet.entity]
+
+	if !(a.x + a.width  * 0.5 < b.x - b.width  * 0.5 || 
+	     a.x - a.width  * 0.5 > b.x + b.width  * 0.5 ||
+	     a.y + a.height * 0.5 < b.y - b.height * 0.5 ||
+	     a.y - a.height * 0.5 > b.y + b.height * 0.5) {
+		 
+		a_offset := make_vector2(a.x, a.y)
+		b_offset := make_vector2(b.x, b.y)
+	
+		for i : bullet.mesh {
+			 for j : b.mesh {
+				if triangles_intersect(i, a_offset, j, b_offset) return true
+				if triangles_intersect(j, b_offset, i, a_offset) return true
+			}
+		}
+	}
+	
+	return false
 }
 
 gl_context: HGLRC
@@ -526,6 +623,36 @@ _main :: () {
 	GetStartupInfoW(*startup_info)
 	
 	show_command: u16 = SW_SHOWDEFAULT
+	
+	enemy_mesh: [4][3]Vector2 = --
+	
+	enemy_mesh[0][0].x = -36
+	enemy_mesh[0][0].y = -24
+	enemy_mesh[0][1].x = 0
+	enemy_mesh[0][1].y = -48
+	enemy_mesh[0][2].x = 36
+	enemy_mesh[0][2].y = -24
+		
+	enemy_mesh[1][0].x = -36
+	enemy_mesh[1][0].y = -24
+	enemy_mesh[1][1].x = -36
+	enemy_mesh[1][1].y = 24
+	enemy_mesh[1][2].x = 36
+	enemy_mesh[1][2].y = -24
+		
+	enemy_mesh[2][0].x = -36
+	enemy_mesh[2][0].y = 24
+	enemy_mesh[2][1].x = 36
+	enemy_mesh[2][1].y = -24
+	enemy_mesh[2][2].x = 36
+	enemy_mesh[2][2].y = 24
+		
+	enemy_mesh[3][0].x = -36
+	enemy_mesh[3][0].y = 24
+	enemy_mesh[3][1].x = 0
+	enemy_mesh[3][1].y = 48
+	enemy_mesh[3][2].x = 36
+	enemy_mesh[3][2].y = 24
 	
 	if (startup_info.dwFlags & STARTF_USESHOWWINDOW) {
 		show_command = startup_info.wShowWindow
@@ -666,7 +793,16 @@ _main :: () {
 
 	glEnable(GL_TEXTURE_2D)
 	texture := load_image("Invaders/Spaceship.bmp")
-	{	
+	{
+		player_mesh: [1][3]Vector2 = --
+		
+		player_mesh[0][0].x = -46
+		player_mesh[0][0].y = -64
+		player_mesh[0][1].x = 0
+		player_mesh[0][1].y = 64
+		player_mesh[0][2].x = 46
+		player_mesh[0][2].y = -64
+	
 		entity: Entity = --
 	
 		entity.x = cast(f32) window_width * 0.5
@@ -676,6 +812,7 @@ _main :: () {
 		entity.flags = .DRAW_RECTANGLE
 		entity.texture_handle = texture
 		entity.color = make_vector4(1, 1, 1, 1)
+		entity.mesh = player_mesh
 	
 		player_index = add_entity(*entity)
 	}
@@ -720,7 +857,7 @@ _main :: () {
 	
 	hex_texture := load_image("Invaders/Hex.bmp")
 	
-	for 10 create_enemy(hex_texture)
+	for 10 create_enemy(hex_texture, enemy_mesh)
 	
 	glEnable(GL_BLEND)
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
@@ -860,7 +997,7 @@ _main :: () {
 		for * enemy : enemies {		
 			for * bullet : bullets {
 				if !bullet.enemy {
-					if (intersect(entities[enemy.entity], entities[bullet.entity])) {
+					if (intersect(bullet, *entities[enemy.entity])) {
 								
 						remove_particle_system(bullet.particle_system)
 						remove_entity(bullet.entity)
@@ -881,7 +1018,7 @@ _main :: () {
 		if player {
 			for * bullet : bullets {
 				if bullet.enemy {
-					if intersect(player, entities[bullet.entity]) {
+					if intersect(bullet, player) {
 						remove_particle_system(bullet.particle_system)
 						remove_entity(bullet.entity)
 					
@@ -962,6 +1099,10 @@ _main :: () {
 				}
 			}
 		}
+		
+		glColor4f(1, 1, 1, 1)
+		glDisable(GL_TEXTURE_2D)
+		
 		
 		if (cast() (delta * 1000_000) > 20_000) {
 			print(cast(s64) (delta * 1000_000))

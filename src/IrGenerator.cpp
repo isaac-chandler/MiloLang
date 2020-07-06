@@ -513,7 +513,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 						case TypeFlavor::STRUCT: {
 							assert(castTo == TYPE_ANY);
 
-							u64 storage = allocateSpaceForType(state, TYPE_ANY);
+							u64 storage = allocateSpaceForType(state, right->type);
 
 							Ir &copy = state->ir.add();
 							copy.op = IrOp::SET;
@@ -1787,10 +1787,10 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 						generateIrForceDest(state, array->storage[i], valueReg);
 
 						Ir &write = state->ir.add();
-						address.op = IrOp::WRITE;
-						address.a = addressReg;
-						address.b = valueReg;
-						address.opSize = elementType->size;
+						write.op = IrOp::WRITE;
+						write.a = addressReg;
+						write.b = valueReg;
+						write.opSize = elementType->size;
 
 						Ir &add = state->ir.add();
 						add.op = IrOp::ADD_CONSTANT;
@@ -1811,6 +1811,8 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 						branch.a = countReg;
 						branch.b = patch;
 						branch.opSize = 8;
+
+						break;
 					}
 					else {
 						Ir &address = state->ir.add();

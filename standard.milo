@@ -137,6 +137,23 @@ get_array_pointer :: (data: *u8, index: u64, size: u64) -> *void {
 	return data + index * size
 }
 
+array_add :: (array: *[..]u8, value: any) -> *void {
+	size := value.value_type.size
+
+	if array.count >= array.capacity {
+		array.capacity = max(array.count * 2, 4)
+		
+		array.data = reallocate(array.data, array.capacity * size)
+	}
+	
+	dest := get_array_pointer(array.data, array.count, size)
+	
+	memory_copy(dest, value.value_pointer, size)
+	array.count += 1
+	
+	return dest
+}
+
 array_add_generic :: (array: *[..]u8, value: *void, size: u64) -> *void {
 	if array.count >= array.capacity {
 		array.capacity = max(array.count * 2, 4)
@@ -150,10 +167,6 @@ array_add_generic :: (array: *[..]u8, value: *void, size: u64) -> *void {
 	array.count += 1
 	
 	return dest
-}
-
-array_add_string :: (array: *[..]string, value: *string) -> *string {
-	return array_add_generic(cast() array, value, size_of(type_of(value)))
 }
 
 panic :: () {
@@ -203,7 +216,7 @@ get_command_line_arguments :: () -> []string {
 DIGIT_TABLE :: "0123456789abcdefghijklmnopqrstuvwxyz"
 
 u64_to_string :: (value: u64, base: u64 = 10) -> #must string {
-	if base > 36 {
+	if base > 36 || base < 2 {
 		return ""
 	}
 
@@ -495,11 +508,11 @@ print :: (using val: any) {
 		}		
 	} else if value_type == type_info(f64) {
 	
-		print_f64(<<cast(*f64)value_type)
+		print_f64(<<cast(*f64)value_pointer)
 		
 	} else if value_type == type_info(f32) {
 	
-		print_f64(cast()<<cast(*f32)value_type)
+		print_f64(cast()<<cast(*f32)value_pointer)
 		
 	} else {
 	

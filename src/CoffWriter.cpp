@@ -741,10 +741,23 @@ bool writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataRelocations,
 
 		if (value->type->flags & TYPE_ARRAY_IS_FIXED) {
 			auto elementSize = static_cast<TypeArray *>(type)->arrayOf->size;
-
+			
 			for (u64 i = 0; i < array->count; i++) {
 				if (!writeValue(dataSize, data, dataRelocations, symbols, stringTable, array->storage[i], emptyStringSymbolIndex, rdata)) {
 					return false;
+				}
+
+				if (array->storage[i + 1] == nullptr) {
+					for (u64 j = i; j < array->count; j++) {
+						if (!writeValue(dataSize, data, dataRelocations, symbols, stringTable, array->storage[i], emptyStringSymbolIndex, rdata)) {
+							return false;
+						}
+
+						dataSize += elementSize;
+						data += elementSize;
+					}
+
+					break;
 				}
 
 				dataSize += elementSize;
@@ -1295,6 +1308,12 @@ void runCoffWriter() {
 					break;
 				}
 				case IrOp::ADD: {
+					if (ir.a == 0 && ir.b == 0) {
+						code.add1(0x31); // xor eax, eax
+						code.add1(0xC0);
+
+						storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
+					}
 					if (ir.a == 0) {
 						writeSet(&code, function, ir.opSize, ir.dest, ir.b);
 					}
@@ -3071,7 +3090,7 @@ void runCoffWriter() {
 		}
 	}
 
-	{
+	if (!hadError) {
 		PROFILE_ZONE("Write types");
 
 		for (u64 i = 0; i < typeTableCapacity; i++) {
