@@ -50,7 +50,8 @@ static const Keyword keywords[] = {
 	{"enum", TokenT::ENUM}, 
 	{"enum_flags", TokenT::ENUM_FLAGS}, 
 	{"#must", TokenT::MUST}, 
-	{"type_info", TokenT::TYPE_INFO}
+	{"type_info", TokenT::TYPE_INFO}, 
+	{"case", TokenT::CASE}
 };
 
 void BigInt::zero() {
@@ -194,7 +195,7 @@ static TokenT advanceTokenType(LexerFile *lexer) {
 	u64 commentNestCount = 0;
 
 	s64 digit;
-	u64 base;
+	u64 base = 10;
 	u64 exponentBase;
 
 	CodeLocation decimalPointUndoLocation;

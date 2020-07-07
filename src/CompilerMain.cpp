@@ -417,7 +417,7 @@ int main(int argc, char *argv[]) {
 
 
 		{
-			wchar_t name[1024];
+			wchar_t name[1024]; // @Robustness
 			GetModuleFileNameW(NULL, name, sizeof(name));
 
 			stompLastBackslash(name);

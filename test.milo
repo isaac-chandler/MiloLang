@@ -654,7 +654,7 @@ _main :: () {
 	enemy_mesh[3][2].x = 36
 	enemy_mesh[3][2].y = 24
 	
-	if (startup_info.dwFlags & STARTF_USESHOWWINDOW) {
+	if startup_info.dwFlags & STARTF_USESHOWWINDOW {
 		show_command = startup_info.wShowWindow
 	}
 	
@@ -665,58 +665,58 @@ _main :: () {
 	
 	window_class.style = CS_OWNDC | CS_VREDRAW | CS_HREDRAW
 	window_class.lpfnWndProc = (hwnd: HWND, uMsg: MSG.Message, wParam: u64, lParam: s64) -> s64 {
-		VK_SPACE :: 0x20
-		VK_LEFT :: 0x25
-		VK_RIGHT :: 0x27
 		VK_SHIFT :: 0x10
+		VK_SPACE :: 0x20
+		VK_LEFT  :: 0x25
+		VK_RIGHT :: 0x27
 	
-		if uMsg == WM_CLOSE {
-			glFinish()
-			wglDeleteContext(gl_context)
+		if uMsg == {
+			case WM_CLOSE
+				glFinish()
+				wglDeleteContext(gl_context)
 
-			DestroyWindow(hwnd)
-		} else if uMsg == WM_DESTROY {
-			PostQuitMessage(0)
-		} else if uMsg == WM_PAINT {
-			paint: PAINTSTRUCT = --
-			
-			dc := BeginPaint(hwnd, *paint)
-			EndPaint(hwnd, *paint)
-		} else if uMsg == WM_SIZE {
-			client_rect: RECT = --
-			
-			GetClientRect(hwnd, *client_rect)
-			
-			window_width = client_rect.right - client_rect.left
-			window_height = client_rect.bottom - client_rect.top
-			
-			print(cast() window_width)
-			print("x")
-			print(cast() window_height)
-			print("\n----------\n")
-			
-		} else if uMsg == WM_KEYDOWN {
-			if wParam == VK_LEFT
-				left_is_down = true
-			else if wParam == VK_RIGHT
-				right_is_down = true
-			else if wParam == VK_SPACE
-				space_is_down = true
-			else if wParam == VK_SHIFT
-				shift_is_down = true
+				DestroyWindow(hwnd)
 				
-		} else if uMsg == WM_KEYUP {
-			if wParam == VK_LEFT
-				left_is_down = false
-			else if wParam == VK_RIGHT
-				right_is_down = false
-			else if wParam == VK_SPACE
-				space_is_down = false
-			else if wParam == VK_SHIFT
-				shift_is_down = false
+			case WM_DESTROY
+				PostQuitMessage(0)
 				
-		} else {
-			return DefWindowProcW(hwnd, uMsg, wParam, lParam)
+			case WM_PAINT
+				paint: PAINTSTRUCT = --
+				
+				dc := BeginPaint(hwnd, *paint)
+				EndPaint(hwnd, *paint)
+				
+			case WM_SIZE
+				client_rect: RECT = --
+				
+				GetClientRect(hwnd, *client_rect)
+				
+				window_width = client_rect.right - client_rect.left
+				window_height = client_rect.bottom - client_rect.top
+				
+				print(cast() window_width)
+				print("x")
+				print(cast() window_height)
+				print("\n----------\n")
+				
+			case WM_KEYDOWN
+				if wParam == {
+					case VK_LEFT  left_is_down  = true
+					case VK_RIGHT right_is_down = true
+					case VK_SPACE space_is_down = true
+					case VK_SHIFT shift_is_down = true
+				}
+				
+			case WM_KEYUP
+				if wParam == {
+					case VK_LEFT  left_is_down  = false
+					case VK_RIGHT right_is_down = false
+					case VK_SPACE space_is_down = false
+					case VK_SHIFT shift_is_down = false
+				}
+				
+			else
+				return DefWindowProcW(hwnd, uMsg, wParam, lParam)
 		}
 		
 		return 0

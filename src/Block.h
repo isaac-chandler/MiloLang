@@ -7,21 +7,46 @@
 
 #define DECLARATION_IS_CONSTANT        0x0'0001
 #define DECLARATION_IS_UNINITIALIZED   0x0'0002
-#define DECLARATION_IS_ITERATOR        0x0'0004
+
+// These flags denote if the declaration is a for loop it or it_index
+#define DECLARATION_IS_ITERATOR        0x0'0004 // This is also set for while loop labels
 #define DECLARATION_IS_ITERATOR_INDEX  0x0'0008
+
+// Set when the initial value of a declaration is completely inferred
 #define DECLARATION_VALUE_IS_READY     0x0'0010
+
+// Set when the type of a declaration is completely inferred
 #define DECLARATION_TYPE_IS_READY      0x0'0020
+
 #define DECLARATION_IS_ARGUMENT        0x0'0040
+
+// Set when a declaration has been allocated space in the output executable
 #define DECLARATION_HAS_STORAGE        0x0'0080
+
 #define DECLARATION_IS_STRUCT_MEMBER   0x0'0100
+
+// A declaration that is implicitly inserted that actually executes the using @Cleanup can we just check DECLARATION_MARKED_AS_USING
 #define DECLARATION_IS_USING           0x0'0200
+
 #define DECLARATION_IMPORTED_BY_USING  0x0'0400
+
+// A using that has already had its declarations imported
 #define DECLARATION_USING_IS_RESOLVED  0x0'0800
+
+// This is the actual variable that the using refers to
 #define DECLARATION_MARKED_AS_USING    0x0'1000
-#define DECLARATION_IS_IMPLICIT_IMPORT 0x0'2000
+
+// Set on declarations that are silently inserted when a variable from some outer scopes is used so that later usings will cause an error if they try to override it
+#define DECLARATION_IS_IMPLICIT_IMPORT 0x0'2000 // @Speed @Cleanup This is a very costly mechanism for this relatively uncommon check
+
 #define DECLARATION_IS_ENUM_VALUE      0x0'4000
+
 #define DECLARATION_IS_RETURN          0x0'8000
+
+// Set if a return value declaration is marked as #must
 #define DECLARATION_IS_MUST            0x1'0000
+
+// Set if a declaration is on the left hand side of a := comma assignment
 #define DECLARATION_IS_IN_COMPOUND     0x2'0000
 
 
@@ -52,7 +77,10 @@ struct Declaration {
 
 
 #define BLOCK_IS_ARGUMENTS 0x1
+
+// Set when a block is fully parsed so that we don't skip through it in identifier resolving until then
 #define BLOCK_IS_COMPLETE 0x2
+
 #define BLOCK_IS_LOOP 0x4
 #define BLOCK_IS_STRUCT 0x8
 #define BLOCK_IS_RETURNS 0x10

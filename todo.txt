@@ -45,7 +45,7 @@ Compile option for runtime checking
  - Cast bounds checking
  - Check casts from any to a type
  
-Syntax for casting float to int and int to float bitwise (maybe allow this casting to work with any types that are the same size)
+Syntax for bitwise casting float to int and int to float (maybe allow this casting to work with any types that are the same size)
 
 Function inlining
 
@@ -78,7 +78,7 @@ function overloading
 
 performance
  - Profile TypeTable.cpp
- - Call infer fewer times - go through fewer InferJobs each iteration -- significantly improved since todo orignally added but can still be better
+ - Call infer fewer times -- significantly improved since todo orignally added but can still be better
    - graph theory
  - More fast paths for trival type inference
  - Allocator in Infer.cpp, TypeTable.cpp
@@ -130,3 +130,9 @@ run ir at compile time
 
 function polymorhpism
 struct polymorhpism
+
+syntax for array slicing
+ - array[1..4]
+ - array[..4]
+ - array[1..]
+ - option for slice bounds checking

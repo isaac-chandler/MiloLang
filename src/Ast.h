@@ -172,7 +172,9 @@ enum class ExprFlavor : u8 {
 	ENUM, 
 	ENUM_INCREMENT, 
 
-	COMMA_ASSIGNMENT
+	COMMA_ASSIGNMENT, 
+
+	SWITCH
 };
 
 struct Declaration;
@@ -192,14 +194,31 @@ struct Expr {
 #endif
 };
 
+
+// The for loop value is being iterated by pointer
 #define EXPR_FOR_BY_POINTER 0x1
+
+// This cast was implicitly inserted during type checking
 #define EXPR_CAST_IS_IMPLICIT 0x2
+
+// This expression has already been given storage space in the output executable
 #define EXPR_HAS_STORAGE 0x4
+
 #define EXPR_FUNCTION_IS_EXTERNAL 0x8
+
+
 #define EXPR_ARRAY_IS_DYNAMIC 0x10
+
+// Set when identifier resolving passes out of a struct or out of a function, this stops a variable from outside the function being referenced
+// since we don't support captures
 #define EXPR_IDENTIFIER_RESOLVING_ONLY_CONSTANTS 0x20
 #define EXPR_IDENTIFIER_IS_BREAK_OR_CONTINUE_LABEL 0x40
+
+// This is an initializer assignment that was inserted by a variable 
+// intitialization in a runtime scope
 #define EXPR_ASSIGN_IS_IMPLICIT_INITIALIZER 0x80
+
+
 // :EvaluatedBinaryLiterals
 // Set for consistency in rules that only a literal can be assigned to a constant even though we do 'constexpr' evaluate 
 // int + int -> int binary expressions so that expressions such as 3 + 5 can still be converted to unsigned implicitly 
@@ -207,9 +226,18 @@ struct Expr {
 // allowed as constants since we don't evaluate comparisons
 #define EXPR_WAS_EVALUATED_BINARY 0x100
 #define EXPR_VALUE_NOT_REQUIRED 0x200
-#define EXPR_FUNCTION_CALL_IS_STATEMENT_LEVEL 0x400
-#define EXPR_COMMA_ASSIGNMENT_IS_DECLARATION 0x800
-#define EXPR_FUNCTION_CALL_IS_IN_COMMA_ASSIGNMENT 0x1000
+
+// These two flags are used to check #must
+#define EXPR_FUNCTION_CALL_IS_STATEMENT_LEVEL 0x400     // This is set if the function call is a statement so all return values are ignored
+#define EXPR_FUNCTION_CALL_IS_IN_COMMA_ASSIGNMENT 0x800 // This is set if the function call is used as a value in an expression so only the first return value is received
+
+// Set if a comma assignment is a := assignment not just an = assignment, so it should declare its arguments
+#define EXPR_COMMA_ASSIGNMENT_IS_DECLARATION 0x1000
+
+// This flag tells us if an integer literal 0 was a -0 that has been evaluated to 0, 
+// this is required in the case that the literal is implicitly converted to a float, 
+// when we will want the float to be -0.0 instead of just 0
+#define EXPR_INTEGER_LITERAL_IS_NEGATIVE_ZERO 0x2000
 
 
 
@@ -220,6 +248,18 @@ struct ExprLiteral : Expr {
 		double floatValue;
 		struct Type *typeValue;
 	};
+};
+
+struct ExprSwitch : Expr {
+	struct Case {
+		Expr *condition;
+		Expr *block;
+		bool fallsThrough; // @Memory this wastes 7 bytes
+	};
+
+	Expr *condition;
+
+	Array<Case> cases;
 };
 
 struct ExprStringLiteral : Expr {
@@ -257,6 +297,8 @@ struct ExprIdentifier : Expr {
 	Declaration *declaration;
 };
 
+// This is an internal compiler expression that is used when the value of an enum is not specified
+// it tells the type checker to give it the value next after the previous declaration
 struct ExprEnumIncrement : Expr {
 	Declaration *previous;
 };

@@ -404,46 +404,132 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 		return loop;
 	}
 	else if (lexer->token.type == TokenT::IF) {
-		ExprIf *ifElse = PARSER_NEW(ExprIf);
-		ifElse->flavor = ExprFlavor::IF;
-		ifElse->start = lexer->token.start;
+		auto start = lexer->token.start;
 
 		lexer->advance();
 
-		ifElse->condition = parseExpr(lexer);
-		if (!ifElse->condition)
+		auto condition = parseExpr(lexer);
+		if (!condition)
 			return nullptr;
 
-		if (expectAndConsume(lexer, ';')) {
-			ifElse->ifBody = nullptr;
+		if (expectAndConsume(lexer, TokenT::EQUAL)) {
+			if (!expectAndConsume(lexer, '{')) {
+				reportExpectedError(&lexer->token, "Error: Expected '{' after '==' in switch if");
+				return nullptr;
+			}
 
-			ifElse->end = lexer->previousTokenEnd;
+			auto switch_ = PARSER_NEW(ExprSwitch);
+
+			switch_->start = start;
+			switch_->end = lexer->previousTokenEnd;
+			switch_->flavor = ExprFlavor::SWITCH;
+			switch_->condition = condition;
+
+
+			Block *block = PARSER_NEW(Block);
+
+			pushBlock(block);
+
+			Expr *else_ = nullptr;
+
+			while (true) {
+				if (lexer->token.type == TokenT::CASE) {
+					auto start = lexer->token.start;
+
+					ExprSwitch::Case case_;
+
+					case_.fallsThrough = false;
+					case_.condition = parseExpr(lexer);
+
+					if (!case_.condition)
+						return nullptr;
+
+					case_.condition->start = start;
+
+					case_.block = parseCase(lexer);
+
+					if (!case_.block) {
+						return nullptr;
+					}
+
+					switch_->cases.add(case_);
+				}
+				else if (lexer->token.type == TokenT::ELSE) {
+					if (else_) {
+						reportError(&lexer->token, "Error: A switch if cannot have multiple 'else' cases");
+						reportError(else_, "   ..: Here is the previous else");
+						return nullptr;
+					}
+
+					auto start = lexer->token.start;
+					auto end = lexer->token.end;
+
+					ExprSwitch::Case case_;
+
+					case_.fallsThrough = false;
+					case_.condition = nullptr;
+					case_.block = parseCase(lexer);
+
+					if (!case_.block) {
+						return nullptr;
+					}
+
+					case_.block->start = lexer->token.start;
+					case_.block->end = lexer->token.end;
+
+					else_ = case_.block;
+
+					switch_->cases.add(case_);
+				}
+				else if (lexer->token.type == TOKEN('}')) {
+					break;
+				}
+			}
+
+			switch_->end = lexer->token.end;
+
+			lexer->advance();
+
+
+			popBlock(block);
 		}
 		else {
-			ifElse->end = lexer->previousTokenEnd;
+			ExprIf *ifElse = PARSER_NEW(ExprIf);
+			ifElse->flavor = ExprFlavor::IF;
+			ifElse->start = start;
+			ifElse->condition = condition;
 
-			ifElse->ifBody = parseStatement(lexer, false);
-
-			if (!ifElse->ifBody)
-				return nullptr;
-		}
-
-		if (expectAndConsume(lexer, TokenT::ELSE)) {
 			if (expectAndConsume(lexer, ';')) {
-				ifElse->elseBody = nullptr;
+				ifElse->ifBody = nullptr;
+
+				ifElse->end = lexer->previousTokenEnd;
 			}
 			else {
-				ifElse->elseBody = parseStatement(lexer, false);
+				ifElse->end = lexer->previousTokenEnd;
 
-				if (!ifElse->elseBody)
+				ifElse->ifBody = parseStatement(lexer, false);
+
+				if (!ifElse->ifBody)
 					return nullptr;
 			}
-		}
-		else {
-			ifElse->elseBody = nullptr;
-		}
 
-		return ifElse;
+			if (expectAndConsume(lexer, TokenT::ELSE)) {
+				if (expectAndConsume(lexer, ';')) {
+					ifElse->elseBody = nullptr;
+				}
+				else {
+					ifElse->elseBody = parseStatement(lexer, false);
+
+					if (!ifElse->elseBody)
+						return nullptr;
+				}
+			}
+			else {
+				ifElse->elseBody = nullptr;
+			}
+
+			return ifElse;
+		}
 	}
 	else if (lexer->token.type == TokenT::CONTINUE || lexer->token.type == TokenT::BREAK || lexer->token.type == TokenT::REMOVE) {
 		ExprBreakOrContinue *continue_ = PARSER_NEW(ExprBreakOrContinue);
@@ -672,6 +758,125 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 			return expr;
 		}
 	}
+}
+
+ExprBlock *parseCase(LexerFile *lexer) {
+	auto block = PARSER_NEW(ExprBlock);
+
+	block->flavor = ExprFlavor::BLOCK;
+
+	pushBlock(&block->declarations);
+
+	while (true) {
+		if (expectAndConsume(lexer, ';')) {
+			continue;
+		}
+		else if (lexer->token.type == TOKEN('}') || lexer->token.type == TokenT::CASE || lexer->token.type == TokenT::ELSE) {
+			break;
+		}
+		else if (lexer->token.type == TokenT::USING) {
+			TokenT peek[2];
+			lexer->peekTokenTypes(2, peek);
+
+			if (peek[1] == TOKEN(':')) { // It is a declaration
+				Declaration *declaration = parseDeclaration(lexer);
+
+				if (!declaration)
+					return nullptr;
+
+				if (!addDeclarationToCurrentBlock(declaration)) {
+					return nullptr;
+				}
+
+				assert(declaration->flags & DECLARATION_MARKED_AS_USING);
+				addDeclarationToCurrentBlock(createDeclarationForUsing(declaration, currentBlock));
+
+				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_UNINITIALIZED))) { // If this declaration is constant or uninitialized don't add an initialization expression
+					ExprBinaryOperator *assign = PARSER_NEW(ExprBinaryOperator);
+					assign->start = declaration->start;
+					assign->end = declaration->end;
+					assign->flavor = ExprFlavor::BINARY_OPERATOR;
+					assign->op = TOKEN('=');
+					assign->left = makeIdentifier(declaration->start, declaration->end, declaration);
+					assign->right = nullptr;
+					assign->flags |= EXPR_ASSIGN_IS_IMPLICIT_INITIALIZER;
+
+					block->exprs.add(assign);
+				}
+
+			}
+			else {
+				auto start = lexer->token.start;
+
+				lexer->advance();
+
+				auto using_ = parseExpr(lexer);
+
+				if (!using_)
+					return nullptr;
+
+
+				auto declaration = PARSER_NEW(Declaration);
+
+				declaration->start = start;
+				declaration->end = using_->end;
+				declaration->name = { nullptr, 0ULL };
+				declaration->type = nullptr;
+				declaration->initialValue = using_;
+				declaration->physicalStorage = 0;
+				declaration->flags |= DECLARATION_IS_USING;
+
+				addDeclarationToCurrentBlock(declaration);
+			}
+
+			continue;
+		}
+		else if (lexer->token.type == TokenT::IDENTIFIER) { // This could be an expression or a declaration
+			TokenT peek;
+			lexer->peekTokenTypes(1, &peek);
+
+			if (peek == TOKEN(':')) { // It is a declaration
+				Declaration *declaration = parseDeclaration(lexer);
+
+				if (!declaration)
+					return nullptr;
+
+				if (!addDeclarationToCurrentBlock(declaration)) {
+					return nullptr;
+				}
+
+				assert(!(declaration->flags & DECLARATION_MARKED_AS_USING));
+
+				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_UNINITIALIZED))) { // If this declaration is constant or uninitialized don't add an initialization expression
+					ExprBinaryOperator *assign = PARSER_NEW(ExprBinaryOperator);
+					assign->start = declaration->start;
+					assign->end = declaration->end;
+					assign->flavor = ExprFlavor::BINARY_OPERATOR;
+					assign->op = TOKEN('=');
+					assign->left = makeIdentifier(declaration->start, declaration->end, declaration);
+					assign->right = nullptr;
+					assign->flags |= EXPR_ASSIGN_IS_IMPLICIT_INITIALIZER;
+
+					block->exprs.add(assign);
+				}
+
+				continue;
+			}
+		}
+
+		Expr *expr = parseStatement(lexer, true);
+
+		if (!expr)
+			return nullptr;
+
+		block->exprs.add(expr);
+	}
+
+	block->end = lexer->previousTokenEnd;
+
+	popBlock(&block->declarations);
+
+	return block;
 }
 
 ExprBlock *parseBlock(LexerFile *lexer, ExprBlock *block) {
@@ -1847,7 +2052,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 	}
 }
 
-Expr *parseUnaryExpr(LexerFile *lexer, CodeLocation *plusStart = nullptr);
+Expr *parseUnaryExpr(LexerFile *lexer, CodeLocation plusStart = {});
 
 Expr *makeUnaryOperator(LexerFile *lexer, CodeLocation &start, EndLocation &end, TokenT type) {
 	ExprUnaryOperator *expr = PARSER_NEW(ExprUnaryOperator);
@@ -1864,7 +2069,7 @@ Expr *makeUnaryOperator(LexerFile *lexer, CodeLocation &start, EndLocation &end,
 	return expr;
 }
 
-Expr *parseUnaryExpr(LexerFile *lexer, CodeLocation *plusStart) {
+Expr *parseUnaryExpr(LexerFile *lexer, CodeLocation plusStart) {
 	CodeLocation start = lexer->token.start;
 	EndLocation end = lexer->token.end;
 
@@ -1886,8 +2091,8 @@ Expr *parseUnaryExpr(LexerFile *lexer, CodeLocation *plusStart) {
 	else if (expectAndConsume(lexer, '+')) {
 		auto expr = makeUnaryOperator(lexer, start, end, TOKEN('+'));
 
-		if (!expr && plusStart && plusStart->locationInMemory + 1 == start.locationInMemory) {
-			reportError(plusStart, &end, "Error: '++' is not supported");
+		if (!expr && plusStart.line && plusStart.locationInMemory + 1 == start.locationInMemory) {
+			reportError(&plusStart, &end, "Error: '++' is not supported");
 		}
 
 		return expr;
@@ -2008,6 +2213,17 @@ Expr *parseBinaryOperator(LexerFile *lexer) {
 	while (true) {
 		u64 newPrecedence = getTokenPrecedence(lexer->token.type);
 
+		// If the token is an == check if the next token is {, if it is this is the == for a switch if not an operator
+		if (lexer->token.type == TokenT::EQUAL) {
+			TokenT peek;
+
+			lexer->peekTokenTypes(1, &peek);
+
+			if (peek == TOKEN('{')) {
+				newPrecedence = 0;
+			}
+		}
+
 		if (newPrecedence <= current.precedence) {
 			if (sp == precedenceStack)
 				break;
@@ -2022,13 +2238,13 @@ Expr *parseBinaryOperator(LexerFile *lexer) {
 
 		lexer->advance();
 
-		CodeLocation *plusStart;
+		CodeLocation plusStart;
 
-		if (current.type == TOKEN('+')) {
-			plusStart = &current.start;
+		if (current.type == TOKEN('+')) { // Save the location of a plus operator so we can give error messages for ++
+			plusStart = current.start;
 		}
 		else {
-			plusStart = nullptr;
+			plusStart = {};
 		}
 
 		right = parseUnaryExpr(lexer, plusStart);
@@ -2037,6 +2253,18 @@ Expr *parseBinaryOperator(LexerFile *lexer) {
 			return nullptr;
 
 		nextPrecedence = getTokenPrecedence(lexer->token.type);
+
+		// If the token is an == check if the next token is {, if it is this is the == for a switch if not an operator
+		if (lexer->token.type == TokenT::EQUAL) {
+			TokenT peek;
+
+			lexer->peekTokenTypes(1, &peek);
+
+			if (peek == TOKEN('{')) {
+				nextPrecedence = 0;
+			}
+		}
+
 
 		if (nextPrecedence > newPrecedence) {
 			*sp = current;
