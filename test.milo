@@ -948,18 +948,16 @@ _main :: () {
 			
 			enemy.cooldown -= delta
 			
-			if enemy.state == .LEFT {
-				entity.x -= ENEMY_SPEED * delta
-			} else if enemy.state == .RIGHT {
-				entity.x += ENEMY_SPEED * delta
-			} else if enemy.state == .DEAD {
-				if enemy.cooldown < 0 {
+			if enemy.state == {
+				case .LEFT 
+					entity.x -= ENEMY_SPEED * delta
+				case .RIGHT
+					entity.x += ENEMY_SPEED * delta
+				case .DEAD
 					remove_entity(enemy.entity)
 				
 					remove
-				}
-				
-				continue
+					continue
 			}
 			
 			if entity.x < entity.width * 0.5 {

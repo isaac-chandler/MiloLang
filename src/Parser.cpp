@@ -184,6 +184,8 @@ Declaration *createDeclarationForUsing(Declaration *oldDeclaration, Block *block
 
 bool parseArguments(LexerFile *lexer, Arguments *args, const char *message);
 
+ExprBlock *parseCase(LexerFile *lexer);
+
 Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 	if (lexer->token.type == TokenT::FOR) {
 		ExprLoop *loop = PARSER_NEW(ExprLoop);
@@ -436,15 +438,21 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 				if (lexer->token.type == TokenT::CASE) {
 					auto start = lexer->token.start;
 
+					lexer->advance();
+
 					ExprSwitch::Case case_;
 
 					case_.fallsThrough = false;
-					case_.condition = parseExpr(lexer);
+					auto condition = parseExpr(lexer);
 
-					if (!case_.condition)
+					if (!condition)
 						return nullptr;
 
-					case_.condition->start = start;
+					auto equal = makeBinaryOperator(start, condition->end, TokenT::EQUAL, switch_->condition);
+					equal->right = condition;
+
+					case_.condition = equal;
+					
 
 					case_.block = parseCase(lexer);
 
@@ -462,7 +470,8 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 					}
 
 					auto start = lexer->token.start;
-					auto end = lexer->token.end;
+
+					lexer->advance();
 
 					ExprSwitch::Case case_;
 
@@ -474,7 +483,7 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 						return nullptr;
 					}
 
-					case_.block->start = lexer->token.start;
+					case_.block->start = start;
 					case_.block->end = lexer->token.end;
 
 					else_ = case_.block;
@@ -492,6 +501,8 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 
 
 			popBlock(block);
+
+			return switch_;
 		}
 		else {
 			ExprIf *ifElse = PARSER_NEW(ExprIf);

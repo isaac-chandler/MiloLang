@@ -141,6 +141,25 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 		flattenTo.add(expr);
 		break;
 	}
+	case ExprFlavor::SWITCH: {
+		auto switch_ = static_cast<ExprSwitch *>(*expr);
+
+		flatten(flattenTo, &switch_->condition);
+
+		for (auto &case_ : switch_->cases) {
+			if (case_.condition) {
+				flatten(flattenTo, &case_.condition);
+			}
+		}
+
+		flattenTo.add(expr);
+
+		for (auto &case_ : switch_->cases) {
+			flatten(flattenTo, &case_.block);
+		}
+
+		break;
+	}
 	case ExprFlavor::FUNCTION:
 	case ExprFlavor::FUNCTION_PROTOTYPE: {
 		flattenTo.add(expr);
@@ -189,7 +208,7 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 	case ExprFlavor::BINARY_OPERATOR: {
 		ExprBinaryOperator *binary = static_cast<ExprBinaryOperator *>(*expr);
 
-		if (binary->left) {
+		if (binary->left && !(binary->flags & EXPR_EQUALS_IS_IMPLICIT_SWITCH)) {
 			flatten(flattenTo, &binary->left);
 		}
 
@@ -412,8 +431,14 @@ bool solidifyOneLiteral(ExprBinaryOperator *binary) {
 				}
 			}
 
+			if (literal->flags & EXPR_INTEGER_LITERAL_IS_NEGATIVE_ZERO && literal->unsignedValue == 0) {
+				literal->floatValue = -0.0;
+			}
+			else {
+				literal->floatValue = static_cast<double>(literal->unsignedValue);
+			}
+
 			literal->flavor = ExprFlavor::FLOAT_LITERAL;
-			literal->floatValue = static_cast<double>(literal->unsignedValue);
 		}
 
 		left->type = right->type;
@@ -450,8 +475,14 @@ bool solidifyOneLiteral(ExprBinaryOperator *binary) {
 				}
 			}
 
+			if (literal->flags & EXPR_INTEGER_LITERAL_IS_NEGATIVE_ZERO && literal->signedValue == 0) {
+				literal->floatValue = -0.0;
+			}
+			else {
+				literal->floatValue = static_cast<double>(literal->signedValue);
+			}
+
 			literal->flavor = ExprFlavor::FLOAT_LITERAL;
-			literal->floatValue = static_cast<double>(literal->signedValue);
 		}
 
 		left->type = right->type;
@@ -487,8 +518,14 @@ bool solidifyOneLiteral(ExprBinaryOperator *binary) {
 				}
 			}
 
+			if (literal->flags & EXPR_INTEGER_LITERAL_IS_NEGATIVE_ZERO && literal->unsignedValue == 0) {
+				literal->floatValue = -0.0;
+			}
+			else {
+				literal->floatValue = static_cast<double>(literal->unsignedValue);
+			}
+
 			literal->flavor = ExprFlavor::FLOAT_LITERAL;
-			literal->floatValue = static_cast<double>(literal->unsignedValue);
 		}
 
 		right->type = left->type;
@@ -525,8 +562,14 @@ bool solidifyOneLiteral(ExprBinaryOperator *binary) {
 				}
 			}
 
+			if (literal->flags & EXPR_INTEGER_LITERAL_IS_NEGATIVE_ZERO && literal->signedValue == 0) {
+				literal->floatValue = -0.0;
+			}
+			else {
+				literal->floatValue = static_cast<double>(literal->signedValue);
+			}
+
 			literal->flavor = ExprFlavor::FLOAT_LITERAL;
-			literal->floatValue = static_cast<double>(literal->signedValue);
 		}
 
 		right->type = left->type;
@@ -830,6 +873,40 @@ void copyLiteral(Expr **exprPointer, Expr *expr) {
 		break;
 	}
 	}
+}
+
+bool switchCasesAreSame(Expr *a, Expr *b) {
+	assert(a->type == b->type);
+	assert(a->flavor == b->flavor);
+
+	assert(a->type->size);
+	assert(b->type->size);
+
+	auto aLiteral = static_cast<ExprLiteral *>(a);
+	auto bLiteral = static_cast<ExprLiteral *>(b);
+
+
+
+	switch (a->flavor) {
+	case ExprFlavor::INT_LITERAL:
+		if (a->type->flags & TYPE_INTEGER_IS_SIGNED)
+			return convertToSigned(aLiteral->unsignedValue, aLiteral->type->size) == convertToSigned(bLiteral->unsignedValue, bLiteral->type->size);
+		else
+			return convertToUnsigned(aLiteral->unsignedValue, aLiteral->type->size) == convertToUnsigned(bLiteral->unsignedValue, bLiteral->type->size);
+	case ExprFlavor::FLOAT_LITERAL:
+		if (a->type == &TYPE_F32)
+			return static_cast<float>(aLiteral->floatValue) == static_cast<float>(bLiteral->floatValue);
+		else
+			return aLiteral->floatValue == bLiteral->floatValue;
+	case ExprFlavor::TYPE_LITERAL:
+		return aLiteral->typeValue == bLiteral->typeValue;
+	case ExprFlavor::STRING_LITERAL:
+		return static_cast<ExprStringLiteral *>(a)->string == static_cast<ExprStringLiteral *>(b)->string;
+	case ExprFlavor::FUNCTION:
+		return a == b;
+	default:
+		assert(false);
+		return false;}
 }
 
 
@@ -3502,6 +3579,37 @@ bool inferFlattened(SubJob *job) {
 
 			break;
 		}
+		case ExprFlavor::SWITCH: {
+			auto switch_ = static_cast<ExprSwitch *>(expr);
+
+			for (auto &case_ : switch_->cases) {
+				if (case_.condition) {
+					assert(case_.condition->flavor == ExprFlavor::BINARY_OPERATOR);
+
+					auto binary = static_cast<ExprBinaryOperator *>(case_.condition);
+
+					if (!isLiteral(binary->right)) {
+						reportError(case_.condition, "Error: Switch if case must be a constant value");
+						return false;
+					}
+
+					for (auto it = &case_ + 1; it != switch_->cases.end(); it++) {
+						if (it->condition) {
+							assert(it->condition->flavor == ExprFlavor::BINARY_OPERATOR);
+
+							auto other = static_cast<ExprBinaryOperator *>(it->condition);
+
+							if (switchCasesAreSame(binary->right, other->right)) {
+								reportError(it->condition, "Error: Duplicate case in switch if");
+								reportError(case_.condition, "Error: Here is the previous case");
+							}
+						}
+					}
+				}
+			}
+
+			break;
+		}
 		case ExprFlavor::BINARY_OPERATOR: {
 			auto binary = static_cast<ExprBinaryOperator *>(expr);
 			bool yield;
@@ -3944,6 +4052,11 @@ bool inferFlattened(SubJob *job) {
 							}
 
 							literal->signedValue = -literal->signedValue;
+
+							if (literal->signedValue == 0) {
+								literal->flags ^= EXPR_INTEGER_LITERAL_IS_NEGATIVE_ZERO;
+							}
+
 							*exprPointer = value;
 						}
 						else {
@@ -3963,6 +4076,12 @@ bool inferFlattened(SubJob *job) {
 							literal->type = &TYPE_SIGNED_INT_LITERAL;
 
 							literal->signedValue = -literal->signedValue;
+
+
+							if (literal->signedValue == 0) {
+								literal->flags ^= EXPR_INTEGER_LITERAL_IS_NEGATIVE_ZERO;
+							}
+
 							*exprPointer = value;
 						}
 						else { // @Incomplete: should we allow negation of unsigned numbers, its useful for some bit twiddling but feels weird

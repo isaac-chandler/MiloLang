@@ -476,6 +476,46 @@ void generateCall(IrState *state, ExprFunctionCall *call, u64 dest, ExprCommaAss
 	ir.opSize = call->type->size;
 }
 
+u64 generateEquals(IrState *state, u64 leftReg, Expr *right, u64 dest, bool equals) {
+	u64 rightReg = generateIr(state, right, state->nextRegister++);
+
+
+	if (right->type->flavor == TypeFlavor::STRING) {
+
+		Ir &ir = state->ir.add();
+
+		ir.op = IrOp::STRING_EQUAL;
+		ir.dest = dest;
+		ir.a = leftReg;
+		ir.b = rightReg;
+		ir.opSize = right->type->size;
+
+		if (!equals) {
+			Ir &invert = state->ir.add();
+
+			invert.op = IrOp::EQUAL;
+			invert.dest = dest;
+			invert.a = dest;
+			invert.b = 0;
+			invert.opSize = 1;
+		}
+	}
+	else {
+		Ir &ir = state->ir.add();
+
+		ir.op = equals ? IrOp::EQUAL : IrOp::NOT_EQUAL;
+		ir.dest = dest;
+		ir.a = leftReg;
+		ir.b = rightReg;
+		ir.opSize = right->type->size;
+
+		if (right->type->flavor == TypeFlavor::FLOAT)
+			ir.flags |= IR_FLOAT_OP;
+	}
+
+	return dest;
+}
+
 u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 	PROFILE_FUNC();
 	if (dest != DEST_NONE && expr->type->size > 8 && !destWasForced) {
@@ -689,42 +729,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				case TokenT::NOT_EQUAL: {
 					assert(left->type == right->type);
 
-					if (left->type->flavor == TypeFlavor::STRING) {
-						u64 leftReg = generateIr(state, left, state->nextRegister++);
-
-						u64 rightReg = generateIr(state, right, state->nextRegister++);
-
-						Ir &ir = state->ir.add();
-
-						ir.op = IrOp::STRING_EQUAL;
-						ir.dest = dest;
-						ir.a = leftReg;
-						ir.b = rightReg;
-						ir.opSize = right->type->size;
-					}
-					else {
-						u64 leftReg = generateIr(state, left, state->nextRegister++);
-
-						u64 rightReg = generateIr(state, right, state->nextRegister++);
-
-						Ir &ir = state->ir.add();
-
-						ir.op = getIrOpForCompare(binary->op);
-						ir.dest = dest;
-						ir.a = leftReg;
-						ir.b = rightReg;
-						ir.opSize = right->type->size;
-
-						if (left->type->flags & TYPE_INTEGER_IS_SIGNED) {
-							assert(right->type->flags & TYPE_INTEGER_IS_SIGNED);
-
-							ir.flags |= IR_SIGNED_OP;
-						}
-						else if (right->type->flavor == TypeFlavor::FLOAT)
-							ir.flags |= IR_FLOAT_OP;
-					}
-
-					return dest;
+					return generateEquals(state, generateIr(state, left, state->nextRegister++), right, dest, binary->op == TokenT::EQUAL);
 				}
 				case TokenT::GREATER_EQUAL:
 				case TokenT::LESS_EQUAL:
@@ -1474,6 +1479,73 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 					return identifier->declaration->physicalStorage;
 				}
 			}
+		}
+		case ExprFlavor::SWITCH: {
+			assert(dest == DEST_NONE);
+
+			auto switch_ = static_cast<ExprSwitch *>(expr);
+
+			u64 value = generateIr(state, switch_->condition, state->nextRegister++);
+
+			u64 compareResult = state->nextRegister++;
+			
+			ExprSwitch::Case *else_ = nullptr;
+
+			for (auto &case_ : switch_->cases) {
+				if (case_.condition) {
+					auto condition = static_cast<ExprBinaryOperator *>(case_.condition);
+
+					assert(condition->flavor == ExprFlavor::BINARY_OPERATOR);
+
+					assert(condition->right->type == switch_->condition->type);
+
+					u64 result = generateEquals(state, value, condition->right, compareResult, true);
+
+					case_.irBranch = state->ir.count;
+
+					Ir &branch = state->ir.add();
+
+					branch.op = IrOp::IF_NZ_GOTO;
+					branch.a = result;
+					branch.opSize = 1;
+				}
+				else {
+					else_ = &case_;
+				}
+			}
+
+			u64 finalPatch = state->ir.count;
+
+			Ir &final = state->ir.add();
+			final.op = IrOp::GOTO;
+
+			if (else_) {
+				else_->irBranch = finalPatch;
+			}
+
+			for (auto &case_ : switch_->cases) {
+				state->ir[case_.irBranch].b = state->ir.count;
+
+				addLineMarker(state, case_.block);
+				generateIr(state, case_.block, DEST_NONE);
+
+				if (&case_ + 1 != switch_->cases.end()) {
+					case_.irSkip = state->ir.count;
+
+					Ir &skip = state->ir.add();
+					skip.op = IrOp::GOTO;
+				}
+			}
+
+			if (!else_) {
+				state->ir[finalPatch].b = state->ir.count;
+			}
+
+			for (u64 i = 0; i + 1 < switch_->cases.count; i++) {
+				state->ir[switch_->cases[i].irSkip].b = state->ir.count;
+			}
+
+			return DEST_NONE;
 		}
 		case ExprFlavor::IF: {
 			auto ifElse = static_cast<ExprIf *>(expr);

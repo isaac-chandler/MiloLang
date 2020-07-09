@@ -263,21 +263,22 @@ print_u64 :: (num: u64, base: u64 = 10) {
 }
 
 read_integer :: (info: *Type_Info_Integer, value: *void) -> u64 {
-	mask: u64 = --
-	number: u64 = --
+	mask: u64
+	number: u64
 
-	if info.size == 1 {
-		number = <<cast(*u8) value
-		mask = 1 << 7
-	} else if info.size == 2 {
-		number = <<cast(*u16) value
-		mask = 1 << 15
-	} else if info.size == 4 {
-		number = <<cast(*u32) value
-		mask = 1 << 31
-	} else if info.size == 8 {
-		number = <<cast(*u64) value
-		mask = 1 << 63
+	if info.size == {
+		case 1
+			number = <<cast(*u8) value
+			mask = 1 << 7
+		case 2
+			number = <<cast(*u16) value
+			mask = 1 << 15
+		case 4
+			number = <<cast(*u32) value
+			mask = 1 << 31
+		case 8
+			number = <<cast(*u64) value
+			mask = 1 << 63
 	}
 	
 	if info.signed && (number & mask)

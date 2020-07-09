@@ -62,7 +62,7 @@ enum class IrOp : u8 {
 	NOOP,
 	FUNCTION, 
 	STRING, 
-	STRING_EQUAL, 
+	STRING_EQUAL,
 	LINE_MARKER, 
 	TYPE
 };
@@ -239,6 +239,11 @@ struct Expr {
 // when we will want the float to be -0.0 instead of just 0
 #define EXPR_INTEGER_LITERAL_IS_NEGATIVE_ZERO 0x2000
 
+// When we generate the cases for a switch we create an == ExprBinaryOperator node
+// so that we don't have to add an extra case in typechecking, the left side is the 
+// value we are switching which is already typechecked so we don't typecheck that again
+#define EXPR_EQUALS_IS_IMPLICIT_SWITCH 0x4000
+
 
 
 struct ExprLiteral : Expr {
@@ -255,6 +260,8 @@ struct ExprSwitch : Expr {
 		Expr *condition;
 		Expr *block;
 		bool fallsThrough; // @Memory this wastes 7 bytes
+		u64 irBranch;
+		u64 irSkip;
 	};
 
 	Expr *condition;
