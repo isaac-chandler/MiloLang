@@ -182,8 +182,9 @@ struct Declaration;
 struct Expr {
 	CodeLocation start;
 	EndLocation end;
-	u16 flags = 0;
 	ExprFlavor flavor;
+
+	u64 flags = 0;
 
 	struct Type *type = nullptr;
 
@@ -244,7 +245,14 @@ struct Expr {
 // value we are switching which is already typechecked so we don't typecheck that again
 #define EXPR_EQUALS_IS_IMPLICIT_SWITCH 0x4000
 
+// If a switch if is marked as #complete this flag is set, 
+// this means that the switch must include a case for every possible
+// value of an enum
+#define EXPR_SWITCH_IS_COMPLETE 0x8000
 
+// If a cast is marked as bitwise, the two types must be the same size, 
+// there will be no conversion made, the bits are simply reinterpreted
+#define EXPR_CAST_IS_BITWISE 0x1'0000
 
 struct ExprLiteral : Expr {
 	union {

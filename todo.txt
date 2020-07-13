@@ -10,29 +10,6 @@ array literals
 
 struct literals
 
-// Maybe this if fine
-currently this doesn't do what you'd expect
-	A :: struct {
-		a := "A"
-	}
-
-	B :: struct {
-		b := "B"
-		using included: A
-	}
-
-	print_b :: (b: *B) {
-		print_string(b.b)
-	}
-
-	main :: () {
-		b: B
-		a : *A = *b
-		
-		// ...
-		
-		print_b(cast(*B) a) // Prints "A" because a cast from 'base class' to 'sub class' just does a pointer conversion instead of paying attention to the using
-	}
 	
 Make it a compile time error to out of bounds index a static array if the index is a constant
  - Compile time error for constant negative index of normal and dynamic arrays?
@@ -44,8 +21,6 @@ Compile option for runtime checking
  - Array bounds checking
  - Cast bounds checking
  - Check casts from any to a type
- 
-Syntax for bitwise casting float to int and int to float (maybe allow this casting to work with any types that are the same size)
 
 Function inlining
 
@@ -94,9 +69,6 @@ performance
  - Syntax of both blocks checked, type checking only happens for chosen block
 
 defer
-
-switch if
- - #complete
  
 debug info
  - show locals
@@ -112,6 +84,9 @@ improve external function interface
  - parse C header files so we don't need to manually declare external functions
  
 change completed keyword (its ugly and completed is something you want to call an identifer)
+ - else
+ - no_break
+ - or
  
 llvm
 

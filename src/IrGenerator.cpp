@@ -546,7 +546,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 					Type *castTo = binary->type;
 
-					if (castTo == right->type)
+					if (castTo == right->type || (binary->flags & EXPR_CAST_IS_BITWISE))
 						return rightReg;
 
 					switch(castTo->flavor) {
@@ -1529,7 +1529,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				addLineMarker(state, case_.block);
 				generateIr(state, case_.block, DEST_NONE);
 
-				if (&case_ + 1 != switch_->cases.end()) {
+				if (!case_.fallsThrough && &case_ + 1 != switch_->cases.end()) {
 					case_.irSkip = state->ir.count;
 
 					Ir &skip = state->ir.add();
@@ -1542,7 +1542,10 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			}
 
 			for (u64 i = 0; i + 1 < switch_->cases.count; i++) {
-				state->ir[switch_->cases[i].irSkip].b = state->ir.count;
+				auto &case_ = switch_->cases[i];
+
+				if (!case_.fallsThrough)
+					state->ir[case_.irSkip].b = state->ir.count;
 			}
 
 			return DEST_NONE;

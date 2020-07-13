@@ -415,6 +415,8 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 			return nullptr;
 
 		if (expectAndConsume(lexer, TokenT::EQUAL)) {
+			bool complete = expectAndConsume(lexer, TokenT::COMPLETE);
+
 			if (!expectAndConsume(lexer, '{')) {
 				reportExpectedError(&lexer->token, "Error: Expected '{' after '==' in switch if");
 				return nullptr;
@@ -427,6 +429,10 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 			switch_->flavor = ExprFlavor::SWITCH;
 			switch_->condition = condition;
 
+			if (complete) {
+				switch_->flags |= EXPR_SWITCH_IS_COMPLETE;
+			}
+
 
 			Block *block = PARSER_NEW(Block);
 
@@ -434,7 +440,7 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 
 			Expr *else_ = nullptr;
 
-			while (true) {
+			while (true) {			
 				if (lexer->token.type == TokenT::CASE) {
 					auto start = lexer->token.start;
 
@@ -456,8 +462,13 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 
 					case_.block = parseCase(lexer);
 
+
 					if (!case_.block) {
 						return nullptr;
+					}
+
+					if (expectAndConsume(lexer, TokenT::THROUGH)) {
+						case_.fallsThrough = true;
 					}
 
 					switch_->cases.add(case_);
@@ -483,6 +494,10 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 						return nullptr;
 					}
 
+					if (expectAndConsume(lexer, TokenT::THROUGH)) {
+						case_.fallsThrough = true;
+					}
+
 					case_.block->start = start;
 					case_.block->end = lexer->token.end;
 
@@ -494,8 +509,6 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 					break;
 				}
 			}
-
-			switch_->end = lexer->token.end;
 
 			lexer->advance();
 
@@ -782,7 +795,7 @@ ExprBlock *parseCase(LexerFile *lexer) {
 		if (expectAndConsume(lexer, ';')) {
 			continue;
 		}
-		else if (lexer->token.type == TOKEN('}') || lexer->token.type == TokenT::CASE || lexer->token.type == TokenT::ELSE) {
+		else if (lexer->token.type == TOKEN('}') || lexer->token.type == TokenT::CASE || lexer->token.type == TokenT::ELSE || lexer->token.type == TokenT::THROUGH) {
 			break;
 		}
 		else if (lexer->token.type == TokenT::USING) {
@@ -2109,16 +2122,37 @@ Expr *parseUnaryExpr(LexerFile *lexer, CodeLocation plusStart) {
 		return expr;
 	}
 	else if (expectAndConsume(lexer, TokenT::CAST)) {
+
+		ExprBinaryOperator *expr = PARSER_NEW(ExprBinaryOperator);
+		expr->start = start;
+		expr->flavor = ExprFlavor::BINARY_OPERATOR;
+		expr->op = TokenT::CAST;
+
+		while (expectAndConsume(lexer, ',')) {
+			if (lexer->token.type != TokenT::IDENTIFIER) {
+				reportExpectedError(&lexer->token, "Error: Expected modifier after ',' in cast");
+				return nullptr;
+			}
+
+			if (lexer->token.text == "bit") {
+				expr->flags |= EXPR_CAST_IS_BITWISE;
+			}
+			else {
+				reportError(&lexer->token, "Error: Unkown modifier for cast: '%.*s'", STRING_PRINTF(lexer->token.text));
+				return nullptr;
+			}
+
+			lexer->advance();
+		}
+
 		if (!expectAndConsume(lexer, '(')) {
 			reportExpectedError(&lexer->token, "Error: Expected '(' after cast");
 			return nullptr;
 		}
 
-		ExprBinaryOperator *expr = PARSER_NEW(ExprBinaryOperator);
-		expr->start = start;
+
 		expr->end = lexer->token.end;
-		expr->flavor = ExprFlavor::BINARY_OPERATOR;
-		expr->op = TokenT::CAST;
+
 
 		if (expectAndConsume(lexer, ')')) {
 			expr->left = nullptr;
@@ -2224,13 +2258,13 @@ Expr *parseBinaryOperator(LexerFile *lexer) {
 	while (true) {
 		u64 newPrecedence = getTokenPrecedence(lexer->token.type);
 
-		// If the token is an == check if the next token is {, if it is this is the == for a switch if not an operator
+		// If the token is an == check if the next token is { or #complete, if it is this is the == for a switch if not an operator
 		if (lexer->token.type == TokenT::EQUAL) {
 			TokenT peek;
 
 			lexer->peekTokenTypes(1, &peek);
 
-			if (peek == TOKEN('{')) {
+			if (peek == TOKEN('{') || peek == TokenT::COMPLETE) {
 				newPrecedence = 0;
 			}
 		}

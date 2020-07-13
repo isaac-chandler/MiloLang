@@ -105,13 +105,11 @@ Enemy :: struct {
 	entity: u64
 	cooldown: f32
 	
-	State :: enum u8 {
+	state: enum u8 {
 		LEFT
 		RIGHT
 		DEAD
 	}
-	
-	state := State.LEFT
 }
 
 Particle :: struct {
@@ -131,12 +129,10 @@ Particle_System :: struct {
 	active: bool
 	occupied: bool
 	
-	Mode :: enum u8 {
+	mode: enum u8 {
 		NORMAL 
 		EXPLOSION
 	}
-	
-	mode := Mode.NORMAL
 	
 	spawn_progress: f32
 	spawn_rate: f32	
@@ -294,7 +290,7 @@ update_particle_system :: (using particle_system: *Particle_System, delta: f32) 
 	if particle_system.active {
 		particle_system.spawn_progress += delta * particle_system.spawn_rate
 		
-		if particle_system.mode == Particle_System.Mode.NORMAL {
+		if particle_system.mode == .NORMAL {
 			while particle_system.spawn_progress > 1 {
 				particle_system.spawn_progress -= 1
 				create_particle(particle_system)

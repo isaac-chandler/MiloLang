@@ -583,7 +583,19 @@ SizeJob *allocateSizeJob();
 DeclarationJob *allocateDeclarationJob();
 FunctionJob *allocateFunctionJob();
 
-bool isValidCast(Type *to, Type *from) {
+bool isValidCast(Type *to, Type *from, u64 flags) {
+	if (from == &TYPE_VOID || to->flavor == TypeFlavor::AUTO_CAST || from->flavor == TypeFlavor::NAMESPACE) {
+		return false;
+	}
+
+	if (to == &TYPE_VOID || to->flavor == TypeFlavor::AUTO_CAST || to->flavor == TypeFlavor::NAMESPACE) {
+		return false;
+	}
+
+	if ((flags & EXPR_CAST_IS_BITWISE) && to->size == from->size) {
+		return true;
+	}
+
 	if (to->flavor == from->flavor) {
 		if (from->flavor == TypeFlavor::AUTO_CAST || from->flavor == TypeFlavor::VOID || from->flavor == TypeFlavor::NAMESPACE) {
 			return false;
@@ -608,14 +620,14 @@ bool isValidCast(Type *to, Type *from) {
 		return true;
 	}
 
-	if (from != &TYPE_VOID && from != &TYPE_AUTO_CAST && from->flavor != TypeFlavor::NAMESPACE && to == TYPE_ANY) {
+	if (to == TYPE_ANY) {
 		return true;
 	}
 
 	if (from->flavor == TypeFlavor::BOOL) {
 		return to->flavor == TypeFlavor::INTEGER;
 	}
-	else if (from->flavor == TypeFlavor::AUTO_CAST || from->flavor == TypeFlavor::TYPE || from->flavor == TypeFlavor::VOID || from->flavor == TypeFlavor::STRUCT || from->flavor == TypeFlavor::NAMESPACE) {
+	else if (from->flavor == TypeFlavor::TYPE) {
 		return false;
 	}
 	else if (from->flavor == TypeFlavor::FLOAT) {
@@ -1187,7 +1199,7 @@ bool tryAutoCast(SubJob *job, Expr **cast, Type *castTo, bool *yield) {
 		}
 	}
 
-	if (!isValidCast(castTo, castFrom)) {
+	if (!isValidCast(castTo, castFrom, autoCast->flags)) {
 		return false;
 	}
 
@@ -2272,7 +2284,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 				return true;
 			}
 
-			if (!isValidCast(castTo, right->type)) {
+			if (!isValidCast(castTo, right->type, binary->flags)) {
 				reportError(binary, "Error: Cannot cast from %.*s to %.*s", STRING_PRINTF(right->type->name), STRING_PRINTF(castTo->name));
 				return false;
 			}
@@ -2985,7 +2997,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 	case TokenT::LOGIC_AND:
 	case TokenT::LOGIC_OR: {
 		if (left->type != &TYPE_BOOL) {
-			if (isValidCast(&TYPE_BOOL, left->type)) {
+			if (isValidCast(&TYPE_BOOL, left->type, 0)) {
 				insertImplicitCast(job->sizeDependencies, &left, &TYPE_BOOL);
 			}
 			else {
@@ -2995,7 +3007,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 		}
 
 		if (right->type != &TYPE_BOOL) {
-			if (isValidCast(&TYPE_BOOL, right->type)) {
+			if (isValidCast(&TYPE_BOOL, right->type, 0)) {
 				insertImplicitCast(job->sizeDependencies, &right, &TYPE_BOOL);
 			}
 			else {
@@ -3582,6 +3594,13 @@ bool inferFlattened(SubJob *job) {
 		case ExprFlavor::SWITCH: {
 			auto switch_ = static_cast<ExprSwitch *>(expr);
 
+			if (switch_->flags & EXPR_SWITCH_IS_COMPLETE) {
+				if (switch_->condition->type->flavor != TypeFlavor::ENUM || (switch_->condition->type->flags & TYPE_ENUM_IS_FLAGS)) {
+					reportError(switch_, "Error: A switch if can only be #complete if it switches on an enum");
+					return false;
+				}
+			}
+
 			for (auto &case_ : switch_->cases) {
 				if (case_.condition) {
 					assert(case_.condition->flavor == ExprFlavor::BINARY_OPERATOR);
@@ -3605,6 +3624,85 @@ bool inferFlattened(SubJob *job) {
 							}
 						}
 					}
+				}
+			}
+
+			if (switch_->flags & EXPR_SWITCH_IS_COMPLETE) {
+				assert(switch_->condition->type->flavor == TypeFlavor::ENUM);
+
+				auto enum_ = static_cast<TypeEnum *>(switch_->condition->type);
+
+
+				for (auto member : enum_->values->declarations) {
+					if (!(member->flags & DECLARATION_VALUE_IS_READY)) {
+						goToSleep(job, &member->sleepingOnMe);
+						return true;
+					}
+				}
+
+				bool failed = false;
+
+				for (auto member : enum_->values->declarations) {					
+					assert(member->initialValue->flavor == ExprFlavor::INT_LITERAL);
+
+					u64 value = static_cast<ExprLiteral *>(member->initialValue)->unsignedValue;
+
+
+					bool found = false;
+					for (auto case_ : switch_->cases) {
+						if (case_.condition) {
+							auto literal = static_cast<ExprBinaryOperator *>(case_.condition)->right;
+
+							assert(literal->flavor == ExprFlavor::INT_LITERAL);
+
+							u64 compare = static_cast<ExprLiteral *>(literal)->unsignedValue;
+
+							if (convertToUnsigned(value, enum_->size) == convertToSigned(compare, enum_->size)) {
+								found = true;
+								break;
+							}
+						}
+					}
+
+					if (!found) {
+						failed = true;
+						break;
+					}
+
+					
+				}
+
+				if (failed) {
+					reportError(switch_, "Error: Switch if that was marked as #complete does not handle all values");
+
+					for (auto member : enum_->values->declarations) {
+						assert(member->initialValue->flavor == ExprFlavor::INT_LITERAL);
+
+						u64 value = static_cast<ExprLiteral *>(member->initialValue)->unsignedValue;
+
+
+						bool found = false;
+						for (auto case_ : switch_->cases) {
+							if (case_.condition) {
+								auto literal = static_cast<ExprBinaryOperator *>(case_.condition)->right;
+
+								assert(literal->flavor == ExprFlavor::INT_LITERAL);
+
+								u64 compare = static_cast<ExprLiteral *>(literal)->unsignedValue;
+
+								if (convertToUnsigned(value, enum_->size) == convertToSigned(compare, enum_->size)) {
+									found = true;
+									break;
+								}
+							}
+						}
+
+						if (!found) {
+							reportError(member, "   ..: %.*s is not handled", STRING_PRINTF(member->name));
+						}
+					}
+
+					return false;
 				}
 			}
 
@@ -3992,7 +4090,7 @@ bool inferFlattened(SubJob *job) {
 			auto ifElse = static_cast<ExprIf *>(expr);
 
 			if (ifElse->condition->type != &TYPE_BOOL) {
-				if (isValidCast(&TYPE_BOOL, ifElse->condition->type)) {
+				if (isValidCast(&TYPE_BOOL, ifElse->condition->type, 0)) {
 					insertImplicitCast(job->sizeDependencies, &ifElse->condition, &TYPE_BOOL);
 				}
 				else {
@@ -4149,7 +4247,7 @@ bool inferFlattened(SubJob *job) {
 			}
 			case TOKEN('!'): {
 				if (value->type != &TYPE_BOOL) {
-					if (isValidCast(&TYPE_BOOL, value->type)) {
+					if (isValidCast(&TYPE_BOOL, value->type, 0)) {
 						insertImplicitCast(job->sizeDependencies, &value, &TYPE_BOOL);
 					}
 					else {
@@ -4407,7 +4505,7 @@ bool inferFlattened(SubJob *job) {
 			auto loop = static_cast<ExprLoop *>(expr);
 
 			if (loop->whileCondition->type != &TYPE_BOOL) {
-				if (isValidCast(&TYPE_BOOL, loop->whileCondition->type)) {
+				if (isValidCast(&TYPE_BOOL, loop->whileCondition->type, 0)) {
 					insertImplicitCast(job->sizeDependencies, &loop->whileCondition, &TYPE_BOOL);
 				}
 				else {

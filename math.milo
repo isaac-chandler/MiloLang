@@ -97,29 +97,22 @@ sin :: (x: f64) -> f64 {
 */
 
 is_infinite :: (x: f64) -> bool {
-	val := x
-	
-	bits := <<cast(*u64) *val
+	bits := cast,bit(u64) x
 	
 	return (bits & 0x7FF0_0000_0000_0000) == 0x7FF0_0000_0000_0000 && (bits & 0x000F_FFFF_FFFF_FFFF) == 0
 }
 
 is_nan :: (x: f64) -> bool {
-	val := x
-	
-	bits := <<cast(*u64) *val
+	bits := cast,bit(u64) x
 	
 	return (bits & 0x7FF0_0000_0000_0000) == 0x7FF0_0000_0000_0000 && (bits & 0x000F_FFFF_FFFF_FFFF)
 }
 
 // very approximate square root - 2 significant figures at best, not thoroughly tested, use at your own risk
 approximate_sqrt :: (val: f32) -> f32 {
-	x := val
-
-	i := <<cast(*u32) *x
-	
+	i := cast,bit(u32) val	
 	
 	i = 0x1fbd1df5 + (i >> 1)
 	
-	return <<cast(*f32) *i
+	return cast,bit(f32) i
 }
