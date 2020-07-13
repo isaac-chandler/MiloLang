@@ -18,8 +18,6 @@ BucketedArenaAllocator parserArena(1024 * 1024);
 
 Block *currentBlock = nullptr;
 
-Array<DeclarationPack> packsToAdd;
-
 static bool addDeclarationToCurrentBlock(Declaration *declaration) {
 	return addDeclarationToBlock(currentBlock, declaration);
 }
@@ -1212,8 +1210,6 @@ bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *u
 		}
 
 		popBlock(&function->arguments);
-
-		packsToAdd.add(makeDeclarationPack(function));
 	}
 	else if (lexer->token.type == TokenT::EXTERNAL) {
 		lexer->advance();
@@ -1236,8 +1232,6 @@ bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *u
 		}
 
 		insertBlock(&function->arguments);
-
-		packsToAdd.add(makeDeclarationPack(function));
 	}
 	else { // This is a function type
 		function->end = lexer->previousTokenEnd;
@@ -2450,12 +2444,6 @@ void parseFile(FileInfo *file) {
 	lexer.advance();
 
 	while (!hadError) {
-		for (auto pack : packsToAdd) {
-			inferQueue.add(pack);
-		}
-
-		packsToAdd.clear();
-
 		if (lexer.token.type == TokenT::IDENTIFIER) {
 			Declaration *declaration = parseDeclaration(&lexer);
 			if (!declaration) {
@@ -2471,7 +2459,7 @@ void parseFile(FileInfo *file) {
 
 			assert(!(declaration->flags & DECLARATION_MARKED_AS_USING));
 
-			inferQueue.add(makeDeclarationPack(declaration));
+			inferQueue.add(declaration);
 		}
 		else if (lexer.token.type == TokenT::USING) {
 			TokenT peek[2];
@@ -2485,11 +2473,11 @@ void parseFile(FileInfo *file) {
 
 				_ReadWriteBarrier();
 
-				inferQueue.add(makeDeclarationPack(declaration));
+				inferQueue.add(declaration);
 
 				assert(declaration->flags & DECLARATION_MARKED_AS_USING);
 
-				inferQueue.add(makeDeclarationPack(createDeclarationForUsing(declaration, currentBlock)));
+				inferQueue.add(createDeclarationForUsing(declaration, currentBlock));
 
 
 			}
@@ -2518,7 +2506,7 @@ void parseFile(FileInfo *file) {
 
 				_ReadWriteBarrier();
 
-				inferQueue.add(makeDeclarationPack(declaration));
+				inferQueue.add(declaration);
 			}
 		}
 		else if (lexer.token.type == TokenT::LOAD) {

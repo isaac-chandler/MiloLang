@@ -148,10 +148,10 @@ void wakeUpSleepers(Array<SubJob *> *sleepers, String name = String(nullptr, 0UL
 
 
 void addBlock(Block *block) {
-	if (block->flags & BLOCK_IS_COMPLETE) 
+	if (block->flags & BLOCK_IS_QUEUED) 
 		return;
 
-	block->flags |= BLOCK_IS_COMPLETE;
+	block->flags |= BLOCK_IS_QUEUED;
 
 	for (auto declaration : block->declarations) {
 		auto success = addDeclaration(declaration);
@@ -164,6 +164,30 @@ void addBlock(Block *block) {
 
 void flatten(Array<Expr **> &flattenTo, Expr **flatten);
 SizeJob *allocateSizeJob();
+FunctionJob *allocateFunctionJob();
+
+void addFunction(ExprFunction *function) {
+	if (function->arguments.flags & BLOCK_IS_QUEUED)
+		return;
+
+	FunctionJob *job = allocateFunctionJob();
+
+	job->function = function;
+
+	addBlock(&function->arguments);
+	addBlock(&function->returns);
+
+	if (function->body) {
+		flatten(job->value.flattened, &function->body);
+		subJobs.add(&job->value);
+	}
+
+	subJobs.add(&job->type);
+
+	++totalFunctions;
+
+	addJob(&functionJobs, job);
+}
 
 void addTypeBlock(Expr *expr) {
 	auto type = static_cast<ExprLiteral *>(expr)->typeValue;
@@ -248,7 +272,15 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 
 		break;
 	}
-	case ExprFlavor::FUNCTION:
+	case ExprFlavor::FUNCTION: {
+		auto function = static_cast<ExprFunction *>(*expr);
+
+		addFunction(function);
+
+		flattenTo.add(expr);
+		
+		break;
+	}
 	case ExprFlavor::FUNCTION_PROTOTYPE: {
 		auto function = static_cast<ExprFunction *>(*expr);
 
@@ -4788,6 +4820,8 @@ bool addDeclaration(Declaration *declaration) {
 				return true;
 			}
 			else if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::FUNCTION) {
+				addFunction(static_cast<ExprFunction *>(declaration->initialValue));
+
 				return true;
 			}
 		}
@@ -4808,6 +4842,8 @@ bool addDeclaration(Declaration *declaration) {
 				return true;
 			}
 			else if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::FUNCTION) {
+				addFunction(static_cast<ExprFunction *>(declaration->initialValue));
+
 				return true;
 			}
 		}
@@ -5468,59 +5504,17 @@ void runInfer() {
 	ArraySet<SizeJob *> sizesToWorkOn;
 
 	while (true) {
-		DeclarationPack declarations = inferQueue.take();
+		Declaration *declaration = inferQueue.take();
 
-		if (declarations.type == DeclarationPackType::EXPRESSION && !declarations.data.expr) {
+		if (!declaration)
 			break;
-		}
-		else if (declarations.type == DeclarationPackType::EXPRESSION) {
-			if (declarations.data.expr->flavor == ExprFlavor::FUNCTION) {
-				FunctionJob *body = allocateFunctionJob();
 
-				body->function = static_cast<ExprFunction *>(declarations.data.expr);
-
-				addBlock(&body->function->arguments);
-				addBlock(&body->function->returns);
-
-				if (body->function->body) {
-					flatten(body->value.flattened, &body->function->body);
-					subJobs.add(&body->value);
-				}
-
-				subJobs.add(&body->type);
-
-				++totalFunctions;
-
-				addJob(&functionJobs, body);
-			}
-			else if (declarations.data.expr->flavor == ExprFlavor::TYPE_LITERAL) {
-
-			}
-			else {
-				assert(false);
-			}
-		}
-		else if (declarations.type == DeclarationPackType::GLOBAL_DECLARATION) {
-			if (!addDeclaration(declarations.data.declaration)) {
-				goto error;
-			}
-		}
-		else {
-			//inferJobs.reserve(inferJobs.count + declarations.count); // Make sure we don't do unnecessary allocations
-			assert(declarations.type == DeclarationPackType::BLOCK);
-
-			for (auto declaration : declarations.data.block->declarations) {
-				if (!addDeclaration(declaration)) {
-					goto error;
-				}
-			}
-
-			wakeUpSleepers(&declarations.data.block->sleepingOnMe);
-		}
+		if (!addDeclaration(declaration))
+			goto error;
 
 		do {
-			for (u64 i = 0; i < subJobs.count; i++) {
-				auto job = subJobs[i];
+			while (subJobs.count) {
+				auto job = subJobs.pop();
 
 				if (!inferFlattened(job)) {
 					goto error;

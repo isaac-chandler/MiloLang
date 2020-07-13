@@ -79,7 +79,7 @@ struct Declaration {
 #define BLOCK_IS_ARGUMENTS 0x1
 
 // Set when a block is fully parsed so that we don't skip through it in identifier resolving until then
-#define BLOCK_IS_COMPLETE 0x2
+#define BLOCK_IS_QUEUED 0x2
 
 #define BLOCK_IS_LOOP 0x4
 #define BLOCK_IS_STRUCT 0x8

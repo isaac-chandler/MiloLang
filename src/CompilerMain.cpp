@@ -382,7 +382,7 @@ int main(int argc, char *argv[]) {
 				}
 			}
 
-			inferQueue.add(makeStopSignal());
+			inferQueue.add(nullptr);
 
 			for (++i; i < files.size(); i++) { // In the event we had an error so stopped parsing files mid way through
 				CloseHandle(files[i].handle);
