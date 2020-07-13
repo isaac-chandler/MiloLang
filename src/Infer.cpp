@@ -124,6 +124,55 @@ SizeJob *sizeJobs;
 
 Array<SubJob *> subJobs;
 
+bool addDeclaration(Declaration *declaration);
+
+void wakeUpSleepers(Array<SubJob *> *sleepers, String name = String(nullptr, 0ULL)) {
+	if (name.length == 0) {
+		for (auto sleeper : *sleepers) {
+			subJobs.add(sleeper);
+		}
+
+		sleepers->clear();
+	}
+	else {
+		for (u64 i = 0; i < sleepers->count; i++) {
+			auto sleeper = (*sleepers)[i];
+
+			if (sleeper->sleepingOnName.length == 0 || name == sleeper->sleepingOnName) {
+				sleepers->unordered_remove(i--);
+				subJobs.add(sleeper);
+			}
+		}
+	}
+}
+
+
+void addBlock(Block *block) {
+	if (block->flags & BLOCK_IS_COMPLETE) 
+		return;
+
+	block->flags |= BLOCK_IS_COMPLETE;
+
+	for (auto declaration : block->declarations) {
+		auto success = addDeclaration(declaration);
+
+		assert(success); // Adding a block should never fail, the only failing cases for addDeclaration are if it is added to global scope
+	}
+
+	wakeUpSleepers(&block->sleepingOnMe);
+}
+
+void addTypeBlock(Type *type) {
+	if (type->flavor == TypeFlavor::STRUCT) {
+		addBlock(&static_cast<TypeStruct *>(type)->members);
+	}
+	else if (type->flavor == TypeFlavor::ENUM) {
+		auto enum_ = static_cast<TypeEnum *>(type);
+
+		addBlock(enum_->values);
+		addBlock(&enum_->members);
+	}
+}
 
 void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 	PROFILE_FUNC();
@@ -162,6 +211,13 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 	}
 	case ExprFlavor::FUNCTION:
 	case ExprFlavor::FUNCTION_PROTOTYPE: {
+		auto function = static_cast<ExprFunction *>(*expr);
+
+
+		addBlock(&function->arguments);
+		addBlock(&function->returns);
+
+
 		flattenTo.add(expr);
 
 		// The function arguments and returns are handled separately since they are declarations of their own so will be type-checked separately
@@ -185,7 +241,11 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 		flattenTo.add(expr);
 		break;
 	}
-	case ExprFlavor::TYPE_LITERAL:
+	case ExprFlavor::TYPE_LITERAL: {
+		addTypeBlock(static_cast<ExprLiteral *>(*expr)->typeValue);
+
+		break;
+	}
 	case ExprFlavor::STRING_LITERAL:
 	case ExprFlavor::FLOAT_LITERAL:
 	case ExprFlavor::INT_LITERAL:
@@ -227,6 +287,8 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 	}
 	case ExprFlavor::BLOCK: {
 		ExprBlock *block = static_cast<ExprBlock *>(*expr);
+
+		addBlock(&block->declarations);
 
 		for (auto &subExpr : block->exprs)
 			flatten(flattenTo, &subExpr);
@@ -813,7 +875,7 @@ void insertImplicitCast(Array<Type *> *sizeDependencies, Expr **castFrom, Type *
 
 	addSizeDependency(sizeDependencies, castTo);
 
-	assert(isValidCast(castTo, cast->right->type));
+	assert(isValidCast(castTo, cast->right->type, 0));
 
 	doConstantCast(castFrom);
 }
@@ -872,8 +934,8 @@ void copyLiteral(Expr **exprPointer, Expr *expr) {
 		*exprPointer = expr;
 		break;
 	}
-	case ExprFlavor::FLOAT_LITERAL:
 	case ExprFlavor::TYPE_LITERAL:
+	case ExprFlavor::FLOAT_LITERAL:
 	case ExprFlavor::INT_LITERAL: {
 		ExprLiteral *newLiteral = new ExprLiteral;
 		*newLiteral = *static_cast<ExprLiteral *>(expr);
@@ -1057,35 +1119,6 @@ bool inferUnaryDot(SubJob *job, TypeEnum *enum_, Expr **exprPointer, bool *yield
 
 	return true;
 }
-
-bool wakeUpSleepers(Array<SubJob *> *sleepers, String name = String(nullptr, 0ULL)) {
-	bool awokeSleepers = false;
-
-	if (name.length == 0) {
-		awokeSleepers = sleepers->count != 0;
-
-		for (auto sleeper : *sleepers) {
-			subJobs.add(sleeper);
-		}
-
-		sleepers->clear();
-	}
-	else {
-		for (u64 i = 0; i < sleepers->count; i++) {
-			auto sleeper = (*sleepers)[i];
-
-			if (sleeper->sleepingOnName.length == 0 || name == sleeper->sleepingOnName) {
-				sleepers->unordered_remove(i--);
-				subJobs.add(sleeper);
-
-				awokeSleepers = true;
-			}
-		}
-	}
-
-	return awokeSleepers;
-}
-
 bool tryUsingConversion(SubJob *job, Type *correct, Expr **exprPointer, bool *yield) {
 	*yield = false;
 	auto given = *exprPointer;
@@ -3402,13 +3435,9 @@ bool inferFlattened(SubJob *job) {
 				}
 				else {
 					for (; identifier->resolveFrom; identifier->resolveFrom = identifier->resolveFrom->parentBlock) {
-						if (!(identifier->resolveFrom->flags & BLOCK_IS_COMPLETE)) {
-							goToSleep(job, &identifier->resolveFrom->sleepingOnMe, identifier->name);
-							break;
-						}
-
 						bool yield;
 						u64 index;
+
 						if (Declaration *declaration = findDeclaration(identifier->resolveFrom, identifier->name, &index, &yield, identifier->indexInBlock)) {
 							if ((declaration->flags & DECLARATION_IS_CONSTANT) && !(declaration->flags & DECLARATION_IMPORTED_BY_USING)) {
 								identifier->declaration = declaration;
@@ -4633,6 +4662,7 @@ void freeJob(DeclarationJob *job) {
 	firstFreeDeclarationJob = job;
 }
 
+
 void freeJob(FunctionJob *job) {
 	job->next = firstFreeFunctionJob;
 	firstFreeFunctionJob = job;
@@ -4688,8 +4718,9 @@ else if (!checkStructDeclaration(declaration, value, name)) {	\
 bool addDeclaration(Declaration *declaration) {
 	declaration->inferJob = nullptr;
 
-	if (declaration->flags & (DECLARATION_IS_ITERATOR | DECLARATION_IS_ITERATOR_INDEX | DECLARATION_IS_IN_COMPOUND))
+	if (declaration->flags & DECLARATION_IS_IN_COMPOUND)
 		return true;
+	assert(!(declaration->flags & (DECLARATION_IS_ITERATOR | DECLARATION_IS_ITERATOR_INDEX | DECLARATION_IS_IN_COMPOUND)));
 
 	if (!declaration->enclosingScope) {
 		if (!addDeclarationToBlock(&globalBlock, declaration)) {
@@ -4731,6 +4762,9 @@ bool addDeclaration(Declaration *declaration) {
 			}
 			else if (declaration->type && declaration->type->flavor == ExprFlavor::TYPE_LITERAL && !declaration->initialValue && (declaration->flags & (DECLARATION_IS_ARGUMENT | DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_RETURN))) {
 				declaration->flags |= DECLARATION_TYPE_IS_READY;
+
+				addTypeBlock(static_cast<ExprLiteral *>(declaration->type)->typeValue);
+
 				wakeUpSleepers(&declaration->sleepingOnMe);
 				return true;
 			}
@@ -5025,6 +5059,7 @@ bool inferDeclaration(DeclarationJob *job) {
 					declaration->initialValue = pushStructAccessDown(static_cast<ExprIdentifier *>(declaration->initialValue), declaration->type, declaration->start, declaration->end);
 				}
 
+
 				for (auto member : struct_->members.declarations) {
 					if (checkForRedeclaration(declaration->enclosingScope, member, declaration->initialValue)) {
 						if (!(member->flags & (DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT))) {
@@ -5085,10 +5120,6 @@ bool inferDeclaration(DeclarationJob *job) {
 			}
 			else {
 				assert(declaration->initialValue->type);
-
-				if (declaration->name == "base") {
-					int aaa = 0;
-				}
 
 				if (!(declaration->flags & DECLARATION_IS_CONSTANT)) {
 					trySolidifyNumericLiteralToDefault(declaration->initialValue);
@@ -5409,6 +5440,9 @@ void runInfer() {
 
 				body->function = static_cast<ExprFunction *>(declarations.data.expr);
 
+				addBlock(&body->function->arguments);
+				addBlock(&body->function->returns);
+
 				if (body->function->body) {
 					flatten(body->value.flattened, &body->function->body);
 					subJobs.add(&body->value);
@@ -5470,12 +5504,7 @@ void runInfer() {
 			wakeUpSleepers(&declarations.data.block->sleepingOnMe);
 		}
 
-		bool madeProgress;
-
-
 		do {
-			madeProgress = false;
-
 			for (u64 i = 0; i < subJobs.count; i++) {
 				auto job = subJobs[i];
 

@@ -70,19 +70,6 @@ static void popBlock(Block *block) { // This only takes the parameter to make su
 	assert(currentBlock == block);
 
 	currentBlock = currentBlock->parentBlock;
-
-	_ReadWriteBarrier(); // Make sure the compiler doesn't try to move this flag set before a previous add, as this means it is safe for the type inference thread 
-
-	block->flags |= BLOCK_IS_COMPLETE;
-
-
-	queueBlock(block);
-}
-
-static void popBlockWithoutQueueing(Block *block) { // This only takes the parameter to make sure we are always popping the block we think we are in debug
-	assert(currentBlock == block);
-
-	currentBlock = currentBlock->parentBlock;
 }
 
 static bool expectAndConsume(LexerFile *lexer, TokenT type) {
@@ -1480,16 +1467,12 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 				addDeclarationToBlock(&type->arguments, argument);
 			} while (expectAndConsume(lexer, ','));
 
-			popBlockWithoutQueueing(&type->arguments);
+			popBlock(&type->arguments);
 
 			if (!expectAndConsume(lexer, ')')) {
 				reportExpectedError(&lexer->token, "Error: Expected a ')' after function arguments");
 				return nullptr;
 			}
-
-			Expr *returnType = parseExpr(lexer);
-			if (!returnType)
-				return nullptr;
 
 			type->flavor = ExprFlavor::FUNCTION_PROTOTYPE;
 
@@ -1514,11 +1497,6 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 					reportError(type, "Error: A function prototype cannot have its return type marked as #must");
 					return nullptr;
 				}
-			}
-
-			if (type->returns.declarations.count) {
-				reportError(type, "Error: A function prototype must have a return type");
-				return nullptr;
 			}
 
 			for (auto declaration : type->returns.declarations) {
