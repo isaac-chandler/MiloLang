@@ -162,15 +162,54 @@ void addBlock(Block *block) {
 	wakeUpSleepers(&block->sleepingOnMe);
 }
 
-void addTypeBlock(Type *type) {
+void flatten(Array<Expr **> &flattenTo, Expr **flatten);
+SizeJob *allocateSizeJob();
+
+void addTypeBlock(Expr *expr) {
+	auto type = static_cast<ExprLiteral *>(expr)->typeValue;
+
 	if (type->flavor == TypeFlavor::STRUCT) {
-		addBlock(&static_cast<TypeStruct *>(type)->members);
+		auto struct_ = static_cast<TypeStruct *>(type);
+
+		addBlock(&struct_->members);
+
+		if (!type->sizeJob) {
+			SizeJob *job = allocateSizeJob();
+
+			job->type = type;
+
+			type->name = expr->valueOfDeclaration ? expr->valueOfDeclaration->name : "(struct)";
+			addStruct(struct_);
+
+			type->sizeJob = job;
+			++totalTypesSized;
+
+			addJob(&sizeJobs, job);
+			subJobs.add(job);
+		}
 	}
 	else if (type->flavor == TypeFlavor::ENUM) {
 		auto enum_ = static_cast<TypeEnum *>(type);
 
 		addBlock(enum_->values);
 		addBlock(&enum_->members);
+
+		if (!type->sizeJob) {
+			SizeJob *job = allocateSizeJob();
+
+			job->type = type;
+
+			type->name = expr->valueOfDeclaration ? expr->valueOfDeclaration->name : "(enum)";
+			addStruct(enum_);
+
+			flatten(job->flattened, &CAST_FROM_SUBSTRUCT(ExprEnum, struct_, enum_)->integerType);
+
+			type->sizeJob = job;
+			++totalTypesSized;
+
+			addJob(&sizeJobs, job);
+			subJobs.add(job);
+		}
 	}
 }
 
@@ -242,7 +281,7 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 		break;
 	}
 	case ExprFlavor::TYPE_LITERAL: {
-		addTypeBlock(static_cast<ExprLiteral *>(*expr)->typeValue);
+		addTypeBlock(*expr);
 
 		break;
 	}
@@ -4763,7 +4802,7 @@ bool addDeclaration(Declaration *declaration) {
 			else if (declaration->type && declaration->type->flavor == ExprFlavor::TYPE_LITERAL && !declaration->initialValue && (declaration->flags & (DECLARATION_IS_ARGUMENT | DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_RETURN))) {
 				declaration->flags |= DECLARATION_TYPE_IS_READY;
 
-				addTypeBlock(static_cast<ExprLiteral *>(declaration->type)->typeValue);
+				addTypeBlock(declaration->type);
 
 				wakeUpSleepers(&declaration->sleepingOnMe);
 				return true;
@@ -5360,8 +5399,8 @@ bool inferSize(SizeJob *job) {
 
 			wakeUpSleepers(&struct_->sleepingOnMe);
 
-			freeJob(job);
 			removeJob(&sizeJobs, job);
+			freeJob(job);
 		}
 	}
 	else if (type->flavor == TypeFlavor::ARRAY) {
@@ -5456,31 +5495,6 @@ void runInfer() {
 			}
 			else if (declarations.data.expr->flavor == ExprFlavor::TYPE_LITERAL) {
 
-				SizeJob *body = allocateSizeJob();
-
-				body->type = static_cast<ExprLiteral *>(declarations.data.expr)->typeValue;
-
-				if (body->type->flavor == TypeFlavor::STRUCT) {
-					body->type->name = declarations.data.expr->valueOfDeclaration ? declarations.data.expr->valueOfDeclaration->name : "(struct)";
-					addStruct(static_cast<TypeStruct *>(body->type));
-				}
-				else if (body->type->flavor == TypeFlavor::ENUM) {
-					body->type->name = declarations.data.expr->valueOfDeclaration ? declarations.data.expr->valueOfDeclaration->name : "(enum)";
-					addStruct(static_cast<TypeEnum *>(body->type));
-
-					auto enum_ = CAST_FROM_SUBSTRUCT(ExprEnum, struct_, static_cast<TypeEnum *>(body->type));
-
-					flatten(body->flattened, &enum_->integerType);
-				}
-				else {
-					assert(false);
-				}
-
-				body->type->sizeJob = body;
-				++totalTypesSized;
-
-				addJob(&sizeJobs, body);
-				subJobs.add(body);
 			}
 			else {
 				assert(false);

@@ -51,7 +51,7 @@ static u64 getTokenPrecedence(TokenT token) {
 	return 0;
 }
 
-static void pushBlock(Block *block) {
+static void insertBlock(Block *block) {
 	if (currentBlock) {
 		block->indexInParent = currentBlock->declarations.count;
 	}
@@ -59,11 +59,12 @@ static void pushBlock(Block *block) {
 		block->indexInParent = 0;
 	}
 	block->parentBlock = currentBlock;
-	currentBlock = block;
 }
 
-static void queueBlock(Block *block) {
-	packsToAdd.add(makeDeclarationPack(block)); // Queue the entire block at once to avoid locking the mutex too much
+static void pushBlock(Block *block) {
+	insertBlock(block);
+
+	currentBlock = block;
 }
 
 static void popBlock(Block *block) { // This only takes the parameter to make sure we are always popping the block we think we are in debug
@@ -1234,8 +1235,7 @@ bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *u
 			return false;
 		}
 
-		pushBlock(&function->arguments); // @Cleanup: These functions deal with properly setting up the blocks parent and queueing the block for infer even if we don't need to 
-		popBlock(&function->arguments);
+		insertBlock(&function->arguments);
 
 		packsToAdd.add(makeDeclarationPack(function));
 	}
@@ -1250,9 +1250,8 @@ bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *u
 		function->flavor = ExprFlavor::FUNCTION_PROTOTYPE;
 		function->type = &TYPE_TYPE;
 
-		pushBlock(&function->arguments);
-		popBlock(&function->arguments);
-
+		insertBlock(&function->arguments);
+		
 		for (auto return_ : function->returns.declarations) {
 			if (return_->flags & DECLARATION_IS_MUST) {
 				reportError(function, "Error: A function prototype cannot have its return type marked as #must");
@@ -1810,8 +1809,6 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 		popBlock(&type->members);
 		expr = parserMakeTypeLiteral(start, lexer->previousTokenEnd, type);
-
-		packsToAdd.add(makeDeclarationPack(expr));
 	}
 	else if (lexer->token.type == TokenT::ENUM || lexer->token.type == TokenT::ENUM_FLAGS) {
 		auto enum_ = PARSER_NEW(ExprEnum);
@@ -1965,8 +1962,6 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		if (members->members.declarations.count == 0) {
 			reportError(enum_, "Error: Cannot have an enum with no values");
 		}
-
-		packsToAdd.add(makeDeclarationPack(typeLiteral));
 
 		expr = typeLiteral;
 	}
@@ -2476,7 +2471,7 @@ void parseFile(FileInfo *file) {
 
 			assert(!(declaration->flags & DECLARATION_MARKED_AS_USING));
 
-			packsToAdd.add(makeDeclarationPack(declaration));
+			inferQueue.add(makeDeclarationPack(declaration));
 		}
 		else if (lexer.token.type == TokenT::USING) {
 			TokenT peek[2];
@@ -2490,11 +2485,11 @@ void parseFile(FileInfo *file) {
 
 				_ReadWriteBarrier();
 
-				packsToAdd.add(makeDeclarationPack(declaration));
+				inferQueue.add(makeDeclarationPack(declaration));
 
 				assert(declaration->flags & DECLARATION_MARKED_AS_USING);
 
-				packsToAdd.add(makeDeclarationPack(createDeclarationForUsing(declaration, currentBlock)));
+				inferQueue.add(makeDeclarationPack(createDeclarationForUsing(declaration, currentBlock)));
 
 
 			}
@@ -2523,7 +2518,7 @@ void parseFile(FileInfo *file) {
 
 				_ReadWriteBarrier();
 
-				packsToAdd.add(makeDeclarationPack(declaration));
+				inferQueue.add(makeDeclarationPack(declaration));
 			}
 		}
 		else if (lexer.token.type == TokenT::LOAD) {

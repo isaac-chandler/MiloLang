@@ -138,6 +138,7 @@ void reportError(CHECK_PRINTF const char *format, ...) {
 	va_start(args, format);
 
 	vprintf(format, args);
+	puts("");
 
 	va_end(args);
 
