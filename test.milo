@@ -5,6 +5,8 @@
 #load "bitmap.milo"
 #load "math.milo"
 
+DEVELOPER :: true
+
 should_quit: bool
 
 window_width: s32 = 1280
@@ -886,8 +888,10 @@ _main :: () {
 		
 		delta := cast() (current_time - last_time) * counter_scale
 		
-		if shift_is_down
-			delta *= 0.05
+		#if DEVELOPER {
+			if shift_is_down
+				delta *= 0.05
+		}
 	
 		glViewport(0, 0, window_width, window_height)
 		glClearColor(0, 0.1, 0.2, 0)

@@ -4312,7 +4312,8 @@ bool inferFlattened(SubJob *job) {
 
 				if (block) {
 					*exprPointer = block;
-					pushFlatten(job);
+						pushFlatten(job);
+					continue;
 				}
 			}
 			break;
@@ -4919,6 +4920,8 @@ else if (!checkStructDeclaration(declaration, value, name)) {	\
 void addImporter(Importer *importer) {
 	if (!importer->enclosingScope)
 		addImporterToBlock(&globalBlock, importer);
+
+	++totalImporters;
 
 	auto job = allocateImporterJob();
 	job->importer = importer;

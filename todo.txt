@@ -66,6 +66,7 @@ performance
  
 
 Allow #if to insert members into structs
+ - Best way to do this is probably to have #if move its declarations into the outer scope and replace them with imports instead of it placing imports in the outer scope
 Allow #if to conditionally execute #load
 
 defer

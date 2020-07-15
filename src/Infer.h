@@ -3,6 +3,7 @@
 #include "Ast.h"
 #include "WorkQueue.h"
 
+inline u64 totalImporters;
 inline u64 totalDeclarations;
 inline u64 totalFunctions;
 inline u64 totalTypesSized;

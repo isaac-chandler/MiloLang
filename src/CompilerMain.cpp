@@ -395,16 +395,17 @@ int main(int argc, char *argv[]) {
 #if BUILD_WINDOWS
 
 	if (!hadError) {
-		u64 totalQueued = totalDeclarations + totalFunctions + totalTypesSized;
+		u64 totalQueued = totalDeclarations + totalFunctions + totalTypesSized + totalImporters;
 
 		printf(
 			"Total queued: %llu\n"
 			"  %llu declarations\n"
 			"  %llu functions\n"
 			"  %llu types\n"
+			"  %llu importers\n"
 			"Total infers: %llu, %.1f infers/queued\n"
 			"Total sizes: %llu, %.1f sizes/type\n",
-			totalQueued, totalDeclarations, totalFunctions, totalTypesSized, totalInfers, static_cast<float>(totalInfers) / totalQueued, totalSizes, static_cast<float>(totalSizes) / totalTypesSized);
+			totalQueued, totalDeclarations, totalFunctions, totalTypesSized, totalImporters, totalInfers, static_cast<float>(totalInfers) / totalQueued, totalSizes, static_cast<float>(totalSizes) / totalTypesSized);
 
 		std::cout << "Compiler Time: " << (duration_cast<microseconds>(duration<double>(
 			high_resolution_clock::now() - start)).count() / 1000.0) << "ms\n";
