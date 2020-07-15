@@ -1921,6 +1921,10 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 			return dest;
 		}
+		case ExprFlavor::STATIC_IF: {
+			break; // In the event that the static if returns false and there is no else block, we just leave the static if expression in the tree, 
+				   // so when we see a static if here we should just generate no code
+		}
 		default:
 			assert(false);
 			return DEST_NONE;

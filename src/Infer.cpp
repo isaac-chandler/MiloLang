@@ -30,13 +30,24 @@ ExprLiteral *inferMakeTypeLiteral(CodeLocation &start, EndLocation &end, Type *t
 
 struct SubJob {
 	Array<Type *> *sizeDependencies;
-	Array<Expr **> flattened;
-	u64 index = 0;
+
+	Array<Array<Expr **>> flatteneds;
+	Array<u64> indices;
+	u64 flattenedCount = 0;
+
 	JobFlavor flavor;
 	String sleepingOnName;
 
 	SubJob(JobFlavor flavor, Array<Type *> *sizeDependencies) : flavor(flavor), sizeDependencies(sizeDependencies) {}
 };
+
+bool isDone(SubJob *job) {
+	return job->flattenedCount == 0;
+}
+
+Expr **getHalt(SubJob *job) {
+	return job->flatteneds[job->flattenedCount - 1][job->indices[job->flattenedCount - 1]];
+}
 
 void goToSleep(SubJob *job, Array<SubJob *> *sleepingOnMe, String name = String(nullptr, 0ULL)) {
 	_ReadWriteBarrier();
@@ -178,9 +189,10 @@ void addBlock(Block *block) {
 	wakeUpSleepers(&block->sleepingOnMe);
 }
 
-void flatten(Array<Expr **> &flattenTo, Expr **flatten);
 SizeJob *allocateSizeJob();
 FunctionJob *allocateFunctionJob();
+
+void beginFlatten(SubJob *job, Expr **expr);
 
 void addFunction(ExprFunction *function) {
 	if (function->arguments.flags & BLOCK_IS_QUEUED)
@@ -194,7 +206,8 @@ void addFunction(ExprFunction *function) {
 	addBlock(&function->returns);
 
 	if (function->body) {
-		flatten(job->value.flattened, &function->body);
+		beginFlatten(&job->value, &function->body);
+
 		subJobs.add(&job->value);
 	}
 
@@ -242,7 +255,7 @@ void addTypeBlock(Expr *expr) {
 			type->name = expr->valueOfDeclaration ? expr->valueOfDeclaration->name : "(enum)";
 			addStruct(enum_);
 
-			flatten(job->flattened, &CAST_FROM_SUBSTRUCT(ExprEnum, struct_, enum_)->integerType);
+			beginFlatten(job, &CAST_FROM_SUBSTRUCT(ExprEnum, struct_, enum_)->integerType);
 
 			type->sizeJob = job;
 			++totalTypesSized;
@@ -265,6 +278,14 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 		if (identifier->structAccess) {
 			flatten(flattenTo, &identifier->structAccess);
 		}
+
+		flattenTo.add(expr);
+		break;
+	}
+	case ExprFlavor::STATIC_IF: {
+		auto staticIf = static_cast<ExprIf *>(*expr);
+
+		flatten(flattenTo, &staticIf->condition);
 
 		flattenTo.add(expr);
 		break;
@@ -469,6 +490,30 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 	}
 }
 
+
+void beginFlatten(SubJob *job, Expr **expr) {
+	if (job->flattenedCount == job->flatteneds.count) {
+		job->flatteneds.add();
+		job->indices.add(0);
+	}
+	else {
+		job->flatteneds[job->flattenedCount].clear();
+		job->indices[job->flattenedCount] = 0;
+	}
+
+	flatten(job->flatteneds[job->flattenedCount], expr);
+
+	job->flattenedCount++;
+}
+
+
+void pushFlatten(SubJob *job) {
+	auto expr = getHalt(job);
+
+	job->indices[job->flattenedCount - 1]++;
+
+	beginFlatten(job, expr);
+}
 Type *getDeclarationType(Declaration *declaration) {
 	assert(declaration->flags & DECLARATION_TYPE_IS_READY);
 	assert(declaration->type);
@@ -1102,19 +1147,21 @@ bool inferIdentifier(SubJob *job, Expr **exprPointer, ExprIdentifier *identifier
 	*yield = false;
 
 	if ((identifier->declaration->flags & DECLARATION_IMPORTED_BY_USING) && !(identifier->declaration->flags & DECLARATION_IS_CONSTANT)) {
-		auto current = static_cast<ExprIdentifier *>(identifier->declaration->initialValue);
+		if (identifier->declaration->initialValue) {
+			auto current = static_cast<ExprIdentifier *>(identifier->declaration->initialValue);
 
-		if (job->sizeDependencies) {			
-			while (current->structAccess) {
-				bool onlyConstants;
-				addSizeDependency(job->sizeDependencies, getExpressionNamespace(current->structAccess, &onlyConstants, current->structAccess));
+			if (job->sizeDependencies) {
+				while (current->structAccess) {
+					bool onlyConstants;
+					addSizeDependency(job->sizeDependencies, getExpressionNamespace(current->structAccess, &onlyConstants, current->structAccess));
 
-				current = static_cast<ExprIdentifier *>(current->structAccess);
-				assert(current->flavor == ExprFlavor::IDENTIFIER);
+					current = static_cast<ExprIdentifier *>(current->structAccess);
+					assert(current->flavor == ExprFlavor::IDENTIFIER);
+				}
 			}
-		}
 
-		identifier->structAccess = pushStructAccessDown(static_cast<ExprIdentifier *>(identifier->declaration->initialValue), identifier->structAccess, identifier->start, identifier->end);
+			identifier->structAccess = pushStructAccessDown(static_cast<ExprIdentifier *>(identifier->declaration->initialValue), identifier->structAccess, identifier->start, identifier->end);
+		}
 		identifier->declaration = identifier->declaration->import;
 	}
 
@@ -3480,8 +3527,13 @@ bool inferFlattened(SubJob *job) {
 	PROFILE_FUNC();
 	++totalInfers;
 
-	for (; job->index < job->flattened.count; ++job->index) {
-		auto exprPointer = job->flattened[job->index];
+	while (job->flattenedCount) {
+		if (job->indices[job->flattenedCount - 1] == job->flatteneds[job->flattenedCount - 1].count) {
+			--job->flattenedCount;
+			continue;
+		}
+
+		auto exprPointer = getHalt(job);
 		auto expr = *exprPointer;
 
 		switch (expr->flavor) {
@@ -4219,6 +4271,52 @@ bool inferFlattened(SubJob *job) {
 
 			break;
 		}
+		case ExprFlavor::STATIC_IF: {
+			auto staticIf = static_cast<ExprIf *>(expr);
+
+			if (staticIf->condition->type != &TYPE_BOOL) {
+				if (isValidCast(&TYPE_BOOL, staticIf->condition->type, 0)) {
+					insertImplicitCast(job->sizeDependencies, &staticIf->condition, &TYPE_BOOL);
+				}
+				else {
+					reportError(staticIf->condition, "Error: Cannot convert %.*s to bool", STRING_PRINTF(staticIf->condition->type->name));
+					return false;
+				}
+			}
+
+
+			if (staticIf->condition->flavor != ExprFlavor::INT_LITERAL || staticIf->condition->type != &TYPE_BOOL) {
+				reportError(staticIf->condition, "Error: #if condition must be a constant");
+				return false;
+			}
+
+			if (job->flavor != JobFlavor::IMPORTER) {
+				auto literal = static_cast<ExprLiteral *>(staticIf->condition);
+
+				ExprBlock *block = nullptr;
+
+				if (convertToUnsigned(literal->unsignedValue, literal->type->size)) {
+					if (staticIf->ifBody) {
+						assert(staticIf->ifBody->flavor == ExprFlavor::BLOCK);
+
+						block = static_cast<ExprBlock *>(staticIf->ifBody);
+					}
+				}
+				else {
+					if (staticIf->elseBody) {
+						assert(staticIf->elseBody->flavor == ExprFlavor::BLOCK);
+
+						block = static_cast<ExprBlock *>(staticIf->elseBody);
+					}
+				}
+
+				if (block) {
+					*exprPointer = block;
+					pushFlatten(job);
+				}
+			}
+			break;
+		}
 		case ExprFlavor::RETURN: {
 			auto return_ = static_cast<ExprReturn *>(expr);
 
@@ -4660,6 +4758,7 @@ bool inferFlattened(SubJob *job) {
 			assert(false);
 		}
 
+		++job->indices[job->flattenedCount - 1];
 	}
 
 	return true;
@@ -4695,8 +4794,7 @@ ImporterJob *allocateImporterJob() {
 		auto result = firstFreeImporterJob;
 		firstFreeImporterJob = result->next;
 
-		result->index = 0;
-		result->flattened.clear();
+		result->flattenedCount = 0;
 
 		return result;
 	}
@@ -4711,9 +4809,8 @@ SizeJob *allocateSizeJob() {
 
 		result->sizingIndexInMembers = 0;
 		result->runningSize = 0;
-
-		result->index = 0;
-		result->flattened.clear();
+		
+		result->flattenedCount = 0;
 
 		return result;
 	}
@@ -4726,10 +4823,8 @@ DeclarationJob *allocateDeclarationJob() {
 		auto result = firstFreeDeclarationJob;
 		firstFreeDeclarationJob = firstFreeDeclarationJob->next;
 
-		result->type.flattened.clear();
-		result->type.index = 0;
-		result->value.flattened.clear();
-		result->value.index = 0;
+		result->type.flattenedCount = 0;
+		result->value.flattenedCount = 0;
 		result->sizeDependencies.clear();
 
 		return result;
@@ -4743,10 +4838,8 @@ FunctionJob *allocateFunctionJob() {
 		auto result = firstFreeFunctionJob;
 		firstFreeFunctionJob = firstFreeFunctionJob->next;
 
-		result->type.flattened.clear();
-		result->type.index = 0;
-		result->value.flattened.clear();
-		result->value.index = 0;
+		result->type.flattenedCount = 0;
+		result->value.flattenedCount = 0;
 		result->sizeDependencies.clear();
 
 		return result;
@@ -4830,7 +4923,7 @@ void addImporter(Importer *importer) {
 	auto job = allocateImporterJob();
 	job->importer = importer;
 
-	flatten(job->flattened, &importer->import);
+	beginFlatten(job, &importer->import);
 
 	addJob(&importerJobs, job);
 	
@@ -4905,12 +4998,12 @@ bool addDeclaration(Declaration *declaration) {
 	job->declaration->inferJob = job;
 
 	if (declaration->type) {
-		flatten(job->type.flattened, &declaration->type);
+		beginFlatten(&job->type, &declaration->type);
 		subJobs.add(&job->type);
 	}
 
 	if (declaration->initialValue) {
-		flatten(job->value.flattened, &declaration->initialValue);
+		beginFlatten(&job->value, &declaration->initialValue);
 		subJobs.add(&job->value);
 	}
 
@@ -4961,8 +5054,8 @@ static s64 findLoop(Array<Declaration *> &loop, Declaration *declaration) {
 
 	auto job = declaration->inferJob;
 
-	if (job->type.index != job->type.flattened.count) {
-		auto dependency = getDependency(*job->type.flattened[job->type.index]);
+	if (!isDone(&job->type)) {
+		auto dependency = getDependency(*getHalt(&job->type));
 
 		for (u64 i = 0; i < loop.count; i++) {
 			if (loop[i] == dependency) {
@@ -4977,8 +5070,8 @@ static s64 findLoop(Array<Declaration *> &loop, Declaration *declaration) {
 		}
 	}
 
-	if (job->value.index != job->value.flattened.count) {
-		auto dependency = getDependency(*job->value.flattened[job->value.index]);
+	if (!isDone(&job->value)) {
+		auto dependency = getDependency(*getHalt(&job->value));
 
 		for (u64 i = 0; i < loop.count; i++) {
 			if (loop[i] == dependency) {
@@ -5001,12 +5094,12 @@ static s64 findLoop(Array<Declaration *> &loop, Declaration *declaration) {
 void getHaltStatus(Declaration *declaration, Declaration *next, Expr **haltedOn, bool *typeDependence) {
 	auto job = declaration->inferJob;
 
-	if (job->type.index != job->type.flattened.count && getDependency(*job->type.flattened[job->type.index]) == next) {
-		*haltedOn = *job->type.flattened[job->type.index];
+	if (!isDone(&job->type) && getDependency(*getHalt(&job->type)) == next) {
+		*haltedOn = *getHalt(&job->type);
 		*typeDependence = true;
 	}
-	else if (job->value.index != job->value.flattened.count && getDependency(*job->value.flattened[job->value.index]) == next) {
-		*haltedOn = *job->value.flattened[job->value.index];
+	else if (!isDone(&job->value) && getDependency(*getHalt(&job->value)) == next) {
+		*haltedOn = *getHalt(&job->value);
 		*typeDependence = false;
 	}
 	else {
@@ -5050,6 +5143,10 @@ bool inferImporter(ImporterJob *job) {
 
 				block = &static_cast<ExprBlock *>(staticIf->elseBody)->declarations;
 			}
+		}
+
+		if (block && importer->enclosingScope == &globalBlock) {
+			addBlock(block);
 		}
 	}
 	else {
@@ -5140,6 +5237,7 @@ bool inferImporter(ImporterJob *job) {
 		}
 	}
 
+	wakeUpSleepers(&importer->enclosingScope->sleepingOnMe);
 	importer->flags |= IMPORTER_IS_COMPLETE;
 
 	removeJob(&importerJobs, job);
@@ -5152,7 +5250,7 @@ bool inferDeclaration(DeclarationJob *job) {
 	PROFILE_FUNC();
 	auto declaration = job->declaration;
 
-	if (!(declaration->flags & (DECLARATION_TYPE_IS_READY)) && declaration->type && job->type.index == job->type.flattened.count) {
+	if (!(declaration->flags & (DECLARATION_TYPE_IS_READY)) && declaration->type && isDone(&job->type)) {
 		if (declaration->type->type != &TYPE_TYPE) {
 			if (declaration->type->type->flavor == TypeFlavor::FUNCTION) {
 				reportError(declaration->type, "Error: Declaration type cannot be a function, did you miss a colon?");
@@ -5191,7 +5289,7 @@ bool inferDeclaration(DeclarationJob *job) {
 	}
 
 	if (declaration->type && declaration->initialValue) {
-		if (job->type.index == job->type.flattened.count && job->value.index == job->value.flattened.count) {
+		if (isDone(&job->type) && isDone(&job->value)) {
 			assert(declaration->initialValue->type);
 
 			Type *correct = static_cast<ExprLiteral *>(declaration->type)->typeValue;
@@ -5246,8 +5344,7 @@ bool inferDeclaration(DeclarationJob *job) {
 		}
 	}
 	else if (declaration->type) {
-
-		if (job->type.index == job->type.flattened.count) {
+		if (isDone(&job->type)) {
 			if (!(declaration->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_ITERATOR | DECLARATION_IS_ITERATOR_INDEX | DECLARATION_IS_ARGUMENT | DECLARATION_IS_RETURN))) {
 				auto type = static_cast<ExprLiteral *>(declaration->type)->typeValue;
 
@@ -5283,7 +5380,7 @@ bool inferDeclaration(DeclarationJob *job) {
 		}
 	}
 	else if (declaration->initialValue) {
-		if (job->value.index == job->value.flattened.count) {
+		if (isDone(&job->value)) {
 			assert(declaration->initialValue->type);
 
 			if (!(declaration->flags & DECLARATION_IS_CONSTANT)) {
@@ -5442,7 +5539,7 @@ bool inferFunction(FunctionJob *job) {
 		else {
 			assert(job->function->body);
 
-			if (job->value.index == job->value.flattened.count) {
+			if (isDone(&job->value)) {
 
 				removeJob(&functionJobs, job);
 				functionWaitingOnSize.add(job);
@@ -5614,7 +5711,7 @@ void runInfer() {
 				if (!inferFlattened(job)) {
 					goto error;
 				}
-				else if (job->index == job->flattened.count) {
+				else if (isDone(job)) {
 					if (job->flavor == JobFlavor::DECLARATION_TYPE) {
 						declarationsToWorkOn.add(CAST_FROM_SUBSTRUCT(DeclarationJob, type, job));
 					}
@@ -5721,16 +5818,16 @@ void runInfer() {
 		// Check for undeclared identifiers
 
 		for (auto job = functionJobs; job; job = job->next) {
-			if (job->type.index != job->type.flattened.count) {
-				auto haltedOn = *job->type.flattened[job->type.index];
+			if (!isDone(&job->type)) {
+				auto haltedOn = *getHalt(&job->type);
 
 				if (checkForUndeclaredIdentifier(haltedOn)) {
 					goto error;
 				}
 			}
 
-			if (job->value.index != job->value.flattened.count) {
-				auto haltedOn = *job->value.flattened[job->value.index];
+			if (!isDone(&job->value)) {
+				auto haltedOn = *getHalt(&job->value);
 
 				if (checkForUndeclaredIdentifier(haltedOn)) {
 					goto error;
@@ -5739,16 +5836,36 @@ void runInfer() {
 		}
 
 		for (auto job = declarationJobs; job; job = job->next) {
-			if (job->type.index != job->type.flattened.count) {
-				auto haltedOn = *job->type.flattened[job->type.index];
+			if (!isDone(&job->type)) {
+				auto haltedOn = *getHalt(&job->type);
 
 				if (checkForUndeclaredIdentifier(haltedOn)) {
 					goto error;
 				}
 			}
 
-			if (job->value.index != job->value.flattened.count) {
-				auto haltedOn = *job->value.flattened[job->value.index];
+			if (!isDone(&job->value)) {
+				auto haltedOn = *getHalt(&job->value);
+
+				if (checkForUndeclaredIdentifier(haltedOn)) {
+					goto error;
+				}
+			}
+		}
+
+		for (auto job = importerJobs; job; job = job->next) {
+			if (!isDone(job)) {
+				auto haltedOn = *getHalt(job);
+
+				if (checkForUndeclaredIdentifier(haltedOn)) {
+					goto error;
+				}
+			}
+		}
+
+		for (auto job = sizeJobs; job; job = job->next) {
+			if (!isDone(job)) {
+				auto haltedOn = *getHalt(job);
 
 				if (checkForUndeclaredIdentifier(haltedOn)) {
 					goto error;
@@ -5815,14 +5932,14 @@ void runInfer() {
 		for (auto job = functionJobs; job; job = job->next) {
 			String name = (job->function->valueOfDeclaration ? job->function->valueOfDeclaration->name : "(function)");
 
-			if (job->type.index != job->type.flattened.count) {
-				auto haltedOn = *job->type.flattened[job->type.index];
+			if (!isDone(&job->type)) {
+				auto haltedOn = *getHalt(&job->type);
 
 				reportError(haltedOn, "%.*s type halted here", STRING_PRINTF(name));
 			}
 
-			if (job->value.index != job->value.flattened.count) {
-				auto haltedOn = *job->value.flattened[job->value.index];
+			if (!isDone(&job->value)) {
+				auto haltedOn = *getHalt(&job->value);
 
 				reportError(haltedOn, "%.*s value halted here", STRING_PRINTF(name));
 
@@ -5831,7 +5948,7 @@ void runInfer() {
 				}
 			}
 
-			if (job->type.index == job->type.flattened.count && job->value.index == job->value.flattened.count) {
+			if (isDone(&job->type) && isDone(&job->value)) {
 				reportError(job->function, "Function halted after completing infer");
 
 				for (auto declaration : job->function->arguments.declarations) {
@@ -5851,14 +5968,14 @@ void runInfer() {
 		for (auto job = declarationJobs; job; job = job->next) {
 			String name = job->declaration->name;
 
-			if (job->type.index != job->type.flattened.count) {
-				auto haltedOn = *job->type.flattened[job->type.index];
+			if (!isDone(&job->type)) {
+				auto haltedOn = *getHalt(&job->type);
 
 				reportError(haltedOn, "%.*s type halted here", STRING_PRINTF(name));
 			}
 
-			if (job->value.index != job->value.flattened.count) {
-				auto haltedOn = *job->value.flattened[job->value.index];
+			if (!isDone(&job->value)) {
+				auto haltedOn = *getHalt(&job->value);
 
 				reportError(haltedOn, "%.*s value halted here", STRING_PRINTF(name));
 
@@ -5867,7 +5984,7 @@ void runInfer() {
 				}
 			}
 
-			if (job->type.index == job->type.flattened.count && job->value.index == job->value.flattened.count) {
+			if (isDone(&job->type) && isDone(&job->value)) {
 				reportError(job->declaration, "Declaration halted after completing infer");
 			}
 		}

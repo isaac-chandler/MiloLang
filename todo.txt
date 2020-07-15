@@ -65,8 +65,8 @@ performance
  - Multithread type inference (nightmare nightmare nightmare)
  
 
-#if
- - Syntax of both blocks checked, type checking only happens for chosen block
+Allow #if to insert members into structs
+Allow #if to conditionally execute #load
 
 defer
  
