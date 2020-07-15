@@ -5,6 +5,10 @@
 #include "String.h"
 #include "CompilerMain.h"
 
+#define IMPORTER_IS_CONSTANT 0x1
+#define IMPORTER_IS_COMPLETE 0x2
+#define IMPORTER_IS_IMPORTED 0x4
+
 #define DECLARATION_IS_CONSTANT        0x0'0001
 #define DECLARATION_IS_UNINITIALIZED   0x0'0002
 
@@ -25,13 +29,7 @@
 
 #define DECLARATION_IS_STRUCT_MEMBER   0x0'0100
 
-// A declaration that is implicitly inserted that actually executes the using @Cleanup can we just check DECLARATION_MARKED_AS_USING
-#define DECLARATION_IS_USING           0x0'0200
-
 #define DECLARATION_IMPORTED_BY_USING  0x0'0400
-
-// A using that has already had its declarations imported
-#define DECLARATION_USING_IS_RESOLVED  0x0'0800
 
 // This is the actual variable that the using refers to
 #define DECLARATION_MARKED_AS_USING    0x0'1000
@@ -87,12 +85,26 @@ struct Declaration {
 
 #define BLOCK_HASHTABLE_MIN_COUNT 32
 
+struct Importer {
+	u64 indexInBlock;
+
+	Block *enclosingScope = nullptr;
+	Expr *import;
+	Expr *structAccess = nullptr;
+
+	Array<SubJob *> sleepingOnMe;
+
+	u64 flags = 0;
+};
+
 struct Block {
 	Array<Declaration *> declarations;
-	Array<Declaration *> usings;
+	Array<Importer *> importers;
 
 	struct BlockEntry *table = nullptr;
 	u64 tableCapacity;
+
+	u64 currentIndex = 0;
 
 	Block *parentBlock = nullptr;
 	u64 indexInParent;
@@ -144,11 +156,13 @@ inline bool checkForRedeclaration(Block *block, Declaration *declaration, struct
 				if (using_) {
 					reportError(using_, "Error: Attempt to import a variable that was used previously in the scope", STRING_PRINTF(declaration->name));
 					reportError(previous, "   ..: Here is the usage");
+					reportError(previous->import, "   ..: Here is the declaration of the previous usage");
 					reportError(declaration, "   ..: Here is the location it was imported from");
 				}
 				else {
 					reportError(declaration, "Error: Attempt to redeclare a variable that was used previously in the scope");
 					reportError(previous, "   ..: Here is the usage");
+					reportError(previous->import, "   ..: Here is the declaration of the previous usage");
 				}
 			} else if (using_) {
 				reportError(using_, "Error: Cannot import variable '%.*s' into scope, it already exists there", STRING_PRINTF(declaration->name));
@@ -169,14 +183,19 @@ inline bool checkForRedeclaration(Block *block, Declaration *declaration, struct
 void addToTable(Block *block, Declaration *declaration);
 void initTable(Block *block);
 
-inline void addDeclarationToBlockUnchecked(Block *block, Declaration *declaration) {
-	declaration->indexInBlock = block->declarations.count;
+inline void addImporterToBlock(Block *block, Importer *importer, s64 index = -1) {
+
+
+	importer->indexInBlock = index == -1 ? block->currentIndex++ : index;
+	importer->enclosingScope = block;
+
+	block->importers.add(importer);
+}
+
+inline void addDeclarationToBlockUnchecked(Block *block, Declaration *declaration, s64 index = -1) {
+	declaration->indexInBlock = index == -1 ? block->currentIndex++ : index;
 	block->declarations.add(declaration);
 	declaration->enclosingScope = block;
-
-	if (declaration->flags & DECLARATION_IS_USING) {
-		block->usings.add(declaration);
-	}
 
 	if (block->table) {
 		addToTable(block, declaration);
@@ -186,12 +205,12 @@ inline void addDeclarationToBlockUnchecked(Block *block, Declaration *declaratio
 	}
 }
 
-inline bool addDeclarationToBlock(Block *block, Declaration *declaration) {
+inline bool addDeclarationToBlock(Block *block, Declaration *declaration, s64 index = -1) {
 	if (!checkForRedeclaration(block, declaration, nullptr)) {
 		return false;
 	}
 
-	addDeclarationToBlockUnchecked(block, declaration);
+	addDeclarationToBlockUnchecked(block, declaration, index);
 
 	return true;
 }
@@ -201,9 +220,8 @@ inline Declaration *findDeclaration(Block *block, String name, u64 *index, bool 
 		usingYieldLimit = block->declarations.count;
 	}
 
-	for (auto declaration : block->usings) {
-		if (declaration->indexInBlock < usingYieldLimit) {
-			assert((declaration->flags & DECLARATION_IS_USING) && !(declaration->flags & DECLARATION_USING_IS_RESOLVED));
+	for (auto importer : block->importers) {
+		if (importer->indexInBlock < usingYieldLimit && !(importer->flags & IMPORTER_IS_COMPLETE)) {
 			*yield = true;
 			return nullptr;
 		}
@@ -214,12 +232,12 @@ inline Declaration *findDeclaration(Block *block, String name, u64 *index, bool 
 	return findDeclarationNoYield(block, name, index);
 }
 
-inline bool addImplicitImport(Block *block, String name, CodeLocation *start, EndLocation *end) {
+inline bool addImplicitImport(Block *block, Declaration *old, CodeLocation *start, EndLocation *end) {
 	PROFILE_FUNC();
 	if (block->flags & (BLOCK_IS_ARGUMENTS | BLOCK_IS_STRUCT | BLOCK_IS_RETURNS)) return true;
 
 	u64 index;
-	auto declaration = findDeclarationIncludeImplictImports(block, name, &index);
+	auto declaration = findDeclarationIncludeImplictImports(block, old->name, &index);
 
 	if (declaration) {
 		if (declaration->flags & DECLARATION_IS_IMPLICIT_IMPORT) {
@@ -234,9 +252,10 @@ inline bool addImplicitImport(Block *block, String name, CodeLocation *start, En
 	}
 	else {
 		Declaration *import = new Declaration;
-		import->name = name;
+		import->name = old->name;
 		import->start = *start;
 		import->end = *end;
+		import->import = old;
 		import->flags |= DECLARATION_IS_IMPLICIT_IMPORT;
 		addDeclarationToBlockUnchecked(block, import);
 

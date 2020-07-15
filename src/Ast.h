@@ -174,7 +174,9 @@ enum class ExprFlavor : u8 {
 
 	COMMA_ASSIGNMENT, 
 
-	SWITCH
+	SWITCH, 
+
+	STATIC_IF
 };
 
 struct Declaration;

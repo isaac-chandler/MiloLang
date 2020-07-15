@@ -51,7 +51,7 @@ static u64 getTokenPrecedence(TokenT token) {
 
 static void insertBlock(Block *block) {
 	if (currentBlock) {
-		block->indexInParent = currentBlock->declarations.count;
+		block->indexInParent = currentBlock->currentIndex++;
 	}
 	else {
 		block->indexInParent = 0;
@@ -143,29 +143,22 @@ Declaration *makeIterator(CodeLocation &start, EndLocation &end, String name) {
 	return declaration;
 }
 
-Declaration *createDeclarationForUsing(Declaration *oldDeclaration, Block *block) {
+Importer *createImporterForUsing(Declaration *oldDeclaration, Block *block) {
 	auto using_ = PARSER_NEW(ExprIdentifier);
 	using_->flavor = ExprFlavor::IDENTIFIER;
 	using_->start = oldDeclaration->start;
 	using_->end = oldDeclaration->end;
 	using_->resolveFrom = block;
 	using_->enclosingScope = block;
-	using_->indexInBlock = block->declarations.count;
+	using_->indexInBlock = block->currentIndex;
 	using_->name = oldDeclaration->name;
 	using_->declaration = oldDeclaration;
 	using_->structAccess = nullptr;
 
-	auto declaration = PARSER_NEW(Declaration);
+	auto import = PARSER_NEW(Importer);
+	import->import = using_;
 
-	declaration->start = using_->start;
-	declaration->end = using_->end;
-	declaration->name = { nullptr, 0ULL };
-	declaration->type = nullptr;
-	declaration->initialValue = using_;
-	declaration->physicalStorage = 0;
-	declaration->flags |= DECLARATION_IS_USING;
-
-	return declaration;
+	return import;
 }
 
 bool parseArguments(LexerFile *lexer, Arguments *args, const char *message);
@@ -541,6 +534,44 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 			return ifElse;
 		}
 	}
+	else if (lexer->token.type == TokenT::STATIC_IF) {
+		
+		auto staticIf = PARSER_NEW(ExprIf);
+		staticIf->flavor = ExprFlavor::STATIC_IF;
+		staticIf->start = lexer->token.start;
+
+		lexer->advance();
+
+		staticIf->condition = parseExpr(lexer);
+
+		if (!staticIf->condition)
+			return nullptr;
+
+		staticIf->end = lexer->previousTokenEnd;
+
+		if (expectAndConsume(lexer, ';')) {
+			staticIf->ifBody = nullptr;
+		}
+		else {
+			staticIf->ifBody = parseBlock(lexer);
+
+			if (!staticIf->ifBody)
+				return nullptr;
+		}
+
+		staticIf->elseBody = nullptr;
+
+		if (expectAndConsume(lexer, TokenT::ELSE)) {
+			if (!expectAndConsume(lexer, ';')) {
+				staticIf->elseBody = parseBlock(lexer);
+
+				if (!staticIf->elseBody)
+					return nullptr;
+			}
+		}
+
+		return staticIf;
+	}
 	else if (lexer->token.type == TokenT::CONTINUE || lexer->token.type == TokenT::BREAK || lexer->token.type == TokenT::REMOVE) {
 		ExprBreakOrContinue *continue_ = PARSER_NEW(ExprBreakOrContinue);
 		continue_->flavor =
@@ -564,7 +595,7 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 			identifier->structAccess = nullptr;
 
 			if (currentBlock) {
-				identifier->indexInBlock = currentBlock->declarations.count;
+				identifier->indexInBlock = currentBlock->currentIndex;
 			}
 
 			continue_->label = identifier;
@@ -799,7 +830,7 @@ ExprBlock *parseCase(LexerFile *lexer) {
 				}
 
 				assert(declaration->flags & DECLARATION_MARKED_AS_USING);
-				addDeclarationToCurrentBlock(createDeclarationForUsing(declaration, currentBlock));
+				currentBlock->importers.add(createImporterForUsing(declaration, currentBlock));
 
 				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_UNINITIALIZED))) { // If this declaration is constant or uninitialized don't add an initialization expression
 					ExprBinaryOperator *assign = PARSER_NEW(ExprBinaryOperator);
@@ -825,18 +856,9 @@ ExprBlock *parseCase(LexerFile *lexer) {
 				if (!using_)
 					return nullptr;
 
-
-				auto declaration = PARSER_NEW(Declaration);
-
-				declaration->start = start;
-				declaration->end = using_->end;
-				declaration->name = { nullptr, 0ULL };
-				declaration->type = nullptr;
-				declaration->initialValue = using_;
-				declaration->physicalStorage = 0;
-				declaration->flags |= DECLARATION_IS_USING;
-
-				addDeclarationToCurrentBlock(declaration);
+				auto importer = PARSER_NEW(Importer);
+				importer->import = using_;
+				addImporterToBlock(currentBlock, importer);
 			}
 
 			continue;
@@ -926,7 +948,7 @@ ExprBlock *parseBlock(LexerFile *lexer, ExprBlock *block) {
 				}
 
 				assert(declaration->flags & DECLARATION_MARKED_AS_USING);
-				addDeclarationToCurrentBlock(createDeclarationForUsing(declaration, currentBlock));
+				addImporterToBlock(currentBlock, createImporterForUsing(declaration, currentBlock));
 
 				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_UNINITIALIZED))) { // If this declaration is constant or uninitialized don't add an initialization expression
 					ExprBinaryOperator *assign = PARSER_NEW(ExprBinaryOperator);
@@ -952,18 +974,11 @@ ExprBlock *parseBlock(LexerFile *lexer, ExprBlock *block) {
 				if (!using_)
 					return nullptr;
 
+				auto importer = PARSER_NEW(Importer);
 
-				auto declaration = PARSER_NEW(Declaration);
-
-				declaration->start = start;
-				declaration->end = using_->end;
-				declaration->name = { nullptr, 0ULL };
-				declaration->type = nullptr;
-				declaration->initialValue = using_;
-				declaration->physicalStorage = 0;
-				declaration->flags |= DECLARATION_IS_USING;
-
-				addDeclarationToCurrentBlock(declaration);
+				importer->import = using_;
+				
+				addImporterToBlock(currentBlock, importer);
 			}
 
 			continue;
@@ -1332,7 +1347,7 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 					usingBlock = PARSER_NEW(ExprBlock);
 				}
 
-				addDeclarationToBlock(&usingBlock->declarations, createDeclarationForUsing(declaration, &function->arguments));
+				addImporterToBlock(&usingBlock->declarations, createImporterForUsing(declaration, &function->arguments));
 			}
 		} while (expectAndConsume(lexer, ','));
 
@@ -1612,7 +1627,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		identifier->structAccess = nullptr;
 
 		if (currentBlock) {
-			identifier->indexInBlock = currentBlock->declarations.count;
+			identifier->indexInBlock = currentBlock->currentIndex;
 		}
 		else {
 			identifier->indexInBlock = 0;
@@ -1787,7 +1802,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 				}
 
 				if (declaration->flags & DECLARATION_MARKED_AS_USING) {
-					addDeclarationToCurrentBlock(createDeclarationForUsing(declaration, currentBlock));
+					addImporterToBlock(currentBlock, createImporterForUsing(declaration, currentBlock));
 				}
 			}
 			else if (expectAndConsume(lexer, ';')) {
@@ -1855,7 +1870,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		membersDeclaration->inferJob = nullptr;
 
 		addDeclarationToCurrentBlock(membersDeclaration);
-		addDeclarationToCurrentBlock(createDeclarationForUsing(membersDeclaration, currentBlock));
+		addImporterToBlock(currentBlock, createImporterForUsing(membersDeclaration, currentBlock));
 
 
 		auto integer = PARSER_NEW(Declaration);
@@ -2477,7 +2492,7 @@ void parseFile(FileInfo *file) {
 
 				assert(declaration->flags & DECLARATION_MARKED_AS_USING);
 
-				inferQueue.add(createDeclarationForUsing(declaration, currentBlock));
+				inferQueue.add(createImporterForUsing(declaration, currentBlock));
 
 
 			}
@@ -2491,22 +2506,10 @@ void parseFile(FileInfo *file) {
 				if (!using_)
 					break;
 
+				auto importer = PARSER_NEW(Importer);
+				importer->import = using_;
 
-				auto declaration = PARSER_NEW(Declaration);
-
-				declaration->start = start;
-				declaration->end = using_->end;
-				declaration->name = { nullptr, 0ULL };
-				declaration->type = nullptr;
-				declaration->initialValue = using_;
-				declaration->physicalStorage = 0;
-				declaration->flags |= DECLARATION_IS_USING;
-				declaration->enclosingScope = nullptr;
-				declaration->indexInBlock = 0;
-
-				_ReadWriteBarrier();
-
-				inferQueue.add(declaration);
+				inferQueue.add(importer);
 			}
 		}
 		else if (lexer.token.type == TokenT::LOAD) {

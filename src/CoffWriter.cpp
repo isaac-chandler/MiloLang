@@ -802,7 +802,7 @@ bool writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataRelocations,
 		auto struct_ = static_cast<TypeStruct *>(type);
 
 		for (auto member : struct_->members.declarations) {
-			if (member->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_CONSTANT | DECLARATION_IS_USING | DECLARATION_IMPORTED_BY_USING)) continue;
+			if (member->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING)) continue;
 
 
 			if (!writeValue(dataSize + member->physicalStorage, data + member->physicalStorage, dataRelocations, symbols, stringTable, 
@@ -3307,7 +3307,7 @@ void runCoffWriter() {
 					u64 names = symbols.count();
 
 					for (auto member : struct_->members.declarations) {
-						if (member->flags & (DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_USING)) continue;
+						if (member->flags & (DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING)) continue;
 
 
 						createRdataPointer(&stringTable, &symbols, &rdata);
@@ -3317,7 +3317,7 @@ void runCoffWriter() {
 					u64 values = symbols.count();
 
 					for (auto member : struct_->members.declarations) {
-						if (member->flags & (DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_USING)) continue;
+						if (member->flags & (DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING)) continue;
 
 						if (!member->initialValue) continue;
 
@@ -3344,7 +3344,7 @@ void runCoffWriter() {
 					u64 valueCount = 0;
 
 					for (auto member : struct_->members.declarations) {
-						if (member->flags & (DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_USING)) continue;
+						if (member->flags & (DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING)) continue;
 
 
 						Type_Info_Struct::Member data;

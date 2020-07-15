@@ -110,7 +110,8 @@ enum class TokenT : u8 {
 	TYPE_INFO, 
 	CASE, 
 	THROUGH, 
-	COMPLETE
+	COMPLETE, 
+	STATIC_IF
 };
 
 struct Token {

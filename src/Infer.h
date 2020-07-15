@@ -15,7 +15,18 @@ enum class DeclarationPackType : u8 {
 	EXPRESSION
 };
 
+struct InferQueueJob {
+	bool isImporter;
 
-inline MPMCWorkQueue<Declaration *> inferQueue;
+	union {
+		Declaration *declaration;
+		Importer *importer;
+	};
+
+	InferQueueJob(Importer *importer) : isImporter(true), importer(importer) {}
+	InferQueueJob(Declaration *declaration) : isImporter(false), declaration(declaration) {}
+};
+
+inline MPMCWorkQueue<InferQueueJob> inferQueue;
 
 void runInfer();

@@ -1078,7 +1078,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			auto block = static_cast<ExprBlock *>(expr);
 
 			for (auto declaration : block->declarations.declarations) {
-				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_USING | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT))) {
+				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT))) {
 					declaration->physicalStorage = allocateSpaceForType(state, static_cast<ExprLiteral *>(declaration->type)->typeValue);
 				}
 			}
@@ -1668,7 +1668,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			auto struct_ = static_cast<TypeStruct *>(expr->type);
 
 			for (auto decl : struct_->members.declarations) {
-				if (decl->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_CONSTANT | DECLARATION_IS_USING | DECLARATION_IMPORTED_BY_USING)) continue;
+				if (decl->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING)) continue;
 
 				if (decl->physicalStorage & 7) {
 					memberSize = my_max(static_cast<ExprLiteral *>(decl->type)->typeValue->size, memberSize);
@@ -1680,7 +1680,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			state->nextRegister += (memberSize + 7) / 8;
 
 			for (auto decl : struct_->members.declarations) {
-				if (decl->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_CONSTANT | DECLARATION_IS_USING | DECLARATION_IMPORTED_BY_USING)) continue;
+				if (decl->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING)) continue;
 
 				if (decl->physicalStorage & 7) {
 					generateIrForceDest(state, decl->initialValue, memberTemp);

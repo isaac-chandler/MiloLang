@@ -13,7 +13,8 @@ enum class JobFlavor {
 	DECLARATION_TYPE,
 	DECLARATION_VALUE,
 	FUNCTION_TYPE,
-	FUNCTION_VALUE
+	FUNCTION_VALUE, 
+	IMPORTER
 };
 
 ExprLiteral *inferMakeTypeLiteral(CodeLocation &start, EndLocation &end, Type *type) {
@@ -118,9 +119,19 @@ struct SizeJob : SubJob {
 	SizeJob() : SubJob(JobFlavor::SIZE, nullptr) {}
 };
 
+struct ImporterJob : SubJob {
+	Importer *importer;
+
+	ImporterJob *next = nullptr;
+	ImporterJob *previous = nullptr;
+
+	ImporterJob() : SubJob(JobFlavor::IMPORTER, nullptr) {}
+};
+
 DeclarationJob *declarationJobs;
 FunctionJob *functionJobs;
 SizeJob *sizeJobs;
+ImporterJob *importerJobs;
 
 Array<SubJob *> subJobs;
 
@@ -146,6 +157,7 @@ void wakeUpSleepers(Array<SubJob *> *sleepers, String name = String(nullptr, 0UL
 	}
 }
 
+void addImporter(Importer *importer);
 
 void addBlock(Block *block) {
 	if (block->flags & BLOCK_IS_QUEUED) 
@@ -157,6 +169,10 @@ void addBlock(Block *block) {
 		auto success = addDeclaration(declaration);
 
 		assert(success); // Adding a block should never fail, the only failing cases for addDeclaration are if it is added to global scope
+	}
+
+	for (auto importer : block->importers) {
+		addImporter(importer);
 	}
 
 	wakeUpSleepers(&block->sleepingOnMe);
@@ -1205,11 +1221,12 @@ bool tryUsingConversion(SubJob *job, Type *correct, Expr **exprPointer, bool *yi
 	if (!struct_)
 		return false;
 
-	if (struct_->members.usings.count) {
-		*yield = true;
-		return false;
+	for (auto importer : struct_->members.importers) {
+		if (!(importer->flags & IMPORTER_IS_COMPLETE)) {
+			*yield = true;
+			return false;
+		}
 	}
-
 
 	Declaration *found = nullptr;
 	for (auto member : struct_->members.declarations) {
@@ -1799,7 +1816,7 @@ bool defaultValueIsZero(SubJob *job, Type *type, bool *yield) {
 		auto struct_ = static_cast<TypeStruct *>(type);
 
 		for (auto member : struct_->members.declarations) {
-			if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IS_USING)) continue;
+			if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT)) continue;
 
 			if (member->flags & DECLARATION_IS_UNINITIALIZED) return false;
 
@@ -2519,7 +2536,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 		}
 		else {
 			if (!binaryOpForAutoCast(job, binary, yield)) {
-				return false;
+				return *yield;
 			}
 			else if (!binaryOpForFloatAndIntLiteral(exprPointer)) {
 				return false;
@@ -2628,7 +2645,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 		}
 		else {
 			if (!binaryOpForAutoCast(job, binary, yield)) {
-				return false;
+				return *yield;
 			}
 			else if (!binaryOpForFloatAndIntLiteral(exprPointer)) {
 				return false;
@@ -2710,7 +2727,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 		}
 		else {
 			if (!binaryOpForAutoCast(job, binary, yield)) {
-				return false;
+				return *yield;
 			}
 			else if (left->type->flavor == TypeFlavor::POINTER && right->type->flavor == TypeFlavor::INTEGER) {
 				trySolidifyNumericLiteralToDefault(right);
@@ -2801,7 +2818,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 		}
 		else {
 			if (!binaryOpForAutoCast(job, binary, yield)) {
-				return false;
+				return *yield;
 			}
 			else if (left->type->flavor == TypeFlavor::ENUM && (left->type->flags & TYPE_ENUM_IS_FLAGS) &&
 				right->type->flavor == TypeFlavor::INTEGER && right->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(right)->unsignedValue == 0) {
@@ -2892,7 +2909,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 		}
 		else {
 			if (!binaryOpForAutoCast(job, binary, yield)) {
-				return false;
+				return *yield;
 			}
 
 			if (right->type != left->type) {
@@ -2961,7 +2978,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 		}
 		else {
 			if (!binaryOpForAutoCast(job, binary, yield)) {
-				return false;
+				return *yield;
 			}
 			else if (!binaryOpForFloatAndIntLiteral(exprPointer)) {
 				return false;
@@ -3471,6 +3488,7 @@ bool inferFlattened(SubJob *job) {
 		case ExprFlavor::IDENTIFIER: {
 
 			auto identifier = static_cast<ExprIdentifier *>(expr);
+
 			if (!identifier->declaration) {
 				if (identifier->structAccess) {
 					bool onlyConstants;
@@ -3516,7 +3534,7 @@ bool inferFlattened(SubJob *job) {
 							}
 							else {
 								if ((identifier->flags & EXPR_IDENTIFIER_RESOLVING_ONLY_CONSTANTS) && !(identifier->flags & EXPR_VALUE_NOT_REQUIRED)) {
-									reportError(identifier, "Error: Cannot refer to %s from outside, capture is not supported", (identifier->declaration->flags & DECLARATION_IS_ARGUMENT) ? "argument" : "variable");
+									reportError(identifier, "Error: Cannot refer to %s from outside, capture is not supported", (declaration->flags & DECLARATION_IS_ARGUMENT) ? "argument" : "variable");
 									return false;
 								}
 
@@ -3558,7 +3576,7 @@ bool inferFlattened(SubJob *job) {
 						if (identifier->enclosingScope && identifier->declaration->enclosingScope != identifier->enclosingScope) {
 							assert(identifier->enclosingScope != &globalBlock);
 
-							if (!addImplicitImport(identifier->enclosingScope, identifier->name, &identifier->start, &identifier->end)) {
+							if (!addImplicitImport(identifier->enclosingScope, identifier->declaration, &identifier->start, &identifier->end)) {
 								return false;
 							}
 						}
@@ -3635,7 +3653,7 @@ bool inferFlattened(SubJob *job) {
 			auto block = static_cast<ExprBlock *>(expr);
 
 			for (auto declaration : block->declarations.declarations) {
-				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_USING | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT))) {
+				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT))) {
 					if (!(declaration->flags & DECLARATION_TYPE_IS_READY)) {
 						goToSleep(job, &declaration->sleepingOnMe);
 
@@ -3646,7 +3664,7 @@ bool inferFlattened(SubJob *job) {
 
 			// Do two passes over the array because if the first pass added dependencies on some declarations then yielded, it would add them again next time round
 			for (auto declaration : block->declarations.declarations) {
-				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_USING | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT))) {
+				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT))) {
 					addSizeDependency(job->sizeDependencies, static_cast<ExprLiteral *>(declaration->type)->typeValue);
 				}
 			}
@@ -4380,10 +4398,6 @@ bool inferFlattened(SubJob *job) {
 					reportError(value, "Error: Cannot take the size of an auto casted value");
 					return false;
 				}
-				else if (type->typeValue == &TYPE_TYPE) {
-					assert(false); // @Incomplete: make this work
-					return false;
-				}
 
 				if (!type->typeValue->size) {
 					goToSleep(job, &type->typeValue->sleepingOnMe);
@@ -4674,6 +4688,21 @@ static BucketedArenaAllocator inferJobAllocator(1024 * 2024);
 static SizeJob *firstFreeSizeJob;
 static DeclarationJob *firstFreeDeclarationJob;
 static FunctionJob *firstFreeFunctionJob;
+static ImporterJob *firstFreeImporterJob;
+
+ImporterJob *allocateImporterJob() {
+	if (firstFreeImporterJob) {
+		auto result = firstFreeImporterJob;
+		firstFreeImporterJob = result->next;
+
+		result->index = 0;
+		result->flattened.clear();
+
+		return result;
+	}
+
+	return new (inferJobAllocator.allocate(sizeof(ImporterJob))) ImporterJob;
+}
 
 SizeJob *allocateSizeJob() {
 	if (firstFreeSizeJob) {
@@ -4682,6 +4711,9 @@ SizeJob *allocateSizeJob() {
 
 		result->sizingIndexInMembers = 0;
 		result->runningSize = 0;
+
+		result->index = 0;
+		result->flattened.clear();
 
 		return result;
 	}
@@ -4739,6 +4771,11 @@ void freeJob(FunctionJob *job) {
 	firstFreeFunctionJob = job;
 }
 
+void freeJob(ImporterJob *job) {
+	job->next = firstFreeImporterJob;
+	firstFreeImporterJob = job;
+}
+
 bool checkStructDeclaration(Declaration *declaration, Type *&value, String name) {
 	if (declaration->name == name) {
 		if (!(declaration->flags & DECLARATION_IS_CONSTANT)) {
@@ -4786,6 +4823,20 @@ else if (!checkStructDeclaration(declaration, value, name)) {	\
 #undef STRUCT_DECLARATION
 }
 
+void addImporter(Importer *importer) {
+	if (!importer->enclosingScope)
+		addImporterToBlock(&globalBlock, importer);
+
+	auto job = allocateImporterJob();
+	job->importer = importer;
+
+	flatten(job->flattened, &importer->import);
+
+	addJob(&importerJobs, job);
+	
+	subJobs.add(job);
+}
+
 bool addDeclaration(Declaration *declaration) {
 	declaration->inferJob = nullptr;
 
@@ -4811,41 +4862,39 @@ bool addDeclaration(Declaration *declaration) {
 
 
 	// Fast path for declarations that are trivial to infer
-	if (!(declaration->flags & DECLARATION_IS_USING)) {
-		if (declaration->flags & DECLARATION_IS_CONSTANT) {
-			if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::INT_LITERAL) {
-				declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, &TYPE_UNSIGNED_INT_LITERAL);
-				declaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
-				wakeUpSleepers(&declaration->sleepingOnMe);
-				return true;
-			}
-			else if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::FUNCTION) {
-				addFunction(static_cast<ExprFunction *>(declaration->initialValue));
-
-				return true;
-			}
+	if (declaration->flags & DECLARATION_IS_CONSTANT) {
+		if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::INT_LITERAL) {
+			declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, &TYPE_UNSIGNED_INT_LITERAL);
+			declaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
+			wakeUpSleepers(&declaration->sleepingOnMe);
+			return true;
 		}
-		else if (declaration->enclosingScope) {
-			if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::INT_LITERAL) {
-				trySolidifyNumericLiteralToDefault(declaration->initialValue);
-				declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, declaration->initialValue->type);
-				declaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
-				wakeUpSleepers(&declaration->sleepingOnMe);
-				return true;
-			}
-			else if (declaration->type && declaration->type->flavor == ExprFlavor::TYPE_LITERAL && !declaration->initialValue && (declaration->flags & (DECLARATION_IS_ARGUMENT | DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_RETURN))) {
-				declaration->flags |= DECLARATION_TYPE_IS_READY;
+		else if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::FUNCTION) {
+			addFunction(static_cast<ExprFunction *>(declaration->initialValue));
 
-				addTypeBlock(declaration->type);
+			return true;
+		}
+	}
+	else if (declaration->enclosingScope) {
+		if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::INT_LITERAL) {
+			trySolidifyNumericLiteralToDefault(declaration->initialValue);
+			declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, declaration->initialValue->type);
+			declaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
+			wakeUpSleepers(&declaration->sleepingOnMe);
+			return true;
+		}
+		else if (declaration->type && declaration->type->flavor == ExprFlavor::TYPE_LITERAL && !declaration->initialValue && (declaration->flags & (DECLARATION_IS_ARGUMENT | DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_RETURN))) {
+			declaration->flags |= DECLARATION_TYPE_IS_READY;
 
-				wakeUpSleepers(&declaration->sleepingOnMe);
-				return true;
-			}
-			else if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::FUNCTION) {
-				addFunction(static_cast<ExprFunction *>(declaration->initialValue));
+			addTypeBlock(declaration->type);
 
-				return true;
-			}
+			wakeUpSleepers(&declaration->sleepingOnMe);
+			return true;
+		}
+		else if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::FUNCTION) {
+			addFunction(static_cast<ExprFunction *>(declaration->initialValue));
+
+			return true;
 		}
 	}
 
@@ -4968,14 +5017,142 @@ void getHaltStatus(Declaration *declaration, Declaration *next, Expr **haltedOn,
 Array<FunctionJob *> functionWaitingOnSize;
 Array<DeclarationJob *> declarationWaitingOnSize;
 
+void addImporter(Importer *importer);
+
+bool inferImporter(ImporterJob *job) {
+	PROFILE_FUNC();
+
+	auto importer = job->importer;
+
+	Block *block = nullptr;
+	bool onlyConstants = false;
+	Expr *structAccess = nullptr;
+
+	if (importer->import->flavor == ExprFlavor::STATIC_IF) {
+		auto staticIf = static_cast<ExprIf *>(importer->import);
+
+		assert(staticIf->condition);
+		assert(staticIf->condition->flavor == ExprFlavor::INT_LITERAL);
+		assert(staticIf->condition->type == &TYPE_BOOL);
+
+		auto literal = static_cast<ExprLiteral *>(staticIf->condition);
+
+		if (convertToUnsigned(literal->unsignedValue, literal->type->size)) {
+			if (staticIf->ifBody) {
+				assert(staticIf->ifBody->flavor == ExprFlavor::BLOCK);
+
+				block = &static_cast<ExprBlock *>(staticIf->ifBody)->declarations;
+			}
+		}
+		else {
+			if (staticIf->elseBody) {
+				assert(staticIf->elseBody->flavor == ExprFlavor::BLOCK);
+
+				block = &static_cast<ExprBlock *>(staticIf->elseBody)->declarations;
+			}
+		}
+	}
+	else {
+		block = &getExpressionNamespace(importer->import, &onlyConstants, importer->import)->members;
+
+		onlyConstants |= (importer->flags & IMPORTER_IS_CONSTANT) != 0;
+
+		if (!block) {
+			return false;
+		}
+
+		if (importer->import->flavor != ExprFlavor::TYPE_LITERAL) {
+			auto identifier = static_cast<ExprIdentifier *>(importer->import);
+
+			while (identifier) {
+				if (identifier->flavor != ExprFlavor::IDENTIFIER) {
+					reportError(importer->import, "Error: You can only 'using' an identifier, a struct access of an identifier or a type");
+					return false;
+				}
+
+				identifier = static_cast<ExprIdentifier *>(identifier->structAccess);
+			}
+
+			structAccess = pushStructAccessDown(static_cast<ExprIdentifier *>(importer->import), importer->structAccess, importer->import->start, importer->import->end);
+		}
+	}
+
+	if (block) {
+		for (auto member : block->importers) {
+			if (!(member->flags & IMPORTER_IS_IMPORTED)) {
+				auto import = new Importer;
+				import->flags = member->flags;
+
+				if (onlyConstants) {
+					import->flags |= IMPORTER_IS_CONSTANT;
+				}
+
+				import->flags |= IMPORTER_IS_IMPORTED;
+				import->flags &= ~IMPORTER_IS_COMPLETE;
+
+				import->import = member->import;
+				import->structAccess = structAccess;
+
+				addImporterToBlock(importer->enclosingScope, import, importer->indexInBlock);
+
+				addImporter(import);
+			}
+		}
+
+
+		for (auto member : block->declarations) {
+			if (checkForRedeclaration(importer->enclosingScope, member, importer->import)) {
+				if (!(member->flags & (DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING))) {
+					if (!onlyConstants || (member->flags & DECLARATION_IS_CONSTANT)) {
+						auto import = new Declaration;
+						import->start = member->start;
+						import->end = member->end;
+						import->name = member->name;
+						import->flags = member->flags;
+
+						if (member->flags & DECLARATION_IS_CONSTANT) {
+							import->type = member->type;
+							import->initialValue = member->initialValue;
+						}
+						else {
+							import->import = member;
+							import->initialValue = structAccess;
+						}
+
+						import->flags |= DECLARATION_IMPORTED_BY_USING;
+
+						addDeclarationToBlock(importer->enclosingScope, import, importer->indexInBlock);
+
+						assert(import->name.length);
+						wakeUpSleepers(&importer->enclosingScope->sleepingOnMe, import->name);
+
+						if (member->flags & DECLARATION_IS_CONSTANT) {
+							if (!addDeclaration(import)) {
+								return false;
+							}
+						}
+					}
+				}
+			}
+			else {
+				return false;
+			}
+		}
+	}
+
+	importer->flags |= IMPORTER_IS_COMPLETE;
+
+	removeJob(&importerJobs, job);
+	freeJob(job);
+
+	return true;
+}
+
 bool inferDeclaration(DeclarationJob *job) {
 	PROFILE_FUNC();
 	auto declaration = job->declaration;
 
-	if (declaration->flags & DECLARATION_USING_IS_RESOLVED)
-		return true;
-
-	if (!(declaration->flags & (DECLARATION_TYPE_IS_READY | DECLARATION_IS_USING)) && declaration->type && job->type.index == job->type.flattened.count) {
+	if (!(declaration->flags & (DECLARATION_TYPE_IS_READY)) && declaration->type && job->type.index == job->type.flattened.count) {
 		if (declaration->type->type != &TYPE_TYPE) {
 			if (declaration->type->type->flavor == TypeFlavor::FUNCTION) {
 				reportError(declaration->type, "Error: Declaration type cannot be a function, did you miss a colon?");
@@ -5013,7 +5190,7 @@ bool inferDeclaration(DeclarationJob *job) {
 		wakeUpSleepers(&declaration->sleepingOnMe);
 	}
 
-	if (!(declaration->flags & DECLARATION_IS_USING) && declaration->type && declaration->initialValue) {
+	if (declaration->type && declaration->initialValue) {
 		if (job->type.index == job->type.flattened.count && job->value.index == job->value.flattened.count) {
 			assert(declaration->initialValue->type);
 
@@ -5068,7 +5245,7 @@ bool inferDeclaration(DeclarationJob *job) {
 			}
 		}
 	}
-	else if (!(declaration->flags & DECLARATION_IS_USING) && declaration->type) {
+	else if (declaration->type) {
 
 		if (job->type.index == job->type.flattened.count) {
 			if (!(declaration->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_ITERATOR | DECLARATION_IS_ITERATOR_INDEX | DECLARATION_IS_ARGUMENT | DECLARATION_IS_RETURN))) {
@@ -5107,135 +5284,47 @@ bool inferDeclaration(DeclarationJob *job) {
 	}
 	else if (declaration->initialValue) {
 		if (job->value.index == job->value.flattened.count) {
-			if (declaration->flags & DECLARATION_IS_USING) {
-				bool onlyConstants;
-				auto struct_ = getExpressionNamespace(declaration->initialValue, &onlyConstants, declaration->initialValue);
+			assert(declaration->initialValue->type);
 
-				onlyConstants |= (declaration->flags & DECLARATION_IS_CONSTANT) != 0;
+			if (!(declaration->flags & DECLARATION_IS_CONSTANT)) {
+				trySolidifyNumericLiteralToDefault(declaration->initialValue);
+			}
 
-				if (!struct_) {
+			if (declaration->initialValue->type == &TYPE_VOID) {
+				reportError(declaration->type, "Error: Declaration cannot have type void");
+				return false;
+			}
+			else if (declaration->initialValue->type == &TYPE_AUTO_CAST) {
+				reportError(declaration->type, "Error: Cannot infer the type of a declaration if the value is an auto cast");
+				return false;
+			}
+			else if (declaration->initialValue->type->flavor == TypeFlavor::NAMESPACE) {
+				reportError(declaration->type, "Error: Declaration type cannot be a namespace");
+				return false;
+			}
+
+			declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, declaration->initialValue->type);
+
+			if ((declaration->flags &
+				(DECLARATION_IS_CONSTANT | DECLARATION_IS_ARGUMENT | DECLARATION_IS_STRUCT_MEMBER | DECLARATION_IS_RETURN)) || declaration->enclosingScope == &globalBlock) {
+				if (!isLiteral(declaration->initialValue)) {
+					reportError(declaration->type, "Error: Declaration value must be a constant");
 					return false;
 				}
+			}
+
+			removeJob(&declarationJobs, job);
+
+			declaration->flags |= DECLARATION_VALUE_IS_READY;
+			declaration->flags |= DECLARATION_TYPE_IS_READY;
+			wakeUpSleepers(&declaration->sleepingOnMe);
 
 
-
-				if (declaration->initialValue->flavor != ExprFlavor::TYPE_LITERAL) {
-					auto identifier = static_cast<ExprIdentifier *>(declaration->initialValue);
-
-					while (identifier) {
-						if (identifier->flavor != ExprFlavor::IDENTIFIER) {
-							reportError(declaration->initialValue, "Error: You can only 'using' an identifier, a struct access of an identifier or a type");
-							return false;
-						}
-
-						identifier = static_cast<ExprIdentifier *>(identifier->structAccess);
-					}
-
-					declaration->initialValue = pushStructAccessDown(static_cast<ExprIdentifier *>(declaration->initialValue), declaration->type, declaration->start, declaration->end);
-				}
-
-
-				for (auto member : struct_->members.declarations) {
-					if (checkForRedeclaration(declaration->enclosingScope, member, declaration->initialValue)) {
-						if (!(member->flags & (DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT))) {
-							if (!onlyConstants || (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_USING))) {
-								auto import = new Declaration;
-								import->start = member->start;
-								import->end = member->end;
-								import->name = member->name;
-								import->flags = member->flags;
-
-								if (member->flags & DECLARATION_IS_USING) {
-									if (onlyConstants) {
-										import->flags |= DECLARATION_IS_CONSTANT;
-									}
-
-									import->initialValue = member->initialValue;
-									import->type = declaration->initialValue;
-									import->flags &= ~DECLARATION_USING_IS_RESOLVED;
-								}
-								else {
-									if (member->flags & DECLARATION_IS_CONSTANT) {
-										import->type = member->type;
-										import->initialValue = member->initialValue;
-									}
-									else {
-										import->import = member;
-										import->initialValue = declaration->initialValue;
-									}
-
-									import->flags |= DECLARATION_IMPORTED_BY_USING;
-								}
-
-								addDeclarationToBlock(declaration->enclosingScope, import);
-								import->indexInBlock = declaration->indexInBlock;
-
-								if (import->name.length) {
-									wakeUpSleepers(&declaration->enclosingScope->sleepingOnMe, import->name);
-								}
-
-								if (member->flags & (DECLARATION_IS_USING | DECLARATION_IS_CONSTANT)) {
-									if (!addDeclaration(import)) {
-										return false;
-									}
-								}
-							}
-						}
-					}
-					else {
-						return false;
-					}
-				}
-
-				declaration->enclosingScope->usings.unordered_remove(declaration);
-				declaration->flags |= DECLARATION_USING_IS_RESOLVED;
-
-				removeJob(&declarationJobs, job);
-				freeJob(job);
+			if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
+				declarationWaitingOnSize.add(job);
 			}
 			else {
-				assert(declaration->initialValue->type);
-
-				if (!(declaration->flags & DECLARATION_IS_CONSTANT)) {
-					trySolidifyNumericLiteralToDefault(declaration->initialValue);
-				}
-
-				if (declaration->initialValue->type == &TYPE_VOID) {
-					reportError(declaration->type, "Error: Declaration cannot have type void");
-					return false;
-				}
-				else if (declaration->initialValue->type == &TYPE_AUTO_CAST) {
-					reportError(declaration->type, "Error: Cannot infer the type of a declaration if the value is an auto cast");
-					return false;
-				}
-				else if (declaration->initialValue->type->flavor == TypeFlavor::NAMESPACE) {
-					reportError(declaration->type, "Error: Declaration type cannot be a namespace");
-					return false;
-				}
-
-				declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, declaration->initialValue->type);
-
-				if ((declaration->flags &
-					(DECLARATION_IS_CONSTANT | DECLARATION_IS_ARGUMENT | DECLARATION_IS_STRUCT_MEMBER | DECLARATION_IS_RETURN)) || declaration->enclosingScope == &globalBlock) {
-					if (!isLiteral(declaration->initialValue)) {
-						reportError(declaration->type, "Error: Declaration value must be a constant");
-						return false;
-					}
-				}
-
-				removeJob(&declarationJobs, job);
-
-				declaration->flags |= DECLARATION_VALUE_IS_READY;
-				declaration->flags |= DECLARATION_TYPE_IS_READY;
-				wakeUpSleepers(&declaration->sleepingOnMe);
-
-
-				if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
-					declarationWaitingOnSize.add(job);
-				}
-				else {
-					freeJob(job);
-				}
+				freeJob(job);
 			}
 		}
 	}
@@ -5378,7 +5467,7 @@ bool inferSize(SizeJob *job) {
 		while (job->sizingIndexInMembers < struct_->members.declarations.count) {
 			auto member = struct_->members.declarations[job->sizingIndexInMembers];
 
-			if (!(member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_USING | DECLARATION_IMPORTED_BY_USING))) {
+			if (!(member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING))) {
 				if (!(member->flags & DECLARATION_TYPE_IS_READY)) {
 					goToSleep(job, &member->sleepingOnMe);
 
@@ -5502,15 +5591,21 @@ void runInfer() {
 	ArraySet<DeclarationJob *> declarationsToWorkOn;
 	ArraySet<FunctionJob *> functionsToWorkOn;
 	ArraySet<SizeJob *> sizesToWorkOn;
+	ArraySet<ImporterJob *> importersToWorkOn;
 
 	while (true) {
-		Declaration *declaration = inferQueue.take();
+		auto job = inferQueue.take();
 
-		if (!declaration)
+		if (!job.declaration)
 			break;
 
-		if (!addDeclaration(declaration))
-			goto error;
+		if (job.isImporter) {
+			addImporter(job.importer);
+		}
+		else {
+			if (!addDeclaration(job.declaration))
+				goto error;
+		}
 
 		do {
 			while (subJobs.count) {
@@ -5535,10 +5630,21 @@ void runInfer() {
 					else if (job->flavor == JobFlavor::SIZE) {
 						sizesToWorkOn.add(static_cast<SizeJob *>(job));
 					}
+					else if (job->flavor == JobFlavor::IMPORTER) {
+						importersToWorkOn.add(static_cast<ImporterJob *>(job));
+					}
 				}
 			}
 
 			subJobs.clear();
+
+
+			for (auto job : importersToWorkOn) {
+				if (!inferImporter(job))
+					goto error;
+			}
+
+			importersToWorkOn.clear();
 
 			for (auto job : declarationsToWorkOn) {
 				if (!inferDeclaration(job))

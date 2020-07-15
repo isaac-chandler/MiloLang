@@ -53,7 +53,8 @@ static const Keyword keywords[] = {
 	{"type_info", TokenT::TYPE_INFO}, 
 	{"case", TokenT::CASE}, 
 	{"#through", TokenT::THROUGH}, 
-	{"#complete", TokenT::COMPLETE}
+	{"#complete", TokenT::COMPLETE}, 
+	{"#if", TokenT::STATIC_IF}
 };
 
 void BigInt::zero() {
