@@ -53,6 +53,8 @@
 
 #define AlignPO2(a, alignment) ((static_cast<u32>(a) + (static_cast<u32>(alignment) - 1)) & ~(static_cast<u32>(alignment) - 1))
 
+#define prefetch(address, hint) (_mm_prefetch(reinterpret_cast<const CHAR *>(address), (hint)))
+
 
 typedef uint8_t u8;
 typedef uint16_t u16;

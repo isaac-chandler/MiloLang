@@ -10,29 +10,139 @@
 
 MPSCWorkQueue<ExprFunction *> irGeneratorQueue;
 
+struct Loop {
+	struct ExprLoop *loop;
+	u64 start;
+
+	Array<u64> endPatches;
+};
+
+Array<Expr *> deferStack;
+static Block *currentBlock;
+
+Array<Loop> loopStack;
+u64 loopCount;
 
 u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced = false);
 u64 generateIrForceDest(IrState *state, Expr *expr, u64 dest);
 
 void pushLoop(IrState *state, ExprLoop *loop) {
-	if (state->loopCount >= state->loopStack.count) {
-		state->loopStack.add();
+	if (loopCount >= loopStack.count) {
+		loopStack.add();
 	}
 
-	state->loopStack[state->loopCount].start = state->ir.count;
-	state->loopStack[state->loopCount].loop = loop;
-	state->loopStack[state->loopCount].endPatches.clear();
+	loopStack[loopCount].start = state->ir.count;
+	loopStack[loopCount].loop = loop;
+	loopStack[loopCount].endPatches.clear();
 
-	++state->loopCount;
+	++loopCount;
+
+	
 }
 
 void popLoop(IrState *state) {
-	--state->loopCount;
+	--loopCount;
 
-	Loop loop = state->loopStack[state->loopCount];
+	Loop loop = loopStack[loopCount];
 
 	for (auto patch : loop.endPatches) {
 		state->ir[patch].b = state->ir.count;
+	}
+}
+
+
+
+static void generateIncrement(IrState *state, ExprLoop *loop) {
+	auto it = loop->iteratorBlock.declarations[0];
+	auto it_index = loop->iteratorBlock.declarations[1];
+
+	Ir &index = state->ir.add();
+	index.op = IrOp::ADD_CONSTANT;
+	index.opSize = 8;
+	index.a = it_index->physicalStorage;
+	index.b = 1;
+	index.dest = it_index->physicalStorage;
+
+	Ir &increment = state->ir.add();
+	increment.op = IrOp::ADD_CONSTANT;
+	increment.opSize = loop->forBegin->type->size;
+	increment.a = loop->irPointer;
+	increment.dest = loop->irPointer;
+
+	if (loop->forBegin->type->flavor == TypeFlavor::POINTER) {
+		auto pointer = static_cast<TypePointer *>(loop->forBegin->type);
+
+		increment.b = pointer->pointerTo->size;
+	}
+	else if (loop->forBegin->type->flavor == TypeFlavor::ARRAY) {
+		auto array = static_cast<TypeArray *>(loop->forBegin->type);
+
+		increment.b = array->arrayOf->size;
+	}
+	else {
+		increment.b = 1;
+	}
+}
+
+void addLineMarker(IrState *state, Expr *expr) {
+	Ir &ir = state->ir.add();
+
+	ir.op = IrOp::LINE_MARKER;
+	ir.location.start = expr->start;
+	ir.location.end = expr->end;
+}
+
+
+void exitBlock(IrState *state, Block *block, bool isBreak) {
+	for (s64 i = deferStack.count - 1; i >= 0; --i) {
+		auto expr = deferStack[i];
+
+		if (expr->flavor == ExprFlavor::FOR) {
+			auto loop = static_cast<ExprLoop *>(expr);
+
+			auto current = &loop->iteratorBlock;
+			bool found = false;
+
+			while (current) {
+				if (current == block) {
+					found = true;
+					break;
+				}
+
+				current = current->parentBlock;
+			}
+
+			if (!found)
+				break;
+
+			if (!isBreak) // Break statements shouldn't execute the increment
+				generateIncrement(state, loop);
+		}
+		else {
+			assert(expr->flavor == ExprFlavor::DEFER);
+
+			auto defer = static_cast<ExprDefer *>(expr);
+
+			if (block) {
+				auto current = defer->enclosingScope;
+				bool found = false;
+
+				while (current) {
+					if (current == block) {
+						found = true;
+						break;
+					}
+
+					current = current->parentBlock;
+				}
+
+				if (!found)
+					break;
+			}
+
+			addLineMarker(state, defer);
+			generateIr(state, defer->expr, DEST_NONE);
+		}
 	}
 }
 
@@ -359,47 +469,6 @@ void writeForModifyWrite(IrState *state, IrModifyWrite info, Expr *left) {
 		write.b = info.leftReg;
 	}
 }
-
-static void generateIncrement(IrState *state, ExprLoop *loop) {
-	auto it = loop->iteratorBlock.declarations[0];
-	auto it_index = loop->iteratorBlock.declarations[1];
-
-	Ir &index = state->ir.add();
-	index.op = IrOp::ADD_CONSTANT;
-	index.opSize = 8;
-	index.a = it_index->physicalStorage;
-	index.b = 1;
-	index.dest = it_index->physicalStorage;
-
-	Ir &increment = state->ir.add();
-	increment.op = IrOp::ADD_CONSTANT;
-	increment.opSize = loop->forBegin->type->size;
-	increment.a = loop->irPointer;
-	increment.dest = loop->irPointer;
-
-	if (loop->forBegin->type->flavor == TypeFlavor::POINTER) {
-		auto pointer = static_cast<TypePointer *>(loop->forBegin->type);
-
-		increment.b = pointer->pointerTo->size;
-	}
-	else if (loop->forBegin->type->flavor == TypeFlavor::ARRAY) {
-		auto array = static_cast<TypeArray *>(loop->forBegin->type);
-
-		increment.b = array->arrayOf->size;
-	}
-	else {
-		increment.b = 1;
-	}
-}
-
-void addLineMarker(IrState *state, Expr *expr) {
-	Ir &ir = state->ir.add();
-
-	ir.op = IrOp::LINE_MARKER;
-	ir.location.start = expr->start;
-	ir.location.end = expr->end;
-}
-
 void generateCall(IrState *state, ExprFunctionCall *call, u64 dest, ExprCommaAssignment *comma) {
 	auto type = static_cast<TypeFunction *>(call->function->type);
 
@@ -1088,16 +1157,40 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				generateIr(state, subExpr, DEST_NONE);
 			}
 
+			exitBlock(state, &block->declarations, false);
+			
+			while (deferStack.count) {
+				auto expr = deferStack[deferStack.count - 1];
+				
+				if (expr->flavor != ExprFlavor::DEFER)
+					break;
+
+				auto defer = static_cast<ExprDefer *>(expr);
+
+				if (defer->enclosingScope != &block->declarations)
+					break;
+
+				deferStack.pop();
+			}
+
+			return DEST_NONE;
+		}
+		case ExprFlavor::DEFER: {
+			assert(dest == DEST_NONE);
+
+			deferStack.add(expr);
+			
 			return DEST_NONE;
 		}
 		case ExprFlavor::BREAK: {
 			auto break_ = static_cast<ExprBreakOrContinue *>(expr);
 
 
-			for (u64 i = state->loopCount; i-- != 0;) {
+			for (u64 i = loopCount; i-- != 0;) {
 
-				if (state->loopStack[i].loop == break_->refersTo) {
-					state->loopStack[i].endPatches.add(state->ir.count);
+				if (loopStack[i].loop == break_->refersTo) {
+					exitBlock(state, &loopStack[i].loop->iteratorBlock, true);
+					loopStack[i].endPatches.add(state->ir.count);
 					break;
 				}
 			}
@@ -1112,17 +1205,13 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 			u64 begin;
 
-			for (u64 i = state->loopCount; i-- != 0;) {
-				if (state->loopStack[i].loop->flavor == ExprFlavor::FOR) {
-					generateIncrement(state, state->loopStack[i].loop);
-				}
 
-				if (state->loopStack[i].loop == continue_->refersTo) {
-					begin = state->loopStack[i].start;
+			for (u64 i = loopCount; i-- != 0;) {
+				if (loopStack[i].loop == continue_->refersTo) {
+					exitBlock(state, &loopStack[i].loop->iteratorBlock, false);
+					begin = loopStack[i].start;
 					break;
 				}
-
-				assert(i != 0);
 			}
 
 			Ir &jump = state->ir.add();
@@ -1387,17 +1476,22 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 					read.a = loop->irPointer;
 				}
 			}
+
+			deferStack.add(loop);
 		
 			if (loop->body) {
 				addLineMarker(state, loop->body);
 				generateIr(state, loop->body, DEST_NONE);
 			}
 
-			generateIncrement(state, loop);
+			exitBlock(state, &loop->iteratorBlock, false);
+
+			Expr *inc = deferStack.pop();
+			assert(inc == loop);
 
 			Ir &jump = state->ir.add();
 			jump.op = IrOp::GOTO;
-			jump.b = state->loopStack[state->loopCount - 1].start;
+			jump.b = loopStack[loopCount - 1].start;
 
 			state->ir[patch].b = state->ir.count;
 
@@ -1626,6 +1720,8 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 		case ExprFlavor::RETURN: {
 			auto return_ = static_cast<ExprReturn *>(expr);
 
+			exitBlock(state, nullptr, true);
+
 			u64 result = 0;
 
 			if (return_->returns.count) {
@@ -1818,7 +1914,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 			Ir &jump = state->ir.add();
 			jump.op = IrOp::GOTO;
-			jump.b = state->loopStack[state->loopCount - 1].start;
+			jump.b = loopStack[loopCount - 1].start;
 
 			state->ir[patch].b = state->ir.count;
 

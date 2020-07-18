@@ -715,3 +715,7 @@ wait_for_thread :: (thread: *Thread) {
 close_thread :: (thread: *Thread) {
 	CloseHandle(thread.handle)
 }
+
+exit :: (code: u32 = 0) {
+	ExitProcess(code)
+}

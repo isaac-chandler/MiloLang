@@ -155,7 +155,7 @@ Declaration *createDataDeclaration(Type *type, Type **toAdd) {
 	dataDeclaration->type = dataType;
 	dataDeclaration->initialValue = nullptr;
 	dataDeclaration->physicalStorage = 0;
-	dataDeclaration->flags |= DECLARATION_IS_STRUCT_MEMBER | DECLARATION_TYPE_IS_READY;
+	dataDeclaration->flags |= DECLARATION_TYPE_IS_READY;
 
 	*toAdd = slot == typeTableCapacity ? nullptr : dataType->typeValue; // Returns capacity if pointer is already in table
 
@@ -304,7 +304,7 @@ TypeArray *getStaticArray(Type *type, u64 count) {
 	countDeclaration->name = "count";
 	countDeclaration->type = unsignedLiteralType;
 	countDeclaration->initialValue = countLiteral;
-	countDeclaration->flags |= DECLARATION_IS_STRUCT_MEMBER | DECLARATION_IS_CONSTANT | DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
+	countDeclaration->flags |= DECLARATION_IS_CONSTANT | DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
 	addDeclarationToBlock(&result->members, countDeclaration);
 
 	result->members.flags |= BLOCK_IS_QUEUED | BLOCK_IS_STRUCT;
@@ -513,7 +513,7 @@ void setupTypeTable() {
 	countDeclaration->type = u64Type;
 	countDeclaration->initialValue = nullptr;
 	countDeclaration->physicalStorage = 8;
-	countDeclaration->flags |= DECLARATION_IS_STRUCT_MEMBER | DECLARATION_TYPE_IS_READY;
+	countDeclaration->flags |= DECLARATION_TYPE_IS_READY;
 
 	capacityDeclaration = TYPE_NEW(Declaration);
 	capacityDeclaration->start = {};
@@ -522,5 +522,5 @@ void setupTypeTable() {
 	capacityDeclaration->type = u64Type;
 	capacityDeclaration->initialValue = nullptr;
 	capacityDeclaration->physicalStorage = 16;
-	capacityDeclaration->flags |= DECLARATION_IS_STRUCT_MEMBER | DECLARATION_TYPE_IS_READY;
+	capacityDeclaration->flags |= DECLARATION_TYPE_IS_READY;
 }

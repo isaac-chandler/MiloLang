@@ -79,6 +79,24 @@ Declaration *findInBlock(Block *block, String name) {
 	return nullptr;
 }
 
+bool replaceInBlock(Block *block, Declaration *old, Declaration *declaration) {
+	assert(old->name == declaration->name);
+
+	u64 hash = doHash(old->name);
+	u64 slot = hash & (block->tableCapacity - 1);
+
+	while (block->table[slot].declaration) {
+		if (block->table[slot].declaration == old) {
+			block->table[slot].declaration = declaration;
+			return true;
+		}
+		++slot;
+		slot &= block->tableCapacity - 1;
+	}
+
+	return false;
+}
+
 void rehash(Block *block) {
 	PROFILE_FUNC();
 

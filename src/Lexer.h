@@ -111,7 +111,8 @@ enum class TokenT : u8 {
 	CASE, 
 	THROUGH, 
 	COMPLETE, 
-	STATIC_IF
+	STATIC_IF, 
+	DEFER
 };
 
 struct Token {

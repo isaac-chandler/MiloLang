@@ -27,25 +27,24 @@
 // Set when a declaration has been allocated space in the output executable
 #define DECLARATION_HAS_STORAGE        0x0'0080
 
-#define DECLARATION_IS_STRUCT_MEMBER   0x0'0100
-
-#define DECLARATION_IMPORTED_BY_USING  0x0'0400
+#define DECLARATION_IMPORTED_BY_USING  0x0'0100
 
 // This is the actual variable that the using refers to
-#define DECLARATION_MARKED_AS_USING    0x0'1000
+// This is the actual variable that the using refers to
+#define DECLARATION_MARKED_AS_USING    0x0'0200
 
 // Set on declarations that are silently inserted when a variable from some outer scopes is used so that later usings will cause an error if they try to override it
-#define DECLARATION_IS_IMPLICIT_IMPORT 0x0'2000 // @Speed @Cleanup This is a very costly mechanism for this relatively uncommon check
+#define DECLARATION_IS_IMPLICIT_IMPORT 0x0'0400 // @Speed @Cleanup This is a very costly mechanism for this relatively uncommon check
 
-#define DECLARATION_IS_ENUM_VALUE      0x0'4000
+#define DECLARATION_IS_ENUM_VALUE      0x0'0800
 
-#define DECLARATION_IS_RETURN          0x0'8000
+#define DECLARATION_IS_RETURN          0x0'1000
 
 // Set if a return value declaration is marked as #must
-#define DECLARATION_IS_MUST            0x1'0000
+#define DECLARATION_IS_MUST            0x0'2000
 
 // Set if a declaration is on the left hand side of a := comma assignment
-#define DECLARATION_IS_IN_COMPOUND     0x2'0000
+#define DECLARATION_IS_IN_COMPOUND     0x0'4000
 
 
 struct Declaration {
@@ -83,7 +82,7 @@ struct Declaration {
 #define BLOCK_IS_STRUCT 0x8
 #define BLOCK_IS_RETURNS 0x10
 
-#define BLOCK_HASHTABLE_MIN_COUNT 32
+#define BLOCK_HASHTABLE_MIN_COUNT 8
 
 struct Importer {
 	u64 indexInBlock;
@@ -117,14 +116,12 @@ inline Block globalBlock;
 
 Declaration *findInBlock(Block *block, String name);
 
-inline Declaration *findDeclarationIncludeImplictImports(Block *block, String name, u64 *index) {
+inline Declaration *findDeclarationIncludeImplictImports(Block *block, String name) {
 	if (block->table) {
 		return findInBlock(block, name);
 	}
 	else {
-		for (*index = 0; *index < block->declarations.count; (*index)++) {
-			auto declaration = block->declarations[*index];
-
+		for (auto declaration : block->declarations) {
 			if (declaration->name == name) {
 				return declaration;
 			}
@@ -134,8 +131,8 @@ inline Declaration *findDeclarationIncludeImplictImports(Block *block, String na
 	return nullptr;
 }
 
-inline Declaration *findDeclarationNoYield(Block *block, String name, u64 *index) {
-	auto declaration = findDeclarationIncludeImplictImports(block, name, index);
+inline Declaration *findDeclarationNoYield(Block *block, String name) {
+	auto declaration = findDeclarationIncludeImplictImports(block, name);
 
 	if (!declaration)
 		return nullptr;
@@ -147,9 +144,8 @@ inline bool checkForRedeclaration(Block *block, Declaration *declaration, struct
 	assert(block);
 	assert(declaration);
 
-	if (declaration->name.length) { // Multiple zero length names are used in the arguments block for function prototypes with unnamed arguments
-		u64 index;
-		auto previous = findDeclarationIncludeImplictImports(block, declaration->name, &index);
+	if (declaration->name.length) { // Multiple zero length names are used in the arguments block for function prototypes with unnamed 
+		auto previous = findDeclarationIncludeImplictImports(block, declaration->name);
 
 		if (previous) {
 			if (previous->flags & DECLARATION_IS_IMPLICIT_IMPORT) {
@@ -215,7 +211,7 @@ inline bool addDeclarationToBlock(Block *block, Declaration *declaration, s64 in
 	return true;
 }
 
-inline Declaration *findDeclaration(Block *block, String name, u64 *index, bool *yield, u64 usingYieldLimit = -1) {
+inline Declaration *findDeclaration(Block *block, String name, bool *yield, u64 usingYieldLimit = -1) {
 	if (usingYieldLimit == -1) {
 		usingYieldLimit = block->declarations.count;
 	}
@@ -229,15 +225,14 @@ inline Declaration *findDeclaration(Block *block, String name, u64 *index, bool 
 
 	*yield = false;
 
-	return findDeclarationNoYield(block, name, index);
+	return findDeclarationNoYield(block, name);
 }
 
 inline bool addImplicitImport(Block *block, Declaration *old, CodeLocation *start, EndLocation *end) {
 	PROFILE_FUNC();
 	if (block->flags & (BLOCK_IS_ARGUMENTS | BLOCK_IS_STRUCT | BLOCK_IS_RETURNS)) return true;
 
-	u64 index;
-	auto declaration = findDeclarationIncludeImplictImports(block, old->name, &index);
+	auto declaration = findDeclarationIncludeImplictImports(block, old->name);
 
 	if (declaration) {
 		if (declaration->flags & DECLARATION_IS_IMPLICIT_IMPORT) {

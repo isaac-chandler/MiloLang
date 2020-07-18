@@ -64,7 +64,8 @@ enum class IrOp : u8 {
 	STRING, 
 	STRING_EQUAL,
 	LINE_MARKER, 
-	TYPE
+	TYPE, 
+	DEFER
 };
 
 #define IR_SIGNED_OP 0x1
@@ -120,13 +121,6 @@ struct Ir {
 	IrOp op;
 };
 
-struct Loop {
-	struct ExprLoop *loop;
-	u64 start;
-
-	Array<u64> endPatches;
-};
-
 struct IrState {
 	u64 nextRegister = 1;
 	u64 callAuxStorage = 0;
@@ -134,9 +128,6 @@ struct IrState {
 	Array<Ir> ir;
 
 	BucketedArenaAllocator allocator;
-
-	Array<Loop> loopStack;
-	u64 loopCount = 0;
 
 	IrState() : allocator(1024) {}
 };
@@ -176,7 +167,8 @@ enum class ExprFlavor : u8 {
 
 	SWITCH, 
 
-	STATIC_IF
+	STATIC_IF, 
+	DEFER
 };
 
 struct Declaration;
@@ -195,6 +187,11 @@ struct Expr {
 #if BUILD_DEBUG // So I don't have to cast it to view the actual expression type in the debugger
 	virtual ~Expr() {}
 #endif
+};
+
+struct ExprDefer : Expr {
+	Expr *expr;
+	Block *enclosingScope;
 };
 
 

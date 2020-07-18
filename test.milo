@@ -16,6 +16,7 @@ counter_scale: f32
 
 load_image :: (filename: string) -> u32 {	
 	file, success := read_entire_file(filename)
+	defer deallocate(file.data)
 	
 	if !success {
 		print("Failed to load image ")
@@ -25,7 +26,6 @@ load_image :: (filename: string) -> u32 {
 	}
 	
 	if file.count < size_of(Bmp_File_Header) + size_of(Bmp_Dib_Header) {
-		deallocate(file.data)
 		return 0
 	}
 
@@ -33,7 +33,6 @@ load_image :: (filename: string) -> u32 {
 	dib_header := cast(*Bmp_Dib_Header)(file.data + size_of(Bmp_File_Header))
 	
 	if file_header.header != Bmp_File_Header.EXPECTED_HEADER || file_header.file_size != file.count {
-		deallocate(file.data)
 		return 0
 	}
 	
@@ -45,7 +44,6 @@ load_image :: (filename: string) -> u32 {
 		dib_header.blue_mask  != 0x000000FF ||
 		dib_header.height <= 0 {
 		
-		deallocate(file.data)
 		return 0
 	}
 	
@@ -60,8 +58,6 @@ load_image :: (filename: string) -> u32 {
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP)
 	
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, dib_header.width, dib_header.height, 0, GL_BGRA_EXT, GL_UNSIGNED_BYTE, file.data + file_header.offset_to_image)
-	
-	deallocate(file.data)
 	
 	return texture
 }
@@ -307,15 +303,16 @@ update_particle_system :: (using particle_system: *Particle_System, delta: f32) 
 }
 
 draw_particle_system :: (using particle_system: *Particle_System) {
-	
-
 	glPushMatrix()
+	defer glPopMatrix()
+	
 	glTranslatef(entities[relative].x, entities[relative].y, 0)
 
 	if particle_system.texture_handle {
 		glBindTexture(GL_TEXTURE_2D, particle_system.texture_handle)
 		
 		glBegin(GL_QUADS)
+		defer glEnd()
 		
 		for * particle : particles {
 			set_gl_color(particle.current_color)
@@ -323,25 +320,20 @@ draw_particle_system :: (using particle_system: *Particle_System) {
 			textured_quad(particle)
 		}
 		
-		glEnd()
-		
 	} else {
 		glDisable(GL_TEXTURE_2D)
+		defer glEnable(GL_TEXTURE_2D)
 		
 		glBegin(GL_QUADS)
+		defer glEnd()
 		
 		for * particle : particles {
 			set_gl_color(particle.current_color)
 		
 			untextured_quad(particle)
 		}
-		
-		glEnd()
-		
-		glEnable(GL_TEXTURE_2D)
-	}
-	
-	glPopMatrix()
+
+	}	
 }
 
 add_entity :: (entity: *Entity) -> u64 {
@@ -1080,20 +1072,18 @@ _main :: () {
 					glBindTexture(GL_TEXTURE_2D, entity.texture_handle)
 					
 					glBegin(GL_QUADS)
+					defer glEnd()
 				
 					set_gl_color(entity.color)
 					textured_quad(entity)
-					
-					glEnd()
 				} else {
 					glDisable(GL_TEXTURE_2D)
 					
 					glBegin(GL_QUADS)
+					defer glEnd()
 				
 					set_gl_color(entity.color)
 					untextured_quad(entity)
-					
-					glEnd()
 				}
 			}
 		}
@@ -1114,8 +1104,4 @@ _main :: () {
 		
 		last_time = current_time
 	}
-
-	ReleaseDC(window_handle, device_context)
-	
-	ExitProcess(0)
 }

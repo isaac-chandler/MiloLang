@@ -575,9 +575,7 @@ u32 createSymbolForFunction(BucketArray<Symbol> *symbols, ExprFunction *function
 		function->flags |= EXPR_HAS_STORAGE;
 
 		if (function->flags & EXPR_FUNCTION_IS_EXTERNAL) {
-			u64 index;
-
-			if (Declaration *declaration = findDeclarationNoYield(&externalsBlock, function->valueOfDeclaration->name, &index)) {
+			if (Declaration *declaration = findDeclarationNoYield(&externalsBlock, function->valueOfDeclaration->name)) {
 				assert(!(declaration->flags & DECLARATION_IMPORTED_BY_USING));
 
 				if (declaration->initialValue->type != function->type) {
@@ -3043,7 +3041,6 @@ void runCoffWriter() {
 			}
 
 			function->state.allocator.free();
-			function->state.loopStack.free();
 			function->state.ir.free();
 		}
 		else if (job.flavor == CoffJobFlavor::GLOBAL_DECLARATION) {

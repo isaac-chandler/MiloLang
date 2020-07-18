@@ -16,7 +16,7 @@ BucketedArenaAllocator parserArena(1024 * 1024);
 #define PARSER_NEW_ARRAY(T, C) new T[C]
 #endif
 
-Block *currentBlock = nullptr;
+static Block *currentBlock = nullptr;
 
 static bool addDeclarationToCurrentBlock(Declaration *declaration) {
 	return addDeclarationToBlock(currentBlock, declaration);
@@ -209,6 +209,156 @@ ExprIf *parseStaticIf(LexerFile *lexer) {
 	}
 
 	return staticIf;
+}
+
+Expr *parseExprStatemenet(LexerFile *lexer, bool allowDeclarations) {
+	Expr *expr = parseExpr(lexer);
+
+	if (!expr)
+		return nullptr;
+
+	CodeLocation start = lexer->token.start;
+	EndLocation end = lexer->token.end;
+
+	if (expectAndConsume(lexer, ',')) {
+		auto comma = PARSER_NEW(ExprCommaAssignment);
+
+		comma->flavor = ExprFlavor::COMMA_ASSIGNMENT;
+
+		Array<Expr *> exprs;
+		exprs.add(expr);
+
+		while (true) {
+			comma->start = lexer->token.start;
+			comma->end = lexer->token.end;
+
+			if (expectAndConsume(lexer, '=')) {
+				comma->call = parseExpr(lexer);
+
+				break;
+			}
+			else if (expectAndConsume(lexer, ':')) {
+				if (!allowDeclarations) {
+					reportError(&lexer->token, "Error: Cannot have a declaration here");
+					return nullptr;
+				}
+
+				comma->flags |= EXPR_COMMA_ASSIGNMENT_IS_DECLARATION;
+				comma->end = lexer->token.end;
+
+				if (!expectAndConsume(lexer, '=')) {
+					reportExpectedError(&lexer->token, "Error: Expected = after : in multi declaration");
+					return nullptr;
+				}
+
+				comma->call = parseExpr(lexer);
+
+				for (auto expr : exprs) {
+					if (expr->flavor != ExprFlavor::IDENTIFIER) {
+						reportError(expr, "Error: Multi-declarations must only assign to identifiers");
+						return nullptr;
+					}
+
+					auto identifier = static_cast<ExprIdentifier *>(expr);
+
+					auto declaration = PARSER_NEW(Declaration);
+
+					declaration->start = identifier->start;
+					declaration->end = identifier->end;
+					declaration->name = identifier->name;
+					declaration->flags |= DECLARATION_IS_IN_COMPOUND;
+					declaration->type = nullptr;
+					declaration->initialValue = nullptr;
+					declaration->physicalStorage = 0;
+
+					if (!addDeclarationToCurrentBlock(declaration)) {
+						return nullptr;
+					}
+
+					identifier->declaration = declaration;
+				}
+
+				break;
+			}
+			else {
+				expr = parseExpr(lexer);
+
+				if (!expr)
+					return nullptr;
+
+				exprs.add(expr);
+			}
+		}
+
+		if (comma->call->flavor != ExprFlavor::FUNCTION_CALL) {
+			reportError(comma->call, "Error: Multi assignments can only have a function call on the right");
+			return nullptr;
+		}
+
+		comma->call->flags |= EXPR_FUNCTION_CALL_IS_IN_COMMA_ASSIGNMENT;
+
+
+		comma->exprCount = exprs.count;
+		comma->left = exprs.storage;
+
+		return comma;
+	}
+
+#define MODIFY_ASSIGN(type)                                                      \
+		else if (expectAndConsume(lexer, type)) {                                \
+			ExprBinaryOperator *op = makeBinaryOperator(start, end, type, expr); \
+																				 \
+			op->right = parseExpr(lexer);										 \
+																				 \
+			if (!op->right)														 \
+				return nullptr;												     \
+																				 \
+			return op;															 \
+		}
+
+	if (false);
+	MODIFY_ASSIGN(TOKEN('='))
+		MODIFY_ASSIGN(TokenT::PLUS_EQUALS)
+		MODIFY_ASSIGN(TokenT::MINUS_EQUALS)
+		MODIFY_ASSIGN(TokenT::TIMES_EQUALS)
+		MODIFY_ASSIGN(TokenT::DIVIDE_EQUALS)
+		MODIFY_ASSIGN(TokenT::MOD_EQUALS)
+		MODIFY_ASSIGN(TokenT::SHIFT_LEFT_EQUALS)
+		MODIFY_ASSIGN(TokenT::SHIFT_RIGHT_EQUALS)
+		MODIFY_ASSIGN(TokenT::XOR_EQUALS)
+		MODIFY_ASSIGN(TokenT::AND_EQUALS)
+		MODIFY_ASSIGN(TokenT::OR_EQUALS)
+	else {
+		if (expr->flavor != ExprFlavor::FUNCTION_CALL) {
+			auto unary = static_cast<ExprUnaryOperator *>(expr);
+			auto binary = static_cast<ExprBinaryOperator *>(expr);
+
+			if (expr->flavor == ExprFlavor::UNARY_OPERATOR && unary->op == TOKEN('+') &&
+				unary->value->flavor == ExprFlavor::UNARY_OPERATOR && static_cast<ExprUnaryOperator *>(unary->value)->op == TOKEN('+') &&
+				unary->start.locationInMemory + 1 == unary->value->start.locationInMemory) {
+
+				reportError(expr, "Error: '++' is not supported");
+			}
+			else if (expr->flavor == ExprFlavor::BINARY_OPERATOR && binary->op == TOKEN('+') &&
+				binary->right->flavor == ExprFlavor::UNARY_OPERATOR && static_cast<ExprUnaryOperator *>(binary->right)->op == TOKEN('+') &&
+				binary->start.locationInMemory + 1 == binary->right->start.locationInMemory) {
+
+				reportError(expr, "Error: '++' is not supported");
+			}
+			else if (lexer->token.type == TokenT::DOUBLE_DASH) {
+				reportError(&lexer->token, "Error: '--' is not supported as an operator");
+			}
+			else {
+				reportError(expr, "Error: Can only have an assignment or function call expression at statement level");
+			}
+			return nullptr;
+		}
+		else {
+			expr->flags |= EXPR_FUNCTION_CALL_IS_STATEMENT_LEVEL;
+		}
+
+		return expr;
+	}
 }
 
 Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
@@ -662,153 +812,7 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 		return nullptr;
 	}
 	else {
-		Expr *expr = parseExpr(lexer);
-
-		if (!expr)
-			return nullptr;
-
-		CodeLocation start = lexer->token.start;
-		EndLocation end = lexer->token.end;
-
-		if (expectAndConsume(lexer, ',')) {
-			auto comma = PARSER_NEW(ExprCommaAssignment);
-
-			comma->flavor = ExprFlavor::COMMA_ASSIGNMENT;
-
-			Array<Expr *> exprs;
-			exprs.add(expr);
-
-			while (true) {
-				comma->start = lexer->token.start;
-				comma->end = lexer->token.end;
-
-				if (expectAndConsume(lexer, '=')) {
-					comma->call = parseExpr(lexer);
-
-					break;
-				}
-				else if (expectAndConsume(lexer, ':')) {
-					if (!allowDeclarations) {
-						reportError(&lexer->token, "Error: Cannot have a declaration here");
-						return nullptr;
-					}
-
-					comma->flags |= EXPR_COMMA_ASSIGNMENT_IS_DECLARATION;
-					comma->end = lexer->token.end;
-
-					if (!expectAndConsume(lexer, '=')) {
-						reportExpectedError(&lexer->token, "Error: Expected = after : in multi declaration");
-						return nullptr;
-					}
-
-					comma->call = parseExpr(lexer);
-					
-					for (auto expr : exprs) {
-						if (expr->flavor != ExprFlavor::IDENTIFIER) {
-							reportError(expr, "Error: Multi-declarations must only assign to identifiers");
-							return nullptr;
-						}
-
-						auto identifier = static_cast<ExprIdentifier *>(expr);
-
-						auto declaration = PARSER_NEW(Declaration);
-
-						declaration->start = identifier->start;
-						declaration->end = identifier->end;
-						declaration->name = identifier->name;
-						declaration->flags |= DECLARATION_IS_IN_COMPOUND;
-						declaration->type = nullptr;
-						declaration->initialValue = nullptr;
-						declaration->physicalStorage = 0;
-
-						if (!addDeclarationToCurrentBlock(declaration)) {
-							return nullptr;
-						}
-
-						identifier->declaration = declaration;
-					}
-
-					break;
-				}
-				else {
-					expr = parseExpr(lexer);
-
-					if (!expr)
-						return nullptr;
-
-					exprs.add(expr);
-				}
-			}
-
-			if (comma->call->flavor != ExprFlavor::FUNCTION_CALL) {
-				reportError(comma->call, "Error: Multi assignments can only have a function call on the right");
-				return nullptr;
-			}
-
-			comma->call->flags |= EXPR_FUNCTION_CALL_IS_IN_COMMA_ASSIGNMENT;
-
-
-			comma->exprCount = exprs.count;
-			comma->left = exprs.storage;
-
-			return comma;
-		}
-
-#define MODIFY_ASSIGN(type)                                                      \
-		else if (expectAndConsume(lexer, type)) {                                \
-			ExprBinaryOperator *op = makeBinaryOperator(start, end, type, expr); \
-																				 \
-			op->right = parseExpr(lexer);										 \
-																				 \
-			if (!op->right)														 \
-				return nullptr;												     \
-																				 \
-			return op;															 \
-		}
-
-		if (false);
-		MODIFY_ASSIGN(TOKEN('='))
-			MODIFY_ASSIGN(TokenT::PLUS_EQUALS)
-			MODIFY_ASSIGN(TokenT::MINUS_EQUALS)
-			MODIFY_ASSIGN(TokenT::TIMES_EQUALS)
-			MODIFY_ASSIGN(TokenT::DIVIDE_EQUALS)
-			MODIFY_ASSIGN(TokenT::MOD_EQUALS)
-			MODIFY_ASSIGN(TokenT::SHIFT_LEFT_EQUALS)
-			MODIFY_ASSIGN(TokenT::SHIFT_RIGHT_EQUALS)
-			MODIFY_ASSIGN(TokenT::XOR_EQUALS)
-			MODIFY_ASSIGN(TokenT::AND_EQUALS)
-			MODIFY_ASSIGN(TokenT::OR_EQUALS)
-		else {
-			if (expr->flavor != ExprFlavor::FUNCTION_CALL) {
-				auto unary = static_cast<ExprUnaryOperator *>(expr);
-				auto binary = static_cast<ExprBinaryOperator *>(expr);
-
-				if (expr->flavor == ExprFlavor::UNARY_OPERATOR && unary->op == TOKEN('+') &&
-					unary->value->flavor == ExprFlavor::UNARY_OPERATOR && static_cast<ExprUnaryOperator *>(unary->value)->op == TOKEN('+') &&
-					unary->start.locationInMemory + 1 == unary->value->start.locationInMemory) {
-
-					reportError(expr, "Error: '++' is not supported");
-				}
-				else if (expr->flavor == ExprFlavor::BINARY_OPERATOR && binary->op == TOKEN('+') &&
-					binary->right->flavor == ExprFlavor::UNARY_OPERATOR && static_cast<ExprUnaryOperator *>(binary->right)->op == TOKEN('+') &&
-					binary->start.locationInMemory + 1 == binary->right->start.locationInMemory) {
-
-					reportError(expr, "Error: '++' is not supported");
-				}
-				else if (lexer->token.type == TokenT::DOUBLE_DASH) {
-					reportError(&lexer->token, "Error: '--' is not supported as an operator");
-				}
-				else {
-					reportError(expr, "Error: Can only have an assignment or function call expression at statement level");
-				}
-				return nullptr;
-			}
-			else {
-				expr->flags |= EXPR_FUNCTION_CALL_IS_STATEMENT_LEVEL;
-			}
-
-			return expr;
-		}
+		return parseExprStatemenet(lexer, allowDeclarations);
 	}
 }
 
@@ -943,6 +947,26 @@ ExprBlock *parseBlock(LexerFile *lexer, ExprBlock *block) {
 		}
 		else if (expectAndConsume(lexer, '}')) {
 			break;
+		}
+		else if (lexer->token.type == TokenT::DEFER) {
+			auto defer = PARSER_NEW(ExprDefer);
+			defer->flavor = ExprFlavor::DEFER;
+			defer->start = lexer->token.start;
+			defer->enclosingScope = currentBlock;
+
+			lexer->advance();
+			
+			defer->expr = parseExprStatemenet(lexer, false);
+
+			if (!defer->expr) {
+				return nullptr;
+			}
+
+			defer->end = lexer->previousTokenEnd;
+
+			block->exprs.add(defer);
+
+			continue;
 		}
 		else if (lexer->token.type == TokenT::USING) {
 			TokenT peek[2];
@@ -1805,8 +1829,6 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 				if (!declaration)
 					return nullptr;
-
-				declaration->flags |= DECLARATION_IS_STRUCT_MEMBER;
 
 				if (!addDeclarationToCurrentBlock(declaration)) {
 					return nullptr;

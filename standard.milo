@@ -206,7 +206,7 @@ main :: () {
 
 	_main()
 	
-	ExitProcess(0)
+	exit()
 }
 
 get_command_line_arguments :: () -> []string {
@@ -257,9 +257,9 @@ u64_to_string :: (value: u64, base: u64 = 10) -> #must string {
 
 print_u64 :: (num: u64, base: u64 = 10) {
 	s := u64_to_string(num, base)
-	print_string(s)
+	defer deallocate(cast() s)
 	
-	deallocate(cast() s)	
+	print_string(s)
 }
 
 read_integer :: (info: *Type_Info_Integer, value: *void) -> u64 {
@@ -395,6 +395,12 @@ print :: (using val: any) {
 				}
 			}
 			
+			print_invalid :: (value: u64) {
+				print_string("(INVALID enum_flags ")
+				print_u64(value, 16)
+				print_string(")")
+			}
+			
 			if first {
 				if value {
 					if info.name {
@@ -402,9 +408,7 @@ print :: (using val: any) {
 						print_string(".")
 					}
 					
-					print_string("(INVALID enum_flags ")
-					print_u64(value, 16)
-					print_string(")")
+					print_invalid(value)
 				} else
 					print_string("0")
 			} else if value {
@@ -413,9 +417,7 @@ print :: (using val: any) {
 				if info.name
 					print_string(".")
 				
-				print_string("(INVALID enum_flags ")
-				print_u64(value, 16)
-				print_string(")")
+				print_invalid(value)
 			}
 		} else {
 			for info.values {

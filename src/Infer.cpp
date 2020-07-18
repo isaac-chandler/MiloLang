@@ -176,7 +176,7 @@ void addBlock(Block *block) {
 
 	block->flags |= BLOCK_IS_QUEUED;
 
-	for (auto declaration : block->declarations) {
+	for (auto &declaration : block->declarations) {
 		auto success = addDeclaration(declaration);
 
 		assert(success); // Adding a block should never fail, the only failing cases for addDeclaration are if it is added to global scope
@@ -267,7 +267,6 @@ void addTypeBlock(Expr *expr) {
 }
 
 void flatten(Array<Expr **> &flattenTo, Expr **expr) {
-	PROFILE_FUNC();
 	switch ((*expr)->flavor) {
 	case ExprFlavor::IDENTIFIER: {
 		auto identifier = static_cast<ExprIdentifier *>(*expr);
@@ -280,6 +279,13 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 		}
 
 		flattenTo.add(expr);
+		break;
+	}
+	case ExprFlavor::DEFER: {
+		auto defer = static_cast<ExprDefer *>(*expr);
+
+		flatten(flattenTo, &defer->expr);
+
 		break;
 	}
 	case ExprFlavor::STATIC_IF: {
@@ -492,6 +498,8 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 
 
 void beginFlatten(SubJob *job, Expr **expr) {
+	PROFILE_FUNC();
+
 	if (job->flattenedCount == job->flatteneds.count) {
 		job->flatteneds.add();
 		job->indices.add(0);
@@ -1224,8 +1232,7 @@ bool inferUnaryDot(SubJob *job, TypeEnum *enum_, Expr **exprPointer, bool *yield
 
 	if (!identifier->declaration) {
 		bool yield;
-		u64 index;
-		auto member = findDeclaration(&enum_->members, identifier->name, &index, &yield);
+		auto member = findDeclaration(&enum_->members, identifier->name, &yield);
 
 		if (yield) {
 			goToSleep(job, &enum_->members.sleepingOnMe, identifier->name);
@@ -2286,13 +2293,23 @@ bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char 
 		}
 	}
 
+#if BUILD_DEBUG
+	if (hasNamedArguments) {
+		for (u64 i = 0; i < block->declarations.count; i++) {
+			assert(block->declarations[i]->indexInBlock == i);
+		}
+	}
+#endif
+
 	if (hasNamedArguments || (arguments->count < block->declarations.count && minArguments != block->declarations.count)) {
 		Expr **sortedArguments = new Expr * [block->declarations.count]{};
 
 		for (u64 i = 0; i < arguments->count; i++) {
 			u64 argIndex = i;
 			if (arguments->names[i].length) {
-				auto argument = findDeclarationNoYield(block, arguments->names[i], &argIndex);
+				auto argument = findDeclarationNoYield(block, arguments->names[i]);
+
+				argIndex = argument->indexInBlock;
 				assert(!(argument->flags & DECLARATION_IMPORTED_BY_USING));
 
 				if (!argument) {
@@ -3551,8 +3568,7 @@ bool inferFlattened(SubJob *job) {
 					}
 
 					bool yield;
-					u64 index;
-					auto member = findDeclaration(&struct_->members, identifier->name, &index, &yield);
+					auto member = findDeclaration(&struct_->members, identifier->name, &yield);
 
 					if (yield) {
 						goToSleep(job, &struct_->members.sleepingOnMe, identifier->name);
@@ -3577,9 +3593,8 @@ bool inferFlattened(SubJob *job) {
 				else {
 					for (; identifier->resolveFrom; identifier->resolveFrom = identifier->resolveFrom->parentBlock) {
 						bool yield;
-						u64 index;
 
-						if (Declaration *declaration = findDeclaration(identifier->resolveFrom, identifier->name, &index, &yield, identifier->indexInBlock)) {
+						if (Declaration *declaration = findDeclaration(identifier->resolveFrom, identifier->name, &yield, identifier->indexInBlock)) {
 							if ((declaration->flags & DECLARATION_IS_CONSTANT) && !(declaration->flags & DECLARATION_IMPORTED_BY_USING)) {
 								identifier->declaration = declaration;
 								break;
@@ -3609,14 +3624,13 @@ bool inferFlattened(SubJob *job) {
 
 						identifier->indexInBlock = identifier->resolveFrom->indexInParent;
 
-						if (identifier->resolveFrom->flags & (BLOCK_IS_ARGUMENTS | BLOCK_IS_STRUCT))
+						if (identifier->resolveFrom->flags & (BLOCK_IS_RETURNS | BLOCK_IS_STRUCT))
 							identifier->flags |= EXPR_IDENTIFIER_RESOLVING_ONLY_CONSTANTS;
 					}
 
 					if (!identifier->declaration) {
 						if (!identifier->resolveFrom) { // If we have checked all the local scopes and the
-							u64 index;
-							identifier->declaration = findDeclarationNoYield(&globalBlock, identifier->name, &index);
+							identifier->declaration = findDeclarationNoYield(&globalBlock, identifier->name);
 
 							if (!identifier->declaration) {
 								goToSleep(job, &globalBlock.sleepingOnMe, identifier->name);
@@ -4918,6 +4932,8 @@ else if (!checkStructDeclaration(declaration, value, name)) {	\
 }
 
 void addImporter(Importer *importer) {
+	PROFILE_FUNC();
+
 	if (!importer->enclosingScope)
 		addImporterToBlock(&globalBlock, importer);
 
@@ -4934,6 +4950,8 @@ void addImporter(Importer *importer) {
 }
 
 bool addDeclaration(Declaration *declaration) {
+	PROFILE_FUNC();
+
 	declaration->inferJob = nullptr;
 
 	if (declaration->flags & DECLARATION_IS_IN_COMPOUND)
@@ -4941,6 +4959,8 @@ bool addDeclaration(Declaration *declaration) {
 	assert(!(declaration->flags & (DECLARATION_IS_ITERATOR | DECLARATION_IS_ITERATOR_INDEX | DECLARATION_IS_IN_COMPOUND)));
 
 	if (!declaration->enclosingScope) {
+		PROFILE_ZONE("Add declaration to global block");
+
 		if (!addDeclarationToBlock(&globalBlock, declaration)) {
 			return false;
 		}
@@ -5324,8 +5344,8 @@ bool inferDeclaration(DeclarationJob *job) {
 				return yield;
 			}
 
-			if ((declaration->flags &
-				(DECLARATION_IS_CONSTANT | DECLARATION_IS_ARGUMENT | DECLARATION_IS_STRUCT_MEMBER | DECLARATION_IS_RETURN)) || declaration->enclosingScope == &globalBlock) {
+			if ((declaration->flags & DECLARATION_IS_CONSTANT) || declaration->enclosingScope == &globalBlock || 
+				(declaration->enclosingScope->flags & (BLOCK_IS_STRUCT | BLOCK_IS_ARGUMENTS | BLOCK_IS_RETURNS))) {
 				if (!isLiteral(declaration->initialValue)) {
 					reportError(declaration->type, "Error: Declaration value must be a constant");
 					return false;
@@ -5405,8 +5425,8 @@ bool inferDeclaration(DeclarationJob *job) {
 
 			declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, declaration->initialValue->type);
 
-			if ((declaration->flags &
-				(DECLARATION_IS_CONSTANT | DECLARATION_IS_ARGUMENT | DECLARATION_IS_STRUCT_MEMBER | DECLARATION_IS_RETURN)) || declaration->enclosingScope == &globalBlock) {
+			if ((declaration->flags & DECLARATION_IS_CONSTANT) || declaration->enclosingScope == &globalBlock ||
+				(declaration->enclosingScope->flags & (BLOCK_IS_STRUCT | BLOCK_IS_ARGUMENTS | BLOCK_IS_RETURNS))) {
 				if (!isLiteral(declaration->initialValue)) {
 					reportError(declaration->type, "Error: Declaration value must be a constant");
 					return false;
