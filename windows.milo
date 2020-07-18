@@ -346,17 +346,7 @@ GetCommandLineA :: () -> string #external
 
 SwapBuffers :: (Arg1: HDC) -> s32 #external
 
-wglCreateContext :: (Arg1: HDC) -> HGLRC #external
-
 GetTickCount :: () -> u32 #external
-
-wglMakeCurrent :: (hdc: HDC, hglrc: HGLRC) -> s32 #external
-
-wglDeleteContext :: (Arg1: HGLRC) -> s32 #external
-
-wglGetCurrentDC :: () -> HDC #external
-
-wglGetProcAddress :: (Arg1: *u8) -> *void #external
 
 PIXELFORMATDESCRIPTOR :: struct {
 	nSize: u16 = size_of(PIXELFORMATDESCRIPTOR)

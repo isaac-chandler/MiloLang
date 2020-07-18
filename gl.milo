@@ -1067,10 +1067,26 @@ PFNGLGETCOLORTABLEEXTPROC :: (target: u32, format: u32, type_: u32, data: *void)
 PFNGLGETCOLORTABLEPARAMETERIVEXTPROC :: (target: u32, pname: u32, params: *s32) -> void
 PFNGLGETCOLORTABLEPARAMETERFVEXTPROC :: (target: u32, pname: u32, params: *f32) -> void
 
-wglSwapIntervalEXT : (s32) -> s32
+#if TARGET_WINDOWS {
+	wglSwapIntervalEXT : (s32) -> s32
+	
+	wglGetProcAddress :: (Arg1: *u8) -> *void #external
+		
+	wglCreateContext :: (Arg1: HDC) -> HGLRC #external
+
+
+	wglMakeCurrent :: (hdc: HDC, hglrc: HGLRC) -> s32 #external
+
+	wglDeleteContext :: (Arg1: HGLRC) -> s32 #external
+
+	wglGetCurrentDC :: () -> HDC #external
+
+}
 
 load_gl_extensions :: () {
-	wglSwapIntervalEXT = wglGetProcAddress(cast() "wglSwapIntervalEXT")
+	#if TARGET_WINDOWS {
+		wglSwapIntervalEXT = wglGetProcAddress(cast() "wglSwapIntervalEXT")
+	}
 }
 
 check_gl_errors :: () {
