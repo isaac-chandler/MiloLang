@@ -569,27 +569,19 @@ void addPointerRelocation(BucketedArenaAllocator *relocations, u32 address, u32 
 	relocations->add2(IMAGE_REL_AMD64_ADDR64);
 }
 
-u32 createSymbolForFunction(BucketArray<Symbol> *symbols, ExprFunction *function, bool *success) {
-	*success = true;
+u32 createSymbolForFunction(BucketArray<Symbol> *symbols, ExprFunction *function) {
 	if (!(function->flags & EXPR_HAS_STORAGE)) {
 		function->flags |= EXPR_HAS_STORAGE;
 
 		if (function->flags & EXPR_FUNCTION_IS_EXTERNAL) {
 			if (Declaration *declaration = findDeclarationNoYield(&externalsBlock, function->valueOfDeclaration->name)) {
-				assert(!(declaration->flags & DECLARATION_IMPORTED_BY_USING));
+				function->symbol = static_cast<ExprFunction *>(declaration->initialValue)->symbol;
+				function->physicalStorage = static_cast<ExprFunction *>(declaration->initialValue)->physicalStorage;
 
-				if (declaration->initialValue->type != function->type) {
-					reportError(function, "Error: Cannot define external function %.*s with different types, it was defined as %.*s",
-						STRING_PRINTF(function->valueOfDeclaration->name), STRING_PRINTF(function->type->name));
-					reportError(declaration->initialValue, "   ..: but was previously %.*s", STRING_PRINTF(declaration->initialValue->type->name));
-					*success = false;
-					return 0;
-				}
-
-				return static_cast<ExprFunction *>(declaration->initialValue)->physicalStorage;
+				return function->physicalStorage;
 			}
 			else {
-				externalsBlock.declarations.add(function->valueOfDeclaration);
+				putDeclarationInBlock(&externalsBlock, function->valueOfDeclaration);
 			}
 		}
 
@@ -695,7 +687,7 @@ Type *getTypeForExpr(Expr *expr) {
 }
 
 
-bool writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataRelocations, BucketArray<Symbol> *symbols, BucketedArenaAllocator *stringTable, Expr *value, s64 *emptyStringSymbolIndex, BucketedArenaAllocator *rdata) {
+void writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataRelocations, BucketArray<Symbol> *symbols, BucketedArenaAllocator *stringTable, Expr *value, s64 *emptyStringSymbolIndex, BucketedArenaAllocator *rdata) {
 	auto type = getTypeForExpr(value);
 
 
@@ -711,12 +703,7 @@ bool writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataRelocations,
 		assert(type->size == 8);
 		dataRelocations->add4(dataSize);
 
-		bool success;
-
-		dataRelocations->add4(createSymbolForFunction(symbols, static_cast<ExprFunction *>(value), &success));
-
-		if (!success)
-			return false;
+		dataRelocations->add4(createSymbolForFunction(symbols, static_cast<ExprFunction *>(value)));
 
 		dataRelocations->add2(IMAGE_REL_AMD64_ADDR64);
 
@@ -741,15 +728,11 @@ bool writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataRelocations,
 			auto elementSize = static_cast<TypeArray *>(type)->arrayOf->size;
 			
 			for (u64 i = 0; i < array->count; i++) {
-				if (!writeValue(dataSize, data, dataRelocations, symbols, stringTable, array->storage[i], emptyStringSymbolIndex, rdata)) {
-					return false;
-				}
-
+				writeValue(dataSize, data, dataRelocations, symbols, stringTable, array->storage[i], emptyStringSymbolIndex, rdata);
+				
 				if (array->storage[i + 1] == nullptr) {
 					for (u64 j = i; j < array->count; j++) {
-						if (!writeValue(dataSize, data, dataRelocations, symbols, stringTable, array->storage[i], emptyStringSymbolIndex, rdata)) {
-							return false;
-						}
+						writeValue(dataSize, data, dataRelocations, symbols, stringTable, array->storage[i], emptyStringSymbolIndex, rdata);
 
 						dataSize += elementSize;
 						data += elementSize;
@@ -803,19 +786,13 @@ bool writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataRelocations,
 			if (member->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING)) continue;
 
 
-			if (!writeValue(dataSize + member->physicalStorage, data + member->physicalStorage, dataRelocations, symbols, stringTable, 
-				member->initialValue, emptyStringSymbolIndex, rdata)) {
-
-				return false;
-
-			}
+			writeValue(dataSize + member->physicalStorage, data + member->physicalStorage, dataRelocations, symbols, stringTable,
+				member->initialValue, emptyStringSymbolIndex, rdata);
 		}
 	}
 	else {
 		assert(false);
 	}
-
-	return true;
 }
 
 void alignAllocator(BucketedArenaAllocator *allocator, u64 alignment) {
@@ -1106,25 +1083,23 @@ void runCoffWriter() {
 			PROFILE_ZONE("Write Function");
 			auto function = job.function;
 
-			bool success;
-			createSymbolForFunction(&symbols, function, &success);
-
-			if (!success)
-				goto error;
+			createSymbolForFunction(&symbols, function);
 
 			if (function->flags & EXPR_FUNCTION_IS_EXTERNAL) {
 				assert(function->valueOfDeclaration);
 				auto symbol = function->symbol;
 
-				setSymbolName(&stringTable, &symbol->name, function->valueOfDeclaration->name);
+				if (symbol) {
+					setSymbolName(&stringTable, &symbol->name, function->valueOfDeclaration->name);
 
-				symbol->storageClass = IMAGE_SYM_CLASS_EXTERNAL;
-				symbol->value = 0;
-				symbol->sectionNumber = 0;
-				symbol->type = 0x20;
+					symbol->storageClass = IMAGE_SYM_CLASS_EXTERNAL;
+					symbol->value = 0;
+					symbol->sectionNumber = 0;
+					symbol->type = 0x20;
 
 
-				symbol->numberOfAuxSymbols = 0;
+					symbol->numberOfAuxSymbols = 0;
+				}
 				continue;
 			}
 
@@ -2849,11 +2824,7 @@ void runCoffWriter() {
 
 					codeRelocations.add4(code.totalSize);
 
-					bool success;
-					codeRelocations.add4(createSymbolForFunction(&symbols, ir.function, &success));
-
-					if (!success)
-						goto error;
+					codeRelocations.add4(createSymbolForFunction(&symbols, ir.function));
 
 					codeRelocations.add2(IMAGE_REL_AMD64_REL32);
 
@@ -3079,8 +3050,7 @@ void runCoffWriter() {
 				u32 dataSize = data.totalSize;
 				u8 *allocation = static_cast<u8 *>(data.allocateUnaligned(type->size));
 
-				if (!writeValue(dataSize, allocation, &dataRelocations, &symbols, &stringTable, declaration->initialValue, &emptyStringSymbolIndex, &rdata))
-					goto error;
+				writeValue(dataSize, allocation, &dataRelocations, &symbols, &stringTable, declaration->initialValue, &emptyStringSymbolIndex, &rdata);
 			}
 
 			symbol->numberOfAuxSymbols = 0;

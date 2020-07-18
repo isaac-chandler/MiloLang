@@ -79,7 +79,7 @@ Declaration *findInBlock(Block *block, String name) {
 	return nullptr;
 }
 
-bool replaceInBlock(Block *block, Declaration *old, Declaration *declaration) {
+bool replaceInTable(Block *block, Declaration *old, Declaration *declaration) {
 	assert(old->name == declaration->name);
 
 	u64 hash = doHash(old->name);

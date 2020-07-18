@@ -1,5 +1,7 @@
 #load "standard.milo"
 #load "bitmap.milo"
+#load "thread.milo"
+#load "file.milo"
 
 ITERATIONS :: 256
 

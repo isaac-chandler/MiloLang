@@ -13,7 +13,7 @@ enum class JobFlavor {
 	DECLARATION_TYPE,
 	DECLARATION_VALUE,
 	FUNCTION_TYPE,
-	FUNCTION_VALUE, 
+	FUNCTION_VALUE,
 	IMPORTER
 };
 
@@ -171,7 +171,7 @@ void wakeUpSleepers(Array<SubJob *> *sleepers, String name = String(nullptr, 0UL
 void addImporter(Importer *importer);
 
 void addBlock(Block *block) {
-	if (block->flags & BLOCK_IS_QUEUED) 
+	if (block->flags & BLOCK_IS_QUEUED)
 		return;
 
 	block->flags |= BLOCK_IS_QUEUED;
@@ -321,7 +321,7 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 		addFunction(function);
 
 		flattenTo.add(expr);
-		
+
 		break;
 	}
 	case ExprFlavor::FUNCTION_PROTOTYPE: {
@@ -1120,7 +1120,8 @@ bool switchCasesAreSame(Expr *a, Expr *b) {
 		return a == b;
 	default:
 		assert(false);
-		return false;}
+		return false;
+	}
 }
 
 
@@ -1248,7 +1249,7 @@ bool inferUnaryDot(SubJob *job, TypeEnum *enum_, Expr **exprPointer, bool *yield
 			reportError(identifier, "Error: Can only access constant members of %.*s from a unary dot", STRING_PRINTF(enum_->name));
 			return false;
 		}
-		
+
 		identifier->declaration = member;
 	}
 
@@ -3826,7 +3827,7 @@ bool inferFlattened(SubJob *job) {
 
 				bool failed = false;
 
-				for (auto member : enum_->values->declarations) {					
+				for (auto member : enum_->values->declarations) {
 					assert(member->initialValue->flavor == ExprFlavor::INT_LITERAL);
 
 					u64 value = static_cast<ExprLiteral *>(member->initialValue)->unsignedValue;
@@ -3853,7 +3854,7 @@ bool inferFlattened(SubJob *job) {
 						break;
 					}
 
-					
+
 				}
 
 				if (failed) {
@@ -4326,7 +4327,7 @@ bool inferFlattened(SubJob *job) {
 
 				if (block) {
 					*exprPointer = block;
-						pushFlatten(job);
+					pushFlatten(job);
 					continue;
 				}
 			}
@@ -4824,7 +4825,7 @@ SizeJob *allocateSizeJob() {
 
 		result->sizingIndexInMembers = 0;
 		result->runningSize = 0;
-		
+
 		result->flattenedCount = 0;
 
 		return result;
@@ -4945,7 +4946,7 @@ void addImporter(Importer *importer) {
 	beginFlatten(job, &importer->import);
 
 	addJob(&importerJobs, job);
-	
+
 	subJobs.add(job);
 }
 
@@ -5167,10 +5168,6 @@ bool inferImporter(ImporterJob *job) {
 				block = &static_cast<ExprBlock *>(staticIf->elseBody)->declarations;
 			}
 		}
-
-		if (block && importer->enclosingScope == &globalBlock) {
-			addBlock(block);
-		}
 	}
 	else {
 		block = &getExpressionNamespace(importer->import, &onlyConstants, importer->import)->members;
@@ -5219,43 +5216,64 @@ bool inferImporter(ImporterJob *job) {
 			}
 		}
 
-
-		for (auto member : block->declarations) {
-			if (checkForRedeclaration(importer->enclosingScope, member, importer->import)) {
+		if (importer->import->flavor == ExprFlavor::STATIC_IF && importer->enclosingScope == &globalBlock) {
+			for (auto member : block->declarations) {
 				if (!(member->flags & (DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING))) {
-					if (!onlyConstants || (member->flags & DECLARATION_IS_CONSTANT)) {
-						auto import = new Declaration;
-						import->start = member->start;
-						import->end = member->end;
-						import->name = member->name;
-						import->flags = member->flags;
+					if (checkForRedeclaration(importer->enclosingScope, member, importer->import)) {
+						if (!onlyConstants || (member->flags & DECLARATION_IS_CONSTANT)) {
+							addDeclarationToBlockUnchecked(importer->enclosingScope, member, importer->indexInBlock);
 
-						if (member->flags & DECLARATION_IS_CONSTANT) {
-							import->type = member->type;
-							import->initialValue = member->initialValue;
-						}
-						else {
-							import->import = member;
-							import->initialValue = structAccess;
-						}
+							wakeUpSleepers(&importer->enclosingScope->sleepingOnMe, member->name);
 
-						import->flags |= DECLARATION_IMPORTED_BY_USING;
-
-						addDeclarationToBlock(importer->enclosingScope, import, importer->indexInBlock);
-
-						assert(import->name.length);
-						wakeUpSleepers(&importer->enclosingScope->sleepingOnMe, import->name);
-
-						if (member->flags & DECLARATION_IS_CONSTANT) {
-							if (!addDeclaration(import)) {
+							if (!addDeclaration(member)) {
 								return false;
 							}
 						}
 					}
+					else {
+						return false;
+					}
 				}
 			}
-			else {
-				return false;
+		}
+		else {
+			for (auto member : block->declarations) {
+				if (!(member->flags & (DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING))) {
+					if (checkForRedeclaration(importer->enclosingScope, member, importer->import)) {
+						if (!onlyConstants || (member->flags & DECLARATION_IS_CONSTANT)) {
+							auto import = new Declaration;
+							import->start = member->start;
+							import->end = member->end;
+							import->name = member->name;
+							import->flags = member->flags;
+
+							if (member->flags & DECLARATION_IS_CONSTANT) {
+								import->type = member->type;
+								import->initialValue = member->initialValue;
+							}
+							else {
+								import->import = member;
+								import->initialValue = structAccess;
+							}
+
+							import->flags |= DECLARATION_IMPORTED_BY_USING;
+
+							addDeclarationToBlockUnchecked(importer->enclosingScope, import, importer->indexInBlock);
+
+							assert(import->name.length);
+							wakeUpSleepers(&importer->enclosingScope->sleepingOnMe, import->name);
+
+							if (member->flags & DECLARATION_IS_CONSTANT) {
+								if (!addDeclaration(import)) {
+									return false;
+								}
+							}
+						}
+					}
+					else {
+						return false;
+					}
+				}
 			}
 		}
 	}
@@ -5344,7 +5362,7 @@ bool inferDeclaration(DeclarationJob *job) {
 				return yield;
 			}
 
-			if ((declaration->flags & DECLARATION_IS_CONSTANT) || declaration->enclosingScope == &globalBlock || 
+			if ((declaration->flags & DECLARATION_IS_CONSTANT) || declaration->enclosingScope == &globalBlock ||
 				(declaration->enclosingScope->flags & (BLOCK_IS_STRUCT | BLOCK_IS_ARGUMENTS | BLOCK_IS_RETURNS))) {
 				if (!isLiteral(declaration->initialValue)) {
 					reportError(declaration->type, "Error: Declaration value must be a constant");
@@ -5682,7 +5700,7 @@ bool inferSize(SizeJob *job) {
 			reportError(enum_->integerType, "Error: enum type must be an integer");
 			return false;
 		}
-		else if ((static_cast<ExprLiteral *>(enum_->integerType)->typeValue->flags & TYPE_INTEGER_IS_SIGNED) && (enum_->struct_.flags & TYPE_ENUM_IS_FLAGS)) {
+		else if ((static_cast<ExprLiteral *>(enum_->integerType)->typeValue->flags &TYPE_INTEGER_IS_SIGNED) && (enum_->struct_.flags & TYPE_ENUM_IS_FLAGS)) {
 			reportError(enum_->integerType, "Error: enum_flags cannot have a signed type");
 			return false;
 		}
@@ -5705,6 +5723,26 @@ bool inferSize(SizeJob *job) {
 	return true;
 }
 
+void createBasicDeclarations() {
+	Declaration *targetWindows = new Declaration;
+	targetWindows->enclosingScope = nullptr;
+	targetWindows->start = {};
+	targetWindows->end = {};
+	targetWindows->name = "TARGET_WINDOWS";
+	targetWindows->type = inferMakeTypeLiteral(targetWindows->start, targetWindows->end, &TYPE_BOOL);
+
+	auto literal = new ExprLiteral;
+	literal->type = &TYPE_BOOL;
+	literal->flavor = ExprFlavor::INT_LITERAL;
+	literal->valueOfDeclaration = targetWindows;
+	literal->unsignedValue = BUILD_WINDOWS; // @Incomplete this doesn't work if we want to support cross compilation
+
+	targetWindows->initialValue = literal;
+	targetWindows->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY | DECLARATION_IS_CONSTANT;
+
+	addDeclarationToBlock(&globalBlock, targetWindows);
+}
+
 void runInfer() {
 	PROFILE_FUNC();
 
@@ -5712,6 +5750,8 @@ void runInfer() {
 	ArraySet<FunctionJob *> functionsToWorkOn;
 	ArraySet<SizeJob *> sizesToWorkOn;
 	ArraySet<ImporterJob *> importersToWorkOn;
+
+	createBasicDeclarations();
 
 	while (true) {
 		auto job = inferQueue.take();

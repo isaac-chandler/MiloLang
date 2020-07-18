@@ -1,5 +1,3 @@
-#load "windows.milo"
-
 Vector2 :: union {
 	using _xy: struct {
 		x: f32
@@ -97,6 +95,63 @@ string_length :: (s: string) -> #must u64 {
 }
 
 
+allocate :: (size: u64) -> #must *void {		
+	#if TARGET_WINDOWS {
+		HeapAlloc :: (hHeap: *void, dwFlags: u32, dwBytes: u64) -> *void #external
+		
+		return HeapAlloc(process_heap, 0, size)
+	} else {
+		unsupported_os = 1
+	}
+}
+
+reallocate :: (block: *void, size: u64) -> #must *void {
+	if block == null
+		return allocate(size)
+	else {
+		#if TARGET_WINDOWS {
+			HeapReAlloc :: (hHeap: *void, dwFlags: u32, lpMem: *void, dwBytes: u64) -> *void #external
+			
+			return HeapReAlloc(process_heap, 0, block, size)
+		
+		} else {
+			unsupported_os = 1
+		}
+	}
+}
+
+deallocate :: (block: *void) {
+	#if TARGET_WINDOWS {
+		HeapFree :: (hHeap: *void, dwFlags: u32, lpMem: *void) -> s32 #external
+		
+		HeapFree(process_heap, 0, block)
+	} else {
+		unsupported_os = 1
+	}
+}
+
+exit :: (code: u32 = 0) {
+	#if TARGET_WINDOWS {
+		ExitProcess :: (uExitCode: u32) #external
+
+		ExitProcess(code)
+	} else {
+		unsupported_os = 1
+	}
+}
+
+
+// @Unicode
+print_buffer :: (buffer: []u8) {
+	#if TARGET_WINDOWS {
+		WriteConsoleA :: (hConsoleOutput: *void, lpBuffer: *void, nNumberOfCharactersToWrite: u32, lpNumberOfCharactersWritten: *u32 = null, lpReserved := null) -> s32 #external
+	
+		WriteConsoleA(std_out, buffer.data, cast() buffer.count)
+	} else {
+		unsupported_os = 1
+	}
+}
+
 
 print_string :: (s: string) {
 	buffer: []u8
@@ -172,7 +227,7 @@ array_add_generic :: (array: *[..]u8, value: *void, size: u64) -> *void {
 panic :: () {
 	print_string("Panic")
 	
-	ExitProcess(1)
+	exit(1)
 }
 
 assert :: (value: bool) {
@@ -198,11 +253,46 @@ array_remove_string_by_pointer :: (array: *[]string, value: *string) {
 	array_remove_generic_by_pointer(cast() array, value, size_of(string))
 }
 
+#if TARGET_WINDOWS {
+	std_out: *void
+	process_heap: *void
+}
+
+
+// @Incomplete, only converts ascii to UTF16, not UTF8
+create_wide_string :: (s: string) -> #must *u16 {
+	result: *u16 = allocate((string_length(s) + 1) * size_of(u16))
+	
+	buffer := result
+	
+	sbuf := cast(*u8) s
+	
+	while <<sbuf {
+		<<buffer = <<sbuf
+		buffer += 1
+		sbuf += 1
+	}
+	
+	<<buffer = 0
+	
+	return result
+}
 
 main :: () {
 	//args.data = argv
 	//args.count = cast(u64) argc
-	init_runtime()
+	#if TARGET_WINDOWS {		
+		GetProcessHeap :: () -> *void #external
+		GetStdHandle :: (nStdHandle: u32) -> *void #external
+		STD_OUTPUT_HANDLE :: cast(u32) -11
+
+	
+		process_heap = GetProcessHeap()
+		std_out = GetStdHandle(STD_OUTPUT_HANDLE)
+		
+	} else {
+		unsupported_os = 1
+	}
 
 	_main()
 	
@@ -296,8 +386,22 @@ print_char :: (value: u8) {
 	
 	print_buffer(buffer)
 }
-// This function is terrible
 
+
+is_infinite :: (x: f64) -> bool {
+	bits := cast,bit(u64) x
+	
+	return (bits & 0x7FF0_0000_0000_0000) == 0x7FF0_0000_0000_0000 && (bits & 0x000F_FFFF_FFFF_FFFF) == 0
+}
+
+is_nan :: (x: f64) -> bool {
+	bits := cast,bit(u64) x
+	
+	return (bits & 0x7FF0_0000_0000_0000) == 0x7FF0_0000_0000_0000 && (bits & 0x000F_FFFF_FFFF_FFFF)
+}
+
+
+// This function is terrible
 print_f64 :: (num: f64, decimal_places: u64 = 6) {
 	value := num
 

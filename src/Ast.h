@@ -344,7 +344,7 @@ struct ExprFunction : Expr {
 
 	Array<struct SubJob *> sleepingOnMe;
 
-	union Symbol *symbol;
+	union Symbol *symbol = nullptr;
 	u32 physicalStorage;
 };
 

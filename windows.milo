@@ -308,14 +308,7 @@ STD_ERROR_HANDLE  :: cast(u32) -12
 
 GetLastError :: () -> u32 #external
 
-
-GetStdHandle :: (nStdHandle: u32) -> HANDLE #external
-
 GetModuleHandleW :: (lpModuleName: *u8) -> HMODULE #external
-
-
-WriteConsoleA :: (hConsoleOutput: HANDLE, lpBuffer: *void, nNumberOfCharactersToWrite: u32, lpNumberOfCharactersWritten: *u32 = null, lpReserved := null) -> s32 #external
-
 
 RegisterClassW :: (lpWndClass: *WNDCLASSW) -> u16 #external
 
@@ -347,46 +340,9 @@ Peek_Message_Options :: enum u32 {
 
 using Peek_Message_Options.members
 
-process_heap: HANDLE
-
 
 GetCommandLineA :: () -> string #external
 
-GetProcessHeap :: () -> HANDLE #external
-
-HeapAlloc :: (hHeap: HANDLE, dwFlags: u32, dwBytes: u64) -> *void #external
-
-HeapReAlloc :: (hHeap: HANDLE, dwFlags: u32, lpMem: *void, dwBytes: u64) -> *void #external
-
-HeapFree :: (hHeap: HANDLE, dwFlags: u32, lpMem: *void) -> s32 #external
-
-allocate :: (size: u64) -> #must *void {
-	return HeapAlloc(process_heap, 0, size)
-}
-
-reallocate :: (block: *void, size: u64) -> #must *void {
-	if block == null
-		return allocate(size)
-	else
-		return HeapReAlloc(process_heap, 0, block, size)
-}
-
-deallocate :: (block: *void) {
-	HeapFree(process_heap, 0, block)
-}
-
-
-std_out: HANDLE
-
-init_runtime :: () {
-	process_heap = GetProcessHeap()
-	std_out = GetStdHandle(STD_OUTPUT_HANDLE)
-}
-
-// @Unicode
-print_buffer :: (buffer: []u8) {
-	WriteConsoleA(std_out, buffer.data, cast() buffer.count)
-}
 
 SwapBuffers :: (Arg1: HDC) -> s32 #external
 
@@ -401,8 +357,6 @@ wglDeleteContext :: (Arg1: HGLRC) -> s32 #external
 wglGetCurrentDC :: () -> HDC #external
 
 wglGetProcAddress :: (Arg1: *u8) -> *void #external
-
-ExitProcess :: (uExitCode: u32) #external
 
 PIXELFORMATDESCRIPTOR :: struct {
 	nSize: u16 = size_of(PIXELFORMATDESCRIPTOR)
@@ -560,116 +514,14 @@ File_Flag :: enum_flags u32 {
 
 using File_Flag.members
 
-// @Incomplete, only converts ascii to UTF16, not UTF8
-create_wide_string :: (s: string) -> #must *u16 {
-	result: *u16 = allocate((string_length(s) + 1) * size_of(u16))
-	
-	buffer := result
-	
-	sbuf := cast(*u8) s
-	
-	while <<sbuf {
-		<<buffer = <<sbuf
-		buffer += 1
-		sbuf += 1
-	}
-	
-	<<buffer = 0
-	
-	return result
-}
 
-// @Incomplete add multiple return values 
-read_entire_file :: (file: string) (-> #must result: []u8, success := true) {
-	result: []u8
-	
-	filename := create_wide_string(file)
-	
-	handle := CreateFileW(filename, GENERIC_READ, 0, null, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN)
-	
-	deallocate(filename)
-	
-	if handle == INVALID_HANDLE_VALUE {
-		return result, false
-	} else {
-	
-		if GetFileSizeEx(handle, cast() *result.count) {
-			result.data = allocate(result.count)
-			remaining := result
-			
-			
-			while remaining {
-				bytes_read: u32
-				
-				bytes_to_read := remaining.count
-				
-				if (bytes_to_read > 0xFFFF_FFFF) {
-					bytes_to_read = 0xFFFF_FFFF
-				}
-				
-				if !ReadFile(handle, remaining.data, cast() bytes_to_read, *bytes_read) || bytes_read != bytes_to_read {
-					result.count = 0
-					deallocate(result.data)
-					result.data = null
-					
-					CloseHandle(handle)
-					
-					return result, false
-				}
-				
-				remaining.count -= bytes_to_read
-				remaining.data += bytes_to_read
-			}
-		} else {
-			CloseHandle(handle)
-		
-			return result, false
-		}
-		
-		CloseHandle(handle)
-	}
-	
-	return result
-}
-
-write_entire_file :: (file: string, data: []u8) -> bool {
-	write := data
-
-	result: []u8 = --
-	
-	filename := create_wide_string(file)
-	
-	handle := CreateFileW(filename, GENERIC_WRITE, 0, null, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN)
-	
-	if handle == INVALID_HANDLE_VALUE {
-		return false
-	} else {
-		while write {
-			bytes_written: u32
-			
-			bytes_to_write := write.count
-			
-			if (bytes_to_write > 0xFFFF_FFFF) {
-				bytes_to_write = 0xFFFF_FFFF
-			}
-			
-			if !WriteFile(handle, write.data, cast() bytes_to_write, *bytes_written) || bytes_written != bytes_to_write {
-				CloseHandle(handle)
-				
-				return false
-			}
-			
-			write.count -= bytes_to_write
-			write.data += bytes_to_write
-		}
-		
-		CloseHandle(handle)
-	}
-	
-	return true
-}
-
-ThreadProc :: (*void) -> u32
+WriteConsoleA :: (hConsoleOutput: *void, lpBuffer: *void, nNumberOfCharactersToWrite: u32, lpNumberOfCharactersWritten: *u32 = null, lpReserved := null) -> s32 #external
+ExitProcess :: (uExitCode: u32) #external
+HeapAlloc :: (hHeap: HANDLE, dwFlags: u32, dwBytes: u64) -> *void #external
+HeapReAlloc :: (hHeap: HANDLE, dwFlags: u32, lpMem: *void, dwBytes: u64) -> *void #external
+HeapFree :: (hHeap: HANDLE, dwFlags: u32, lpMem: *void) -> s32 #external
+GetProcessHeap :: () -> HANDLE #external
+GetStdHandle :: (nStdHandle: u32) -> HANDLE #external
 
 Create_Thread_Flags :: enum_flags u32 {
 	CREATE_SUSPENDED :: 0x4
@@ -680,7 +532,7 @@ using Create_Thread_Flags.members
 
 
 
-CreateThread :: (lpThreadAttributes: *SECURITY_ATTRIBUTES = null, dwStackSize: u64 = 0, lpStartAddress: ThreadProc, lpParameter := null, dwCreationFlags: Create_Thread_Flags = 0, lpThreadId: *u32 = null) -> HANDLE #external
+CreateThread :: (lpThreadAttributes: *SECURITY_ATTRIBUTES = null, dwStackSize: u64 = 0, lpStartAddress: (*void) -> u32, lpParameter := null, dwCreationFlags: Create_Thread_Flags = 0, lpThreadId: *u32 = null) -> HANDLE #external
 
 INFINITE :: 0xFFFF_FFFF
 
@@ -693,29 +545,4 @@ Wait_Result :: enum u32 {
 
 using Wait_Result.members
 
-WaitForSingleObject :: (hHandle: HANDLE, dwMilliseconds: u32 = INFINITE) -> Wait_Result #external
-
-Thread :: struct {
-	handle: HANDLE
-	id: u32
-}
-
-create_thread :: (procedure: ThreadProc, data := null) -> #must Thread {
-	thread: Thread = --
-	
-	thread.handle = CreateThread(null, 0, procedure, data, 0, *thread.id)
-	
-	return thread
-}
-
-wait_for_thread :: (thread: *Thread) {
-	WaitForSingleObject(thread.handle)
-}
-
-close_thread :: (thread: *Thread) {
-	CloseHandle(thread.handle)
-}
-
-exit :: (code: u32 = 0) {
-	ExitProcess(code)
-}
+WaitForSingleObject :: (hHandle: HANDLE, dwMilliseconds: u32 = INFINITE) -> Wait_Result #external	

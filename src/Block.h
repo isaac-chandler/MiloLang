@@ -82,7 +82,7 @@ struct Declaration {
 #define BLOCK_IS_STRUCT 0x8
 #define BLOCK_IS_RETURNS 0x10
 
-#define BLOCK_HASHTABLE_MIN_COUNT 8
+#define BLOCK_HASHTABLE_MIN_COUNT 32
 
 struct Importer {
 	u64 indexInBlock;
@@ -140,6 +140,18 @@ inline Declaration *findDeclarationNoYield(Block *block, String name) {
 	return declaration->flags & DECLARATION_IS_IMPLICIT_IMPORT ? nullptr : declaration;
 }
 
+bool replaceInTable(Block *block, Declaration *old, Declaration *declaration);
+
+inline void replaceDeclaration(Block *block, Declaration *&old, Declaration *declaration) {
+	old = declaration;
+
+	if (block->table) {
+		replaceInTable(block, old, declaration);
+	}
+
+	declaration->enclosingScope = block;
+}
+
 inline bool checkForRedeclaration(Block *block, Declaration *declaration, struct Expr *using_) {
 	assert(block);
 	assert(declaration);
@@ -188,10 +200,8 @@ inline void addImporterToBlock(Block *block, Importer *importer, s64 index = -1)
 	block->importers.add(importer);
 }
 
-inline void addDeclarationToBlockUnchecked(Block *block, Declaration *declaration, s64 index = -1) {
-	declaration->indexInBlock = index == -1 ? block->currentIndex++ : index;
+inline void putDeclarationInBlock(Block *block, Declaration *declaration) {
 	block->declarations.add(declaration);
-	declaration->enclosingScope = block;
 
 	if (block->table) {
 		addToTable(block, declaration);
@@ -199,6 +209,13 @@ inline void addDeclarationToBlockUnchecked(Block *block, Declaration *declaratio
 	else if (block->declarations.count == BLOCK_HASHTABLE_MIN_COUNT) {
 		initTable(block);
 	}
+}
+
+inline void addDeclarationToBlockUnchecked(Block *block, Declaration *declaration, s64 index = -1) {
+	declaration->indexInBlock = index == -1 ? block->currentIndex++ : index;
+	declaration->enclosingScope = block;
+	
+	putDeclarationInBlock(block, declaration);
 }
 
 inline bool addDeclarationToBlock(Block *block, Declaration *declaration, s64 index = -1) {

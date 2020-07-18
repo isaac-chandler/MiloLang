@@ -4,6 +4,7 @@
 #load "random/random.milo"
 #load "bitmap.milo"
 #load "math.milo"
+#load "file.milo"
 
 DEVELOPER :: true
 

@@ -1,0 +1,38 @@
+Thread :: struct {
+	handle: *void
+	id: u32
+}
+
+create_thread :: (procedure: (*void) -> u32, data := null) -> #must Thread {
+	thread: Thread = --
+
+	#if TARGET_WINDOWS {
+		CreateThread :: (lpThreadAttributes := null, dwStackSize: u64 = 0, lpStartAddress: (*void) -> u32, lpParameter := null, dwCreationFlags: u32 = 0, lpThreadId: *u32 = null) -> *void #external
+	
+		thread.handle = CreateThread(null, 0, procedure, data, 0, *thread.id)
+	} else {
+		unsupported_os = 1
+	}
+	
+	return thread
+}
+
+wait_for_thread :: (thread: *Thread) {
+	#if TARGET_WINDOWS {
+		WaitForSingleObject :: (hHandle: *void, dwMilliseconds: u32 = 0xFFFF_FFFF) -> u32 #external
+
+		WaitForSingleObject(thread.handle)
+	} else {
+		unsupported_os = 1
+	}
+}
+
+close_thread :: (thread: *Thread) {
+	#if TARGET_WINDOWS {
+		CloseHandle :: (hObject: *void) -> s32 #external
+	
+		CloseHandle(thread.handle)
+	} else {
+		unsupported_os = 1
+	}
+}
