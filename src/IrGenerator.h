@@ -5,6 +5,8 @@
 
 inline ExprFunction *removeFunction = nullptr;
 
-extern MPSCWorkQueue<ExprFunction *> irGeneratorQueue;
+inline MPSCWorkQueue<ExprFunction *> irGeneratorQueue;
 
 void runIrGenerator();
+
+void runLlvm();

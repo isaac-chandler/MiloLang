@@ -8,8 +8,6 @@
 #include "CoffWriter.h"
 #include "TypeTable.h"
 
-MPSCWorkQueue<ExprFunction *> irGeneratorQueue;
-
 struct Loop {
 	struct ExprLoop *loop;
 	u64 start;
@@ -2018,7 +2016,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			return dest;
 		}
 		case ExprFlavor::STATIC_IF: {
-			break; // In the event that the static if returns false and there is no else block, we just leave the static if expression in the tree, 
+			return DEST_NONE; // In the event that the static if returns false and there is no else block, we just leave the static if expression in the tree, 
 				   // so when we see a static if here we should just generate no code
 		}
 		default:

@@ -339,6 +339,8 @@ int main(int argc, char *argv[]) {
 	}
 #endif
 
+	bool useLlvm = true;
+
 	using namespace std::chrono;
 
 #if BUILD_PROFILE
@@ -360,18 +362,17 @@ int main(int argc, char *argv[]) {
 
 		std::thread infer(runInfer);
 		std::thread irGenerator(runIrGenerator);
-		std::thread coffWriter(runCoffWriter);
+		std::thread backend = std::thread(useLlvm ? runLlvm : runCoffWriter);
 
 		mainThread = std::this_thread::get_id();
 		inferThread = infer.get_id();
 
 		SetThreadDescription(infer.native_handle(), L"Infer");
 		SetThreadDescription(irGenerator.native_handle(), L"Ir Generator");
-		SetThreadDescription(coffWriter.native_handle(), L"Coff Writer");
+		SetThreadDescription(backend.native_handle(), useLlvm ? L"LLVM" : L"Coff Writer");
 
 		infer.detach();
 		irGenerator.detach();
-
 		{
 			u64 i;
 			for (i = 0; i < files.size(); i++) {
@@ -388,8 +389,8 @@ int main(int argc, char *argv[]) {
 				CloseHandle(files[i].handle);
 			}
 		}
-		coffWriter.join();
 
+		backend.join();
 	}
 
 #if BUILD_WINDOWS

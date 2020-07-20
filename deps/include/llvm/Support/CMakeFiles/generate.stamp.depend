@@ -1,0 +1,5 @@
+# CMake generation dependency list for this directory.
+C:/Code/LLVM/llvm-10.0.0.src/include/llvm/Support/CMakeLists.txt
+C:/Program Files/CMake/share/cmake-3.18/Modules/FindGit.cmake
+C:/Program Files/CMake/share/cmake-3.18/Modules/FindPackageHandleStandardArgs.cmake
+C:/Program Files/CMake/share/cmake-3.18/Modules/FindPackageMessage.cmake
