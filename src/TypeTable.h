@@ -51,6 +51,8 @@ struct Type {
 	Array<struct SubJob *> sleepingOnMe;
 	struct SizeJob *sizeJob = nullptr;
 
+	llvm::Type *llvmType = nullptr;
+
 	union Symbol *symbol = nullptr;
 	u32 physicalStorage;
 };

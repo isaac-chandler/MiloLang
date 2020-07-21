@@ -24,7 +24,7 @@ u64 loopCount;
 u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced = false);
 u64 generateIrForceDest(IrState *state, Expr *expr, u64 dest);
 
-void pushLoop(IrState *state, ExprLoop *loop) {
+static void pushLoop(IrState *state, ExprLoop *loop) {
 	if (loopCount >= loopStack.count) {
 		loopStack.add();
 	}
@@ -38,7 +38,7 @@ void pushLoop(IrState *state, ExprLoop *loop) {
 	
 }
 
-void popLoop(IrState *state) {
+static void popLoop(IrState *state) {
 	--loopCount;
 
 	Loop loop = loopStack[loopCount];
@@ -91,7 +91,7 @@ void addLineMarker(IrState *state, Expr *expr) {
 }
 
 
-void exitBlock(IrState *state, Block *block, bool isBreak) {
+static void exitBlock(IrState *state, Block *block, bool isBreak) {
 	for (s64 i = deferStack.count - 1; i >= 0; --i) {
 		auto expr = deferStack[i];
 
