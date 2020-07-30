@@ -785,9 +785,9 @@ SizeJob *allocateSizeJob();
 DeclarationJob *allocateDeclarationJob();
 FunctionJob *allocateFunctionJob();
 
-bool isValidCast(Type *to, Expr *expr, u64 flags) {
-	auto from = expr->type;
+bool isAddressable(Expr *expr);
 
+bool isValidCast(Type *to, Type *from, u64 flags) {
 	if (from == &TYPE_VOID || to->flavor == TypeFlavor::AUTO_CAST || from->flavor == TypeFlavor::NAMESPACE) {
 		return false;
 	}
@@ -813,7 +813,7 @@ bool isValidCast(Type *to, Expr *expr, u64 flags) {
 				 auto toArray = static_cast<TypeArray *>(to);
 				auto fromArray = static_cast<TypeArray *>(from);
 
-				return toArray->arrayOf == fromArray->arrayOf && !(from->flags & TYPE_ARRAY_IS_FIXED) || isAddressable(expr);
+				return toArray->arrayOf == fromArray->arrayOf;
 			}
 		}
 
@@ -1017,7 +1017,7 @@ void insertImplicitCast(Array<Type *> *sizeDependencies, Expr **castFrom, Type *
 
 	addSizeDependency(sizeDependencies, castTo);
 
-	assert(isValidCast(castTo, cast->right, 0));
+	assert(isValidCast(castTo, cast->right->type, 0));
 
 	doConstantCast(castFrom);
 }
@@ -1377,7 +1377,7 @@ bool tryAutoCast(SubJob *job, Expr **cast, Type *castTo, bool *yield) {
 		}
 	}
 
-	if (!isValidCast(castTo, autoCast->right, autoCast->flags)) {
+	if (!isValidCast(castTo, autoCast->right->type, autoCast->flags)) {
 		return false;
 	}
 
@@ -2475,7 +2475,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 				return true;
 			}
 
-			if (!isValidCast(castTo, right, binary->flags)) {
+			if (!isValidCast(castTo, right->type, binary->flags)) {
 				reportError(binary, "Error: Cannot cast from %.*s to %.*s", STRING_PRINTF(right->type->name), STRING_PRINTF(castTo->name));
 				return false;
 			}
@@ -3188,7 +3188,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 	case TokenT::LOGIC_AND:
 	case TokenT::LOGIC_OR: {
 		if (left->type != &TYPE_BOOL) {
-			if (isValidCast(&TYPE_BOOL, left, 0)) {
+			if (isValidCast(&TYPE_BOOL, left->type, 0)) {
 				insertImplicitCast(job->sizeDependencies, &left, &TYPE_BOOL);
 			}
 			else {
@@ -3198,7 +3198,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 		}
 
 		if (right->type != &TYPE_BOOL) {
-			if (isValidCast(&TYPE_BOOL, right, 0)) {
+			if (isValidCast(&TYPE_BOOL, right->type, 0)) {
 				insertImplicitCast(job->sizeDependencies, &right, &TYPE_BOOL);
 			}
 			else {
@@ -4280,7 +4280,7 @@ bool inferFlattened(SubJob *job) {
 			auto ifElse = static_cast<ExprIf *>(expr);
 
 			if (ifElse->condition->type != &TYPE_BOOL) {
-				if (isValidCast(&TYPE_BOOL, ifElse->condition, 0)) {
+				if (isValidCast(&TYPE_BOOL, ifElse->condition->type, 0)) {
 					insertImplicitCast(job->sizeDependencies, &ifElse->condition, &TYPE_BOOL);
 				}
 				else {
@@ -4295,7 +4295,7 @@ bool inferFlattened(SubJob *job) {
 			auto staticIf = static_cast<ExprIf *>(expr);
 
 			if (staticIf->condition->type != &TYPE_BOOL) {
-				if (isValidCast(&TYPE_BOOL, staticIf->condition, 0)) {
+				if (isValidCast(&TYPE_BOOL, staticIf->condition->type, 0)) {
 					insertImplicitCast(job->sizeDependencies, &staticIf->condition, &TYPE_BOOL);
 				}
 				else {
@@ -4484,7 +4484,7 @@ bool inferFlattened(SubJob *job) {
 			}
 			case TOKEN('!'): {
 				if (value->type != &TYPE_BOOL) {
-					if (isValidCast(&TYPE_BOOL, value, 0)) {
+					if (isValidCast(&TYPE_BOOL, value->type, 0)) {
 						insertImplicitCast(job->sizeDependencies, &value, &TYPE_BOOL);
 					}
 					else {
@@ -4738,7 +4738,7 @@ bool inferFlattened(SubJob *job) {
 			auto loop = static_cast<ExprLoop *>(expr);
 
 			if (loop->whileCondition->type != &TYPE_BOOL) {
-				if (isValidCast(&TYPE_BOOL, loop->whileCondition, 0)) {
+				if (isValidCast(&TYPE_BOOL, loop->whileCondition->type, 0)) {
 					insertImplicitCast(job->sizeDependencies, &loop->whileCondition, &TYPE_BOOL);
 				}
 				else {

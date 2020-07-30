@@ -1397,7 +1397,6 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 		expr = function;
 	}
 	else {
-	notDeclaration:
 		// This is one or more expressions in parentheses
 
 		expr = parseExpr(lexer);

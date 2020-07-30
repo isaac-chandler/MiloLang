@@ -57,11 +57,13 @@ static llvm::Type *createLlvmType(llvm::LLVMContext &context, Type *type) {
 			auto pointer = llvm::PointerType::getUnqual(getLlvmType(context, array->arrayOf));
 			auto int64 = llvm::Type::getInt64Ty(context);
 
+			auto arrayType = llvm::StructType::get(pointer, int64);
+
 			if (array->flags & TYPE_ARRAY_IS_DYNAMIC) {
-				return llvm::StructType::create(toCString(array->name), pointer, int64, int64);
+				return llvm::StructType::get(arrayType, int64);
 			}
 			else {
-				return llvm::StructType::create(toCString(array->name), pointer, int64);
+				return arrayType;
 			}
 		}
 	}
@@ -147,6 +149,8 @@ static llvm::Value *allocateType(State *state, Type *type) {
 	auto value = state->builder.CreateAlloca(getLlvmType(state->context, type));
 
 	state->builder.SetInsertPoint(old);
+
+	return value;
 }
 
 static void pushLoop(State *state, ExprLoop *loop) {
@@ -246,7 +250,11 @@ static void exitBlock(State *state, Block *block, bool isBreak) {
 	}
 }
 
-llvm::Value *generateLllvmIr(State *state, Expr *expr) {
+llvm::Value *loadAddressOf(State *state, Expr *expr) {
+
+}
+
+llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 	PROFILE_FUNC();
 	switch (expr->flavor) {
 	case ExprFlavor::BINARY_OPERATOR: {
@@ -263,7 +271,7 @@ llvm::Value *generateLllvmIr(State *state, Expr *expr) {
 			Type *castTo = binary->type;
 
 			if (castTo == right->type) {
-				return generateLllvmIr(state, right);
+				return generateLlvmIr(state, right);
 			}
 			else if (binary->flags & EXPR_CAST_IS_BITWISE) {
 				return state->builder.CreateBitCast(generateLlvmIr(state, right), getLlvmType(state->context, castTo));
@@ -275,7 +283,7 @@ llvm::Value *generateLllvmIr(State *state, Expr *expr) {
 
 				auto storage = allocateType(state, right->type);
 
-				state->builder.CreateStore(generateLllvmIr(state, right), storage);
+				state->builder.CreateStore(generateLlvmIr(state, right), storage);
 
 				auto int8p = llvm::Type::getInt8PtrTy(state->context);
 
@@ -289,7 +297,7 @@ llvm::Value *generateLllvmIr(State *state, Expr *expr) {
 				if (right->type->flavor == TypeFlavor::STRING) {
 					auto nullCheck = state->builder.GetInsertBlock();
 
-					auto string = generateLllvmIr(state, right);
+					auto string = generateLlvmIr(state, right);
 
 					auto cmp = state->builder.CreateICmpEQ(string, llvm::ConstantPointerNull::get(llvm::Type::getInt8PtrTy(state->context)));
 					
@@ -321,29 +329,29 @@ llvm::Value *generateLllvmIr(State *state, Expr *expr) {
 						return llvm::ConstantInt::get(llvm::Type::getInt1Ty(state->context), 1);
 					}
 					else {
-						return state->builder.CreateICmpNE(state->builder.CreateExtractValue(generateLllvmIr(state, right), 1), 
+						return state->builder.CreateICmpNE(state->builder.CreateExtractValue(generateLlvmIr(state, right), 1), 
 							llvm::ConstantInt::get(llvm::Type::getInt64Ty(state->context), 0));
 					}
 				}
 				else if (right->type->flavor == TypeFlavor::FLOAT) {
-					auto value = generateLllvmIr(state, right);
+					auto value = generateLlvmIr(state, right);
 
 					return state->builder.CreateFCmpONE(value, llvm::ConstantFP::get(value->getType(), 0));
 				}
 				else if (right->type->flavor == TypeFlavor::INTEGER) {
-					auto value = generateLllvmIr(state, right);
+					auto value = generateLlvmIr(state, right);
 
 					return state->builder.CreateICmpNE(value, llvm::ConstantInt::get(value->getType(), 0));
 				}
 				else {
-					auto value = generateLllvmIr(state, right);
+					auto value = generateLlvmIr(state, right);
 					assert(value->getType()->isPointerTy());
 
 					return state->builder.CreateICmpNE(value, llvm::ConstantPointerNull::get(static_cast<llvm::PointerType *>(value->getType())));
 				}
 			}
 			case TypeFlavor::FLOAT: {
-				auto value = generateLllvmIr(state, right);
+				auto value = generateLlvmIr(state, right);
 
 				if (right->type->flavor == TypeFlavor::FLOAT) {
 					return state->builder.CreateFPCast(value, getLlvmType(state->context, castTo));
@@ -361,7 +369,7 @@ llvm::Value *generateLllvmIr(State *state, Expr *expr) {
 			}
 			case TypeFlavor::ENUM:
 			case TypeFlavor::INTEGER: {
-				auto value = generateLllvmIr(state, right);
+				auto value = generateLlvmIr(state, right);
 
 				if (right->type->flavor == TypeFlavor::POINTER || right->type->flavor == TypeFlavor::FUNCTION) {
 					return state->builder.CreatePtrToInt(value, getLlvmType(state->context, castTo));
@@ -379,32 +387,38 @@ llvm::Value *generateLllvmIr(State *state, Expr *expr) {
 				}
 			}
 			case TypeFlavor::ARRAY: {
-				auto value = generateLllvmIr(state, right);
+				auto value = generateLlvmIr(state, right);
 
 				if (right->type->flags & TYPE_ARRAY_IS_DYNAMIC) {
 					assert(!(left->type->flags & TYPE_ARRAY_IS_FIXED));
 
 
-					return nullptr;
+					return state->builder.CreateExtractValue(generateLlvmIr(state, right), 0);
 				}
 				else {
 					assert(right->type->flags & TYPE_ARRAY_IS_FIXED);
 					assert(!(left->type->flags & TYPE_ARRAY_IS_DYNAMIC));
 
-					return nullptr;
+					auto arrayType = static_cast<llvm::StructType *>(getLlvmType(state->context, castTo));
+					auto pointerType = arrayType->getElementType(0);
+
+					return state->builder.CreateInsertValue(llvm::ConstantStruct::get(
+							arrayType, 
+							llvm::UndefValue::get(pointerType), 
+							llvm::ConstantInt::get(llvm::Type::getInt64Ty(state->context), static_cast<TypeArray *>(right->type)->count)), 
+						state->builder.CreatePointerCast(loadAddressOf(state, right), pointerType), 0);
 				}
 			}
-			case TypeFlavor::POINTER: {
+			case TypeFlavor::POINTER:
+			case TypeFlavor::FUNCTION:
+			case TypeFlavor::STRING: {
 				if (right->type->flavor == TypeFlavor::ARRAY && (right->type->flags & TYPE_ARRAY_IS_FIXED)) {
-					return nullptr;
+					return state->builder.CreatePointerCast(loadAddressOf(state, right), getLlvmType(state->context, castTo));
 				}
 				else {
-					return state->builder.CreatePointerCast(;
+					return state->builder.CreatePointerCast(generateLlvmIr(state, right), getLlvmType(state->context, castTo));
 				}
 			}
-			case TypeFlavor::FUNCTION:
-			case TypeFlavor::STRING:
-				return nullptr; // These casts should be a nop
 			case TypeFlavor::TYPE:
 			case TypeFlavor::VOID:
 				assert(false);
@@ -415,6 +429,7 @@ llvm::Value *generateLllvmIr(State *state, Expr *expr) {
 			return nullptr;
 		}
 		case TOKEN('['): {
+			state->builder.
 			return nullptr;
 		}
 		case TokenT::EQUAL:
@@ -481,6 +496,7 @@ llvm::Value *generateLllvmIr(State *state, Expr *expr) {
 			else {
 				return nullptr;
 			}
+		}
 		case TokenT::LOGIC_AND:
 		case TokenT::LOGIC_OR: {
 			return nullptr;
@@ -513,7 +529,7 @@ llvm::Value *generateLllvmIr(State *state, Expr *expr) {
 		}
 
 		for (auto subExpr : block->exprs) {
-			generateLllvmIr(state, subExpr);
+			generateLlvmIr(state, subExpr);
 		}
 
 		exitBlock(state, &block->declarations, false);
@@ -954,7 +970,7 @@ llvm::Value *generateLllvmIr(State *state, Expr *expr) {
 			return nullptr;
 		}
 		case TokenT::TYPE_INFO: {
-			auto type = generateLllvmIr(state, unary->value);
+			auto type = generateLlvmIr(state, unary->value);
 
 
 			return nullptr;
@@ -1180,7 +1196,7 @@ void runLlvm() {
 					state.function = llvmFunction;
 					state.entryBlock = entry;
 
-					generateLllvmIr(&state, function->body);
+					generateLlvmIr(&state, function->body);
 
 					if (functionType->getReturnType()->isVoidTy()) {
 						builder.CreateRetVoid();
