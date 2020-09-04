@@ -111,3 +111,28 @@ __remove :: (array: *[]u8, value: *u8, size: u64) -> *u8 {
 			
 	return value - size
 }
+
+// @StringFormat
+// The function called when the == operator is used on two string types
+__strings_equal :: (a: *u8, b: *u8) -> bool {	
+	a_pointer := a
+	b_pointer := b
+
+	while true {
+		a_char := <<a_pointer
+		b_char := <<b_pointer
+		
+		a_pointer += 1
+		b_pointer += 1
+	
+		if a_char == 0
+			return b_char == 0
+			
+		// We know a != 0, so this means a and b are different lengths, therefore not equal
+		if b_char == 0
+			return false
+		
+		if a_char != b_char
+			return false
+	}
+}

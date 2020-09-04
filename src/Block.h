@@ -65,8 +65,14 @@ struct Declaration {
 
 	Array<struct SubJob *> sleepingOnMe;
 
-	union Symbol *symbol;
-	u64 physicalStorage;
+	union {
+		struct {
+			union Symbol *symbol;
+			u64 physicalStorage;
+		};
+
+		struct llvm::Value *llvmStorage;
+	};
 
 	u64 flags = 0;
 

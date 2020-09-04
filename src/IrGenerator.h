@@ -4,6 +4,7 @@
 #include "Ast.h"
 
 inline ExprFunction *removeFunction = nullptr;
+inline ExprFunction *stringsEqualFunction = nullptr;
 
 inline MPSCWorkQueue<ExprFunction *> irGeneratorQueue;
 

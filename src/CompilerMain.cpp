@@ -53,7 +53,7 @@ bool loadNewFile(String file) {
 	{
 		ScopeLock fileLock(filesMutex);
 		info.fileUid = static_cast<u32>(files.size());
-			
+
 		if (!files.add(info)) {
 			CloseHandle(handle);
 		}
@@ -338,9 +338,6 @@ int main(int argc, char *argv[]) {
 		}
 	}
 #endif
-
-	bool useLlvm = true;
-
 	using namespace std::chrono;
 
 #if BUILD_PROFILE
@@ -348,12 +345,32 @@ int main(int argc, char *argv[]) {
 	QueryPerformanceCounter(reinterpret_cast<LARGE_INTEGER *>(&startTime));
 #endif
 
-	if (argc != 2) {
+	char *input = nullptr;
+	bool useLlvm = false;
+
+	for (int i = 1; i < argc; i++) {
+		if (strcmp("-llvm", argv[i]) == 0) {
+			if (useLlvm) {
+				reportError("Error: Cannot specify LLVM codegen more than once");
+				return 1;
+			}
+
+			useLlvm = true;
+		}
+		else {
+			if (input) {
+				reportError("Error: Cannot more than one input file");
+				return 1;
+			}
+
+			input = argv[i];
+		}
+	}
+
+	if (!input) {
 		reportError("Error: Expected name of input file");
 		reportError("Usage: %s <file>", argv[0]);
 	}
-
-	char *input = argv[1];
 
 	auto start = high_resolution_clock::now();
 

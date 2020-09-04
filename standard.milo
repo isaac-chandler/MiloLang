@@ -441,7 +441,9 @@ print_f64 :: (num: f64, decimal_places: u64 = 6) {
 }
 
 print :: (using val: any) {
-	if value_type == type_info(void) 
+	if !value_type
+		print_string("<Error no type info in print>")
+	else if value_type == type_info(void) 
 		print_string("void")
 	else if value_type == type_info(type) {
 	

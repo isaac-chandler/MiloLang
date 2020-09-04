@@ -810,7 +810,7 @@ bool isValidCast(Type *to, Type *from, u64 flags) {
 				return to == from;
 			}
 			else {
-				 auto toArray = static_cast<TypeArray *>(to);
+				auto toArray = static_cast<TypeArray *>(to);
 				auto fromArray = static_cast<TypeArray *>(from);
 
 				return toArray->arrayOf == fromArray->arrayOf;
@@ -2495,6 +2495,11 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 			return false;
 		}
 
+
+		if (right->type->size != 8) {
+			insertImplicitCast(job->sizeDependencies, &right, right->type->flags & TYPE_INTEGER_IS_SIGNED ? &TYPE_S64 : &TYPE_U64);
+		}
+
 		if (left->type->flavor == TypeFlavor::POINTER) {
 			TypePointer *pointer = static_cast<TypePointer *>(left->type);
 
@@ -2802,6 +2807,10 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 			else if (left->type->flavor == TypeFlavor::POINTER && right->type->flavor == TypeFlavor::INTEGER) {
 				trySolidifyNumericLiteralToDefault(right);
 				auto pointer = static_cast<TypePointer *>(left->type);
+
+				if (right->type->size != 8) {
+					insertImplicitCast(job->sizeDependencies, &right, right->type->flags & TYPE_INTEGER_IS_SIGNED ? &TYPE_S64 : &TYPE_U64);
+				}
 
 				addSizeDependency(job->sizeDependencies, pointer->pointerTo);
 			}
@@ -3171,6 +3180,10 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 			if (left->type->flavor == TypeFlavor::POINTER && right->type->flavor == TypeFlavor::INTEGER) {
 				trySolidifyNumericLiteralToDefault(right);
 				auto pointer = static_cast<TypePointer *>(left->type);
+
+				if (right->type->size != 8) {
+					insertImplicitCast(job->sizeDependencies, &right, right->type->flags & TYPE_INTEGER_IS_SIGNED ? &TYPE_S64 : &TYPE_U64);
+				}
 
 				addSizeDependency(job->sizeDependencies, pointer->pointerTo);
 			}
@@ -4907,24 +4920,37 @@ bool checkStructDeclaration(Declaration *declaration, Type *&value, String name)
 	return true;
 }
 
+bool checkFunctionDeclaration(Declaration *declaration, ExprFunction *&value, String name) {
+	if (declaration->name == name) {
+		if (!(declaration->flags & DECLARATION_IS_CONSTANT)) {
+			reportError(declaration, "Internal Compiler Error: Declaration for %.*s must be a constant", name);
+			return false;
+		}
+		else if (!declaration->initialValue || declaration->initialValue->flavor != ExprFlavor::FUNCTION) {
+			reportError(declaration, "Internal Compiler Error: %.*s must be a function", name);
+			return false;
+		}
+
+		value = static_cast<ExprFunction *>(declaration->initialValue);
+	}
+
+	return true;
+}
+
 bool checkBuiltinDeclaration(Declaration *declaration) {
+
+#define FUNCTION_DECLARATION(value, name)		\
+else if (!checkFunctionDeclaration(declaration, value, name)) {	\
+	return false;                                               \
+}                                             
 #define STRUCT_DECLARATION(value, name)		\
 else if (!checkStructDeclaration(declaration, value, name)) {	\
 	return false;                                               \
 }                                             
-	if (declaration->name == "__remove") {
-		if (!(declaration->flags & DECLARATION_IS_CONSTANT)) {
-			reportError(declaration, "Internal Compiler Error: Declaration for __remove must be a constant");
-			return false;
-		}
-		else if (!declaration->initialValue || declaration->initialValue->flavor != ExprFlavor::FUNCTION) {
-			reportError(declaration, "Internal Compiler Error: __remove must be a function");
-			return false;
-		}
-
-		removeFunction = static_cast<ExprFunction *>(declaration->initialValue);
-	}
-	STRUCT_DECLARATION(TYPE_ANY, "any")
+	if (false);
+	FUNCTION_DECLARATION(removeFunction, "__remove")
+		FUNCTION_DECLARATION(stringsEqualFunction, "__strings_equal")
+		STRUCT_DECLARATION(TYPE_ANY, "any")
 		STRUCT_DECLARATION(TYPE_TYPE_INFO, "Type_Info")
 		STRUCT_DECLARATION(TYPE_TYPE_INFO_INTEGER, "Type_Info_Integer")
 		STRUCT_DECLARATION(TYPE_TYPE_INFO_POINTER, "Type_Info_Pointer")
@@ -4935,6 +4961,7 @@ else if (!checkStructDeclaration(declaration, value, name)) {	\
 
 		return true;
 #undef STRUCT_DECLARATION
+#undef FUNCTION_DECLARATION
 }
 
 void addImporter(Importer *importer) {
@@ -5705,7 +5732,7 @@ bool inferSize(SizeJob *job) {
 			reportError(enum_->integerType, "Error: enum type must be an integer");
 			return false;
 		}
-		else if ((static_cast<ExprLiteral *>(enum_->integerType)->typeValue->flags &TYPE_INTEGER_IS_SIGNED) && (enum_->struct_.flags & TYPE_ENUM_IS_FLAGS)) {
+		else if ((static_cast<ExprLiteral *>(enum_->integerType)->typeValue->flags & TYPE_INTEGER_IS_SIGNED) && (enum_->struct_.flags & TYPE_ENUM_IS_FLAGS)) {
 			reportError(enum_->integerType, "Error: enum_flags cannot have a signed type");
 			return false;
 		}

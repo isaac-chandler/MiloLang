@@ -547,7 +547,7 @@ u32 *addRelocationToUnkownSymbol(BucketedArenaAllocator *allocator, u32 virtualA
 
 	return value;
 }
-Block externalsBlock;
+static Block externalsBlock;
 
 u32 createRdataPointer(BucketedArenaAllocator *stringTable, BucketArray<Symbol> *symbols, BucketedArenaAllocator *rdata) {
 	Symbol symbol;
@@ -2844,46 +2844,6 @@ void runCoffWriter() {
 					code.add4(0);
 
 					storeFromIntRegister(&code, function, 8, ir.dest, RAX);
-				} break;
-				case IrOp::STRING_EQUAL: {
-
-					loadIntoIntRegister(&code, function, 8, RAX, ir.a);
-					loadIntoIntRegister(&code, function, 8, RCX, ir.b);
-
-					code.add1(0x48); // sub rcx, rax
-					code.add1(0x29);
-					code.add1(0xC1);
-
-					// early out if pointers are the same
-					code.add1(0x74); // je .set
-					code.add1(0x0E);
-
-					// .loop
-					code.add1(0x8A); // mov dl, byte ptr[rax]
-					code.add1(0x10);
-
-					code.add1(0x3A);  // cmp dl, byte ptr[rax+rcx*1]
-					code.add1(0x14);
-					code.add1(0x08);
-
-					code.add1(0x70 | C_NE); // jne .set
-					code.add1(0x07);
-
-
-					code.add1(0x48); // inc rax
-					code.add1(0xFF);
-					code.add1(0xC0);
-
-					code.add1(0x84); // test dl, dl
-					code.add1(0xD2);
-
-					code.add1(0x70 | C_NE); // jne .loop
-					code.add1(0xF2);
-
-					// .set
-					code.add1(0x0F);
-					code.add1(0x94);
-					writeRSPRegisterByte(&code, function, RAX, ir.dest);
 				} break;
 				case IrOp::LINE_MARKER: {
 					addLineInfo(&lineInfo, &columnInfo, code.totalSize - functionStart, ir.location.start, ir.location.end);

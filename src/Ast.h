@@ -62,7 +62,6 @@ enum class IrOp : u8 {
 	NOOP,
 	FUNCTION, 
 	STRING, 
-	STRING_EQUAL,
 	LINE_MARKER, 
 	TYPE, 
 	DEFER
@@ -267,8 +266,14 @@ struct ExprSwitch : Expr {
 		Expr *condition;
 		Expr *block;
 		bool fallsThrough; // @Memory this wastes 7 bytes
-		u64 irBranch;
+
+		union {
+			u64 irBranch;
+			struct llvm::BasicBlock *llvmCaseBlock;
+		};
+
 		u64 irSkip;
+
 	};
 
 	Expr *condition;
@@ -279,8 +284,14 @@ struct ExprSwitch : Expr {
 struct ExprStringLiteral : Expr {
 	String string;
 
-	union Symbol *symbol;
-	u32 physicalStorage;
+	union {
+		struct {
+			union Symbol *symbol;
+			u32 physicalStorage;
+		};
+
+		struct llvm::Value *llvmStorage;
+	};
 };
 
 struct ExprArray : Expr {
@@ -344,8 +355,16 @@ struct ExprFunction : Expr {
 
 	Array<struct SubJob *> sleepingOnMe;
 
-	union Symbol *symbol = nullptr;
-	u32 physicalStorage;
+	union {
+		struct {
+			union Symbol *symbol;
+			u32 physicalStorage;
+		};
+
+		llvm::Function *llvmStorage;
+	};
+
+	ExprFunction() : llvmStorage(nullptr) {}
 };
 
 struct ExprReturn : Expr {
@@ -364,8 +383,16 @@ struct ExprLoop : Expr {
 
 	Expr *completedBody;
 
-	u64 irPointer;
-	u64 arrayPointer;
+	union {
+		u64 irPointer;
+		struct llvm::Value *llvmPointer;
+	};
+
+	union {
+		u64 arrayPointer;
+		struct llvm::Value *llvmArrayPointer;
+	};
+
 	Block iteratorBlock;
 };
 

@@ -372,10 +372,6 @@ u64 loadAddressForArrayDereference(IrState *state, Expr *deref, u64 dest) {
 
 	assert(temp == rightReg);
 
-	if (binary->right->type->size != 8) {
-		convertNumericType(state, (binary->right->type->flags & TYPE_INTEGER_IS_SIGNED) ? &TYPE_S64 : &TYPE_U64, temp, binary->right->type, temp);
-	}
-
 	if (binary->type->size != 1) {
 		Ir &mul = state->ir.add();
 
@@ -546,16 +542,38 @@ void generateCall(IrState *state, ExprFunctionCall *call, u64 dest, ExprCommaAss
 u64 generateEquals(IrState *state, u64 leftReg, Expr *right, u64 dest, bool equals) {
 	u64 rightReg = generateIr(state, right, state->nextRegister++);
 
-
 	if (right->type->flavor == TypeFlavor::STRING) {
+		if (!stringsEqualFunction) {
+			reportError("Internal Compiler Error: Comparing strings before __strings_equal is declared");
+			assert(false);
+			exit(1); // @Cleanup Forceful exit since we don't have good error handling here and its an internal compiler error
+		}
+
+		u64 function = generateIr(state, stringsEqualFunction, state->nextRegister++);
+
+		FunctionCall *argumentInfo = static_cast<FunctionCall *>(state->allocator.allocate(sizeof(FunctionCall) + sizeof(argumentInfo->args[0]) * 2));
+		argumentInfo->argCount = 2;
+
+		u64 callAuxStorage = 4;
+
+		argumentInfo->args[0].number = leftReg;
+		argumentInfo->args[0].type = TYPE_VOID_POINTER;
+		argumentInfo->args[1].number = leftReg;
+		argumentInfo->args[1].type = TYPE_VOID_POINTER;
+
+		argumentInfo->returnType = &TYPE_BOOL;
+
+		if (4 > state->callAuxStorage) {
+			state->callAuxStorage = 4;
+		}
 
 		Ir &ir = state->ir.add();
-
-		ir.op = IrOp::STRING_EQUAL;
+		ir.op = IrOp::CALL;
+		ir.a = function;
+		ir.arguments = argumentInfo;
 		ir.dest = dest;
-		ir.a = leftReg;
-		ir.b = rightReg;
-		ir.opSize = right->type->size;
+		ir.opSize = TYPE_BOOL.size;
+
 
 		if (!equals) {
 			Ir &invert = state->ir.add();
@@ -853,11 +871,6 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 							div.flags |= IR_SIGNED_OP;
 						}
 						else {
-							if (right->type->size != 8) {
-								convertNumericType(state, (right->type->flags & TYPE_INTEGER_IS_SIGNED) ? &TYPE_S64 : &TYPE_U64, temp, right->type, rightReg);
-								rightReg = temp;
-							}
-
 							if (pointer->pointerTo->size != 1) {
 								Ir &mul = state->ir.add();
 
@@ -1009,11 +1022,6 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 						auto pointer = static_cast<TypePointer *>(left->type);
 
 						u64 temp = state->nextRegister++;
-
-						if (right->type->size != 8) {
-							convertNumericType(state, (right->type->flags & TYPE_INTEGER_IS_SIGNED) ? &TYPE_S64 : &TYPE_U64, temp, right->type, info.rightReg);
-							info.rightReg = temp;
-						}
 
 						if (pointer->pointerTo->size != 1) {
 							Ir &mul = state->ir.add();
@@ -1384,16 +1392,17 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			initItIndex.opSize = 8;
 			initItIndex.destSize = 8;
 
-			pushLoop(state, loop);
-
-			addLineMarker(state, expr);
-
-
 			u64 irEnd;
 
 			if (loop->forEnd) {
 				irEnd = generateIr(state, loop->forEnd, state->nextRegister++);
 			}
+
+			pushLoop(state, loop);
+
+			addLineMarker(state, expr);
+
+
 
 			u64 compareDest;
 
@@ -1718,8 +1727,6 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 		case ExprFlavor::RETURN: {
 			auto return_ = static_cast<ExprReturn *>(expr);
 
-			exitBlock(state, nullptr, true);
-
 			u64 result = 0;
 
 			if (return_->returns.count) {
@@ -1735,6 +1742,9 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 					write.opSize = return_->returns.values[i]->type->size;
 				}
 
+
+				exitBlock(state, nullptr, true);
+
 				Ir &ir = state->ir.add();
 				ir.op = IrOp::RETURN;
 				ir.a = result;
@@ -1745,6 +1755,8 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				}
 			}
 			else {
+				exitBlock(state, nullptr, true);
+
 				Ir &ir = state->ir.add();
 				ir.op = IrOp::RETURN;
 				ir.a = 0;
@@ -1762,7 +1774,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			auto struct_ = static_cast<TypeStruct *>(expr->type);
 
 			for (auto decl : struct_->members.declarations) {
-				if (decl->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING)) continue;
+				if (decl->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT)) continue;
 
 				if (decl->physicalStorage & 7) {
 					memberSize = my_max(static_cast<ExprLiteral *>(decl->type)->typeValue->size, memberSize);
@@ -1774,7 +1786,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			state->nextRegister += (memberSize + 7) / 8;
 
 			for (auto decl : struct_->members.declarations) {
-				if (decl->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING)) continue;
+				if (decl->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT)) continue;
 
 				if (decl->physicalStorage & 7) {
 					generateIrForceDest(state, decl->initialValue, memberTemp);
