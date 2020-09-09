@@ -55,6 +55,8 @@ struct Type {
 
 	union Symbol *symbol = nullptr;
 	u32 physicalStorage;
+
+	struct llvm::GlobalVariable *llvmStorage = nullptr;
 };
 
 struct TypePointer : Type {
@@ -135,7 +137,9 @@ inline Type *TYPE_TYPE_INFO_POINTER;
 inline Type *TYPE_TYPE_INFO_FUNCTION;
 inline Type *TYPE_TYPE_INFO_ARRAY;
 inline Type *TYPE_TYPE_INFO_STRUCT;
+inline Type *TYPE_TYPE_INFO_STRUCT_MEMBER;
 inline Type *TYPE_TYPE_INFO_ENUM;
+inline Type *TYPE_TYPE_INFO_ENUM_VALUE;
 
 void addStruct(TypeStruct *struct_);
 

@@ -1822,6 +1822,8 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 			return nullptr;
 		}
 
+		Declaration *initialized = nullptr;
+
 		while (true) {
 			if (lexer->token.type == TokenT::IDENTIFIER || lexer->token.type == TokenT::USING) {
 				auto declaration = parseDeclaration(lexer);
@@ -1831,6 +1833,18 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 				if (!addDeclarationToCurrentBlock(declaration)) {
 					return nullptr;
+				}
+
+				if ((type->flags & TYPE_STRUCT_IS_UNION) && !(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_UNINITIALIZED))) {
+					if (initialized) {
+						reportError(declaration, "Error: Only one member of a union can be initialized");
+						reportError(initialized, "   ..: Here is the previously initialized member");
+						
+						return nullptr;
+					}
+					else {
+						initialized = declaration;
+					}
 				}
 
 				if (declaration->flags & DECLARATION_MARKED_AS_USING) {

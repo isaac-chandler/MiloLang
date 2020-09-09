@@ -433,7 +433,8 @@ int main(int argc, char *argv[]) {
 		wchar_t buffer[1024];
 
 		wchar_t *linkerPath;
-		wchar_t *libPath;
+		wchar_t *windowsLibPath;
+		wchar_t *crtLibPath;
 
 
 		{
@@ -471,9 +472,23 @@ int main(int argc, char *argv[]) {
 					goto linkerCacheFail;
 				}
 
-				libPath = new wchar_t[length];
+				windowsLibPath = new wchar_t[length];
 
-				if (!read(libPath, length)) {
+				if (!read(windowsLibPath, length)) {
+					printf("Failed to read linker cache\n");
+					fclose(cache);
+					goto linkerCacheFail;
+				}
+
+				if (!read(&length, 1)) {
+					printf("Failed to read linker cache\n");
+					fclose(cache);
+					goto linkerCacheFail;
+				}
+
+				crtLibPath = new wchar_t[length];
+
+				if (!read(crtLibPath, length)) {
 					printf("Failed to read linker cache\n");
 					fclose(cache);
 					goto linkerCacheFail;
@@ -486,7 +501,12 @@ int main(int argc, char *argv[]) {
 					goto linkerCacheFail;
 				}
 
-				if (!directoryExists(libPath)) {
+				if (!directoryExists(windowsLibPath)) {
+					printf("Linker cache had invalid library path\n");
+					goto linkerCacheFail;
+				}
+
+				if (!directoryExists(crtLibPath)) {
 					printf("Linker cache had invalid library path\n");
 					goto linkerCacheFail;
 				}
@@ -509,9 +529,14 @@ int main(int argc, char *argv[]) {
 					reportError("Couldn't find libraries");
 					return 1;
 				}
+				else if (!result.windows_sdk_ucrt_library_path) {
+					reportError("Couldn't find libraries");
+					return 1;
+				}
 
 				linkerPath = mprintf(L"%s\\%s", result.vs_exe_path, L"link.exe");
-				libPath = result.windows_sdk_um_library_path;
+				windowsLibPath = result.windows_sdk_um_library_path;
+				crtLibPath = result.vs_library_path;
 
 				if (FILE *cache = _wfopen(cacheFile, L"wb")) {
 					u16 length = lstrlenW(linkerPath) + 1;
@@ -522,16 +547,22 @@ int main(int argc, char *argv[]) {
 					write(linkerPath, length);
 
 
-					length = lstrlenW(libPath) + 1;
+					length = lstrlenW(windowsLibPath) + 1;
 
 					write(&length, 1);
-					write(libPath, length);
+					write(windowsLibPath, length);
+
+
+					length = lstrlenW(crtLibPath) + 1;
+
+					write(&length, 1);
+					write(crtLibPath, length);
 
 					fclose(cache);
 				}
 			}
 
-			_snwprintf(buffer, 1024, L"\"%s\" out.obj /debug /entry:main kernel32.lib user32.lib gdi32.lib opengl32.lib \"/libpath:%s\" /incremental:no /nologo", linkerPath, libPath);
+			_snwprintf(buffer, 1024, L"\"%s\" out.obj /debug /entry:main kernel32.lib user32.lib gdi32.lib opengl32.lib libcmt.lib \"/libpath:%s\" \"/libpath:%s\" /incremental:no /nologo", linkerPath, windowsLibPath, crtLibPath);
 		}
 
 

@@ -730,8 +730,8 @@ void writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataRelocations,
 			for (u64 i = 0; i < array->count; i++) {
 				writeValue(dataSize, data, dataRelocations, symbols, stringTable, array->storage[i], emptyStringSymbolIndex, rdata);
 				
-				if (array->storage[i + 1] == nullptr) {
-					for (u64 j = i; j < array->count; j++) {
+				if (i + 1 < array->count && array->storage[i + 1] == nullptr) {
+					for (u64 j = i + 1; j < array->count; j++) {
 						writeValue(dataSize, data, dataRelocations, symbols, stringTable, array->storage[i], emptyStringSymbolIndex, rdata);
 
 						dataSize += elementSize;

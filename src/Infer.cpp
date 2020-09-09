@@ -4957,7 +4957,9 @@ else if (!checkStructDeclaration(declaration, value, name)) {	\
 		STRUCT_DECLARATION(TYPE_TYPE_INFO_FUNCTION, "Type_Info_Function")
 		STRUCT_DECLARATION(TYPE_TYPE_INFO_ARRAY, "Type_Info_Array")
 		STRUCT_DECLARATION(TYPE_TYPE_INFO_STRUCT, "Type_Info_Struct")
+		STRUCT_DECLARATION(TYPE_TYPE_INFO_STRUCT_MEMBER, "Type_Info_Struct_Member")
 		STRUCT_DECLARATION(TYPE_TYPE_INFO_ENUM, "Type_Info_Enum")
+		STRUCT_DECLARATION(TYPE_TYPE_INFO_ENUM_VALUE, "Type_Info_Enum_Value")
 
 		return true;
 #undef STRUCT_DECLARATION
@@ -6092,11 +6094,15 @@ void runInfer() {
 		goto error;
 	}
 
+	startLlvm.notify_one();
+
 	irGeneratorQueue.add(nullptr);
 
 	return;
 error:;
 	assert(hadError);
+
+	startLlvm.notify_one();
 
 	irGeneratorQueue.add(nullptr);
 }

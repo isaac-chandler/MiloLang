@@ -735,7 +735,7 @@ _main :: () {
 	
 	AdjustWindowRectEx(*window_rect, window_style ^ WS_OVERLAPPED | WS_TILED)
 	
-	window_handle := CreateWindowExW(lpClassName = class_name, lpWindowName = create_wide_string("Test Window"), dwStyle = WS_OVERLAPPEDWINDOW ^ WS_THICKFRAME ^ WS_MAXIMIZEBOX, 
+	window_handle := CreateWindowExW(lpClassName = class_name, lpWindowName = create_wide_string("Test Window"), dwStyle = window_style, 
 		nWidth = window_rect.right - window_rect.left, nHeight = window_rect.bottom - window_rect.top, hInstance = instance)
 	
 	if window_handle == null {
@@ -988,7 +988,8 @@ _main :: () {
 		for * enemy : enemies {		
 			for * bullet : bullets {
 				if !bullet.enemy {
-					if (intersect(bullet, *entities[enemy.entity])) {
+				
+					if intersect(bullet, *entities[enemy.entity]) {
 								
 						remove_particle_system(bullet.particle_system)
 						remove_entity(bullet.entity)
@@ -1008,7 +1009,7 @@ _main :: () {
 		
 		if player {
 			for * bullet : bullets {
-				if bullet.enemy {
+				if bullet.enemy {				
 					if intersect(bullet, player) {
 						remove_particle_system(bullet.particle_system)
 						remove_entity(bullet.entity)

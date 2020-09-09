@@ -434,7 +434,7 @@ OVERLAPPED :: struct {
 	
 	data: union {
 		Offset: u64
-		Pointer: *void
+		Pointer: *void = --
 	}
 	
 	hEvent: HANDLE

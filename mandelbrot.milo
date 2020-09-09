@@ -5,8 +5,8 @@
 
 ITERATIONS :: 256
 
-width :: 2048
-height :: 2048
+width :: 512
+height :: 512
 
 x_min :: -0.77
 x_max :: -0.702
