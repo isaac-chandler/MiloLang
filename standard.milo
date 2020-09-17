@@ -1,3 +1,5 @@
+/*
+
 Vector2 :: union {
 	using _xy: struct {
 		x: f32
@@ -14,7 +16,20 @@ Vector2 :: union {
 		print(")")
 	}
 }
+*/
 
+Vector2 :: struct {
+	x: f32
+	y: f32
+	
+	print_me :: (using vector: *Vector2) {
+		print("(")
+		print(x)
+		print(", ")
+		print(y)
+		print(")")
+	}
+}
 
 Vector3 :: union {
 	using _xyz: struct {

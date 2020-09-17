@@ -94,8 +94,6 @@
 		
 	
 		write := data
-
-		result: []u8 = --
 		
 		filename := create_wide_string(file)
 		

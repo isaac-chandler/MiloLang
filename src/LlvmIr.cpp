@@ -14,6 +14,7 @@ static llvm::Type *getLlvmType(llvm::LLVMContext &context, Type *type) {
 	return type->llvmType;
 }
 
+extern bool isStandardSize(u64 size);
 
 llvm::StringRef stringRef(const String &string) {
 	return llvm::StringRef(string.characters, string.length);
@@ -99,8 +100,7 @@ static llvm::Type *createLlvmType(llvm::LLVMContext &context, Type *type) {
 				llvm::ArrayRef<llvm::Type *> members;
 
 				if (struct_->size == mainMember->size) {
-					getLlvmType(context, mainMember);
-					members = llvm::ArrayRef(&mainMember->llvmType, 1);
+					members = llvm::ArrayRef(new llvm::Type * [1]{ getLlvmType(context, mainMember)}, 1);
 
 				}
 				else {
@@ -118,7 +118,15 @@ static llvm::Type *createLlvmType(llvm::LLVMContext &context, Type *type) {
 
 			type->llvmType = llvmType; // Put the empty struct on the type so that if we have a struct that points to itself we don't infinitely recurse
 
-			Array<llvm::Type *> body;
+			u64 count = 0;
+			for (auto member : struct_->members.declarations) {
+				if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING))
+					continue;
+
+				++count;
+			}
+
+			Array<llvm::Type *> body(count);
 
 			for (auto member : struct_->members.declarations) {
 				if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING))
@@ -136,18 +144,54 @@ static llvm::Type *createLlvmType(llvm::LLVMContext &context, Type *type) {
 		auto function = static_cast<TypeFunction *>(type);
 
 		// LLVM doesn't support multiple return values, so the extra return values are passed by pointer after the other arguments
-		u64 count = function->argumentCount + function->returnCount - 1;
+
+
+		u64 paramOffset = 0;
+		auto return_ = function->returnTypes[0];
+
+		if (!isStandardSize(return_->size)) {
+			paramOffset = 1;
+		}
+
+		u64 count = function->argumentCount + function->returnCount + paramOffset - 1;
+
 		llvm::Type **arguments = new llvm::Type * [count];
 
+		if (paramOffset) {
+			arguments[0] = llvm::PointerType::getUnqual(getLlvmType(context, return_));
+		}
+
 		for (u64 i = 0; i < function->argumentCount; i++) {
-			arguments[i] = getLlvmType(context, function->argumentTypes[i]);
+			auto argument = function->argumentTypes[i];
+
+			if (!isStandardSize(argument->size)) {
+				arguments[i + paramOffset] = llvm::PointerType::getUnqual(getLlvmType(context, argument));
+			}
+			else if (argument->flavor == TypeFlavor::STRUCT || argument->flavor == TypeFlavor::ARRAY) {
+				arguments[i + paramOffset] = llvm::IntegerType::get(context, argument->size * 8);
+			}
+			else {
+				arguments[i + paramOffset] = getLlvmType(context, argument);
+			}
 		}
 
 		for (u64 i = 1; i < function->returnCount; i++) {
-			arguments[function->argumentCount + i - 1] = llvm::PointerType::getUnqual(getLlvmType(context, function->returnTypes[i]));
+			arguments[function->argumentCount + paramOffset + i - 1] = llvm::PointerType::getUnqual(getLlvmType(context, function->returnTypes[i]));
 		}
 
-		return llvm::PointerType::getUnqual(llvm::FunctionType::get(getLlvmType(context, function->returnTypes[0]), llvm::ArrayRef(arguments, arguments + count), false));
+		llvm::Type *retType;
+
+		if (return_ == &TYPE_VOID || paramOffset) {
+			retType = llvm::Type::getVoidTy(context);
+		}
+		else if (return_->flavor == TypeFlavor::STRUCT || return_->flavor == TypeFlavor::ARRAY) {
+			retType = llvm::IntegerType::get(context, return_->size * 8);
+		}
+		else {
+			retType = getLlvmType(context, return_);
+		}
+
+		return llvm::PointerType::getUnqual(llvm::FunctionType::get(retType, llvm::ArrayRef(arguments, arguments + count), false));
 	}
 	else {
 		assert(false);
@@ -394,11 +438,11 @@ static llvm::Value *allocateType(State *state, Type *type, String name = "") {
 }
 
 
-static llvm::Value *allocateType(State *state, llvm::Type *type) {
+static llvm::Value *allocateType(State *state, llvm::Type *type, String name = "") {
 	auto old = state->builder.GetInsertBlock();
 
 	state->builder.SetInsertPoint(state->entryBlock);
-	auto value = state->builder.CreateAlloca(type);
+	auto value = state->builder.CreateAlloca(type, nullptr, stringRef(name));
 
 	state->builder.SetInsertPoint(old);
 
@@ -669,11 +713,15 @@ llvm::Value *loadAddressOf(State *state, Expr *expr) {
 			return state->builder.CreateGEP(generateLlvmIr(state, binary->left), generateLlvmIr(state, binary->right));
 		}
 		else if (binary->left->type->flags & TYPE_ARRAY_IS_FIXED) {
+			auto values = new llvm::Value * [2] {
+				llvm::ConstantInt::get(llvm::Type::getInt64Ty(state->context), 0),
+				generateLlvmIr(state, binary->right)
+			};
+
+
 			return state->builder.CreateGEP(
-				state->builder.CreatePointerCast(
-					generateLlvmIr(state, binary->left),
-					llvm::PointerType::getUnqual(getLlvmType(state->context, static_cast<TypeArray *>(binary->left->type)->arrayOf))),
-				generateLlvmIr(state, binary->right));
+				generateLlvmIr(state, binary->left),
+				llvm::ArrayRef( values, 2));
 		}
 		else {
 			assert(binary->left->type->flavor == TypeFlavor::ARRAY);
@@ -782,28 +830,65 @@ llvm::Value *loadAddressOf(State *state, Expr *expr) {
 static llvm::Value *generateLlvmCall(State *state, ExprFunctionCall *call, ExprCommaAssignment *comma) {
 	auto function = static_cast<TypeFunction *>(call->function->type);
 
-	auto argumentCount = function->argumentCount + function->returnCount - 1;
-	auto arguments = new llvm::Value * [argumentCount];
+	u64 paramOffset = 0;
+	auto return_ = function->returnTypes[0];
+
+	if (!isStandardSize(return_->size)) {
+		paramOffset = 1;
+	}
+
+	u64 count = function->argumentCount + function->returnCount + paramOffset - 1;
+
+	auto arguments = new llvm::Value * [count];
 
 	u64 returnIndex = 1;
 	for (; returnIndex < (comma ? comma->exprCount : 1); returnIndex++) {
-		arguments[function->argumentCount + returnIndex - 1] = loadAddressOf(state, comma->left[returnIndex]);
+		arguments[function->argumentCount + paramOffset + returnIndex - 1] = loadAddressOf(state, comma->left[returnIndex]);
 	}
 
 	for (; returnIndex < function->returnCount; returnIndex++) {
-		arguments[function->argumentCount + returnIndex - 1] = allocateType(state, function->returnTypes[returnIndex]);
+		arguments[function->argumentCount + paramOffset + returnIndex - 1] = allocateType(state, function->returnTypes[returnIndex]);
 	}
 
 	auto functionIr = generateLlvmIr(state, call->function);
 
-	for (u64 i = 0; i < call->arguments.count; i++) {
-		arguments[i] = generateIrAndLoadIfStoredByPointer(state, call->arguments.values[i]);
+
+	for (u64 i = 0; i < function->argumentCount; i++) {
+		auto argument = function->argumentTypes[i];
+
+		if (!isStandardSize(argument->size)) {
+			assert(isStoredByPointer(argument));
+			arguments[i + paramOffset] = generateLlvmIr(state, call->arguments.values[i]);
+
+		}
+		else if (argument->flavor == TypeFlavor::STRUCT || argument->flavor == TypeFlavor::ARRAY) {
+			arguments[i + paramOffset] = state->builder.CreateAlignedLoad(state->builder.CreateBitCast(generateLlvmIr(state, call->arguments.values[i]),
+				llvm::PointerType::getUnqual(llvm::IntegerType::get(state->context, argument->size * 8))), 
+				function->argumentTypes[i]->alignment);
+		}
+		else {
+			arguments[i + paramOffset] = generateLlvmIr(state, call->arguments.values[i]);
+		}
 	}
 
-	auto ir = state->builder.CreateCall(functionIr, llvm::ArrayRef(arguments, argumentCount));
+	if (paramOffset) {
+		arguments[0] = allocateType(state, return_);
+	}
+	auto ir = state->builder.CreateCall(functionIr, llvm::ArrayRef(arguments, count));
 	ir->setCallingConv(llvm::CallingConv::Win64);
 
-	return storeIfPointerType(state, call->type, ir);
+	if (paramOffset) {
+		return arguments[0];
+	}
+	else if (return_->flavor == TypeFlavor::ARRAY || return_->flavor == TypeFlavor::STRUCT) {
+		auto store = allocateType(state, ir->getFunctionType()->getReturnType());
+		state->builder.CreateStore(ir, store);
+
+		return state->builder.CreateBitCast(store, llvm::PointerType::getUnqual(getLlvmType(state->context, return_)));
+	}
+	else {
+		return ir;
+	}
 }
 
 static llvm::Value *generateLlvmEqual(State *state, bool equal, llvm::Value *l, Expr *right) {
@@ -818,11 +903,14 @@ static llvm::Value *generateLlvmEqual(State *state, bool equal, llvm::Value *l, 
 			exit(1); // @Cleanup Forceful exit since we don't have good error handling here and its an internal compiler error
 		}
 
+		auto args = new llvm::Value * [2]{ l, generateLlvmIr(state, right) };
 
-		llvm::Value *result = state->builder.CreateCall(createLlvmFunction(state, stringsEqualFunction), { l, generateLlvmIr(state, right) });
+		auto result = state->builder.CreateCall(createLlvmFunction(state, stringsEqualFunction), llvm::ArrayRef(args, 2));
+
+		result->setCallingConv(llvm::CallingConv::Win64);
 
 		if (!equal) {
-			result = state->builder.CreateICmp(llvm::CmpInst::Predicate::ICMP_EQ, result, llvm::ConstantInt::get(llvm::Type::getInt1Ty(state->context), 0));
+			return state->builder.CreateICmp(llvm::CmpInst::Predicate::ICMP_EQ, result, llvm::ConstantInt::get(llvm::Type::getInt1Ty(state->context), 0));
 		}
 
 		
@@ -1412,11 +1500,15 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 
 		auto argumentType = function->getFunctionType()->getParamType(0);
 
-		auto call = state->builder.CreateCall(function, {
+		auto args = new llvm::Value * [3]{
 			state->builder.CreateBitCast(remove->refersTo->llvmArrayPointer, argumentType),
 			state->builder.CreateBitCast(state->builder.CreateLoad(remove->refersTo->llvmPointer), llvm::Type::getInt8PtrTy(state->context)),
 			llvm::ConstantInt::get(llvm::Type::getInt64Ty(state->context), static_cast<TypeArray *>(remove->refersTo->forBegin->type)->arrayOf->size)
-			});
+		};
+
+		auto call = state->builder.CreateCall(function, llvm::ArrayRef(args, 3));
+
+		call->setCallingConv(llvm::CallingConv::Win64);
 
 		state->builder.CreateStore(state->builder.CreateBitCast(call, remove->refersTo->llvmPointer->getType()->getPointerElementType()), remove->refersTo->llvmPointer);
 		
@@ -1454,7 +1546,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 		state->builder.CreateStore(llvm::ConstantInt::get(llvm::Type::getInt64Ty(state->context), 0), it_index->llvmStorage);
 
 		if (loop->forBegin->type->flavor != TypeFlavor::INTEGER && !(loop->flags & EXPR_FOR_BY_POINTER)) {
-			loop->llvmPointer = allocateType(state, it->llvmStorage->getType());
+			loop->llvmPointer = allocateType(state, it->llvmStorage->getType(), "for.pointer");
 		}
 		else {
 			loop->llvmPointer = it->llvmStorage;
@@ -1710,17 +1802,37 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 		u64 result = 0;
 
 		if (return_->returns.count) {
-			auto result = generateIrAndLoadIfStoredByPointer(state, return_->returns.values[0]);
+			auto result = generateLlvmIr(state, return_->returns.values[0]);
+
+			auto retType = return_->returns.values[0]->type;
+			u64 paramOffset = isStandardSize(retType->size) ? 0 : 1;
 
 			for (u64 i = 1; i < return_->returns.count; i++) {
 				auto store = generateIrAndLoadIfStoredByPointer(state, return_->returns.values[i]);
 
-				state->builder.CreateStore(store, state->function->getArg(return_->returnsFrom->arguments.declarations.count + i - 1));
+				state->builder.CreateStore(store, state->function->getArg(return_->returnsFrom->arguments.declarations.count + paramOffset + i - 1));
 			}
 
 			exitBlock(state, nullptr, true);
 
-			state->builder.CreateRet(result);
+
+			if (paramOffset) {
+				state->builder.CreateStore(state->builder.CreateLoad(result), return_->returnsFrom->llvmStorage->getArg(0));
+
+				state->builder.CreateRetVoid();
+			}
+			else if (retType->flavor == TypeFlavor::STRUCT || retType->flavor == TypeFlavor::ARRAY) {
+				state->builder.CreateRet(state->builder.CreateAlignedLoad(
+					state->builder.CreateBitCast(
+						result,
+						llvm::PointerType::getUnqual(llvm::IntegerType::get(state->context, retType->size * 8))
+					),
+					retType->alignment
+				));
+			}
+			else {
+				state->builder.CreateRet(result);
+			}
 		}
 		else {
 			exitBlock(state, nullptr, true);
@@ -1869,6 +1981,8 @@ void runLlvm() {
 		startLlvm.wait(lock);
 	}
 
+	//Sleep(1000);
+
 	llvm::LLVMContext context;
 
 	llvm::Module llvmModule("llvm_out", context);
@@ -1897,16 +2011,6 @@ void runLlvm() {
 
 	llvm::TargetOptions options;
 
-	llvm::legacy::FunctionPassManager fpm(&llvmModule);
-
-	/*fpm.add(llvm::createPromoteMemoryToRegisterPass());
-	fpm.add(llvm::createInstructionCombiningPass());
-	fpm.add(llvm::createReassociatePass());
-	fpm.add(llvm::createGVNPass());
-	fpm.add(llvm::createCFGSimplificationPass());
-	fpm.add(llvm::createDeadCodeEliminationPass());*/
-
-	fpm.doInitialization();
 
 	auto rm = llvm::Optional<llvm::Reloc::Model>();
 
@@ -1952,12 +2056,31 @@ void runLlvm() {
 					state.function = llvmFunction;
 					state.entryBlock = entry;
 
+					u64 paramOffset = isStandardSize(static_cast<ExprLiteral *>(function->returns.declarations[0]->type)->typeValue->size) ? 0 : 1;
 
 					for (u64 i = 0; i < function->arguments.declarations.count; i++) {
 						auto argument = function->arguments.declarations[i];
+						auto argType = static_cast<ExprLiteral *>(function->arguments.declarations[i]->type)->typeValue;
 
-						argument->llvmStorage = allocateType(&state, static_cast<ExprLiteral *>(argument->type)->typeValue, argument->name);
-						builder.CreateStore(llvmFunction->getArg(i), argument->llvmStorage);
+
+						llvm::Value *llvmArg = llvmFunction->getArg(i + paramOffset);
+						if (!isStandardSize(argType->size)) {
+							argument->llvmStorage = llvmArg;
+						}
+						else if (argType->flavor == TypeFlavor::ARRAY || argType->flavor == TypeFlavor::STRUCT) {
+							auto alloc = allocateType(&state, functionType->getFunctionParamType(i + paramOffset));
+
+							builder.CreateStore(llvmArg, alloc);
+
+							argument->llvmStorage = builder.CreateBitCast(alloc, llvm::PointerType::getUnqual(getLlvmType(context, argType)), stringRef(argument->name));
+						}
+						else {
+							argument->llvmStorage = allocateType(&state, static_cast<ExprLiteral *>(argument->type)->typeValue, argument->name);
+
+							
+
+							builder.CreateStore(llvmArg, argument->llvmStorage);
+						}
 					}
 
 					generateLlvmIr(&state, function->body);
@@ -1976,8 +2099,6 @@ void runLlvm() {
 					builder.SetInsertPoint(entry);
 
 					builder.CreateBr(code);
-
-					fpm.run(*llvmFunction);
 
 #if BUILD_DEBUG
 					if (llvm::verifyFunction(*llvmFunction, &verifyStream)) {
@@ -2286,6 +2407,9 @@ void runLlvm() {
 			auto int32 = llvm::Type::getInt32Ty(context);
 			auto fltused = new llvm::GlobalVariable(llvmModule, int32, true, llvm::GlobalValue::ExternalLinkage, llvm::ConstantInt::get(int32, 0), "_fltused");
 
+
+			
+
 			std::cout << verifyOutput << "\n";
 
 			//llvmModule.dump();
@@ -2300,13 +2424,64 @@ void runLlvm() {
 			llvm::raw_fd_ostream output("out.obj", err);
 
 
+			// Based on zig llvm pass manager https://github.com/ziglang/zig/blob/master/src/zig_llvm.cpp
+			targetMachine->setO0WantsFastISel(true);
+
+			llvm::PassManagerBuilder *pmbuilder = new llvm::PassManagerBuilder;
+			pmbuilder->OptLevel = targetMachine->getOptLevel();
+			pmbuilder->SizeLevel = 0;
+			pmbuilder->DisableTailCalls = true;
+			pmbuilder->DisableUnrollLoops = true;
+			pmbuilder->SLPVectorize = false;
+			pmbuilder->LoopVectorize = false;
+			pmbuilder->RerollLoops = false;
+			pmbuilder->DisableGVNLoadPRE = true;
+			pmbuilder->PrepareForLTO = false;
+			pmbuilder->PrepareForLTO = false;
+			pmbuilder->PerformThinLTO = false;
+#if BUILD_DEBUG
+			pmbuilder->VerifyInput = true;
+			pmbuilder->VerifyOutput = true;
+#else
+			pmbuilder->VerifyInput = false;
+			pmbuilder->VerifyOutput = false;
+#endif
+
+			llvm::TargetLibraryInfoImpl tlii(llvm::Triple(llvmModule.getTargetTriple()));
+
+			pmbuilder->LibraryInfo = &tlii;
+
+			pmbuilder->Inliner = llvm::createAlwaysInlinerLegacyPass(false);
+
+			llvm::legacy::FunctionPassManager fpm(&llvmModule);
+			fpm.add(new llvm::TargetLibraryInfoWrapperPass(tlii));
+			fpm.add(llvm::createTargetTransformInfoWrapperPass(targetMachine->getTargetIRAnalysis()));
+			
+#if BUILD_DEBUG
+			fpm.add(llvm::createVerifierPass());
+#endif
+
+			pmbuilder->populateFunctionPassManager(fpm);
+
 			llvm::legacy::PassManager pass;
+			pass.add(llvm::createTargetTransformInfoWrapperPass(targetMachine->getTargetIRAnalysis()));
+			pmbuilder->populateModulePassManager(pass);
+
 
 			auto fileType = llvm::CGFT_ObjectFile;
 
 			if (targetMachine->addPassesToEmitFile(pass, output, nullptr, fileType)) {
 				reportError("LLVM Error: can't emit a file of this type");
 			}
+
+			fpm.doInitialization();
+
+			for (auto &function : llvmModule) {
+				if (!function.isDeclaration())
+					fpm.run(function);
+			}
+
+			fpm.doFinalization();
 
 			pass.run(llvmModule);
 

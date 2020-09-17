@@ -179,6 +179,11 @@ triangles_intersect :: (a: [3]Vector2, a_offset: Vector2, b: [3]Vector2, b_offse
 	v0 := sub_vector2(a[2], a[0])
 	v1 := sub_vector2(a[1], a[0])
 	
+	// print(a[0])
+	// print(a[1])
+	// print(a[2])
+	// print("\n")
+	
 	dot00 := dot_vector2(v0, v0)
 	dot01 := dot_vector2(v0, v1)
 	dot11 := dot_vector2(v1, v1)
@@ -575,12 +580,13 @@ intersect :: (bullet: *Bullet, b: *Entity) -> bool {
 	     a.x - a.width  * 0.5 > b.x + b.width  * 0.5 ||
 	     a.y + a.height * 0.5 < b.y - b.height * 0.5 ||
 	     a.y - a.height * 0.5 > b.y + b.height * 0.5) {
-		 
+		
 		a_offset := make_vector2(a.x, a.y)
 		b_offset := make_vector2(b.x, b.y)
-	
+		
 		for i : bullet.mesh {
-			 for j : b.mesh {
+			for j : b.mesh {
+				
 				if triangles_intersect(i, a_offset, j, b_offset) return true
 				if triangles_intersect(j, b_offset, i, a_offset) return true
 			}
@@ -615,7 +621,10 @@ _main :: () {
 	
 	show_command: u16 = SW_SHOWDEFAULT
 	
-	enemy_mesh: [4][3]Vector2 = --
+	enemy_mesh: [][3]Vector2
+	
+	enemy_mesh.data = allocate(size_of([4][3]Vector2))
+	enemy_mesh.count = 4
 	
 	enemy_mesh[0][0].x = -36
 	enemy_mesh[0][0].y = -24
