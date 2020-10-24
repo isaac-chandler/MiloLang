@@ -771,6 +771,8 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 								count.dest = dest + 1;
 								count.a = static_cast<TypeArray *>(right->type)->count;
 								count.opSize = 8;
+
+								return dest;
 							}
 						}
 						case TypeFlavor::POINTER: {
@@ -2000,16 +2002,16 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 						address.op = IrOp::ADDRESS_OF_LOCAL;
 						address.dest = addressReg;
 						address.a = dest;
-						address.b = dest + i * elementType->size;
+						address.b = i * elementType->size;
 						address.opSize = 8;
 
 						generateIrForceDest(state, array->storage[i], valueReg);
 
 						Ir &write = state->ir.add();
-						address.op = IrOp::WRITE;
-						address.a = addressReg;
-						address.b = valueReg;
-						address.opSize = elementType->size;
+						write.op = IrOp::WRITE;
+						write.a = addressReg;
+						write.b = valueReg;
+						write.opSize = elementType->size;
 					}
 				}
 			}

@@ -694,10 +694,8 @@ _main :: () {
 				window_width = client_rect.right - client_rect.left
 				window_height = client_rect.bottom - client_rect.top
 				
-				print(cast() window_width)
-				print("x")
-				print(cast() window_height)
-				print("\n----------\n")
+				print("%x%\n", window_width, window_height)
+				print("----------\n")
 				
 			case WM_KEYDOWN
 				if wParam == {
@@ -728,7 +726,7 @@ _main :: () {
 	
 	if RegisterClassW(*window_class) == 0 {
 		print("Failed to register window class\n")
-		print(GetLastError())
+		print("%\n", GetLastError())
 		return
 	}
 	
@@ -749,7 +747,7 @@ _main :: () {
 	
 	if window_handle == null {
 		print("Failed to open window\n")
-		print(GetLastError())
+		print("%\n", GetLastError())
 		return
 	}
 	
@@ -1103,9 +1101,8 @@ _main :: () {
 		glDisable(GL_TEXTURE_2D)
 		
 		
-		if (cast() (delta * 1000_000) > 20_000) {
-			print(cast(s64) (delta * 1000_000))
-			print("\n")
+		if (delta > 0.02) {
+			print("%\n", delta)
 		}
 		
 		// print(cast() (delta * 1000_000))

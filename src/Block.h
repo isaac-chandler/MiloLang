@@ -46,6 +46,7 @@
 // Set if a declaration is on the left hand side of a := comma assignment
 #define DECLARATION_IS_IN_COMPOUND     0x0'4000
 
+#define DECLARATION_IS_VARARGS         0x0'8000
 
 struct Declaration {
 	CodeLocation start;

@@ -23,11 +23,7 @@ Vector2 :: struct {
 	y: f32
 	
 	print_me :: (using vector: *Vector2) {
-		print("(")
-		print(x)
-		print(", ")
-		print(y)
-		print(")")
+		print("(%, %)", x, y)
 	}
 }
 
@@ -43,13 +39,7 @@ Vector3 :: union {
 	xy: Vector2 = --
 	
 	print_me :: (using vector: *Vector3) {
-		print("(")
-		print(x)
-		print(", ")
-		print(y)
-		print(", ")
-		print(z)
-		print(")")
+		print("(%, %, %)", x, y, z)
 	}
 }
 
@@ -75,15 +65,7 @@ Vector4 :: union {
 	
 	
 	print_me :: (using vector: *Vector4) {
-		print("(")
-		print(x)
-		print(", ")
-		print(y)
-		print(", ")
-		print(z)
-		print(", ")
-		print(w)
-		print(")")
+		print("(%, %, %, %)", x, y, z, w)
 	}
 }
 
@@ -417,7 +399,7 @@ is_nan :: (x: f64) -> bool {
 
 
 // This function is terrible
-print_f64 :: (num: f64, decimal_places: u64 = 6) {
+print_f64 :: (num: f64, decimal_places: u64 = 6, base: u64 = 10) {
 	value := num
 
 	if is_nan(value) {
@@ -442,20 +424,39 @@ print_f64 :: (num: f64, decimal_places: u64 = 6) {
 	
 	integer_part := cast(u64) value
 	
-	print_u64(integer_part)
+	print_u64(integer_part, base)
 	
 	print_string(".")
 	
 	for decimal_places {
-		value *= 10
+		// @CompilerBug @Hack because f64 to u64 conversion code generation is bugged
+		value *= cast(f64) cast(u32) base
 		
 		integer := cast(u64) value
 		
-		print_char(cast() ('0' + integer % 10))
+		if !integer break;
+		
+		print_char(DIGIT_TABLE[integer % base])
 	}
 }
 
-print :: (using val: any) {
+print :: (format: string, ..vals: any) {
+	index: u64
+	
+	for format
+		if it == '%' {
+			if index > vals.count
+				return;
+			print_any(vals[index])
+			index += 1
+		} else {
+			print_char(it)
+		}
+			
+}
+
+
+print_any :: (using val: any) {
 	if !value_type
 		print_string("<Error no type info in print>")
 	else if value_type == type_info(void) 
@@ -552,15 +553,11 @@ print :: (using val: any) {
 					break
 				}
 			} completed {
-				print_string("(INVALID enum ")
-				
 				num: any = --
 				num.value_pointer = value_pointer
 				num.value_type = info.base_type
 				
-				print(num)
-				
-				print_string(")")
+				print("(INVALID enum %)", num)
 			}
 		}
 		
@@ -614,16 +611,11 @@ print :: (using val: any) {
 		
 			for info.members {
 				if !(it.flags & .CONSTANT) {
-					print_string(it.name)
-					print_string(" = ")
-				
 					val: any = --
 					val.value_pointer = value_pointer + it.offset
 					val.value_type = it.member_type
 					
-					print(val)
-					
-					print_string(" ")
+					print("% = % ", it.name, val)
 				}
 			}
 			

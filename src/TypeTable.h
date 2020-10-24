@@ -96,6 +96,7 @@ struct TypeFunction : Type {
 
 	u64 argumentCount;
 	Type **argumentTypes;
+	bool isVarargs;
 };
 
 inline Type TYPE_S8 = { 1, 1, "s8", 2, TYPE_INTEGER_IS_SIGNED, TypeFlavor::INTEGER };

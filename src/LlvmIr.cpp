@@ -1,5 +1,7 @@
 #include "Basic.h"
 
+#ifndef BUILD_NO_LLVM
+
 #include "CoffWriter.h"
 #include "Lexer.h"
 #include "IrGenerator.h"
@@ -2490,3 +2492,11 @@ void runLlvm() {
 	}
 error:;
 }
+
+#else
+
+void runLlvm() {
+	printf("LLVM is not supported in this build.\n");
+}
+
+#endif

@@ -252,6 +252,8 @@ struct ExprDefer : Expr {
 // there will be no conversion made, the bits are simply reinterpreted
 #define EXPR_CAST_IS_BITWISE 0x1'0000
 
+#define EXPR_FUNCTION_HAS_VARARGS 0x2'0000
+
 struct ExprLiteral : Expr {
 	union {
 		u64 unsignedValue;

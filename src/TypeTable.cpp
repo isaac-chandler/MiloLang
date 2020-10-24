@@ -16,6 +16,7 @@ BucketedArenaAllocator typeArena(1024 * 1024);
 #define STATIC_ARRAY_TYPE_HASH_PRIME 4969
 #define FUNCTION_ARGUMENT_HASH_PRIME 5147
 #define FUNCTION_RETURN_HASH_PRIME 5347
+#define VARARGS_HASH_PRIME 6221
 
 static u32 nextStructHash = STRUCT_HASH_PRIME;
 
@@ -362,8 +363,19 @@ void generateTypeNameForFunction(TypeFunction *function) {
 	for (u64 i = 0; i < function->argumentCount; i++) {
 		String name = function->argumentTypes[i]->name;
 
-		memcpy(cursor, name.characters, name.length);
-		cursor += name.length;
+		if (i == function->argumentCount - 1 && function->isVarargs) {
+			*cursor++ = '.';
+			*cursor++ = '.';
+
+			assert(name.characters[0] == '[' && name.characters[1] == ']');
+
+			memcpy(cursor, name.characters + 2, name.length - 2);
+			cursor += name.length - 2;
+		}
+		else {
+			memcpy(cursor, name.characters, name.length);
+			cursor += name.length;
+		}
 
 		if (i + 1 != function->argumentCount) {
 			*cursor++ = ',';
@@ -412,6 +424,12 @@ TypeFunction *getFunctionType(ExprFunction *expr) {
 		hash *= FUNCTION_ARGUMENT_HASH_PRIME;
 	}
 
+	bool varags = expr->arguments.declarations.count && (expr->arguments.declarations[expr->arguments.declarations.count - 1]->flags & DECLARATION_IS_VARARGS) != 0;
+
+	if (varags) {
+		hash *= VARARGS_HASH_PRIME;
+	}
+
 	if (hash == 0) hash = 1;
 
 	u32 slot = hash & (typeTableCapacity - 1);
@@ -419,6 +437,10 @@ TypeFunction *getFunctionType(ExprFunction *expr) {
 	for (TypeTableEntry entry = typeTableEntries[slot]; entry.hash; entry = typeTableEntries[slot]) {
 		if (entry.hash == hash && entry.value->flavor == TypeFlavor::FUNCTION) {
 			auto function = static_cast<TypeFunction *>(entry.value);
+
+			if (function->isVarargs != varags) {
+				goto cont;
+			}
 
 			if (function->argumentCount == arguments.count && function->returnCount == returns.count) {
 				for (u64 i = 0; i < arguments.count; i++) {
@@ -449,6 +471,7 @@ TypeFunction *getFunctionType(ExprFunction *expr) {
 	result->hash = hash;
 	result->argumentCount = arguments.count;
 	result->argumentTypes = TYPE_NEW_ARRAY(Type *, result->argumentCount);
+	result->isVarargs = varags;
 
 	for (u64 i = 0; i < returns.count; i++) {
 		result->returnTypes[i] = static_cast<ExprLiteral *>(returns[i]->type)->typeValue;

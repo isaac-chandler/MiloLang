@@ -2064,10 +2064,23 @@ bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yi
 				break;
 			}
 			case TypeFlavor::FUNCTION: {
+				auto a = static_cast<TypeFunction *>(correct);
+				auto b = static_cast<TypeFunction *>(given->type);
+
+				if (a->isVarargs != b->isVarargs && a->argumentCount == b->argumentCount && a->returnCount == b->returnCount) {
+					// @Incomplete Should this check recursively if function pointers are varargs convertible
+					for (u64 i = 0; i < a->argumentCount; i++) {
+						if (a->argumentTypes[i] != b->argumentTypes[i]) return false;
+						if (a->returnTypes[i] != b->returnTypes[i]) return false;
+					}
+					insertImplicitCast(job->sizeDependencies, &given, correct);
+				}
+
 				if (correct != given->type) {
 					reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
 					return false;
 				}
+				break;
 			}
 			case TypeFlavor::INTEGER: {
 				if ((correct->flags & TYPE_INTEGER_IS_SIGNED) == (given->type->flags & TYPE_INTEGER_IS_SIGNED)) {
@@ -2283,8 +2296,6 @@ bool isAddressable(Expr *expr) {
 bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char *message, Expr *callLocation, Expr *functionLocation, bool *yield) {
 	*yield = false;
 
-	bool hasNamedArguments = false;
-
 	String functionName = "function";
 
 	if (functionLocation->valueOfDeclaration) {
@@ -2300,73 +2311,121 @@ bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char 
 	}
 
 #if BUILD_DEBUG
-	if (hasNamedArguments) {
-		for (u64 i = 0; i < block->declarations.count; i++) {
-			assert(block->declarations[i]->indexInBlock == i);
-		}
+	for (u64 i = 0; i < block->declarations.count; i++) {
+		assert(block->declarations[i]->indexInBlock == i);
 	}
 #endif
 
-	if (hasNamedArguments || (arguments->count < block->declarations.count && minArguments != block->declarations.count)) {
-		Expr **sortedArguments = new Expr * [block->declarations.count]{};
+	bool hadNamedArguments = false;
+	Expr **sortedArguments = new Expr * [block->declarations.count]{};
 
-		for (u64 i = 0; i < arguments->count; i++) {
-			u64 argIndex = i;
-			if (arguments->names[i].length) {
-				auto argument = findDeclarationNoYield(block, arguments->names[i]);
+	for (u64 i = 0; i < arguments->count; i++) {
+		auto argument = block->declarations[i];
 
-				argIndex = argument->indexInBlock;
-				assert(!(argument->flags & DECLARATION_IMPORTED_BY_USING));
+		u64 argIndex = i;
+		if (arguments->names[i].length) {
+			hadNamedArguments = true;
 
-				if (!argument) {
-					reportError(arguments->values[i], "Error: %.*s does not have a %s called %.*s", STRING_PRINTF(functionName), message, STRING_PRINTF(arguments->names[i]));
+			argument = findDeclarationNoYield(block, arguments->names[i]);
+		}
+		else if (hadNamedArguments) {
+			reportError(arguments->values[i], "Error: Cannot have unnamed arguments after named arguments were given");
+		}
+
+		if (!argument) {
+			reportError(arguments->values[i], "Error: %.*s does not have a %s called %.*s", STRING_PRINTF(functionName), message, STRING_PRINTF(arguments->names[i]));
+			return false;
+		}
+
+		argIndex = argument->indexInBlock;
+		assert(!(argument->flags & DECLARATION_IMPORTED_BY_USING));
+
+		if (sortedArguments[argIndex]) {
+			reportError(arguments->values[i], "Error: %s %.*s was supplied twice", message, STRING_PRINTF(block->declarations[argIndex]->name));
+			reportError(sortedArguments[argIndex], "   ..: It was previously given here");
+			return false;
+		}
+
+		if (argument->flags & DECLARATION_IS_VARARGS) {
+			Array<Expr *> varargs;
+
+			auto array = new ExprArray;
+			array->flavor = ExprFlavor::ARRAY;
+			array->start = arguments->values[i]->start;
+
+			Type *varargsType = static_cast<TypeArray *>(static_cast<ExprLiteral *>(argument->type)->typeValue)->arrayOf;
+
+			for (; i < arguments->count; i++) {
+				if (arguments->names[i].length) {
+					break;
+				}
+
+				if (!assignOp(job, arguments->values[i], varargsType, arguments->values[i], yield)) {
 					return false;
 				}
+
+				varargs.add(arguments->values[i]);
+				array->end = arguments->values[i]->end;
 			}
 
-			if (sortedArguments[argIndex]) {
-				reportError(arguments->values[i], "Error: %s %.*s was supplied twice", message, STRING_PRINTF(block->declarations[argIndex]->name));
-				reportError(sortedArguments[argIndex], "   ..: It was previously given here");
-				return false;
+			array->storage = varargs.storage;
+			array->count = varargs.count;
+
+			array->type = getStaticArray(varargsType, varargs.count);
+			if (array->type->size == 0 && !array->type->sizeJob) {
+				auto sizeJob = allocateSizeJob();
+				sizeJob->type = array->type;
+				sizeJob->type->sizeJob = sizeJob;
+
+				addJob(&sizeJobs, sizeJob);
+				subJobs.add(sizeJob);
+				++totalTypesSized;
 			}
 
+
+			addSizeDependency(job->sizeDependencies, array->type);
+
+			sortedArguments[argIndex] = array;
+		}
+		else {
 			sortedArguments[argIndex] = arguments->values[i];
 		}
+	}
 
-		for (u64 i = 0; i < block->declarations.count; i++) {
-			if (!sortedArguments[i]) {
-				auto argument = block->declarations[i];
+	bool failed = false;
 
-				if (argument->initialValue) {
-					sortedArguments[i] = argument->initialValue;
-					addSizeDependency(job->sizeDependencies, argument->initialValue->type);
-				}
-				else {
-					reportError(callLocation, "Error: Required %s '%.*s' was not given", message, STRING_PRINTF(argument->name));
-					reportError(argument, "   ..: Here is the %s", message);
-					return false;
-				}
+	for (u64 i = 0; i < block->declarations.count; i++) {
+		if (!sortedArguments[i]) {
+			auto argument = block->declarations[i];
+
+			if (argument->initialValue) {
+				sortedArguments[i] = argument->initialValue;
+				addSizeDependency(job->sizeDependencies, argument->initialValue->type);
+			}
+			else if (argument->flags & DECLARATION_IS_VARARGS) {
+				auto literal = new ExprLiteral;
+				literal->start = argument->start;
+				literal->end = argument->end;
+				literal->flavor = ExprFlavor::INT_LITERAL;
+				literal->unsignedValue = 0;
+				literal->type = static_cast<ExprLiteral *>(argument->type)->typeValue;
+
+				sortedArguments[i] = literal;
+				addSizeDependency(job->sizeDependencies, literal->type);
+			}
+			else {
+				reportError(callLocation, "Error: Required %s '%.*s' was not given", message, STRING_PRINTF(argument->name));
+				reportError(argument, "   ..: Here is the %s", message);
+				failed = true;
 			}
 		}
-
-		arguments->values = sortedArguments;
-		arguments->count = block->declarations.count;
 	}
-	else if (arguments->count != block->declarations.count) {
 
-		if (arguments->count < block->declarations.count) {
-			reportError(callLocation, "Error: Too few %ss for %.*s (Expected: %" PRIu64 ", Given: %" PRIu64 ")", message,
-				STRING_PRINTF(functionName), block->declarations.count, arguments->count);
-
-			reportError(block->declarations[arguments->count], "   ..: Here are the missing %ss", message);
-		}
-		else if (arguments->count > block->declarations.count) {
-			reportError(callLocation, "Error: Too many %ss for %.*s (Expected: %" PRIu64 ", Given: %" PRIu64 ")", message,
-				STRING_PRINTF(functionName), block->declarations.count, arguments->count);
-		}
-
+	if (failed)
 		return false;
-	}
+
+	arguments->values = sortedArguments;
+	arguments->count = block->declarations.count;
 
 	for (u64 i = 0; i < arguments->count; i++) {
 		Type *correct = static_cast<ExprLiteral *>(block->declarations[i]->type)->typeValue;
@@ -4263,18 +4322,72 @@ bool inferFlattened(SubJob *job) {
 				}
 			}
 			else {
-				if (call->arguments.count != function->argumentCount) {
+				if (call->arguments.count != function->argumentCount || function->isVarargs) {
 
-					if (call->arguments.count < function->argumentCount) {
-						reportError(call, "Error: Too few arguments for %.*s (Expected: %" PRIu64 ", Given: %" PRIu64 ")",
-							STRING_PRINTF(functionName), function->argumentCount, call->arguments.count);
+					if (function->isVarargs) {
+						if (call->arguments.count < function->argumentCount - 1) {
+							reportError(call, "Error: Too few arguments for %.*s (Expected: %" PRIu64 ", Given: %" PRIu64 ")",
+								STRING_PRINTF(functionName), function->argumentCount, call->arguments.count);
+							return false;
+						}
+						else if (call->arguments.count == function->argumentCount - 1) {
+							auto newArguments = new Expr * [function->argumentCount];
+
+							for (u64 i = 0; i < call->arguments.count; i++) {
+								newArguments[i] = call->arguments.values[i];
+							}
+
+							auto literal = new ExprLiteral;
+							literal->flavor = ExprFlavor::INT_LITERAL;
+							literal->unsignedValue = 0;
+							literal->start = call->start;
+							literal->end = call->end;
+							literal->type = function->argumentTypes[function->argumentCount - 1];
+						
+							newArguments[call->arguments.count] = literal;
+							call->arguments.values = newArguments;
+							call->arguments.count = function->argumentCount;
+						}
+						else {
+							auto array = new ExprArray;
+							array->flavor = ExprFlavor::ARRAY;
+							array->start = call->arguments.values[function->argumentCount - 1]->start;
+
+							Type *varargsType = static_cast<TypeArray *>(function->argumentTypes[function->argumentCount - 1])->arrayOf;
+
+							array->count = call->arguments.count - function->argumentCount + 1;
+							array->storage = new Expr * [array->count];
+
+							for (u64 i = 0; i < array->count; i++) {
+								bool yield = false;
+								auto &argument = call->arguments.values[function->argumentCount + i - 1];
+
+								if (!assignOp(job, argument, varargsType, argument, &yield)) {
+									return yield;
+								}
+
+								array->storage[i];
+								array->end = argument->end;
+							}
+
+							call->arguments.values[function->argumentCount - 1] = array;
+							call->arguments.count = function->argumentCount;
+						}
+
 					}
-					else if (call->arguments.count > function->argumentCount) {
-						reportError(call, "Error: Too many arguments for %.*s (Expected: %" PRIu64 ", Given: %" PRIu64 ")",
-							STRING_PRINTF(functionName), function->argumentCount, call->arguments.count);
+					else {
+						if (call->arguments.count < function->argumentCount) {
+							reportError(call, "Error: Too few arguments for %.*s (Expected: %" PRIu64 ", Given: %" PRIu64 ")",
+								STRING_PRINTF(functionName), function->argumentCount, call->arguments.count);
+						}
+						else if (call->arguments.count > function->argumentCount) {
+							reportError(call, "Error: Too many arguments for %.*s (Expected: %" PRIu64 ", Given: %" PRIu64 ")",
+								STRING_PRINTF(functionName), function->argumentCount, call->arguments.count);
+						}
+
+						return false;
 					}
 
-					return false;
 				}
 
 				for (u64 i = 0; i < call->arguments.count; i++) {
@@ -5325,7 +5438,7 @@ bool inferDeclaration(DeclarationJob *job) {
 	PROFILE_FUNC();
 	auto declaration = job->declaration;
 
-	if (!(declaration->flags & (DECLARATION_TYPE_IS_READY)) && declaration->type && isDone(&job->type)) {
+	if (!(declaration->flags & DECLARATION_TYPE_IS_READY) && declaration->type && isDone(&job->type)) {
 		if (declaration->type->type != &TYPE_TYPE) {
 			if (declaration->type->type->flavor == TypeFlavor::FUNCTION) {
 				reportError(declaration->type, "Error: Declaration type cannot be a function, did you miss a colon?");

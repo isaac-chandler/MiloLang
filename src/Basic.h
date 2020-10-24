@@ -50,6 +50,7 @@
 
 #pragma warning(error: 4715)
 
+
 #if BUILD_PROFILE
 #define CONCAT2(x, y) x##y
 #define CONCAT(x, y) CONCAT2(x, y)

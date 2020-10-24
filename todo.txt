@@ -28,12 +28,8 @@ Rotate operators
 
 Allow logical shifting of signed values
 
-ABI/calling convention
- - varargs (represent with arrays?)
- 
-varargs
- - 
- 
+C Varargs for external functions
+
 Make comma assignments work for things other than function calls
  - i.e. a, b = b, a to do a swap thats not gross
  - Do we really need this, I can't think of any other use cases than a swap, if we really want this functionality, maybe just add a swap primitive i.e. #swap a, b

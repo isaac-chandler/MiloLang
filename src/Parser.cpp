@@ -1276,6 +1276,12 @@ bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *u
 		function->body = nullptr;
 		function->flags |= EXPR_FUNCTION_IS_EXTERNAL;
 
+		if (function->flags & EXPR_FUNCTION_HAS_VARARGS) {
+			// @Incomplete allow c style varargs for external functions
+			reportError(function, "Error: External functions cannot have varargs");
+			return false;
+		}
+
 		if (function->returns.declarations.count != 1) {
 			reportError(function, "Error: External functions cannot have multiple return values");
 			return false;
@@ -1346,7 +1352,7 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 
 		expr = function;
 	}
-	else if ((lexer->token.type == TokenT::IDENTIFIER && peek == TOKEN(':')) || lexer->token.type == TokenT::USING) { // This is an argument declaration
+	else if ((lexer->token.type == TokenT::IDENTIFIER && peek == TOKEN(':')) || lexer->token.type == TokenT::USING || lexer->token.type == TokenT::DOUBLE_DOT) { // This is an argument declaration
 		ExprFunction *function = PARSER_NEW(ExprFunction);
 		function->flavor = ExprFlavor::FUNCTION;
 		function->start = start;
@@ -1355,10 +1361,43 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 
 		ExprBlock *usingBlock = nullptr;
 
+		Declaration *hadVarargs = nullptr;
+
 		do {
+			// @Incomplete 
+			if (hadVarargs) {
+				reportError(hadVarargs, "Error: Varargs arguments must be the final argument");
+				return nullptr;
+			}
+
+			bool varargs = expectAndConsume(lexer, TokenT::DOUBLE_DOT);
+
 			Declaration *declaration = parseDeclaration(lexer);
 			if (!declaration) {
 				return nullptr;
+			}
+
+			if (varargs) {
+				if (declaration->initialValue) {
+					reportError(declaration, "Error: Varargs arguments cannot have a default value");
+					return nullptr;
+				}
+
+				// @Incomplete: Create a separate type for varargs arrays so that non constant functions can be varargs
+				auto arrayType = PARSER_NEW(ExprBinaryOperator);
+				arrayType->start = declaration->type->start;
+				arrayType->end = declaration->type->end;
+				arrayType->flavor = ExprFlavor::BINARY_OPERATOR;
+				arrayType->op = TokenT::ARRAY_TYPE;
+				arrayType->type = nullptr;
+				arrayType->left = nullptr;
+				arrayType->right = declaration->type;
+
+				declaration->type = arrayType;
+
+				declaration->flags |= DECLARATION_IS_VARARGS;
+				function->flags |= EXPR_FUNCTION_HAS_VARARGS;
+				hadVarargs = declaration;
 			}
 
 			declaration->flags |= DECLARATION_IS_ARGUMENT;
