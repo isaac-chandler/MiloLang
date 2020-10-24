@@ -270,7 +270,7 @@ struct IrModifyWrite {
 u64 loadAddressForArrayDereference(IrState *state, Expr *deref, u64 dest);
 
 u64 loadAddressOf(IrState *state, Expr *expr, u64 dest) {
-	if (expr->flavor == ExprFlavor::BINARY_OPERATOR) {
+	if (expr->flavor == ExprFlavor::BINARY_OPERATOR && static_cast<ExprBinaryOperator *>(expr)->op == TOKEN('[')) {
 		dest = loadAddressForArrayDereference(state, expr, dest);
 	}
 	else if (expr->flavor == ExprFlavor::UNARY_OPERATOR) {
@@ -633,6 +633,18 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 					if (castTo == right->type || (binary->flags & EXPR_CAST_IS_BITWISE))
 						return rightReg;
+
+					if (right->type == TYPE_ANY) {
+						Ir &read = state->ir.add();
+						
+						read.op = IrOp::READ;
+						read.a = rightReg;
+						read.destSize = castTo->size;
+						read.opSize = 8;
+						read.dest = dest;
+
+						return dest;
+					}
 
 					switch(castTo->flavor) {
 						case TypeFlavor::STRUCT: {

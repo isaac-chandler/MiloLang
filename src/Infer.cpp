@@ -800,6 +800,10 @@ bool isValidCast(Type *to, Type *from, u64 flags) {
 		return true;
 	}
 
+	if (from == TYPE_ANY && to != TYPE_ANY) {
+		return true;
+	}
+
 	if (to->flavor == from->flavor) {
 		if (from->flavor == TypeFlavor::AUTO_CAST || from->flavor == TypeFlavor::VOID || from->flavor == TypeFlavor::NAMESPACE) {
 			return false;

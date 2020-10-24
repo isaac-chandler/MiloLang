@@ -705,7 +705,7 @@ llvm::CmpInst::Predicate getUCmp(TokenT op) {
 }
 
 llvm::Value *loadAddressOf(State *state, Expr *expr) {
-	if (expr->flavor == ExprFlavor::BINARY_OPERATOR) {
+	if (expr->flavor == ExprFlavor::BINARY_OPERATOR && static_cast<ExprBinaryOperator *>(expr)->op == TOKEN('[')) {
 		auto binary = static_cast<ExprBinaryOperator *>(expr);
 
 		assert(binary->op == TOKEN('['));
@@ -954,6 +954,13 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 				}
 
 				return storeIfPointerType(state, castTo, value);
+			}
+			else if (right->type == TYPE_ANY) {
+				auto any = generateLlvmIr(state, right);
+
+				auto pointer = state->builder.CreatePointerCast(state->builder.CreateStructGEP(any, 0), llvm::PointerType::getUnqual(getLlvmType(state->context, castTo)));
+
+				return storeIfPointerType(state, castTo, state->builder.CreateLoad(pointer));
 			}
 
 			switch (castTo->flavor) {

@@ -349,26 +349,26 @@ print_u64 :: (num: u64, base: u64 = 10) {
 	print_string(s)
 }
 
-read_integer :: (info: *Type_Info_Integer, value: *void) -> u64 {
+read_integer :: (value: any) -> u64 {
 	mask: u64
 	number: u64
 
-	if info.size == {
+	if value.value_type.size == {
 		case 1
-			number = <<cast(*u8) value
+			number = cast(u8) value
 			mask = 1 << 7
 		case 2
-			number = <<cast(*u16) value
+			number = cast(u16) value
 			mask = 1 << 15
 		case 4
-			number = <<cast(*u32) value
+			number = cast(u32) value
 			mask = 1 << 31
 		case 8
-			number = <<cast(*u64) value
+			number = cast(u64) value
 			mask = 1 << 63
 	}
 	
-	if info.signed && (number & mask)
+	if (cast(*Type_Info_Integer) value.value_type).signed && (number & mask)
 		number |= ~(mask | (mask - 1))
 	
 	return number
@@ -463,10 +463,10 @@ print_any :: (using val: any) {
 		print_string("void")
 	else if value_type == type_info(type) {
 	
-		print_string(type_info(<<cast(*type) value_pointer).name)
+		print_string(type_info(cast(type) val).name)
 		
 	} else if value_type == type_info(bool) {
-		value := <<cast(*bool) value_pointer
+		value := cast(bool) val
 	
 		if value
 			print_string("true")
@@ -475,14 +475,14 @@ print_any :: (using val: any) {
 		
 	} else if value_type == type_info(type) {
 	
-		print_string(type_info(<<cast(*type) value_pointer).name)
+		print_string(type_info(cast(type) val).name)
 		
 	} else if value_type == type_info(string) {
 	
-		print_string(<<cast(*string) value_pointer)
+		print_string(cast() val)
 		
 	} else if value_type.tag == .INTEGER {		
-		value := read_integer(cast() value_type, value_pointer)
+		value := read_integer(val)
 		
 		if (cast(*Type_Info_Integer) value_type).signed && (value & (1 << 63)) {
 			print_string("-")
@@ -493,7 +493,10 @@ print_any :: (using val: any) {
 	} else if value_type.tag == .ENUM {
 		info := cast(*Type_Info_Enum) value_type
 		
-		value := read_integer(info.base_type, value_pointer)
+		integer_value := val
+		integer_value.value_type = info.base_type
+		
+		value := read_integer(integer_value)
 
 		if info.is_flags {
 			first := true
@@ -526,8 +529,7 @@ print_any :: (using val: any) {
 			if first {
 				if value {
 					if info.name {
-						print_string(info.name)
-						print_string(".")
+						print("%.", info.name)
 					}
 					
 					print_invalid(value)
@@ -564,7 +566,7 @@ print_any :: (using val: any) {
 		
 	} else if value_type.tag == .POINTER || value_type.tag == .FUNCTION {
 	
-		print_u64(<<cast(*u64) value_pointer)
+		print_u64(cast(u64) val, 16)
 		
 	} else if value_type.tag == .ARRAY {
 	
@@ -575,13 +577,10 @@ print_any :: (using val: any) {
 		if info.flavor == .FIXED {
 			count = info.count
 		} else {
-			count = (cast(*[]u8) value_pointer).count
+			count = (cast([]u8) val).count
 		}
 		
-		print_string("[")
-		print_u64(count)
-		print_string("]")
-		print_string(info.element_type.name)
+		print("[%]%", count, info.element_type.name)
 		
 	} else if value_type.tag == .STRUCT {	
 		info := cast(*Type_Info_Struct) value_type
@@ -624,16 +623,15 @@ print_any :: (using val: any) {
 		}		
 	} else if value_type == type_info(f64) {
 	
-		print_f64(<<cast(*f64)value_pointer)
+		print_f64(cast(f64) val)
 		
 	} else if value_type == type_info(f32) {
 	
-		print_f64(cast()<<cast(*f32)value_pointer)
+		print_f64(cast() cast(f32) val)
 		
 	} else {
 	
-		print_string("Cannot print ")
-		print_string(value_type.name)
+		print("Cannot print %", value_type.name)
 		
 	}
 }
