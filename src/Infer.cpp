@@ -2518,11 +2518,15 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 
 	switch (binary->op) {
 	case TokenT::CAST: {
-		if (left->type != &TYPE_TYPE) {
+		if (!assignOp(job, left, &TYPE_TYPE, left, yield)) {
+			if (yield)
+				return true;
+
 			reportError(left, "Error: Cast target must be a type");
 			return false;
 		}
-		else if (left->flavor != ExprFlavor::TYPE_LITERAL) {
+		
+		if (left->flavor != ExprFlavor::TYPE_LITERAL) {
 			reportError(left, "Error: Cast target must be a constant");
 			return false;
 		}
@@ -4410,7 +4414,20 @@ bool inferFlattened(SubJob *job) {
 			auto ifElse = static_cast<ExprIf *>(expr);
 
 			if (ifElse->condition->type != &TYPE_BOOL) {
-				if (isValidCast(&TYPE_BOOL, ifElse->condition->type, 0)) {
+				if (ifElse->condition->type == &TYPE_AUTO_CAST) {
+					bool yield = false;
+					if (!tryAutoCast(job, &ifElse->condition, &TYPE_BOOL, &yield)) {
+						if (!yield) {
+							reportError(ifElse->condition, "Error: Cannot convert %.*s to bool",
+								STRING_PRINTF(static_cast<ExprBinaryOperator *>(ifElse->condition)->right->type->name));
+							return false;
+						}
+						else {
+							return true;
+						}
+					}
+				}
+				else if (isValidCast(&TYPE_BOOL, ifElse->condition->type, 0)) {
 					insertImplicitCast(job->sizeDependencies, &ifElse->condition, &TYPE_BOOL);
 				}
 				else {
@@ -4425,7 +4442,20 @@ bool inferFlattened(SubJob *job) {
 			auto staticIf = static_cast<ExprIf *>(expr);
 
 			if (staticIf->condition->type != &TYPE_BOOL) {
-				if (isValidCast(&TYPE_BOOL, staticIf->condition->type, 0)) {
+				if (staticIf->condition->type == &TYPE_AUTO_CAST) {
+					bool yield = false;
+					if (!tryAutoCast(job, &staticIf->condition, &TYPE_BOOL, &yield)) {
+						if (!yield) {
+							reportError(staticIf->condition, "Error: Cannot convert %.*s to bool",
+								STRING_PRINTF(static_cast<ExprBinaryOperator *>(staticIf->condition)->right->type->name));
+							return false;
+						}
+						else {
+							return true;
+						}
+					}
+				}
+				else if (isValidCast(&TYPE_BOOL, staticIf->condition->type, 0)) {
 					insertImplicitCast(job->sizeDependencies, &staticIf->condition, &TYPE_BOOL);
 				}
 				else {
@@ -4614,7 +4644,20 @@ bool inferFlattened(SubJob *job) {
 			}
 			case TOKEN('!'): {
 				if (value->type != &TYPE_BOOL) {
-					if (isValidCast(&TYPE_BOOL, value->type, 0)) {
+					if (value->type == &TYPE_AUTO_CAST) {
+						bool yield = false;
+						if (!tryAutoCast(job, &value, &TYPE_BOOL, &yield)) {
+							if (!yield) {
+								reportError(value, "Error: Cannot convert %.*s to bool",
+									STRING_PRINTF(static_cast<ExprBinaryOperator *>(value)->right->type->name));
+								return false;
+							}
+							else {
+								return true;
+							}
+						}
+					} 
+					else if (isValidCast(&TYPE_BOOL, value->type, 0)) {
 						insertImplicitCast(job->sizeDependencies, &value, &TYPE_BOOL);
 					}
 					else {
@@ -4629,10 +4672,13 @@ bool inferFlattened(SubJob *job) {
 			}
 			case TokenT::SIZE_OF: {
 				if (value->type != &TYPE_TYPE) {
-					reportError(value, "Error: size_of can only accept a type (given a %.*s)", STRING_PRINTF(value->type->name));
-					return false;
+					bool yield = false;
+					if (!assignOp(job, value, &TYPE_TYPE, value, &yield)) {
+						return yield;
+					}
 				}
-				else if (value->flavor != ExprFlavor::TYPE_LITERAL) {
+
+				if (value->flavor != ExprFlavor::TYPE_LITERAL) {
 					reportError(value, "Error: size_of type must be a constant");
 					return false;
 				}
@@ -4694,8 +4740,10 @@ bool inferFlattened(SubJob *job) {
 			}
 			case TokenT::TYPE_INFO: {
 				if (value->type != &TYPE_TYPE) {
-					reportError(value, "Error: Can only get type_info for a type");
-					return false;
+					bool yield = false;
+					if (!assignOp(job, value, &TYPE_TYPE, value, &yield)) {
+						return yield;
+					}
 				}
 
 				if (value->flavor == ExprFlavor::TYPE_LITERAL) {
@@ -4868,7 +4916,20 @@ bool inferFlattened(SubJob *job) {
 			auto loop = static_cast<ExprLoop *>(expr);
 
 			if (loop->whileCondition->type != &TYPE_BOOL) {
-				if (isValidCast(&TYPE_BOOL, loop->whileCondition->type, 0)) {
+				if (loop->whileCondition->type == &TYPE_AUTO_CAST) {
+					bool yield = false;
+					if (!tryAutoCast(job, &loop->whileCondition, &TYPE_BOOL, &yield)) {
+						if (!yield) {
+							reportError(loop->whileCondition, "Error: Cannot convert %.*s to bool", 
+								STRING_PRINTF(static_cast<ExprBinaryOperator *>(loop->whileCondition)->right->type->name));
+							return false;
+						}
+						else {
+							return true;
+						}
+					}
+				}
+				else if (isValidCast(&TYPE_BOOL, loop->whileCondition->type, 0)) {
 					insertImplicitCast(job->sizeDependencies, &loop->whileCondition, &TYPE_BOOL);
 				}
 				else {
@@ -5443,15 +5504,22 @@ bool inferDeclaration(DeclarationJob *job) {
 	auto declaration = job->declaration;
 
 	if (!(declaration->flags & DECLARATION_TYPE_IS_READY) && declaration->type && isDone(&job->type)) {
-		if (declaration->type->type != &TYPE_TYPE) {
+		bool yield = false;
+		if (!assignOp(&job->value, declaration->type, &TYPE_TYPE, declaration->type, &yield)) {
+			if (yield)
+				return true;
+
 			if (declaration->type->type->flavor == TypeFlavor::FUNCTION) {
 				reportError(declaration->type, "Error: Declaration type cannot be a function, did you miss a colon?");
 			}
 			else {
 				reportError(declaration->type, "Error: Declaration type must be a type, but got a %.*s", STRING_PRINTF(declaration->type->type->name));
 			}
+
 			return false;
+			
 		}
+
 		if (declaration->type->flavor != ExprFlavor::TYPE_LITERAL) {
 			reportError(declaration->type, "Error: Declaration type must be a constant");
 			return false;
