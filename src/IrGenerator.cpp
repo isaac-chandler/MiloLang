@@ -558,7 +558,7 @@ u64 generateEquals(IrState *state, u64 leftReg, Expr *right, u64 dest, bool equa
 
 		argumentInfo->args[0].number = leftReg;
 		argumentInfo->args[0].type = TYPE_VOID_POINTER;
-		argumentInfo->args[1].number = leftReg;
+		argumentInfo->args[1].number = rightReg;
 		argumentInfo->args[1].type = TYPE_VOID_POINTER;
 
 		argumentInfo->returnType = &TYPE_BOOL;
@@ -614,6 +614,163 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 	}
 
 	switch (expr->flavor) {
+		case ExprFlavor::SLICE: {
+
+			auto slice = static_cast<ExprSlice *>(expr);
+
+			u64 array;
+
+			if (slice->array->type->flags & TYPE_ARRAY_IS_FIXED) {
+				array = loadAddressOf(state, slice->array, state->nextRegister++);
+			}
+			else {
+				array = generateIr(state, slice->array, state->nextRegister++);
+			}
+
+			if (slice->array->type == &TYPE_STRING) {
+				auto offset = generateIr(state, slice->sliceStart, state->nextRegister++);
+
+				auto &add = state->ir.add();
+				add.op = IrOp::ADD;
+				add.dest = dest;
+				add.a = array;
+				add.b = offset;
+				add.opSize = 8;
+			}
+			else if (slice->array->type->flavor == TypeFlavor::POINTER) {
+				auto pointer = static_cast<TypePointer *>(slice->array->type);
+
+				if (slice->sliceStart) {
+					auto offset = generateIr(state, slice->sliceStart, state->nextRegister++);
+
+					auto end = generateIr(state, slice->sliceEnd, state->nextRegister++);
+
+					auto &count = state->ir.add();
+					count.op = IrOp::SUB;
+					count.dest = dest + 1;
+					count.a = end;
+					count.b = offset;
+					count.opSize = 8;
+
+					if (pointer->pointerTo->size != 1) {
+						auto &mul = state->ir.add();
+						mul.op = IrOp::MUL_BY_CONSTANT;
+						mul.dest = dest;
+						mul.a = offset;
+						mul.b = pointer->pointerTo->size;
+						mul.opSize = 8;
+
+						offset = dest;
+					}
+
+					auto &add = state->ir.add();
+					add.op = IrOp::ADD;
+					add.dest = dest;
+					add.a = array;
+					add.b = offset;
+					add.opSize = 8;
+				}
+				else {
+					generateIrForceDest(state, slice->sliceEnd, dest + 1);
+
+					auto &set = state->ir.add();
+					set.op = IrOp::SET;
+					set.dest = dest;
+					set.a = array;
+					set.destSize = 8;
+					set.opSize = 8;
+				}
+
+			}
+			else if (slice->array->type->flavor == TypeFlavor::ARRAY) {
+				auto arrayType = static_cast<TypeArray *>(slice->array->type);
+
+				if (slice->sliceStart && slice->sliceEnd) {
+					auto offset = generateIr(state, slice->sliceStart, state->nextRegister++);
+
+					auto end = generateIr(state, slice->sliceEnd, state->nextRegister++);
+
+					auto &count = state->ir.add();
+					count.op = IrOp::SUB;
+					count.dest = dest + 1;
+					count.a = end;
+					count.b = offset;
+					count.opSize = 8;
+
+					if (arrayType->arrayOf->size != 1) {
+						auto &mul = state->ir.add();
+						mul.op = IrOp::MUL_BY_CONSTANT;
+						mul.dest = dest;
+						mul.a = offset;
+						mul.b = arrayType->arrayOf->size;
+						mul.opSize = 8;
+
+						offset = dest;
+					}
+
+					auto &add = state->ir.add();
+					add.op = IrOp::ADD;
+					add.dest = dest;
+					add.a = array;
+					add.b = offset;
+					add.opSize = 8;
+				}
+				else if (slice->sliceStart) {
+					auto offset = generateIr(state, slice->sliceStart, state->nextRegister++);
+
+					u64 length = array + 1;
+
+					if (arrayType->flags & TYPE_ARRAY_IS_FIXED) {
+						length = state->nextRegister++;
+
+						auto &immediate = state->ir.add();
+						immediate.op = IrOp::IMMEDIATE;
+						immediate.dest = length;
+						immediate.a = arrayType->count;
+						immediate.opSize = 8;
+					}
+
+					auto &count = state->ir.add();
+					count.op = IrOp::SUB;
+					count.dest = dest + 1;
+					count.a = length;
+					count.b = offset;
+					count.opSize = 8;
+
+					if (arrayType->arrayOf->size != 1) {
+						auto &mul = state->ir.add();
+						mul.op = IrOp::MUL_BY_CONSTANT;
+						mul.dest = dest;
+						mul.a = offset;
+						mul.b = arrayType->arrayOf->size;
+						mul.opSize = 8;
+
+						offset = dest;
+					}
+
+					auto &add = state->ir.add();
+					add.op = IrOp::ADD;
+					add.dest = dest;
+					add.a = array;
+					add.b = offset;
+					add.opSize = 8;
+				}
+				else {
+					assert(slice->sliceEnd);
+
+					generateIrForceDest(state, slice->sliceEnd, dest + 1);
+
+					auto &set = state->ir.add();
+					set.op = IrOp::SET;
+					set.dest = dest;
+					set.a = array;
+					set.destSize = 8;
+					set.opSize = 8;
+				}
+			}
+
+			return dest;
+		}
 		case ExprFlavor::BINARY_OPERATOR: {
 
 			auto binary = static_cast<ExprBinaryOperator *>(expr);

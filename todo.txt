@@ -15,7 +15,12 @@ Make it a compile time error to out of bounds index a static array if the index 
  - Compile time error for constant negative index of normal and dynamic arrays?
  - Compile time error for things that are an array literal of normal or dynamic type
 
-Allow casting any to any type
+Make auto cast work in more places where the target type is known
+ - Array/pointer type
+ - Array type count slot
+ - Array index
+ - Array slice start/end
+ 
 
 Compile option for runtime checking
  - Array bounds checking

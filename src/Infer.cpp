@@ -281,6 +281,20 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 		flattenTo.add(expr);
 		break;
 	}
+	case ExprFlavor::SLICE: {
+		auto slice = static_cast<ExprSlice *>(*expr);
+
+		flatten(flattenTo, &slice->array);
+
+		if (slice->sliceStart)
+			flatten(flattenTo, &slice->sliceStart);
+		if (slice->sliceEnd)
+			flatten(flattenTo, &slice->sliceEnd);
+
+		flattenTo.add(expr);
+
+		break;
+	}
 	case ExprFlavor::DEFER: {
 		auto defer = static_cast<ExprDefer *>(*expr);
 
@@ -3570,7 +3584,6 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 
 
 		if (left) {
-
 			if (left->type->flavor != TypeFlavor::INTEGER) {
 				reportError(right, "Error: Array size must be an integer");
 				return false;
@@ -3858,6 +3871,93 @@ bool inferFlattened(SubJob *job) {
 					return false;
 				}
 			}
+
+			break;
+		}
+		case ExprFlavor::SLICE: {
+			auto slice = static_cast<ExprSlice *>(*exprPointer);
+
+			if (slice->sliceStart) {
+				trySolidifyNumericLiteralToDefault(slice->sliceStart);
+
+				if (slice->sliceStart->type->flavor != TypeFlavor::INTEGER) {
+					reportError(slice->sliceStart, "Error: Array index must be an integer");
+					return false;
+				}
+
+				if (slice->sliceStart->type->size != 8) {
+					insertImplicitCast(job->sizeDependencies, &slice->sliceStart, slice->sliceStart->type->flags & TYPE_INTEGER_IS_SIGNED ? &TYPE_S64 : &TYPE_U64);
+				}
+			}
+
+
+			if (slice->sliceEnd) {
+				trySolidifyNumericLiteralToDefault(slice->sliceEnd);
+
+				if (slice->sliceStart->type->flavor != TypeFlavor::INTEGER) {
+					reportError(slice->sliceEnd, "Error: Array index must be an integer");
+					return false;
+				}
+
+				if (slice->sliceStart->type->size != 8) {
+					insertImplicitCast(job->sizeDependencies, &slice->sliceEnd, slice->sliceEnd->type->flags & TYPE_INTEGER_IS_SIGNED ? &TYPE_S64 : &TYPE_U64);
+				}
+			}
+
+
+
+			if (slice->array->type->flavor == TypeFlavor::POINTER) {
+				TypePointer *pointer = static_cast<TypePointer *>(slice->array->type);
+
+				if (pointer->pointerTo == &TYPE_VOID) {
+					reportError(slice, "Error: Cannot slice a void pointer");
+					return false;
+				}
+
+				if (!slice->sliceEnd) {
+					reportError(slice, "Error: Pointer slices must have an end");
+					return false;
+				}
+
+				assert(!(pointer->pointerTo->flags & TYPE_IS_INTERNAL));
+
+				expr->type = getArray(pointer->pointerTo);
+				addSizeDependency(job->sizeDependencies, pointer->pointerTo);
+			}
+			else if (slice->array->type->flavor == TypeFlavor::STRING) {
+				// @StringFormat
+				if (slice->sliceEnd) {
+					reportError(slice, "Error: String slices cannot have an end");
+					return false;
+				}
+
+				expr->type = &TYPE_STRING;
+			}
+			else if (slice->array->type->flavor == TypeFlavor::ARRAY) {
+				auto *array = static_cast<TypeArray *>(slice->array->type);
+
+				if ((array->flags & TYPE_ARRAY_IS_FIXED) && !isAddressable(slice->array)) {
+					reportError(slice, "Error: Cannot slice an array that has no storage");
+					return false;
+				}
+
+				if (array->flags & (TYPE_ARRAY_IS_DYNAMIC | TYPE_ARRAY_IS_FIXED)) {
+					expr->type = getArray(array->arrayOf);
+				}
+				else {
+					expr->type = array;
+				}
+
+				addSizeDependency(job->sizeDependencies, array->arrayOf);
+			}
+			else {
+				reportError(slice->array, "Error: Cannot slice a %.*s", STRING_PRINTF(slice->array->type->name));
+				return false;
+			}
+
+			addSizeDependency(job->sizeDependencies, expr->type);
+
+			break;
 
 			break;
 		}

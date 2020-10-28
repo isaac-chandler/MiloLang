@@ -2098,24 +2098,88 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 			expr = call;
 		}
 		else if (expectAndConsume(lexer, '[')) {
-			ExprBinaryOperator *deref = PARSER_NEW(ExprBinaryOperator);
-			deref->start = start;
-			deref->left = expr;
-			deref->flavor = ExprFlavor::BINARY_OPERATOR;
-			deref->op = TOKEN('[');
+			if (expectAndConsume(lexer, TokenT::DOUBLE_DOT)) {
+				auto slice = PARSER_NEW(ExprSlice);
 
-			deref->right = parseExpr(lexer);
+				slice->start = start;
+				slice->array = expr;
+				slice->flavor = ExprFlavor::SLICE;
+				slice->sliceStart = nullptr;
+				
+				if (lexer->token.type == TOKEN(']')) {
+					reportError(&lexer->token, "Error: Slices must have either a start or an end");
+					return nullptr;
+				}
 
-			if (!deref->right)
-				return nullptr;
+				slice->sliceEnd = parseExpr(lexer);
 
-			deref->end = lexer->token.end;
+				if (!slice->sliceEnd)
+					return nullptr;
 
-			if (!expectAndConsume(lexer, ']')) {
-				reportExpectedError(&lexer->token, "Error: Expected ']' after array index");
-				return nullptr;
+				slice->end = lexer->token.end;
+
+				if (!expectAndConsume(lexer, TOKEN(']'))) {
+					reportExpectedError(&lexer->token, "Error: Expected ']' after slice");
+					return nullptr;
+				}
+
+				expr = slice;
 			}
-			expr = deref;
+			else {
+				auto index = parseExpr(lexer);
+
+				if (!index)
+					return nullptr;
+
+				if (expectAndConsume(lexer, TokenT::DOUBLE_DOT)) {
+					auto slice = PARSER_NEW(ExprSlice);
+
+					slice->start = start;
+					slice->array = expr;
+					slice->flavor = ExprFlavor::SLICE;
+					slice->sliceStart = index;
+
+					if (lexer->token.type == TOKEN(']')) {
+						slice->sliceEnd = nullptr;
+						slice->end = lexer->token.end;
+
+						lexer->advance();
+						expr = slice;
+					}
+					else {
+						slice->sliceEnd = parseExpr(lexer);
+
+						if (!slice->sliceEnd)
+							return nullptr;
+
+						slice->end = lexer->token.end;
+
+						if (!expectAndConsume(lexer, TOKEN(']'))) {
+							reportExpectedError(&lexer->token, "Error: Expected ']' after slice");
+							return nullptr;
+						}
+
+						expr = slice;
+					}
+				}
+				else {
+					ExprBinaryOperator *deref = PARSER_NEW(ExprBinaryOperator);
+					deref->start = start;
+					deref->left = expr;
+					deref->flavor = ExprFlavor::BINARY_OPERATOR;
+					deref->op = TOKEN('[');
+
+					deref->right = index;
+
+					deref->end = lexer->token.end;
+
+					if (!expectAndConsume(lexer, ']')) {
+						reportExpectedError(&lexer->token, "Error: Expected ']' after array index");
+						return nullptr;
+					}
+					expr = deref;
+				}
+			}
 		}
 		else if (expectAndConsume(lexer, '.')) {
 			auto *access = PARSER_NEW(ExprIdentifier);

@@ -1419,6 +1419,12 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 		}
 		break;
 	}
+	case ExprFlavor::SLICE: {
+		// @Incomplete
+		assert(("@Incomplete Slicing is not implemented yet in the llvm backend", false));
+		
+		break;
+	}
 	case ExprFlavor::BLOCK: {
 		auto block = static_cast<ExprBlock *>(expr);
 

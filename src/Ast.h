@@ -167,7 +167,9 @@ enum class ExprFlavor : u8 {
 	SWITCH, 
 
 	STATIC_IF, 
-	DEFER
+	DEFER, 
+
+	SLICE
 };
 
 struct Declaration;
@@ -186,6 +188,12 @@ struct Expr {
 #if BUILD_DEBUG // So I don't have to cast it to view the actual expression type in the debugger
 	virtual ~Expr() {}
 #endif
+};
+
+struct ExprSlice : Expr {
+	Expr *array;
+	Expr *sliceStart;
+	Expr *sliceEnd;
 };
 
 struct ExprDefer : Expr {
