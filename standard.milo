@@ -554,7 +554,7 @@ print_any :: (using val: any) {
 					print_string(it.name)
 					break
 				}
-			} completed {
+			} or {
 				num: any = --
 				num.value_pointer = value_pointer
 				num.value_type = info.base_type
@@ -604,7 +604,7 @@ print_any :: (using val: any) {
 					break
 				}
 			}
-		} completed {
+		} or {
 		
 			print_string("{ ")
 		

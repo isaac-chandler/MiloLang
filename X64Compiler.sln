@@ -10,7 +10,9 @@ Global
 		Debug|x64 = Debug|x64
 		DebugNoLLVM|x64 = DebugNoLLVM|x64
 		Profiling|x64 = Profiling|x64
+		ProfilingNoLLVM|x64 = ProfilingNoLLVM|x64
 		Release|x64 = Release|x64
+		ReleaseNoLLVM|x64 = ReleaseNoLLVM|x64
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
 		{9131BA69-C28C-4AAE-81E8-AF87790DB83D}.Debug|x64.ActiveCfg = Debug|x64
@@ -19,8 +21,12 @@ Global
 		{9131BA69-C28C-4AAE-81E8-AF87790DB83D}.DebugNoLLVM|x64.Build.0 = DebugNoLLVM|x64
 		{9131BA69-C28C-4AAE-81E8-AF87790DB83D}.Profiling|x64.ActiveCfg = Profiling|x64
 		{9131BA69-C28C-4AAE-81E8-AF87790DB83D}.Profiling|x64.Build.0 = Profiling|x64
+		{9131BA69-C28C-4AAE-81E8-AF87790DB83D}.ProfilingNoLLVM|x64.ActiveCfg = ProfilingNoLLVM|x64
+		{9131BA69-C28C-4AAE-81E8-AF87790DB83D}.ProfilingNoLLVM|x64.Build.0 = ProfilingNoLLVM|x64
 		{9131BA69-C28C-4AAE-81E8-AF87790DB83D}.Release|x64.ActiveCfg = Release|x64
 		{9131BA69-C28C-4AAE-81E8-AF87790DB83D}.Release|x64.Build.0 = Release|x64
+		{9131BA69-C28C-4AAE-81E8-AF87790DB83D}.ReleaseNoLLVM|x64.ActiveCfg = ReleaseNoLLVM|x64
+		{9131BA69-C28C-4AAE-81E8-AF87790DB83D}.ReleaseNoLLVM|x64.Build.0 = ReleaseNoLLVM|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

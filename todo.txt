@@ -60,6 +60,12 @@ performance
  - Get rid of linker
  - Multithread type inference (nightmare nightmare nightmare)
  
+ 
+Memory usage
+ - Where could memory be freed simply
+ - Minimise wasted allocations if inference yields (i.e. function/return argument sorting)
+ 
+ 
 
 Allow #if to insert members into structs
  - Best way to do this is probably to have #if move its declarations into the outer scope and replace them with imports instead of it placing imports in the outer scope

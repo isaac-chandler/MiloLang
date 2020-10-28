@@ -43,7 +43,7 @@ static const Keyword keywords[] = {
 	{"#external", TokenT::EXTERNAL}, 
 	{"#load", TokenT::LOAD}, 
 	{"union", TokenT::UNION}, 
-	{"completed", TokenT::COMPLETED},  // @Incomplete Change this keyword because people will almost certainly want to call a variable completed
+	{"or", TokenT::COMPLETED},  // @Incomplete Change this keyword because people will almost certainly want to call a variable completed
 	{"remove", TokenT::REMOVE}, 
 	{"#pack", TokenT::PACK}, 
 	{"using", TokenT::USING},

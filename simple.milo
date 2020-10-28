@@ -169,7 +169,7 @@ find_string :: (array: []string, s: string) {
 			
 			break
 		}
-	} completed {
+	} or {
 		print_string("Couldn't find ")
 		print_string(s)
 		print_string("\n")
