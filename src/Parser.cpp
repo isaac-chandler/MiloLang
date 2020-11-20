@@ -2678,6 +2678,11 @@ Declaration *parseDeclaration(LexerFile *lexer) {
 
 			return nullptr;
 		}
+		else if (lexer->token.type == TokenT::DOUBLE_DOT) {
+			reportError(&lexer->token, "Error: Cannot infer the type of a default value, please specify the type");
+
+			return nullptr;
+		}
 
 		declaration->initialValue = parseExpr(lexer);
 
@@ -2696,11 +2701,13 @@ Declaration *parseDeclaration(LexerFile *lexer) {
 		}
 
 		if (expectAndConsume(lexer, '=')) {
-			if (lexer->token.type == TokenT::DOUBLE_DASH) {
+			if (expectAndConsume(lexer, TokenT::DOUBLE_DASH)) {
 				declaration->flags |= DECLARATION_IS_UNINITIALIZED;
 				declaration->initialValue = nullptr;
-				declaration->end = lexer->token.end;
-				lexer->advance();
+			}
+			else if (expectAndConsume(lexer, TokenT::DOUBLE_DOT)) {
+				declaration->flags |= DECLARATION_IS_EXPLICIT_DEFAULT;
+				declaration->initialValue = nullptr;
 			}
 			else {
 				declaration->initialValue = parseExpr(lexer);
@@ -2710,9 +2717,9 @@ Declaration *parseDeclaration(LexerFile *lexer) {
 				}
 
 				declaration->initialValue->valueOfDeclaration = declaration;
-
-				declaration->end = lexer->previousTokenEnd;
 			}
+
+			declaration->end = lexer->previousTokenEnd;
 		}
 		else if (expectAndConsume(lexer, ':')) {
 			declaration->flags |= DECLARATION_IS_CONSTANT;
@@ -2722,13 +2729,20 @@ Declaration *parseDeclaration(LexerFile *lexer) {
 
 				return nullptr;
 			}
-			declaration->initialValue = parseExpr(lexer);
+			else if (expectAndConsume(lexer, TokenT::DOUBLE_DOT)) {
+				declaration->flags |= DECLARATION_IS_EXPLICIT_DEFAULT;
+				declaration->initialValue = nullptr;
+			}
+			else {
+				declaration->initialValue = parseExpr(lexer);
 
-			if (!declaration->initialValue) {
-				return nullptr;
+				if (!declaration->initialValue) {
+					return nullptr;
+				}
+
+				declaration->initialValue->valueOfDeclaration = declaration;
 			}
 
-			declaration->initialValue->valueOfDeclaration = declaration;
 
 			declaration->end = lexer->previousTokenEnd;
 		}
