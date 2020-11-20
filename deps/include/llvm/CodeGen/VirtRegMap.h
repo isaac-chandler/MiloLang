@@ -19,7 +19,6 @@
 #include "llvm/ADT/IndexedMap.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
-#include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Pass.h"
 #include <cassert>
 
@@ -99,9 +98,9 @@ class TargetInstrInfo;
 
     /// returns the physical register mapped to the specified
     /// virtual register
-    Register getPhys(Register virtReg) const {
+    MCRegister getPhys(Register virtReg) const {
       assert(virtReg.isVirtual());
-      return Virt2PhysMap[virtReg.id()];
+      return MCRegister::from(Virt2PhysMap[virtReg.id()]);
     }
 
     /// creates a mapping for the specified virtual register to

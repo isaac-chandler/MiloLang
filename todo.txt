@@ -89,11 +89,6 @@ improve external function interface
  - separate function types for external functions (so our calling convention doesn't need to be C-compatible)
  - parse C header files so we don't need to manually declare external functions
  
-change completed keyword (its ugly and completed is something you want to call an identifer)
- - else
- - no_break
- - or
- 
 llvm
 
  
@@ -112,8 +107,7 @@ run ir at compile time
 function polymorhpism
 struct polymorhpism
 
+cache default values for each type
+
 syntax for array slicing
- - array[1..4]
- - array[..4]
- - array[1..]
  - option for slice bounds checking

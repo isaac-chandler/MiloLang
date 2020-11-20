@@ -28,6 +28,7 @@
 #undef VOID
 
 
+
 #pragma warning(push)
 #pragma warning(disable: 4141 4146 4244 4267 4530 4624 4996)
 #include <llvm/IR/Module.h>
@@ -35,6 +36,7 @@
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/TargetRegistry.h>
+#include <llvm/Support/Host.h>
 #include <llvm/Target/TargetOptions.h>
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/Analysis/TargetLibraryInfo.h>

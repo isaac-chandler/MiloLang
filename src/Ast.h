@@ -169,7 +169,8 @@ enum class ExprFlavor : u8 {
 	STATIC_IF, 
 	DEFER, 
 
-	SLICE
+	SLICE, 
+	RUN
 };
 
 struct Declaration;
@@ -194,6 +195,10 @@ struct ExprSlice : Expr {
 	Expr *array;
 	Expr *sliceStart;
 	Expr *sliceEnd;
+};
+
+struct ExprRun : Expr {
+	Expr *expr;
 };
 
 struct ExprDefer : Expr {
@@ -225,13 +230,9 @@ struct ExprDefer : Expr {
 // intitialization in a runtime scope
 #define EXPR_ASSIGN_IS_IMPLICIT_INITIALIZER 0x80
 
+#define EXPR_FUNCTION_IS_C_CALL 0x100
 
-// :EvaluatedBinaryLiterals
-// Set for consistency in rules that only a literal can be assigned to a constant even though we do 'constexpr' evaluate 
-// int + int -> int binary expressions so that expressions such as 3 + 5 can still be converted to unsigned implicitly 
-// instead of being stuck as s64. We could allow these to be constants but it would be inconsistent which binary ops are 
-// allowed as constants since we don't evaluate comparisons
-#define EXPR_WAS_EVALUATED_BINARY 0x100
+// This is set on expressions that are inside of a type_of, so that only the type is inferred
 #define EXPR_VALUE_NOT_REQUIRED 0x200
 
 // These two flags are used to check #must
@@ -261,6 +262,8 @@ struct ExprDefer : Expr {
 #define EXPR_CAST_IS_BITWISE 0x1'0000
 
 #define EXPR_FUNCTION_HAS_VARARGS 0x2'0000
+
+#define EXPR_FUNCTION_IS_RUN 0x4'0000
 
 struct ExprLiteral : Expr {
 	union {

@@ -40,6 +40,7 @@ enum class TypeFlavor : u8 {
 #define TYPE_STRUCT_IS_UNION 0x20
 #define TYPE_STRUCT_IS_PACKED 0x40
 #define TYPE_ENUM_IS_FLAGS 0x80
+#define TYPE_FUNCTION_IS_C_CALL 0x100
 
 struct Type {
 	u64 size;

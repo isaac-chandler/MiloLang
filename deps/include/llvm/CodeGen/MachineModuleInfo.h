@@ -54,8 +54,8 @@ class Module;
 //===----------------------------------------------------------------------===//
 /// This class can be derived from and used by targets to hold private
 /// target-specific information for each Module.  Objects of type are
-/// accessed/created with MMI::getInfo and destroyed when the MachineModuleInfo
-/// is destroyed.
+/// accessed/created with MachineModuleInfo::getObjFileInfo and destroyed when
+/// the MachineModuleInfo is destroyed.
 ///
 class MachineModuleInfoImpl {
 public:
@@ -165,9 +165,9 @@ public:
 
   /// Returns the MachineFunction constructed for the IR function \p F.
   /// Creates a new MachineFunction if none exists yet.
-  MachineFunction &getOrCreateMachineFunction(const Function &F);
+  MachineFunction &getOrCreateMachineFunction(Function &F);
 
-  /// \bried Returns the MachineFunction associated to IR function \p F if there
+  /// \brief Returns the MachineFunction associated to IR function \p F if there
   /// is one, otherwise nullptr.
   MachineFunction *getMachineFunction(const Function &F) const;
 
@@ -233,13 +233,6 @@ public:
   /// to emit them as well, return the whole set.
   ArrayRef<MCSymbol *> getAddrLabelSymbolToEmit(const BasicBlock *BB);
 
-  /// If the specified function has had any references to address-taken blocks
-  /// generated, but the block got deleted, return the symbol now so we can
-  /// emit it.  This prevents emitting a reference to a symbol that has no
-  /// definition.
-  void takeDeletedSymbolsForFunction(const Function *F,
-                                     std::vector<MCSymbol*> &Result);
-
   /// \name Exception Handling
   /// \{
 
@@ -258,6 +251,12 @@ public:
     return Personalities;
   }
   /// \}
+
+  // MMI owes MCContext. It should never be invalidated.
+  bool invalidate(Module &, const PreservedAnalyses &,
+                  ModuleAnalysisManager::Invalidator &) {
+    return false;
+  }
 }; // End class MachineModuleInfo
 
 class MachineModuleInfoWrapperPass : public ImmutablePass {

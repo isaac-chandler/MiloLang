@@ -876,7 +876,8 @@ static llvm::Value *generateLlvmCall(State *state, ExprFunctionCall *call, ExprC
 	if (paramOffset) {
 		arguments[0] = allocateType(state, return_);
 	}
-	auto ir = state->builder.CreateCall(functionIr, llvm::ArrayRef(arguments, count));
+
+	auto ir = state->builder.CreateCall(static_cast<llvm::FunctionType *>(functionIr->getType()), functionIr, llvm::ArrayRef(arguments, count));
 	ir->setCallingConv(llvm::CallingConv::Win64);
 
 	if (paramOffset) {
@@ -976,7 +977,6 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 				state->builder.CreateStore(state->builder.CreateBitCast(allocateAndStore(state, value), int8p),
 					state->builder.CreateStructGEP(any, 0));
 
-				// @Incomplete: Actually store type info instead of null
 				state->builder.CreateStore(llvm::ConstantExpr::getBitCast(createTypeInfoVariable(state, right->type), llvm::PointerType::getUnqual(getLlvmType(state->context, TYPE_TYPE_INFO))), 
 					state->builder.CreateStructGEP(any, 1));
 
@@ -1420,10 +1420,52 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 		break;
 	}
 	case ExprFlavor::SLICE: {
-		// @Incomplete
-		assert(("@Incomplete Slicing is not implemented yet in the llvm backend", false));
 		
-		break;
+		auto slice = static_cast<ExprSlice *>(expr);
+
+		auto result = allocateType(state, slice->type);
+
+		llvm::Value *pointer = nullptr;
+		llvm::Value *count = nullptr;
+
+		if (slice->array->type == &TYPE_STRING || slice->array->type->flavor == TypeFlavor::POINTER) {
+			pointer = generateLlvmIr(state, slice->array);
+		}
+		else if (slice->array->type->flags & TYPE_ARRAY_IS_FIXED) {
+			pointer = loadAddressOf(state, slice->array);
+			count = llvm::ConstantInt::get(llvm::Type::getInt64Ty(state->context), static_cast<TypeArray *>(slice->array->type)->count);
+		}
+		else {
+			auto array = generateLlvmIr(state, slice->array);
+
+			pointer = state->builder.CreateLoad(state->builder.CreateStructGEP(array, 0));
+			count = state->builder.CreateLoad(state->builder.CreateStructGEP(array, 1));
+		}
+		
+		if (slice->sliceStart && slice->sliceEnd) {
+			auto offset = generateLlvmIr(state, slice->sliceStart);
+
+			auto end = generateLlvmIr(state, slice->sliceEnd);
+
+			state->builder.CreateStore(state->builder.CreateGEP(pointer, offset), state->builder.CreateStructGEP(result, 0));
+			state->builder.CreateStore(state->builder.CreateSub(end, offset), state->builder.CreateStructGEP(result, 1));
+		}
+		else if (slice->sliceStart) {
+			auto offset = generateLlvmIr(state, slice->sliceStart);
+
+			state->builder.CreateStore(state->builder.CreateGEP(pointer, offset), state->builder.CreateStructGEP(result, 0));
+			state->builder.CreateStore(state->builder.CreateSub(count, offset), state->builder.CreateStructGEP(result, 1));
+		}
+		else {
+			assert(slice->sliceEnd);
+
+			auto end = generateLlvmIr(state, slice->sliceEnd);
+
+			state->builder.CreateStore(pointer, state->builder.CreateStructGEP(result, 0));
+			state->builder.CreateStore(end, state->builder.CreateStructGEP(result, 1));
+		}
+
+		return result;
 	}
 	case ExprFlavor::BLOCK: {
 		auto block = static_cast<ExprBlock *>(expr);
@@ -2013,11 +2055,10 @@ void runLlvm() {
 
 	llvm::raw_string_ostream verifyStream(verifyOutput);
 
-	llvm::InitializeAllTargetInfos();
-	llvm::InitializeAllTargets();
-	llvm::InitializeAllTargetMCs();
-	llvm::InitializeAllAsmParsers();
-	llvm::InitializeAllAsmPrinters();
+	llvm::InitializeNativeTarget();
+	llvm::InitializeNativeTargetAsmPrinter();
+	llvm::InitializeNativeTargetAsmParser();
+
 
 	auto targetTriple = llvm::sys::getDefaultTargetTriple();
 

@@ -27,9 +27,9 @@ RECT :: struct {
 HANDLE :: *void
 HGDIOBJ :: *void
 
-WNDPROC :: (hwnd: HWND, uMsg: MSG.Message, wParam: u64, lParam: s64) -> s64
+WNDPROC :: (hwnd: HWND, uMsg: MSG.Message, wParam: u64, lParam: s64) -> s64 #c_call
 
-DefWindowProcW :: (hWnd: HWND, Msg: MSG.Message, wParam: u64, lParam: s64) -> s64 #external
+DefWindowProcW :: (hWnd: HWND, Msg: MSG.Message, wParam: u64, lParam: s64) -> s64 #external "user32"
 
 WNDCLASSW :: struct {
 	style: Style
@@ -247,10 +247,10 @@ using MSG.Message.members
 
 CW_USEDEFAULT :: cast(s32) 0x80000000
 
-GetStartupInfoW :: (lpStartupInfo: *STARTUPINFOW) #external
+GetStartupInfoW :: (lpStartupInfo: *STARTUPINFOW) #external "kernel32"
 
 
-CreateWindowExW :: (dwExStyle: Window_Style_Ex = 0, lpClassName: *u16, lpWindowName: *u16, dwStyle := Window_Style.WS_OVERLAPPEDWINDOW, X: s32 = CW_USEDEFAULT, Y: s32 = CW_USEDEFAULT, nWidth: s32, nHeight: s32, hWndParent: HWND = null, hMenu: HMENU = null, hInstance: HINSTANCE, lpParam := null) -> HWND #external
+CreateWindowExW :: (dwExStyle: Window_Style_Ex = 0, lpClassName: *u16, lpWindowName: *u16, dwStyle := Window_Style.WS_OVERLAPPEDWINDOW, X: s32 = CW_USEDEFAULT, Y: s32 = CW_USEDEFAULT, nWidth: s32, nHeight: s32, hWndParent: HWND = null, hMenu: HMENU = null, hInstance: HINSTANCE, lpParam := null) -> HWND #external "user32"
 
 PAINTSTRUCT :: struct {
 	hdc: HDC
@@ -261,19 +261,19 @@ PAINTSTRUCT :: struct {
 	rgbReserved: [32]u8
 }
 
-BeginPaint :: (hWnd: HWND, lpPaint: *PAINTSTRUCT) -> HDC #external
+BeginPaint :: (hWnd: HWND, lpPaint: *PAINTSTRUCT) -> HDC #external "user32"
 
-EndPaint :: (hWnd: HWND, lpPaint: *PAINTSTRUCT) -> s32 #external
+EndPaint :: (hWnd: HWND, lpPaint: *PAINTSTRUCT) -> s32 #external "user32"
 
-AdjustWindowRect :: (lpRect: *RECT, dwStyle: Window_Style, bMenu := false) -> s32 #external
-AdjustWindowRectEx :: (lpRect: *RECT, dwStyle: Window_Style, bMenu: bool = false, dwSyleEx: Window_Style_Ex = 0) -> s32 #external
+AdjustWindowRect :: (lpRect: *RECT, dwStyle: Window_Style, bMenu := false) -> s32 #external "user32"
+AdjustWindowRectEx :: (lpRect: *RECT, dwStyle: Window_Style, bMenu: bool = false, dwSyleEx: Window_Style_Ex = 0) -> s32 #external "user32"
 
-PatBlt :: (hdc: HDC, x: s32, y: s32, w: s32, h: s32, rop: u32) -> s32 #external
+PatBlt :: (hdc: HDC, x: s32, y: s32, w: s32, h: s32, rop: u32) -> s32 #external "gdi32"
 
 BLACKNESS :: 0x0000_0042
 WHITENESS :: 0x00FF_0062
 
-GetStockObject :: (i: Stock_Object) -> HGDIOBJ #external
+GetStockObject :: (i: Stock_Object) -> HGDIOBJ #external "gdi32"
 
 Stock_Object :: enum s32 {
 	WHITE_BRUSH         ::  0
@@ -300,37 +300,37 @@ Stock_Object :: enum s32 {
 
 using Stock_Object.members
 
-GetClientRect :: (hWnd: HWND, lpRect: *RECT) -> s32 #external
+GetClientRect :: (hWnd: HWND, lpRect: *RECT) -> s32 #external "user32"
 
 STD_INPUT_HANDLE  :: cast(u32) -10
 STD_OUTPUT_HANDLE :: cast(u32) -11
 STD_ERROR_HANDLE  :: cast(u32) -12
 
-GetLastError :: () -> u32 #external
+GetLastError :: () -> u32 #external "kernel32"
 
-GetModuleHandleW :: (lpModuleName: *u8) -> HMODULE #external
+GetModuleHandleW :: (lpModuleName: *u8) -> HMODULE #external "kernel32"
 
-RegisterClassW :: (lpWndClass: *WNDCLASSW) -> u16 #external
-
-
-ShowWindow :: (hWnd: HWND, nCmdShow: Show_Window_Command) -> s32 #external
+RegisterClassW :: (lpWndClass: *WNDCLASSW) -> u16 #external "user32"
 
 
-GetMessageW :: (lpMsg: *MSG, hWnd: HWND,  wMsgFilterMin := WM_NULL, wMsgFilterMax := WM_NULL) -> s32 #external
+ShowWindow :: (hWnd: HWND, nCmdShow: Show_Window_Command) -> s32 #external "user32"
 
-PeekMessageW :: (lpMsg: *MSG, hWnd: HWND,  wMsgFilterMin := WM_NULL, wMsgFilterMax := WM_NULL, wRemoveMessage := PM_REMOVE) -> s32 #external
 
-TranslateMessage :: (lpMsg: *MSG) -> s32 #external
+GetMessageW :: (lpMsg: *MSG, hWnd: HWND,  wMsgFilterMin := WM_NULL, wMsgFilterMax := WM_NULL) -> s32 #external "user32"
 
-DispatchMessageW :: (lpMsg: *MSG) -> s32 #external
+PeekMessageW :: (lpMsg: *MSG, hWnd: HWND,  wMsgFilterMin := WM_NULL, wMsgFilterMax := WM_NULL, wRemoveMessage := PM_REMOVE) -> s32 #external "user32"
 
-GetDC :: (hWnd: HWND) -> HDC #external
-ReleaseDC :: (hWnd: HWND, hdc: HDC) -> s32 #external
-DeleteDC :: (hdc: HDC) -> s32 #external
+TranslateMessage :: (lpMsg: *MSG) -> s32 #external "user32"
 
-DestroyWindow :: (hWnd: HWND) -> s32 #external
+DispatchMessageW :: (lpMsg: *MSG) -> s32 #external "user32"
 
-PostQuitMessage :: (nExitCode: s32) #external
+GetDC :: (hWnd: HWND) -> HDC #external "user32"
+ReleaseDC :: (hWnd: HWND, hdc: HDC) -> s32 #external "user32"
+DeleteDC :: (hdc: HDC) -> s32 #external "user32"
+
+DestroyWindow :: (hWnd: HWND) -> s32 #external "user32"
+
+PostQuitMessage :: (nExitCode: s32) #external "user32"
 
 Peek_Message_Options :: enum u32 {
 	PM_NOREMOVE :: 0
@@ -341,12 +341,12 @@ Peek_Message_Options :: enum u32 {
 using Peek_Message_Options.members
 
 
-GetCommandLineA :: () -> string #external
+GetCommandLineA :: () -> string #external "kernel32"
 
 
-SwapBuffers :: (Arg1: HDC) -> s32 #external
+SwapBuffers :: (Arg1: HDC) -> s32 #external "gdi32"
 
-GetTickCount :: () -> u32 #external
+GetTickCount :: () -> u32 #external "kernel32"
 
 PIXELFORMATDESCRIPTOR :: struct {
 	nSize: u16 = size_of(PIXELFORMATDESCRIPTOR)
@@ -413,14 +413,14 @@ using PIXELFORMATDESCRIPTOR.Flags.members
 using PIXELFORMATDESCRIPTOR.Pixel_Type.members
 using PIXELFORMATDESCRIPTOR.Plane.members
 
-ChoosePixelFormat :: (hdc: HDC, ppfd: *PIXELFORMATDESCRIPTOR) -> s32 #external
+ChoosePixelFormat :: (hdc: HDC, ppfd: *PIXELFORMATDESCRIPTOR) -> s32 #external "gdi32"
 
-SetPixelFormat :: (hdc: HDC, format: s32, ppfd: *PIXELFORMATDESCRIPTOR) -> s32 #external
+SetPixelFormat :: (hdc: HDC, format: s32, ppfd: *PIXELFORMATDESCRIPTOR) -> s32 #external "gdi32"
 
 
-QueryPerformanceCounter :: (lpPerformanceCount: *s64) -> s32 #external
+QueryPerformanceCounter :: (lpPerformanceCount: *s64) -> s32 #external "kernel32"
 
-QueryPerformanceFrequency :: (lpFrequency: *s64) -> s32 #external
+QueryPerformanceFrequency :: (lpFrequency: *s64) -> s32 #external "kernel32"
 
 SECURITY_ATTRIBUTES :: struct {
 	nLength: u32 = size_of(SECURITY_ATTRIBUTES)
@@ -440,15 +440,15 @@ OVERLAPPED :: struct {
 	hEvent: HANDLE
 }
 
-CloseHandle :: (hObject: HANDLE) -> s32 #external
+CloseHandle :: (hObject: HANDLE) -> s32 #external "kernel32"
 
 CreateFileW :: (lpFileName: *u16, dwDesiredAccess: Access_Flags, dwShareMode: File_Share_Flag, lpSecurityAttributes: *SECURITY_ATTRIBUTES = null, 
-				dwCreationDisposition: File_Create_Option, dwFlagsAndAttributes: File_Flag, hTemplateFile: HANDLE = null) -> HANDLE #external
+				dwCreationDisposition: File_Create_Option, dwFlagsAndAttributes: File_Flag, hTemplateFile: HANDLE = null) -> HANDLE #external "kernel32"
 				
-GetFileSizeEx :: (hFile: HANDLE, lpFileSize: *s64) -> s32 #external
+GetFileSizeEx :: (hFile: HANDLE, lpFileSize: *s64) -> s32 #external "kernel32"
 
-ReadFile :: (hFile: HANDLE, lpBuffer: *void, nNumberOfBytesToRead: u32, lpNumberOfBytesRead: *u32, lpOverlapped: *OVERLAPPED = null) -> s32 #external
-WriteFile :: (hFile: HANDLE, lpBuffer: *void, nNumberOfBytesToWrite: u32, lpNumberOfBytesWritten: *u32, lpOverlapped: *OVERLAPPED = null) -> s32 #external
+ReadFile :: (hFile: HANDLE, lpBuffer: *void, nNumberOfBytesToRead: u32, lpNumberOfBytesRead: *u32, lpOverlapped: *OVERLAPPED = null) -> s32 #external "kernel32"
+WriteFile :: (hFile: HANDLE, lpBuffer: *void, nNumberOfBytesToWrite: u32, lpNumberOfBytesWritten: *u32, lpOverlapped: *OVERLAPPED = null) -> s32 #external "kernel32"
 
 INVALID_HANDLE_VALUE :: cast(HANDLE) -1
 
@@ -505,13 +505,13 @@ File_Flag :: enum_flags u32 {
 using File_Flag.members
 
 
-WriteConsoleA :: (hConsoleOutput: *void, lpBuffer: *void, nNumberOfCharactersToWrite: u32, lpNumberOfCharactersWritten: *u32 = null, lpReserved := null) -> s32 #external
-ExitProcess :: (uExitCode: u32) #external
-HeapAlloc :: (hHeap: HANDLE, dwFlags: u32, dwBytes: u64) -> *void #external
-HeapReAlloc :: (hHeap: HANDLE, dwFlags: u32, lpMem: *void, dwBytes: u64) -> *void #external
-HeapFree :: (hHeap: HANDLE, dwFlags: u32, lpMem: *void) -> s32 #external
-GetProcessHeap :: () -> HANDLE #external
-GetStdHandle :: (nStdHandle: u32) -> HANDLE #external
+WriteConsoleA :: (hConsoleOutput: *void, lpBuffer: *void, nNumberOfCharactersToWrite: u32, lpNumberOfCharactersWritten: *u32 = null, lpReserved := null) -> s32 #external "kernel32"
+ExitProcess :: (uExitCode: u32) #external "kernel32"
+HeapAlloc :: (hHeap: HANDLE, dwFlags: u32, dwBytes: u64) -> *void #external "kernel32"
+HeapReAlloc :: (hHeap: HANDLE, dwFlags: u32, lpMem: *void, dwBytes: u64) -> *void #external "kernel32"
+HeapFree :: (hHeap: HANDLE, dwFlags: u32, lpMem: *void) -> s32 #external "kernel32"
+GetProcessHeap :: () -> HANDLE #external "kernel32"
+GetStdHandle :: (nStdHandle: u32) -> HANDLE #external "kernel32"
 
 Create_Thread_Flags :: enum_flags u32 {
 	CREATE_SUSPENDED :: 0x4
@@ -522,7 +522,7 @@ using Create_Thread_Flags.members
 
 
 
-CreateThread :: (lpThreadAttributes: *SECURITY_ATTRIBUTES = null, dwStackSize: u64 = 0, lpStartAddress: (*void) -> u32, lpParameter := null, dwCreationFlags: Create_Thread_Flags = 0, lpThreadId: *u32 = null) -> HANDLE #external
+CreateThread :: (lpThreadAttributes: *SECURITY_ATTRIBUTES = null, dwStackSize: u64 = 0, lpStartAddress: (*void) -> u32 #c_call, lpParameter := null, dwCreationFlags: Create_Thread_Flags = 0, lpThreadId: *u32 = null) -> HANDLE #external "kernel32"
 
 INFINITE :: 0xFFFF_FFFF
 
@@ -535,4 +535,4 @@ Wait_Result :: enum u32 {
 
 using Wait_Result.members
 
-WaitForSingleObject :: (hHandle: HANDLE, dwMilliseconds: u32 = INFINITE) -> Wait_Result #external	
+WaitForSingleObject :: (hHandle: HANDLE, dwMilliseconds: u32 = INFINITE) -> Wait_Result #external "kernel32"

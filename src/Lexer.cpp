@@ -55,7 +55,9 @@ static const Keyword keywords[] = {
 	{"#through", TokenT::THROUGH}, 
 	{"#complete", TokenT::COMPLETE}, 
 	{"#if", TokenT::STATIC_IF}, 
-	{"defer", TokenT::DEFER}
+	{"defer", TokenT::DEFER}, 
+	{"#run", TokenT::RUN}, 
+	{"#c_call", TokenT::C_CALL}
 };
 
 void BigInt::zero() {

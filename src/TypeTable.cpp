@@ -16,6 +16,7 @@ BucketedArenaAllocator typeArena(1024 * 1024);
 #define STATIC_ARRAY_TYPE_HASH_PRIME 4969
 #define FUNCTION_ARGUMENT_HASH_PRIME 5147
 #define FUNCTION_RETURN_HASH_PRIME 5347
+#define C_CALL_HASH_PRIME 6073
 #define VARARGS_HASH_PRIME 6221
 
 static u32 nextStructHash = STRUCT_HASH_PRIME;
@@ -337,7 +338,15 @@ TypeArray *getStaticArray(Type *type, u64 count) {
 
 
 void generateTypeNameForFunction(TypeFunction *function) {
-	function->name.length = 8; // "() (-> )"
+	function->name.length = 6; // "() -> "
+
+	if (function->returnCount != 1) {
+		function->name.length += 2;
+	}
+
+	if (function->flags & TYPE_FUNCTION_IS_C_CALL) {
+		function->name.length += 8; // " #c_call"
+	}
 
 	for (u64 i = 0; i < function->returnCount; i++) {
 		function->name.length += function->returnTypes[i]->name.length;
@@ -385,7 +394,9 @@ void generateTypeNameForFunction(TypeFunction *function) {
 
 	*cursor++ = ')';
 	*cursor++ = ' ';
-	*cursor++ = '(';
+	if (function->returnCount != 1) {
+		*cursor++ = '(';
+	}
 	*cursor++ = '-';
 	*cursor++ = '>';
 	*cursor++ = ' ';
@@ -404,7 +415,14 @@ void generateTypeNameForFunction(TypeFunction *function) {
 		}
 	}
 
-	*cursor++ = ')';
+	if (function->returnCount != 1) {
+		*cursor++ = ')';
+	}
+
+	if (function->flags & TYPE_FUNCTION_IS_C_CALL) {
+		memcpy(cursor, " #c_call", 8);
+		cursor += 8;
+	}
 }
 
 TypeFunction *getFunctionType(ExprFunction *expr) {
@@ -426,6 +444,10 @@ TypeFunction *getFunctionType(ExprFunction *expr) {
 
 	bool varags = expr->arguments.declarations.count && (expr->arguments.declarations[expr->arguments.declarations.count - 1]->flags & DECLARATION_IS_VARARGS) != 0;
 
+	if (expr->flags & EXPR_FUNCTION_IS_C_CALL) {
+		hash *= C_CALL_HASH_PRIME;
+	}
+
 	if (varags) {
 		hash *= VARARGS_HASH_PRIME;
 	}
@@ -439,6 +461,10 @@ TypeFunction *getFunctionType(ExprFunction *expr) {
 			auto function = static_cast<TypeFunction *>(entry.value);
 
 			if (function->isVarargs != varags) {
+				goto cont;
+			}
+
+			if (((function->flags & TYPE_FUNCTION_IS_C_CALL) != 0) != ((expr->flags & EXPR_FUNCTION_IS_C_CALL) != 0)) {
 				goto cont;
 			}
 
@@ -472,6 +498,10 @@ TypeFunction *getFunctionType(ExprFunction *expr) {
 	result->argumentCount = arguments.count;
 	result->argumentTypes = TYPE_NEW_ARRAY(Type *, result->argumentCount);
 	result->isVarargs = varags;
+
+	if (expr->flags & EXPR_FUNCTION_IS_C_CALL) {
+		result->flags |= TYPE_FUNCTION_IS_C_CALL;
+	}
 
 	for (u64 i = 0; i < returns.count; i++) {
 		result->returnTypes[i] = static_cast<ExprLiteral *>(returns[i]->type)->typeValue;

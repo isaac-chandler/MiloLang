@@ -94,7 +94,7 @@ string_length :: (s: string) -> #must u64 {
 
 allocate :: (size: u64) -> #must *void {		
 	#if TARGET_WINDOWS {
-		HeapAlloc :: (hHeap: *void, dwFlags: u32, dwBytes: u64) -> *void #external
+		HeapAlloc :: (hHeap: *void, dwFlags: u32, dwBytes: u64) -> *void #external "kernel32"
 		
 		return HeapAlloc(process_heap, 0, size)
 	} else {
@@ -107,7 +107,7 @@ reallocate :: (block: *void, size: u64) -> #must *void {
 		return allocate(size)
 	else {
 		#if TARGET_WINDOWS {
-			HeapReAlloc :: (hHeap: *void, dwFlags: u32, lpMem: *void, dwBytes: u64) -> *void #external
+			HeapReAlloc :: (hHeap: *void, dwFlags: u32, lpMem: *void, dwBytes: u64) -> *void #external "kernel32"
 			
 			return HeapReAlloc(process_heap, 0, block, size)
 		
@@ -119,7 +119,7 @@ reallocate :: (block: *void, size: u64) -> #must *void {
 
 deallocate :: (block: *void) {
 	#if TARGET_WINDOWS {
-		HeapFree :: (hHeap: *void, dwFlags: u32, lpMem: *void) -> s32 #external
+		HeapFree :: (hHeap: *void, dwFlags: u32, lpMem: *void) -> s32 #external "kernel32"
 		
 		HeapFree(process_heap, 0, block)
 	} else {
@@ -129,7 +129,7 @@ deallocate :: (block: *void) {
 
 exit :: (code: u32 = 0) {
 	#if TARGET_WINDOWS {
-		ExitProcess :: (uExitCode: u32) #external
+		ExitProcess :: (uExitCode: u32) #external "kernel32"
 
 		ExitProcess(code)
 	} else {
@@ -141,7 +141,7 @@ exit :: (code: u32 = 0) {
 // @Unicode
 print_buffer :: (buffer: []u8) {
 	#if TARGET_WINDOWS {
-		WriteConsoleA :: (hConsoleOutput: *void, lpBuffer: *void, nNumberOfCharactersToWrite: u32, lpNumberOfCharactersWritten: *u32 = null, lpReserved := null) -> s32 #external
+		WriteConsoleA :: (hConsoleOutput: *void, lpBuffer: *void, nNumberOfCharactersToWrite: u32, lpNumberOfCharactersWritten: *u32 = null, lpReserved := null) -> s32 #external "kernel32"
 	
 		WriteConsoleA(std_out, buffer.data, cast() buffer.count)
 	} else {
@@ -279,8 +279,8 @@ main :: () {
 	//args.data = argv
 	//args.count = cast(u64) argc
 	#if TARGET_WINDOWS {		
-		GetProcessHeap :: () -> *void #external
-		GetStdHandle :: (nStdHandle: u32) -> *void #external
+		GetProcessHeap :: () -> *void #external "kernel32"
+		GetStdHandle :: (nStdHandle: u32) -> *void #external "kernel32"
 		STD_OUTPUT_HANDLE :: cast(u32) -11
 
 	
@@ -429,12 +429,9 @@ print_f64 :: (num: f64, decimal_places: u64 = 6, base: u64 = 10) {
 	print_string(".")
 	
 	for decimal_places {
-		// @CompilerBug @Hack because f64 to u64 conversion code generation is bugged
-		value *= cast(f64) cast(u32) base
+		value *= cast(f64) base
 		
 		integer := cast(u64) value
-		
-		if !integer break;
 		
 		print_char(DIGIT_TABLE[integer % base])
 	}

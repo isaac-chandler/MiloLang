@@ -2412,8 +2412,12 @@ void runCoffWriter() {
 						}
 					}
 					else {
-						if (ir.opSize == 8) { // Aww sheet
+						if (ir.opSize == 8) {
 							loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
+
+							code.add1(0x0F); // xorps xmm0, xmm0
+							code.add1(0x57);
+							code.add1(0xC0);
 
 							code.add1(0x48); // test rax, rax
 							code.add1(0x85);
@@ -2424,7 +2428,6 @@ void runCoffWriter() {
 							u8 *firstJumpPatch = code.add1(0);
 							u64 firstJumpRel = code.totalSize;
 
-							code.add1(0x0F);
 
 							if (ir.destSize == 8) {
 								code.add1(0xF2);
@@ -2433,6 +2436,8 @@ void runCoffWriter() {
 								code.add1(0xF3);
 							}
 
+							code.add1(0x48);
+							code.add1(0x0F);
 							code.add1(0x2a);
 							code.add1(0xC0);
 
@@ -2468,6 +2473,7 @@ void runCoffWriter() {
 								code.add1(0xF3);
 							}
 
+							code.add1(0x48);
 							code.add1(0x0F);
 							code.add1(0x2A);
 							code.add1(0xC0);

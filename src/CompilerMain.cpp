@@ -562,7 +562,24 @@ int main(int argc, char *argv[]) {
 				}
 			}
 
-			_snwprintf(buffer, 1024, L"\"%s\" out.obj /debug /entry:main kernel32.lib user32.lib gdi32.lib opengl32.lib libcmt.lib \"/libpath:%s\" \"/libpath:%s\" /incremental:no /nologo", linkerPath, windowsLibPath, crtLibPath);
+			char libBuffer[1024]; // @Robustness
+			
+			{
+				char *libOffset = libBuffer;
+
+				for (auto lib : libraries) {
+					*(libOffset++) = ' ';
+					memcpy(libOffset, lib.characters, lib.length);
+					libOffset += lib.length;
+					*(libOffset++) = '.';
+					*(libOffset++) = 'l';
+					*(libOffset++) = 'i';
+					*(libOffset++) = 'b';
+				}
+
+				*libOffset = 0;
+			}
+			_snwprintf(buffer, 1024, L"\"%s\" out.obj /debug /entry:main%S \"/libpath:%s\" \"/libpath:%s\" /incremental:no /nologo", linkerPath, libBuffer, windowsLibPath, crtLibPath);
 		}
 
 

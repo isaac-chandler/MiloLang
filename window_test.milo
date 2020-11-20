@@ -23,7 +23,7 @@ _main :: () {
 	window_class: WNDCLASSW
 	
 	window_class.style = CS_OWNDC | CS_VREDRAW | CS_HREDRAW
-	window_class.lpfnWndProc = (hwnd: HWND, uMsg: MSG.Message, wParam: u64, lParam: s64) -> s64 {
+	window_class.lpfnWndProc = (hwnd: HWND, uMsg: MSG.Message, wParam: u64, lParam: s64) -> s64 #c_call {
 		if uMsg == {
 			case WM_CLOSE
 				DestroyWindow(hwnd)

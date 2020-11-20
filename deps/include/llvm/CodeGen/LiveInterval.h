@@ -25,6 +25,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/iterator_range.h"
+#include "llvm/CodeGen/Register.h"
 #include "llvm/CodeGen/SlotIndexes.h"
 #include "llvm/MC/LaneBitmask.h"
 #include "llvm/Support/Allocator.h"
@@ -617,7 +618,7 @@ namespace llvm {
     /// subranges). Returns true if found at least one index.
     template <typename Range, typename OutputIt>
     bool findIndexesLiveAt(Range &&R, OutputIt O) const {
-      assert(std::is_sorted(R.begin(), R.end()));
+      assert(llvm::is_sorted(R));
       auto Idx = R.begin(), EndIdx = R.end();
       auto Seg = segments.begin(), EndSeg = segments.end();
       bool Found = false;
@@ -625,11 +626,12 @@ namespace llvm {
         // if the Seg is lower find first segment that is above Idx using binary
         // search
         if (Seg->end <= *Idx) {
-          Seg = std::upper_bound(++Seg, EndSeg, *Idx,
-            [=](typename std::remove_reference<decltype(*Idx)>::type V,
-                const typename std::remove_reference<decltype(*Seg)>::type &S) {
-              return V < S.end;
-            });
+          Seg = std::upper_bound(
+              ++Seg, EndSeg, *Idx,
+              [=](std::remove_reference_t<decltype(*Idx)> V,
+                  const std::remove_reference_t<decltype(*Seg)> &S) {
+                return V < S.end;
+              });
           if (Seg == EndSeg)
             break;
         }
@@ -703,12 +705,16 @@ namespace llvm {
   private:
     SubRange *SubRanges = nullptr; ///< Single linked list of subregister live
                                    /// ranges.
+    const Register Reg; // the register or stack slot of this interval.
+    float Weight = 0.0; // weight of this interval
 
   public:
-    const unsigned reg;  // the register or stack slot of this interval.
-    float weight;        // weight of this interval
+    Register reg() const { return Reg; }
+    float weight() const { return Weight; }
+    void incrementWeight(float Inc) { Weight += Inc; }
+    void setWeight(float Value) { Weight = Value; }
 
-    LiveInterval(unsigned Reg, float Weight) : reg(Reg), weight(Weight) {}
+    LiveInterval(unsigned Reg, float Weight) : Reg(Reg), Weight(Weight) {}
 
     ~LiveInterval() {
       clearSubRanges();
@@ -805,14 +811,10 @@ namespace llvm {
     unsigned getSize() const;
 
     /// isSpillable - Can this interval be spilled?
-    bool isSpillable() const {
-      return weight != huge_valf;
-    }
+    bool isSpillable() const { return Weight != huge_valf; }
 
     /// markNotSpillable - Mark interval as not spillable
-    void markNotSpillable() {
-      weight = huge_valf;
-    }
+    void markNotSpillable() { Weight = huge_valf; }
 
     /// For a given lane mask @p LaneMask, compute indexes at which the
     /// lane is marked undefined by subregister <def,read-undef> definitions.
@@ -833,7 +835,7 @@ namespace llvm {
     ///    function will be applied to the L0010 and L0008 subranges.
     ///
     /// \p Indexes and \p TRI are required to clean up the VNIs that
-    /// don't defne the related lane masks after they get shrunk. E.g.,
+    /// don't define the related lane masks after they get shrunk. E.g.,
     /// when L000F gets split into L0007 and L0008 maybe only a subset
     /// of the VNIs that defined L000F defines L0007.
     ///
@@ -869,7 +871,7 @@ namespace llvm {
     bool operator<(const LiveInterval& other) const {
       const SlotIndex &thisIndex = beginIndex();
       const SlotIndex &otherIndex = other.beginIndex();
-      return std::tie(thisIndex, reg) < std::tie(otherIndex, other.reg);
+      return std::tie(thisIndex, Reg) < std::tie(otherIndex, other.Reg);
     }
 
     void print(raw_ostream &OS) const;

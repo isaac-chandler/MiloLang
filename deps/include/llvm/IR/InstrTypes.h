@@ -154,18 +154,20 @@ public:
   }
 #include "llvm/IR/Instruction.def"
 
-  static UnaryOperator *CreateWithCopiedFlags(UnaryOps Opc,
-                                              Value *V,
-                                              Instruction *CopyO,
-                                              const Twine &Name = "") {
-    UnaryOperator *UO = Create(Opc, V, Name);
+  static UnaryOperator *
+  CreateWithCopiedFlags(UnaryOps Opc, Value *V, Instruction *CopyO,
+                        const Twine &Name = "",
+                        Instruction *InsertBefore = nullptr) {
+    UnaryOperator *UO = Create(Opc, V, Name, InsertBefore);
     UO->copyIRFlags(CopyO);
     return UO;
   }
 
   static UnaryOperator *CreateFNegFMF(Value *Op, Instruction *FMFSource,
-                                      const Twine &Name = "") {
-    return CreateWithCopiedFlags(Instruction::FNeg, Op, FMFSource, Name);
+                                      const Twine &Name = "",
+                                      Instruction *InsertBefore = nullptr) {
+    return CreateWithCopiedFlags(Instruction::FNeg, Op, FMFSource, Name,
+                                 InsertBefore);
   }
 
   UnaryOps getOpcode() const {
@@ -280,11 +282,6 @@ public:
                                        const Twine &Name = "") {
     return CreateWithCopiedFlags(Instruction::FRem, V1, V2, FMFSource, Name);
   }
-  static BinaryOperator *CreateFNegFMF(Value *Op, Instruction *FMFSource,
-                                       const Twine &Name = "") {
-    Value *Zero = ConstantFP::getNegativeZero(Op->getType());
-    return CreateWithCopiedFlags(Instruction::FSub, Zero, Op, FMFSource, Name);
-  }
 
   static BinaryOperator *CreateNSW(BinaryOps Opc, Value *V1, Value *V2,
                                    const Twine &Name = "") {
@@ -390,10 +387,6 @@ public:
                                       Instruction *InsertBefore = nullptr);
   static BinaryOperator *CreateNUWNeg(Value *Op, const Twine &Name,
                                       BasicBlock *InsertAtEnd);
-  static BinaryOperator *CreateFNeg(Value *Op, const Twine &Name = "",
-                                    Instruction *InsertBefore = nullptr);
-  static BinaryOperator *CreateFNeg(Value *Op, const Twine &Name,
-                                    BasicBlock *InsertAtEnd);
   static BinaryOperator *CreateNot(Value *Op, const Twine &Name = "",
                                    Instruction *InsertBefore = nullptr);
   static BinaryOperator *CreateNot(Value *Op, const Twine &Name,
@@ -657,8 +650,8 @@ public:
   /// DataLayout argument is to determine the pointer size when examining casts
   /// involving Integer and Pointer types. They are no-op casts if the integer
   /// is the same size as the pointer. However, pointer size varies with
-  /// platform.
-  /// Determine if the described cast is a no-op cast.
+  /// platform.  Note that a precondition of this method is that the cast is
+  /// legal - i.e. the instruction formed with these operands would verify.
   static bool isNoopCast(
     Instruction::CastOps Opcode, ///< Opcode of cast
     Type *SrcTy,         ///< SrcTy of cast
@@ -698,11 +691,14 @@ public:
   /// Return the destination type, as a convenience
   Type* getDestTy() const { return getType(); }
 
-  /// This method can be used to determine if a cast from S to DstTy using
+  /// This method can be used to determine if a cast from SrcTy to DstTy using
   /// Opcode op is valid or not.
   /// @returns true iff the proposed cast is valid.
   /// Determine if a cast is valid without creating one.
-  static bool castIsValid(Instruction::CastOps op, Value *S, Type *DstTy);
+  static bool castIsValid(Instruction::CastOps op, Type *SrcTy, Type *DstTy);
+  static bool castIsValid(Instruction::CastOps op, Value *S, Type *DstTy) {
+    return castIsValid(op, S->getType(), DstTy);
+  }
 
   /// Methods for support type inquiry through isa, cast, and dyn_cast:
   static bool classof(const Instruction *I) {
@@ -729,41 +725,43 @@ public:
   /// Some passes (e.g. InstCombine) depend on the bit-wise characteristics of
   /// FCMP_* values. Changing the bit patterns requires a potential change to
   /// those passes.
-  enum Predicate {
-    // Opcode              U L G E    Intuitive operation
-    FCMP_FALSE =  0,  ///< 0 0 0 0    Always false (always folded)
-    FCMP_OEQ   =  1,  ///< 0 0 0 1    True if ordered and equal
-    FCMP_OGT   =  2,  ///< 0 0 1 0    True if ordered and greater than
-    FCMP_OGE   =  3,  ///< 0 0 1 1    True if ordered and greater than or equal
-    FCMP_OLT   =  4,  ///< 0 1 0 0    True if ordered and less than
-    FCMP_OLE   =  5,  ///< 0 1 0 1    True if ordered and less than or equal
-    FCMP_ONE   =  6,  ///< 0 1 1 0    True if ordered and operands are unequal
-    FCMP_ORD   =  7,  ///< 0 1 1 1    True if ordered (no nans)
-    FCMP_UNO   =  8,  ///< 1 0 0 0    True if unordered: isnan(X) | isnan(Y)
-    FCMP_UEQ   =  9,  ///< 1 0 0 1    True if unordered or equal
-    FCMP_UGT   = 10,  ///< 1 0 1 0    True if unordered or greater than
-    FCMP_UGE   = 11,  ///< 1 0 1 1    True if unordered, greater than, or equal
-    FCMP_ULT   = 12,  ///< 1 1 0 0    True if unordered or less than
-    FCMP_ULE   = 13,  ///< 1 1 0 1    True if unordered, less than, or equal
-    FCMP_UNE   = 14,  ///< 1 1 1 0    True if unordered or not equal
-    FCMP_TRUE  = 15,  ///< 1 1 1 1    Always true (always folded)
+  enum Predicate : unsigned {
+    // Opcode            U L G E    Intuitive operation
+    FCMP_FALSE = 0, ///< 0 0 0 0    Always false (always folded)
+    FCMP_OEQ = 1,   ///< 0 0 0 1    True if ordered and equal
+    FCMP_OGT = 2,   ///< 0 0 1 0    True if ordered and greater than
+    FCMP_OGE = 3,   ///< 0 0 1 1    True if ordered and greater than or equal
+    FCMP_OLT = 4,   ///< 0 1 0 0    True if ordered and less than
+    FCMP_OLE = 5,   ///< 0 1 0 1    True if ordered and less than or equal
+    FCMP_ONE = 6,   ///< 0 1 1 0    True if ordered and operands are unequal
+    FCMP_ORD = 7,   ///< 0 1 1 1    True if ordered (no nans)
+    FCMP_UNO = 8,   ///< 1 0 0 0    True if unordered: isnan(X) | isnan(Y)
+    FCMP_UEQ = 9,   ///< 1 0 0 1    True if unordered or equal
+    FCMP_UGT = 10,  ///< 1 0 1 0    True if unordered or greater than
+    FCMP_UGE = 11,  ///< 1 0 1 1    True if unordered, greater than, or equal
+    FCMP_ULT = 12,  ///< 1 1 0 0    True if unordered or less than
+    FCMP_ULE = 13,  ///< 1 1 0 1    True if unordered, less than, or equal
+    FCMP_UNE = 14,  ///< 1 1 1 0    True if unordered or not equal
+    FCMP_TRUE = 15, ///< 1 1 1 1    Always true (always folded)
     FIRST_FCMP_PREDICATE = FCMP_FALSE,
     LAST_FCMP_PREDICATE = FCMP_TRUE,
     BAD_FCMP_PREDICATE = FCMP_TRUE + 1,
-    ICMP_EQ    = 32,  ///< equal
-    ICMP_NE    = 33,  ///< not equal
-    ICMP_UGT   = 34,  ///< unsigned greater than
-    ICMP_UGE   = 35,  ///< unsigned greater or equal
-    ICMP_ULT   = 36,  ///< unsigned less than
-    ICMP_ULE   = 37,  ///< unsigned less or equal
-    ICMP_SGT   = 38,  ///< signed greater than
-    ICMP_SGE   = 39,  ///< signed greater or equal
-    ICMP_SLT   = 40,  ///< signed less than
-    ICMP_SLE   = 41,  ///< signed less or equal
+    ICMP_EQ = 32,  ///< equal
+    ICMP_NE = 33,  ///< not equal
+    ICMP_UGT = 34, ///< unsigned greater than
+    ICMP_UGE = 35, ///< unsigned greater or equal
+    ICMP_ULT = 36, ///< unsigned less than
+    ICMP_ULE = 37, ///< unsigned less or equal
+    ICMP_SGT = 38, ///< signed greater than
+    ICMP_SGE = 39, ///< signed greater or equal
+    ICMP_SLT = 40, ///< signed less than
+    ICMP_SLE = 41, ///< signed less or equal
     FIRST_ICMP_PREDICATE = ICMP_EQ,
     LAST_ICMP_PREDICATE = ICMP_SLE,
     BAD_ICMP_PREDICATE = ICMP_SLE + 1
   };
+  using PredicateField =
+      Bitfield::Element<Predicate, 0, 6, LAST_ICMP_PREDICATE>;
 
 protected:
   CmpInst(Type *ty, Instruction::OtherOps op, Predicate pred,
@@ -804,15 +802,15 @@ public:
   }
 
   /// Return the predicate for this instruction.
-  Predicate getPredicate() const {
-    return Predicate(getSubclassDataFromInstruction());
-  }
+  Predicate getPredicate() const { return getSubclassData<PredicateField>(); }
 
   /// Set the predicate for this instruction to the specified value.
-  void setPredicate(Predicate P) { setInstructionSubclassData(P); }
+  void setPredicate(Predicate P) { setSubclassData<PredicateField>(P); }
 
   static bool isFPPredicate(Predicate P) {
-    return P >= FIRST_FCMP_PREDICATE && P <= LAST_FCMP_PREDICATE;
+    assert(FIRST_FCMP_PREDICATE == 0 &&
+           "FIRST_FCMP_PREDICATE is required to be 0");
+    return P <= LAST_FCMP_PREDICATE;
   }
 
   static bool isIntPredicate(Predicate P) {
@@ -893,9 +891,19 @@ public:
   /// Determine if this CmpInst is commutative.
   bool isCommutative() const;
 
-  /// This is just a convenience that dispatches to the subclasses.
   /// Determine if this is an equals/not equals predicate.
-  bool isEquality() const;
+  /// This is a static version that you can use without an instruction
+  /// available.
+  static bool isEquality(Predicate pred);
+
+  /// Determine if this is an equals/not equals predicate.
+  bool isEquality() const { return isEquality(getPredicate()); }
+
+  /// Return true if the predicate is relational (not EQ or NE).
+  static bool isRelational(Predicate P) { return !isEquality(P); }
+
+  /// Return true if the predicate is relational (not EQ or NE).
+  bool isRelational() const { return !isEquality(); }
 
   /// @returns true if the comparison is signed, false otherwise.
   /// Determine if this instruction is using a signed comparison.
@@ -920,6 +928,30 @@ public:
   /// return the signed version of a predicate
   Predicate getSignedPredicate() {
     return getSignedPredicate(getPredicate());
+  }
+
+  /// For example, SLT->ULT, SLE->ULE, SGT->UGT, SGE->UGE, ULT->Failed assert
+  /// @returns the unsigned version of the signed predicate pred.
+  static Predicate getUnsignedPredicate(Predicate pred);
+
+  /// For example, SLT->ULT, SLE->ULE, SGT->UGT, SGE->UGE, ULT->Failed assert
+  /// @returns the unsigned version of the predicate for this instruction (which
+  /// has to be an signed predicate).
+  /// return the unsigned version of a predicate
+  Predicate getUnsignedPredicate() {
+    return getUnsignedPredicate(getPredicate());
+  }
+
+  /// For example, SLT->ULT, ULT->SLT, SLE->ULE, ULE->SLE, EQ->Failed assert
+  /// @returns the unsigned version of the signed predicate pred or
+  ///          the signed version of the signed predicate pred.
+  static Predicate getFlippedSignednessPredicate(Predicate pred);
+
+  /// For example, SLT->ULT, ULT->SLT, SLE->ULE, ULE->SLE, EQ->Failed assert
+  /// @returns the unsigned version of the signed predicate pred or
+  ///          the signed version of the signed predicate pred.
+  Predicate getFlippedSignednessPredicate() {
+    return getFlippedSignednessPredicate(getPredicate());
   }
 
   /// This is just a convenience.
@@ -1066,7 +1098,7 @@ public:
       : Tag(std::move(Tag)), Inputs(Inputs) {}
 
   explicit OperandBundleDefT(const OperandBundleUse &OBU) {
-    Tag = OBU.getTagName();
+    Tag = std::string(OBU.getTagName());
     Inputs.insert(Inputs.end(), OBU.Inputs.begin(), OBU.Inputs.end());
   }
 
@@ -1104,6 +1136,15 @@ using ConstOperandBundleDef = OperandBundleDefT<const Value *>;
 /// as cheap as most other operations on the base class.
 class CallBase : public Instruction {
 protected:
+  // The first two bits are reserved by CallInst for fast retrieval,
+  using CallInstReservedField = Bitfield::Element<unsigned, 0, 2>;
+  using CallingConvField =
+      Bitfield::Element<CallingConv::ID, CallInstReservedField::NextBit, 10,
+                        CallingConv::MaxID>;
+  static_assert(
+      Bitfield::areContiguous<CallInstReservedField, CallingConvField>(),
+      "Bitfields must be contiguous");
+
   /// The last operand is the called operand.
   static constexpr int CalledOperandOpEndIdx = -1;
 
@@ -1136,6 +1177,15 @@ protected:
 
 public:
   using Instruction::getContext;
+
+  /// Create a clone of \p CB with a different set of operand bundles and
+  /// insert it before \p InsertPt.
+  ///
+  /// The returned call instruction is identical \p CB in every way except that
+  /// the operand bundles for the new instruction are set to the operand bundles
+  /// in \p Bundles.
+  static CallBase *Create(CallBase *CB, ArrayRef<OperandBundleDef> Bundles,
+                          Instruction *InsertPt = nullptr);
 
   static bool classof(const Instruction *I) {
     return I->getOpcode() == Instruction::Call ||
@@ -1293,10 +1343,6 @@ public:
 
   Value *getCalledOperand() const { return Op<CalledOperandOpEndIdx>(); }
 
-  // DEPRECATED: This routine will be removed in favor of `getCalledOperand` in
-  // the near future.
-  Value *getCalledValue() const { return getCalledOperand(); }
-
   const Use &getCalledOperandUse() const { return Op<CalledOperandOpEndIdx>(); }
   Use &getCalledOperandUse() { return Op<CalledOperandOpEndIdx>(); }
 
@@ -1360,14 +1406,11 @@ public:
   }
 
   CallingConv::ID getCallingConv() const {
-    return static_cast<CallingConv::ID>(getSubclassDataFromInstruction() >> 2);
+    return getSubclassData<CallingConvField>();
   }
 
   void setCallingConv(CallingConv::ID CC) {
-    auto ID = static_cast<unsigned>(CC);
-    assert(!(ID & ~CallingConv::MaxID) && "Unsupported calling convention");
-    setInstructionSubclassData((getSubclassDataFromInstruction() & 3) |
-                               (ID << 2));
+    setSubclassData<CallingConvField>(CC);
   }
 
   /// Check if this call is an inline asm statement.
@@ -1387,14 +1430,18 @@ public:
   ///
   void setAttributes(AttributeList A) { Attrs = A; }
 
-  /// Determine whether this call has the given attribute.
+  /// Determine whether this call has the given attribute. If it does not
+  /// then determine if the called function has the attribute, but only if
+  /// the attribute is allowed for the call.
   bool hasFnAttr(Attribute::AttrKind Kind) const {
     assert(Kind != Attribute::NoBuiltin &&
            "Use CallBase::isNoBuiltin() to check for Attribute::NoBuiltin");
     return hasFnAttrImpl(Kind);
   }
 
-  /// Determine whether this call has the given attribute.
+  /// Determine whether this call has the given attribute. If it does not
+  /// then determine if the called function has the attribute, but only if
+  /// the attribute is allowed for the call.
   bool hasFnAttr(StringRef Kind) const { return hasFnAttrImpl(Kind); }
 
   /// adds the attribute to the list of attributes.
@@ -1438,6 +1485,12 @@ public:
   void removeAttribute(unsigned i, StringRef Kind) {
     AttributeList PAL = getAttributes();
     PAL = PAL.removeAttribute(getContext(), i, Kind);
+    setAttributes(PAL);
+  }
+
+  void removeAttributes(unsigned i, const AttrBuilder &Attrs) {
+    AttributeList PAL = getAttributes();
+    PAL = PAL.removeAttributes(getContext(), i, Attrs);
     setAttributes(PAL);
   }
 
@@ -1552,10 +1605,12 @@ public:
     return paramHasAttr(ArgNo, Attribute::InAlloca);
   }
 
-  /// Determine whether this argument is passed by value or in an alloca.
-  bool isByValOrInAllocaArgument(unsigned ArgNo) const {
+  /// Determine whether this argument is passed by value, in an alloca, or is
+  /// preallocated.
+  bool isPassPointeeByValueArgument(unsigned ArgNo) const {
     return paramHasAttr(ArgNo, Attribute::ByVal) ||
-           paramHasAttr(ArgNo, Attribute::InAlloca);
+           paramHasAttr(ArgNo, Attribute::InAlloca) ||
+           paramHasAttr(ArgNo, Attribute::Preallocated);
   }
 
   /// Determine if there are is an inalloca argument. Only the last argument can
@@ -1584,10 +1639,8 @@ public:
            dataOperandHasImpliedAttr(OpNo + 1, Attribute::ReadNone);
   }
 
-  /// Extract the alignment of the return value.
-  /// FIXME: Remove this function once transition to Align is over.
-  /// Use getRetAlign() instead.
-  unsigned getRetAlignment() const {
+  LLVM_ATTRIBUTE_DEPRECATED(unsigned getRetAlignment() const,
+                            "Use getRetAlign() instead") {
     if (const auto MA = Attrs.getRetAlignment())
       return MA->value();
     return 0;
@@ -1597,9 +1650,8 @@ public:
   MaybeAlign getRetAlign() const { return Attrs.getRetAlignment(); }
 
   /// Extract the alignment for a call or parameter (0=unknown).
-  /// FIXME: Remove this function once transition to Align is over.
-  /// Use getParamAlign() instead.
-  unsigned getParamAlignment(unsigned ArgNo) const {
+  LLVM_ATTRIBUTE_DEPRECATED(unsigned getParamAlignment(unsigned ArgNo) const,
+                            "Use getParamAlign() instead") {
     if (const auto MA = Attrs.getParamAlignment(ArgNo))
       return MA->value();
     return 0;
@@ -1613,6 +1665,12 @@ public:
   /// Extract the byval type for a call or parameter.
   Type *getParamByValType(unsigned ArgNo) const {
     Type *Ty = Attrs.getParamByValType(ArgNo);
+    return Ty ? Ty : getArgOperand(ArgNo)->getType()->getPointerElementType();
+  }
+
+  /// Extract the preallocated type for a call or parameter.
+  Type *getParamPreallocatedType(unsigned ArgNo) const {
+    Type *Ty = Attrs.getParamPreallocatedType(ArgNo);
     return Ty ? Ty : getArgOperand(ArgNo)->getType()->getPointerElementType();
   }
 
@@ -1725,6 +1783,12 @@ public:
   bool cannotDuplicate() const { return hasFnAttr(Attribute::NoDuplicate); }
   void setCannotDuplicate() {
     addAttribute(AttributeList::FunctionIndex, Attribute::NoDuplicate);
+  }
+
+  /// Determine if the call cannot be tail merged.
+  bool cannotMerge() const { return hasFnAttr(Attribute::NoMerge); }
+  void setCannotMerge() {
+    addAttribute(AttributeList::FunctionIndex, Attribute::NoMerge);
   }
 
   /// Determine if the invoke is convergent
@@ -1876,10 +1940,7 @@ public:
   /// OperandBundleUser to a vector of OperandBundleDefs.  Note:
   /// OperandBundeUses and OperandBundleDefs are non-trivially *different*
   /// representations of operand bundles (see documentation above).
-  void getOperandBundlesAsDefs(SmallVectorImpl<OperandBundleDef> &Defs) const {
-    for (unsigned i = 0, e = getNumOperandBundles(); i != e; ++i)
-      Defs.emplace_back(getOperandBundleAt(i));
-  }
+  void getOperandBundlesAsDefs(SmallVectorImpl<OperandBundleDef> &Defs) const;
 
   /// Return the operand bundle for the operand at index OpIdx.
   ///
@@ -2107,16 +2168,14 @@ public:
   op_iterator populateBundleOperandInfos(ArrayRef<OperandBundleDef> Bundles,
                                          const unsigned BeginIndex);
 
+public:
   /// Return the BundleOpInfo for the operand at index OpIdx.
   ///
   /// It is an error to call this with an OpIdx that does not correspond to an
   /// bundle operand.
+  BundleOpInfo &getBundleOpInfoForOperand(unsigned OpIdx);
   const BundleOpInfo &getBundleOpInfoForOperand(unsigned OpIdx) const {
-    for (auto &BOI : bundle_op_infos())
-      if (BOI.Begin <= OpIdx && OpIdx < BOI.End)
-        return BOI;
-
-    llvm_unreachable("Did not find operand bundle for operand!");
+    return const_cast<CallBase *>(this)->getBundleOpInfoForOperand(OpIdx);
   }
 
 protected:
@@ -2136,7 +2195,7 @@ private:
   bool hasFnAttrOnCalledFunction(StringRef Kind) const;
 
   template <typename AttrKind> bool hasFnAttrImpl(AttrKind Kind) const {
-    if (Attrs.hasAttribute(AttributeList::FunctionIndex, Kind))
+    if (Attrs.hasFnAttribute(Kind))
       return true;
 
     // Operand bundles override attributes on the called function, but don't

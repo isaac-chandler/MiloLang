@@ -133,7 +133,8 @@ private:
     MM_MachO,
     MM_WinCOFF,
     MM_WinCOFFX86,
-    MM_Mips
+    MM_Mips,
+    MM_XCOFF
   };
   ManglingModeT ManglingMode;
 
@@ -173,19 +174,25 @@ private:
   /// well-defined bitwise representation.
   SmallVector<unsigned, 8> NonIntegralAddressSpaces;
 
-  void setAlignment(AlignTypeEnum align_type, Align abi_align, Align pref_align,
-                    uint32_t bit_width);
+  /// Attempts to set the alignment of the given type. Returns an error
+  /// description on failure.
+  Error setAlignment(AlignTypeEnum align_type, Align abi_align,
+                     Align pref_align, uint32_t bit_width);
+
   Align getAlignmentInfo(AlignTypeEnum align_type, uint32_t bit_width,
                          bool ABIAlign, Type *Ty) const;
-  void setPointerAlignment(uint32_t AddrSpace, Align ABIAlign, Align PrefAlign,
-                           uint32_t TypeByteWidth, uint32_t IndexWidth);
+
+  /// Attempts to set the alignment of a pointer in the given address space.
+  /// Returns an error description on failure.
+  Error setPointerAlignment(uint32_t AddrSpace, Align ABIAlign, Align PrefAlign,
+                            uint32_t TypeByteWidth, uint32_t IndexWidth);
 
   /// Internal helper method that returns requested alignment for type.
   Align getAlignment(Type *Ty, bool abi_or_pref) const;
 
-  /// Parses a target data specification string. Assert if the string is
-  /// malformed.
-  void parseSpecifier(StringRef LayoutDescription);
+  /// Attempts to parse a target data specification string and reports an error
+  /// if the string is malformed.
+  Error parseSpecifier(StringRef Desc);
 
   // Free all internal data structures.
   void clear();
@@ -228,6 +235,10 @@ public:
   /// Parse a data layout string (with fallback to default values).
   void reset(StringRef LayoutDescription);
 
+  /// Parse a data layout string and return the layout. Return an error
+  /// description on failure.
+  static Expected<DataLayout> parse(StringRef LayoutDescription);
+
   /// Layout endianness...
   bool isLittleEndian() const { return !BigEndian; }
   bool isBigEndian() const { return BigEndian; }
@@ -262,7 +273,7 @@ public:
 
   /// Returns true if the given alignment exceeds the natural stack alignment.
   bool exceedsNaturalStackAlignment(Align Alignment) const {
-    return StackNaturalAlign && (Alignment > StackNaturalAlign);
+    return StackNaturalAlign && (Alignment > *StackNaturalAlign);
   }
 
   Align getStackAlignment() const {
@@ -309,6 +320,7 @@ public:
     case MM_ELF:
     case MM_Mips:
     case MM_WinCOFF:
+    case MM_XCOFF:
       return '\0';
     case MM_MachO:
     case MM_WinCOFFX86:
@@ -329,6 +341,8 @@ public:
     case MM_MachO:
     case MM_WinCOFFX86:
       return "L";
+    case MM_XCOFF:
+      return "L..";
     }
     llvm_unreachable("invalid mangling mode");
   }
@@ -501,13 +515,17 @@ public:
   }
 
   /// Returns the minimum ABI-required alignment for the specified type.
+  /// FIXME: Deprecate this function once migration to Align is over.
   unsigned getABITypeAlignment(Type *Ty) const;
+
+  /// Returns the minimum ABI-required alignment for the specified type.
+  Align getABITypeAlign(Type *Ty) const;
 
   /// Helper function to return `Alignment` if it's set or the result of
   /// `getABITypeAlignment(Ty)`, in any case the result is a valid alignment.
   inline Align getValueOrABITypeAlignment(MaybeAlign Alignment,
                                           Type *Ty) const {
-    return Alignment ? *Alignment : Align(getABITypeAlignment(Ty));
+    return Alignment ? *Alignment : getABITypeAlign(Ty);
   }
 
   /// Returns the minimum ABI-required alignment for an integer type of
@@ -518,7 +536,14 @@ public:
   /// type.
   ///
   /// This is always at least as good as the ABI alignment.
+  /// FIXME: Deprecate this function once migration to Align is over.
   unsigned getPrefTypeAlignment(Type *Ty) const;
+
+  /// Returns the preferred stack/global alignment for the specified
+  /// type.
+  ///
+  /// This is always at least as good as the ABI alignment.
+  Align getPrefTypeAlign(Type *Ty) const;
 
   /// Returns an integer type with size at least as big as that of a
   /// pointer in the given address space.
@@ -563,13 +588,26 @@ public:
   /// Returns the preferred alignment of the specified global.
   ///
   /// This includes an explicitly requested alignment (if the global has one).
-  unsigned getPreferredAlignment(const GlobalVariable *GV) const;
+  Align getPreferredAlign(const GlobalVariable *GV) const;
+
+  /// Returns the preferred alignment of the specified global.
+  ///
+  /// This includes an explicitly requested alignment (if the global has one).
+  LLVM_ATTRIBUTE_DEPRECATED(
+      inline unsigned getPreferredAlignment(const GlobalVariable *GV) const,
+      "Use getPreferredAlign instead") {
+    return getPreferredAlign(GV).value();
+  }
 
   /// Returns the preferred alignment of the specified global, returned
   /// in log form.
   ///
   /// This includes an explicitly requested alignment (if the global has one).
-  unsigned getPreferredAlignmentLog(const GlobalVariable *GV) const;
+  LLVM_ATTRIBUTE_DEPRECATED(
+      inline unsigned getPreferredAlignmentLog(const GlobalVariable *GV) const,
+      "Inline where needed") {
+    return Log2(getPreferredAlign(GV));
+  }
 };
 
 inline DataLayout *unwrap(LLVMTargetDataRef P) {
@@ -640,6 +678,7 @@ inline TypeSize DataLayout::getTypeSizeInBits(Type *Ty) const {
   case Type::IntegerTyID:
     return TypeSize::Fixed(Ty->getIntegerBitWidth());
   case Type::HalfTyID:
+  case Type::BFloatTyID:
     return TypeSize::Fixed(16);
   case Type::FloatTyID:
     return TypeSize::Fixed(32);
@@ -653,12 +692,13 @@ inline TypeSize DataLayout::getTypeSizeInBits(Type *Ty) const {
   // only 80 bits contain information.
   case Type::X86_FP80TyID:
     return TypeSize::Fixed(80);
-  case Type::VectorTyID: {
+  case Type::FixedVectorTyID:
+  case Type::ScalableVectorTyID: {
     VectorType *VTy = cast<VectorType>(Ty);
     auto EltCnt = VTy->getElementCount();
-    uint64_t MinBits = EltCnt.Min *
-                        getTypeSizeInBits(VTy->getElementType()).getFixedSize();
-    return TypeSize(MinBits, EltCnt.Scalable);
+    uint64_t MinBits = EltCnt.getKnownMinValue() *
+                       getTypeSizeInBits(VTy->getElementType()).getFixedSize();
+    return TypeSize(MinBits, EltCnt.isScalable());
   }
   default:
     llvm_unreachable("DataLayout::getTypeSizeInBits(): Unsupported type");

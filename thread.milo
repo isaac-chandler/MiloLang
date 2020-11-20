@@ -7,7 +7,7 @@ create_thread :: (procedure: (*void) -> u32, data := null) -> #must Thread {
 	thread: Thread = --
 
 	#if TARGET_WINDOWS {
-		CreateThread :: (lpThreadAttributes := null, dwStackSize: u64 = 0, lpStartAddress: (*void) -> u32, lpParameter := null, dwCreationFlags: u32 = 0, lpThreadId: *u32 = null) -> *void #external
+		CreateThread :: (lpThreadAttributes := null, dwStackSize: u64 = 0, lpStartAddress: (*void) -> u32, lpParameter := null, dwCreationFlags: u32 = 0, lpThreadId: *u32 = null) -> *void #external "kernel32"
 	
 		thread.handle = CreateThread(null, 0, procedure, data, 0, *thread.id)
 	} else {
@@ -19,7 +19,7 @@ create_thread :: (procedure: (*void) -> u32, data := null) -> #must Thread {
 
 wait_for_thread :: (thread: *Thread) {
 	#if TARGET_WINDOWS {
-		WaitForSingleObject :: (hHandle: *void, dwMilliseconds: u32 = 0xFFFF_FFFF) -> u32 #external
+		WaitForSingleObject :: (hHandle: *void, dwMilliseconds: u32 = 0xFFFF_FFFF) -> u32 #external "kernel32"
 
 		WaitForSingleObject(thread.handle)
 	} else {
@@ -29,7 +29,7 @@ wait_for_thread :: (thread: *Thread) {
 
 close_thread :: (thread: *Thread) {
 	#if TARGET_WINDOWS {
-		CloseHandle :: (hObject: *void) -> s32 #external
+		CloseHandle :: (hObject: *void) -> s32 #external "kernel32"
 	
 		CloseHandle(thread.handle)
 	} else {

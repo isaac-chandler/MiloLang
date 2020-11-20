@@ -198,17 +198,18 @@ class LoopVectorizationLegality {
 public:
   LoopVectorizationLegality(
       Loop *L, PredicatedScalarEvolution &PSE, DominatorTree *DT,
-      TargetTransformInfo *TTI, TargetLibraryInfo *TLI, AliasAnalysis *AA,
+      TargetTransformInfo *TTI, TargetLibraryInfo *TLI, AAResults *AA,
       Function *F, std::function<const LoopAccessInfo &(Loop &)> *GetLAA,
       LoopInfo *LI, OptimizationRemarkEmitter *ORE,
       LoopVectorizationRequirements *R, LoopVectorizeHints *H, DemandedBits *DB,
-      AssumptionCache *AC)
+      AssumptionCache *AC, BlockFrequencyInfo *BFI, ProfileSummaryInfo *PSI)
       : TheLoop(L), LI(LI), PSE(PSE), TTI(TTI), TLI(TLI), DT(DT),
-        GetLAA(GetLAA), ORE(ORE), Requirements(R), Hints(H), DB(DB), AC(AC) {}
+        GetLAA(GetLAA), ORE(ORE), Requirements(R), Hints(H), DB(DB), AC(AC),
+        BFI(BFI), PSI(PSI) {}
 
   /// ReductionList contains the reduction descriptors for all
   /// of the reductions that were found in the loop.
-  using ReductionList = DenseMap<PHINode *, RecurrenceDescriptor>;
+  using ReductionList = MapVector<PHINode *, RecurrenceDescriptor>;
 
   /// InductionList saves induction variables and maps them to the
   /// induction descriptor.
@@ -229,19 +230,20 @@ public:
 
   /// Return true if we can vectorize this loop while folding its tail by
   /// masking, and mark all respective loads/stores for masking.
+  /// This object's state is only modified iff this function returns true.
   bool prepareToFoldTailByMasking();
 
   /// Returns the primary induction variable.
   PHINode *getPrimaryInduction() { return PrimaryInduction; }
 
   /// Returns the reduction variables found in the loop.
-  ReductionList *getReductionVars() { return &Reductions; }
+  ReductionList &getReductionVars() { return Reductions; }
 
   /// Returns the induction variables found in the loop.
-  InductionList *getInductionVars() { return &Inductions; }
+  InductionList &getInductionVars() { return Inductions; }
 
   /// Return the first-order recurrences found in the loop.
-  RecurrenceSet *getFirstOrderRecurrences() { return &FirstOrderRecurrences; }
+  RecurrenceSet &getFirstOrderRecurrences() { return FirstOrderRecurrences; }
 
   /// Return the set of instructions to sink to handle first-order recurrences.
   DenseMap<Instruction *, Instruction *> &getSinkAfter() { return SinkAfter; }
@@ -312,6 +314,12 @@ public:
   // Returns true if the NoNaN attribute is set on the function.
   bool hasFunNoNaNAttr() const { return HasFunNoNaNAttr; }
 
+  /// Returns all assume calls in predicated blocks. They need to be dropped
+  /// when flattening the CFG.
+  const SmallPtrSetImpl<Instruction *> &getConditionalAssumes() const {
+    return ConditionalAssumes;
+  }
+
 private:
   /// Return true if the pre-header, exiting and latch blocks of \p Lp and all
   /// its nested loops are considered legal for vectorization. These legal
@@ -363,8 +371,14 @@ private:
   /// its original trip-count, under a proper guard, which should be preserved.
   /// \p SafePtrs is a list of addresses that are known to be legal and we know
   /// that we can read from them without segfault.
+  /// \p MaskedOp is a list of instructions that have to be transformed into
+  /// calls to the appropriate masked intrinsic when the loop is vectorized.
+  /// \p ConditionalAssumes is a list of assume instructions in predicated
+  /// blocks that must be dropped if the CFG gets flattened.
   bool blockCanBePredicated(BasicBlock *BB, SmallPtrSetImpl<Value *> &SafePtrs,
-                            bool PreserveGuards = false);
+                            SmallPtrSetImpl<const Instruction *> &MaskedOp,
+                            SmallPtrSetImpl<Instruction *> &ConditionalAssumes,
+                            bool PreserveGuards = false) const;
 
   /// Updates the vectorization state by adding \p Phi to the inductions list.
   /// This can set \p Phi as the main induction of the loop if \p Phi is a
@@ -468,6 +482,14 @@ private:
   /// While vectorizing these instructions we have to generate a
   /// call to the appropriate masked intrinsic
   SmallPtrSet<const Instruction *, 8> MaskedOp;
+
+  /// Assume instructions in predicated blocks must be dropped if the CFG gets
+  /// flattened.
+  SmallPtrSet<Instruction *, 8> ConditionalAssumes;
+
+  /// BFI and PSI are used to check for profile guided size optimizations.
+  BlockFrequencyInfo *BFI;
+  ProfileSummaryInfo *PSI;
 };
 
 } // namespace llvm

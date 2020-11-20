@@ -2,6 +2,8 @@
 
 #include "String.h"
 #include "Basic.h"
+#include "ArraySet.h"
+
 inline volatile bool hadError = false;
 inline std::thread::id inferThread;
 inline std::thread::id mainThread;
@@ -28,6 +30,8 @@ bool loadNewFile(String file);
 FileInfo *getFileInfoByUid(u32 fileUid);
 
 Array<FileInfo> getAllFilesNoLock();
+
+inline ArraySet<String> libraries;
 
 #ifdef BUILD_WINDOWS
 #define CHECK_PRINTF _Printf_format_string_

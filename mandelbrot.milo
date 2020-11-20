@@ -38,7 +38,7 @@ Job :: struct {
 	end_row: s64
 }
 
-thread_proc :: (data: *void) -> u32 {
+thread_proc :: (data: *void) -> u32 #c_call {
 	job: *Job = data
 	
 	for y: job.start_row .. job.end_row {

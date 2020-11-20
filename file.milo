@@ -5,13 +5,13 @@
 	// @Incomplete add multiple return values 
 	read_entire_file :: (file: string) (-> #must result: []u8, success := true) {
 		
-		CloseHandle :: (hObject: *void) -> s32 #external
+		CloseHandle :: (hObject: *void) -> s32 #external "kernel32"
 		CreateFileW :: (lpFileName: *u16, dwDesiredAccess: u32, dwShareMode: u32, lpSecurityAttributes := null, 
-						dwCreationDisposition: u32, dwFlagsAndAttributes: u32, hTemplateFile := null) -> *void #external
+						dwCreationDisposition: u32, dwFlagsAndAttributes: u32, hTemplateFile := null) -> *void #external "kernel32"
 						
-		GetFileSizeEx :: (hFile: *void, lpFileSize: *s64) -> s32 #external
+		GetFileSizeEx :: (hFile: *void, lpFileSize: *s64) -> s32 #external "kernel32"
 
-		ReadFile :: (hFile: *void, lpBuffer: *void, nNumberOfBytesToRead: u32, lpNumberOfBytesRead: *u32, lpOverlapped := null) -> s32 #external
+		ReadFile :: (hFile: *void, lpBuffer: *void, nNumberOfBytesToRead: u32, lpNumberOfBytesRead: *u32, lpOverlapped := null) -> s32 #external "kernel32"
 		
 		INVALID_HANDLE_VALUE :: cast(*void) -1
 
@@ -76,11 +76,11 @@
 
 	write_entire_file :: (file: string, data: []u8) -> bool {
 		
-		CloseHandle :: (hObject: *void) -> s32 #external
+		CloseHandle :: (hObject: *void) -> s32 #external "kernel32"
 		CreateFileW :: (lpFileName: *u16, dwDesiredAccess: u32, dwShareMode: u32, lpSecurityAttributes := null, 
-						dwCreationDisposition: u32, dwFlagsAndAttributes: u32, hTemplateFile := null) -> *void #external
+						dwCreationDisposition: u32, dwFlagsAndAttributes: u32, hTemplateFile := null) -> *void #external "kernel32"
 						
-		WriteFile :: (hFile: *void, lpBuffer: *void, nNumberOfBytesToWrite: u32, lpNumberOfBytesWritten: *u32, lpOverlapped := null) -> s32 #external
+		WriteFile :: (hFile: *void, lpBuffer: *void, nNumberOfBytesToWrite: u32, lpNumberOfBytesWritten: *u32, lpOverlapped := null) -> s32 #external "kernel32"
 		
 		INVALID_HANDLE_VALUE :: cast(*void) -1
 		

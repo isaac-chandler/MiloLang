@@ -281,6 +281,14 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 		flattenTo.add(expr);
 		break;
 	}
+	case ExprFlavor::RUN: {
+		auto run = static_cast<ExprRun *>(*expr);
+
+		flatten(flattenTo, &run->expr);
+
+		flattenTo.add(expr);
+		break;
+	}
 	case ExprFlavor::SLICE: {
 		auto slice = static_cast<ExprSlice *>(*expr);
 
@@ -918,6 +926,64 @@ void checkedRemoveLastSizeDependency(Array<Type *> *sizeDependencies, Type *type
 	}
 }
 
+
+
+ExprLiteral *createFloatLiteral(CodeLocation start, EndLocation end, Type *type, double value) {
+	auto literal = new ExprLiteral;
+	literal->flavor = ExprFlavor::FLOAT_LITERAL;
+	literal->type = type;
+	literal->floatValue = value;
+	literal->start = start;
+	literal->end = end;
+
+	return literal;
+}
+
+ExprLiteral *createIntLiteral(CodeLocation start, EndLocation end, Type *type, u64 value) {
+	if (type == &TYPE_BOOL) {
+		value = value != 0;
+	}
+	else if (type == &TYPE_S8) {
+		value &= 0xFF;
+
+		if (value & 0x80) {
+			value |= 0xFFFF'FFFF'FFFF'FF00;
+		}
+	}
+	else if (type == &TYPE_S16) {
+		value &= 0xFFFF;
+
+		if (value & 0x8000) {
+			value |= 0xFFFF'FFFF'FFFF'0000;
+		}
+	}
+	else if (type == &TYPE_S32) {
+		value &= 0xFFFF'FFFF;
+
+		if (value & 0x8000'0000) {
+			value |= 0xFFFF'FFFF'0000'0000;
+		}
+	}
+	else if (type == &TYPE_U8) {
+		value &= 0xFF;
+	}
+	else if (type == &TYPE_U16) {
+		value &= 0xFFFF;
+	}
+	else if (type == &TYPE_U32) {
+		value &= 0xFFFF'FFFF;
+	}
+
+	auto literal = new ExprLiteral;
+	literal->flavor = ExprFlavor::INT_LITERAL;
+	literal->type = type;
+	literal->unsignedValue = value;
+	literal->start = start;
+	literal->end = end;
+
+	return literal;
+}
+
 void doConstantCast(Expr **cast) {
 	auto binary = static_cast<ExprBinaryOperator *>(*cast);
 	auto castTo = static_cast<ExprLiteral *>(binary->left)->typeValue;
@@ -965,7 +1031,13 @@ void doConstantCast(Expr **cast) {
 			newLiteral->flavor = ExprFlavor::INT_LITERAL;
 
 			newLiteral->type = castTo;
-			newLiteral->unsignedValue = old->unsignedValue == 0 ? 0 : 1;
+			if (expr->type->flavor == TypeFlavor::ARRAY && (expr->type->flags & TYPE_ARRAY_IS_FIXED)) {
+				auto array = static_cast<ExprArray *>(expr);
+				newLiteral->unsignedValue = array->count == 0 ? 0 : 1;
+			}
+			else {
+				newLiteral->unsignedValue = old->unsignedValue == 0 ? 0 : 1;
+			}
 
 			*cast = newLiteral;
 		}
@@ -1012,6 +1084,39 @@ void doConstantCast(Expr **cast) {
 
 			newLiteral->type = castTo;
 			newLiteral->floatValue = old->floatValue;
+
+			*cast = newLiteral;
+		}
+		else if (castTo->flavor == TypeFlavor::BOOL) {
+			*cast = createIntLiteral(binary->start, old->end, &TYPE_BOOL, old->floatValue != 0);
+		}
+	}
+	else if (expr->flavor == ExprFlavor::ARRAY) {
+		if (castTo == &TYPE_BOOL) {
+			auto newLiteral = new ExprLiteral;
+			newLiteral->start = binary->start;
+			newLiteral->end = expr->end;
+			newLiteral->valueOfDeclaration = expr->valueOfDeclaration;
+			newLiteral->flavor = ExprFlavor::INT_LITERAL;
+
+			newLiteral->type = castTo;
+			auto array = static_cast<ExprArray *>(expr);
+			newLiteral->unsignedValue = array->count == 0 ? 0 : 1;
+
+			*cast = newLiteral;
+		}	
+	}
+	else if (expr->flavor == ExprFlavor::STRING_LITERAL) {
+		if (castTo == &TYPE_BOOL) {
+			auto newLiteral = new ExprLiteral;
+			newLiteral->start = binary->start;
+			newLiteral->end = expr->end;
+			newLiteral->valueOfDeclaration = expr->valueOfDeclaration;
+			newLiteral->flavor = ExprFlavor::INT_LITERAL;
+
+			newLiteral->type = castTo;
+			auto string = static_cast<ExprStringLiteral *>(expr);
+			newLiteral->unsignedValue = string->string.length == 0 ? 0 : 1;
 
 			*cast = newLiteral;
 		}
@@ -1417,7 +1522,6 @@ bool binaryOpForFloat(Expr **exprPointer) {
 			literal.type = left->type;
 			literal.start = left->start;
 			literal.end = right->end;
-			literal.flags |= EXPR_WAS_EVALUATED_BINARY;
 
 			auto lhs = static_cast<ExprLiteral *>(left);
 			auto rhs = static_cast<ExprLiteral *>(right);
@@ -1500,6 +1604,296 @@ bool assignOpForFloat(ExprBinaryOperator *binary) {
 	return true;
 }
 
+void evaluateConstantBinary(Expr **exprPointer) {
+	auto binary = static_cast<ExprBinaryOperator *>(*exprPointer);
+
+	auto left = static_cast<ExprLiteral *>(binary->left);
+	auto right = static_cast<ExprLiteral *>(binary->right);
+
+	auto stringLeft = static_cast<ExprStringLiteral *>(binary->left);
+	auto stringRight = static_cast<ExprStringLiteral *>(binary->right);
+
+	switch (binary->op) {
+	case TokenT::CAST: {
+		doConstantCast(exprPointer);
+		break;
+	}
+	case TOKEN('['): {
+		// @Incomplete: support [ for array literals, string literals
+		break;
+	}
+	case TokenT::NOT_EQUAL: {
+		if (left->flavor != right->flavor)
+			break;
+
+		if (left->flavor == ExprFlavor::INT_LITERAL) {
+			*exprPointer = createIntLiteral(left->start, right->end, &TYPE_BOOL, left->unsignedValue != right->unsignedValue);
+		}
+		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
+			*exprPointer = createIntLiteral(left->start, right->end, &TYPE_BOOL, left->floatValue != right->floatValue);
+		}
+		else if (left->flavor == ExprFlavor::STRING_LITERAL) {
+			*exprPointer = createIntLiteral(stringLeft->start, stringRight->end, &TYPE_BOOL, stringLeft->string != stringRight->string);	
+		}
+		break;
+	}
+	case TokenT::EQUAL: {
+		if (left->flavor != right->flavor)
+			break;
+
+		if (left->flavor == ExprFlavor::INT_LITERAL) {
+			*exprPointer = createIntLiteral(left->start, right->end, &TYPE_BOOL, left->unsignedValue == right->unsignedValue);
+		}
+		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
+			*exprPointer = createIntLiteral(left->start, right->end, &TYPE_BOOL, left->floatValue == right->floatValue);
+		}
+		else if (left->flavor == ExprFlavor::STRING_LITERAL) {
+			*exprPointer = createIntLiteral(stringLeft->start, stringRight->end, &TYPE_BOOL, stringLeft->string == stringRight->string);	
+		}
+		break;
+	}
+	case TokenT::GREATER_EQUAL: {
+		if (left->flavor != right->flavor)
+			break;
+
+		if (left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
+			*exprPointer = createIntLiteral(left->start, right->end, &TYPE_BOOL, left->signedValue >= right->signedValue);
+		}
+		else if (left->flavor == ExprFlavor::INT_LITERAL) {
+			*exprPointer = createIntLiteral(left->start, right->end, &TYPE_BOOL, left->unsignedValue >= right->unsignedValue);
+		}
+		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
+			*exprPointer = createIntLiteral(left->start, right->end, &TYPE_BOOL, left->floatValue >= right->floatValue);
+		}
+		break;
+	}
+	case TokenT::LESS_EQUAL: {
+		if (left->flavor != right->flavor)
+			break;
+
+		if (left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
+			*exprPointer = createIntLiteral(left->start, right->end, &TYPE_BOOL, left->signedValue <= right->signedValue);
+		}
+		else if (left->flavor == ExprFlavor::INT_LITERAL) {
+			*exprPointer = createIntLiteral(left->start, right->end, &TYPE_BOOL, left->unsignedValue <= right->unsignedValue);
+		}
+		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
+			*exprPointer = createIntLiteral(left->start, right->end, &TYPE_BOOL, left->floatValue <= right->floatValue);
+		}
+		break;
+	}
+	case TOKEN('>'): {
+		if (left->flavor != right->flavor)
+			break;
+
+		if (left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
+			*exprPointer = createIntLiteral(left->start, right->end, &TYPE_BOOL, left->signedValue > right->signedValue);
+		}
+		else if (left->flavor == ExprFlavor::INT_LITERAL) {
+			*exprPointer = createIntLiteral(left->start, right->end, &TYPE_BOOL, left->unsignedValue > right->unsignedValue);
+		}
+		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
+			*exprPointer = createIntLiteral(left->start, right->end, &TYPE_BOOL, left->floatValue > right->floatValue);
+		}
+		break;
+	}
+	case TOKEN('<'): {
+		if (left->flavor != right->flavor)
+			break;
+
+		if (left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
+			*exprPointer = createIntLiteral(left->start, right->end, &TYPE_BOOL, left->signedValue < right->signedValue);
+		}
+		else if (left->flavor == ExprFlavor::INT_LITERAL) {
+			*exprPointer = createIntLiteral(left->start, right->end, &TYPE_BOOL, left->unsignedValue < right->unsignedValue);
+		}
+		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
+			*exprPointer = createIntLiteral(left->start, right->end, &TYPE_BOOL, left->floatValue < right->floatValue);
+		}
+		break;
+	}
+	case TOKEN('+'): {
+		if (left->flavor != right->flavor)
+			break;
+
+		if (left->flavor == ExprFlavor::INT_LITERAL) {
+			if (left->type->flavor == TypeFlavor::INTEGER) {
+				auto literal = createIntLiteral(left->start, right->end, left->type, left->signedValue + right->signedValue);
+		
+				if (literal->type == &TYPE_SIGNED_INT_LITERAL && literal->signedValue >= 0) {
+					literal->type = &TYPE_UNSIGNED_INT_LITERAL;
+				}
+
+				*exprPointer = literal;
+			}
+			else {
+				// @Incomplete (must be able to yield on size)
+				assert(left->type->flavor == TypeFlavor::POINTER);
+				assert(false);
+			}
+		}
+		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
+			*exprPointer = createFloatLiteral(left->start, right->end, left->type, left->floatValue < right->floatValue);
+		}
+		break;
+	}
+	case TOKEN('-'): {
+		if (left->flavor != right->flavor)
+			break;
+
+		if (left->flavor == ExprFlavor::INT_LITERAL) {
+			if (left->type->flavor == TypeFlavor::INTEGER) {
+				auto literal = createIntLiteral(left->start, right->end, left->type, left->signedValue - right->signedValue);
+
+				if (literal->type == &TYPE_UNSIGNED_INT_LITERAL && left->unsignedValue < right->unsignedValue) {
+					literal->type = &TYPE_SIGNED_INT_LITERAL;
+				}
+				else if (literal->type == &TYPE_SIGNED_INT_LITERAL && literal->signedValue >= 0) {
+					literal->type = &TYPE_UNSIGNED_INT_LITERAL;
+				}
+
+				*exprPointer = literal;
+			}
+			else {
+				// @Incomplete (must be able to yield on size)
+				assert(left->type->flavor == TypeFlavor::POINTER);
+				assert(false);
+			}
+		}
+		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
+			*exprPointer = createFloatLiteral(left->start, right->end, left->type, left->floatValue < right->floatValue);
+		}
+		break;
+	}
+	case TOKEN('&'): {
+		if (left->flavor != right->flavor)
+			break;
+
+		if (left->flavor == ExprFlavor::INT_LITERAL) {
+			*exprPointer = createIntLiteral(left->start, right->end, left->type, left->unsignedValue & right->unsignedValue);
+		}
+		break;
+	}
+	case TOKEN('|'): {
+		if (left->flavor != right->flavor)
+			break;
+
+		if (left->flavor == ExprFlavor::INT_LITERAL) {
+			*exprPointer = createIntLiteral(left->start, right->end, left->type, left->unsignedValue | right->unsignedValue);
+		}
+		break;
+	}
+	case TOKEN('^'): {
+		if (left->flavor != right->flavor)
+			break;
+
+		if (left->flavor == ExprFlavor::INT_LITERAL) {
+			*exprPointer = createIntLiteral(left->start, right->end, left->type, left->unsignedValue ^ right->unsignedValue);
+		}
+		break;
+	}
+	case TokenT::SHIFT_LEFT: {
+		if (left->flavor != right->flavor)
+			break;
+
+		if (left->flavor == ExprFlavor::INT_LITERAL) {
+			*exprPointer = createIntLiteral(left->start, right->end, left->type, left->unsignedValue << right->unsignedValue);
+		}
+		break;
+	}
+	case TokenT::SHIFT_RIGHT: {
+		if (left->flavor != right->flavor)
+			break;
+
+		if (left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
+			*exprPointer = createIntLiteral(left->start, right->end, left->type, left->signedValue >> right->signedValue);
+		}
+		else if (left->flavor == ExprFlavor::INT_LITERAL) {
+			*exprPointer = createIntLiteral(left->start, right->end, left->type, left->unsignedValue >> right->unsignedValue);
+		}
+		break;
+	}
+	case TOKEN('*'): {
+		if (left->flavor != right->flavor)
+			break;
+
+		if (left->flavor == ExprFlavor::INT_LITERAL) {
+			auto literal = createIntLiteral(left->start, right->end, left->type, left->unsignedValue * right->unsignedValue);
+			
+			if (left->type == &TYPE_SIGNED_INT_LITERAL && literal->signedValue >= 0) {
+				literal->type = &TYPE_UNSIGNED_INT_LITERAL;
+			}
+
+			*exprPointer = literal;
+		}
+		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
+			*exprPointer = createFloatLiteral(left->start, right->end, left->type, left->floatValue * right->floatValue);
+		}
+		break;
+	}
+	case TOKEN('/'): {
+		if (left->flavor != right->flavor)
+			break;
+
+		if (left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
+			auto literal = createIntLiteral(left->start, right->end, left->type, left->signedValue / right->signedValue);
+			
+			if (left->type == &TYPE_SIGNED_INT_LITERAL && literal->signedValue >= 0) {
+				literal->type = &TYPE_UNSIGNED_INT_LITERAL;
+			}
+
+			*exprPointer = literal;
+		}
+		else if (left->flavor == ExprFlavor::INT_LITERAL) {
+			*exprPointer = createIntLiteral(left->start, right->end, left->type, left->unsignedValue / right->unsignedValue);
+		}
+		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
+			*exprPointer = createFloatLiteral(left->start, right->end, left->type, left->floatValue * right->floatValue);
+		}
+		break;
+	}
+	case TOKEN('%'): {
+		if (left->flavor != right->flavor)
+			break;
+
+		if (left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
+			auto literal = createIntLiteral(left->start, right->end, left->type, left->signedValue % right->signedValue);
+			
+			if (left->type == &TYPE_SIGNED_INT_LITERAL && literal->signedValue >= 0) {
+				literal->type = &TYPE_UNSIGNED_INT_LITERAL;
+			}
+
+			*exprPointer = literal;
+		}
+		else if (left->flavor == ExprFlavor::INT_LITERAL) {
+			*exprPointer = createIntLiteral(left->start, right->end, left->type, left->unsignedValue % right->unsignedValue);
+		}
+		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
+			*exprPointer = createFloatLiteral(left->start, right->end, left->type, fmod(left->floatValue, right->floatValue));
+		}
+		break;
+	}
+	case TokenT::LOGIC_AND: {
+		if (left->flavor != right->flavor)
+			break;
+
+		if (left->flavor == ExprFlavor::INT_LITERAL) {
+			*exprPointer = createIntLiteral(left->start, right->end, left->type, left->unsignedValue != 0 && right->unsignedValue != 0);
+		}
+		break;
+	}
+	case TokenT::LOGIC_OR: {
+		if (left->flavor != right->flavor)
+			break;
+
+		if (left->flavor == ExprFlavor::INT_LITERAL) {
+			*exprPointer = createIntLiteral(left->start, right->end, left->type, left->unsignedValue != 0 || right->unsignedValue != 0);
+		}
+		break;
+	}
+	}
+}
+
 bool binaryOpForInteger(Array<Type *> *sizeDependencies, Expr **exprPointer) {
 	auto binary = static_cast<ExprBinaryOperator *>(*exprPointer);
 	auto &left = binary->left;
@@ -1521,96 +1915,7 @@ bool binaryOpForInteger(Array<Type *> *sizeDependencies, Expr **exprPointer) {
 		right->type = &TYPE_SIGNED_INT_LITERAL;
 	}
 
-	if (left->type == right->type) {
-		if (left->type == &TYPE_UNSIGNED_INT_LITERAL || left->type == &TYPE_SIGNED_INT_LITERAL) {
-			ExprLiteral literal;
-			literal.flavor = ExprFlavor::INT_LITERAL;
-			literal.type = left->type;
-			literal.start = left->start;
-			literal.end = right->end;
-			literal.flags |= EXPR_WAS_EVALUATED_BINARY;
-
-			auto lhs = static_cast<ExprLiteral *>(left);
-			auto rhs = static_cast<ExprLiteral *>(right);
-
-			switch (binary->op) {
-			case TOKEN('+'): {
-				literal.unsignedValue = lhs->unsignedValue + rhs->unsignedValue; // Independent of signed
-				break;
-			}
-			case TOKEN('-'): {
-				if (lhs->unsignedValue < rhs->unsignedValue) {
-					literal.type = &TYPE_SIGNED_INT_LITERAL; // If you typed 3 - 5 you probably mean -2, not (S64_MAX - 1)
-				}
-
-				literal.unsignedValue = lhs->unsignedValue - rhs->unsignedValue; // Independent of signed
-				break;
-			}
-			case TOKEN('*'): {
-				literal.unsignedValue = lhs->unsignedValue * rhs->unsignedValue; // Independent of signed
-				break;
-			}
-			case TOKEN('/'): {
-				if (left->type == &TYPE_UNSIGNED_INT_LITERAL) {
-					literal.unsignedValue = lhs->unsignedValue / rhs->unsignedValue;
-				}
-				else {
-					literal.signedValue = lhs->signedValue / rhs->signedValue;
-				}
-
-				break;
-			}
-			case TOKEN('%'): {
-				if (left->type == &TYPE_UNSIGNED_INT_LITERAL) {
-					literal.unsignedValue = lhs->unsignedValue % rhs->unsignedValue;
-				}
-				else {
-					literal.signedValue = lhs->signedValue % rhs->signedValue;
-				}
-
-				break;
-			}
-			case TOKEN('&'): {
-				literal.unsignedValue = lhs->unsignedValue & rhs->unsignedValue; // Independent of signed
-				break;
-			}
-			case TOKEN('|'): {
-				literal.unsignedValue = lhs->unsignedValue | rhs->unsignedValue; // Independent of signed
-				break;
-			}
-			case TOKEN('^'): {
-				literal.unsignedValue = lhs->unsignedValue ^ rhs->unsignedValue; // Independent of signed
-				break;
-			}
-			case TokenT::SHIFT_LEFT: {
-				literal.unsignedValue = lhs->unsignedValue << rhs->unsignedValue; // Independent of signed
-				break;
-			}
-			case TokenT::SHIFT_RIGHT: {
-				if (left->type == &TYPE_UNSIGNED_INT_LITERAL) {
-					literal.unsignedValue = lhs->unsignedValue >> rhs->unsignedValue;
-				}
-				else {
-					literal.signedValue = lhs->signedValue >> rhs->signedValue;
-				}
-
-				break;
-			}
-			default: {
-				trySolidifyNumericLiteralToDefault(left);
-				trySolidifyNumericLiteralToDefault(right);
-
-				return true;
-			}
-			}
-
-			ExprLiteral *allocation = new ExprLiteral;
-			*allocation = literal;
-
-			*exprPointer = allocation;
-		}
-	}
-	else {
+	if (left->type != right->type) {
 		if ((left->type->flags & TYPE_INTEGER_IS_SIGNED) == (right->type->flags & TYPE_INTEGER_IS_SIGNED)) {
 			if (left->type == &TYPE_UNSIGNED_INT_LITERAL || left->type == &TYPE_SIGNED_INT_LITERAL) {
 				if (!boundsCheckImplicitConversion(binary, right->type, static_cast<ExprLiteral *>(left))) {
@@ -1861,7 +2166,7 @@ bool arrayIsLiteral(ExprArray *array) {
 }
 
 bool isLiteral(Expr *expr) {
-	return ((expr->flavor == ExprFlavor::INT_LITERAL || expr->flavor == ExprFlavor::FLOAT_LITERAL) && !(expr->flags & EXPR_WAS_EVALUATED_BINARY)) /* See :EvaluatedBinaryLiterals*/
+	return ((expr->flavor == ExprFlavor::INT_LITERAL || expr->flavor == ExprFlavor::FLOAT_LITERAL))
 		|| expr->flavor == ExprFlavor::TYPE_LITERAL || expr->flavor == ExprFlavor::STRING_LITERAL || expr->flavor == ExprFlavor::FUNCTION || (expr->flavor == ExprFlavor::ARRAY && arrayIsLiteral(static_cast<ExprArray *>(expr))) || expr->flavor == ExprFlavor::STRUCT_DEFAULT;
 }
 
@@ -2564,8 +2869,6 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 
 		expr->type = castTo;
 
-		doConstantCast(exprPointer);
-
 		break;
 	}
 	case TOKEN('['): {
@@ -2806,7 +3109,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 			else if (!binaryOpForFloatAndIntLiteral(exprPointer)) {
 				return false;
 			}
-
+			
 			if (right->type != left->type) {
 				reportError(binary, "Error: Cannot compare %.*s to %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
 				return false;
@@ -3636,6 +3939,8 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 		assert(false);
 		return false;
 	}
+
+	evaluateConstantBinary(exprPointer);
 
 	return true;
 }
@@ -4612,7 +4917,10 @@ bool inferFlattened(SubJob *job) {
 			Block *returnTypes = &return_->returnsFrom->returns;
 
 			if (returnTypes->declarations.count == 1 && static_cast<ExprLiteral *>(returnTypes->declarations[0]->type)->typeValue == &TYPE_VOID) {
-				if (return_->returns.count) {
+				if (return_->returns.count == 1 && return_->returns.values[0]->type == &TYPE_VOID) {
+					// Returning a function call of void return type is legal
+				}
+				else if (return_->returns.count) {
 					reportError(return_->returns.values[0], "Error: A function with void return type cannot return a value");
 					return false;
 				}
@@ -4648,6 +4956,10 @@ bool inferFlattened(SubJob *job) {
 
 							literal->signedValue = -literal->signedValue;
 
+							if (literal->signedValue >= 0) {
+								literal->type = &TYPE_UNSIGNED_INT_LITERAL;
+							}
+
 							if (literal->signedValue == 0) {
 								literal->flags ^= EXPR_INTEGER_LITERAL_IS_NEGATIVE_ZERO;
 							}
@@ -4668,7 +4980,8 @@ bool inferFlattened(SubJob *job) {
 								return false;
 							}
 
-							literal->type = &TYPE_SIGNED_INT_LITERAL;
+							if (literal->unsignedValue != 0)
+								literal->type = &TYPE_SIGNED_INT_LITERAL;
 
 							literal->signedValue = -literal->signedValue;
 
@@ -4740,6 +5053,10 @@ bool inferFlattened(SubJob *job) {
 					return false;
 				}
 
+				if (value->flavor == ExprFlavor::INT_LITERAL) {
+					*exprPointer = createIntLiteral(unary->start, value->end, value->type, ~static_cast<ExprLiteral *>(value)->unsignedValue);
+				}
+
 				break;
 			}
 			case TOKEN('!'): {
@@ -4767,6 +5084,10 @@ bool inferFlattened(SubJob *job) {
 				}
 
 				unary->type = &TYPE_BOOL;
+
+				if (value->flavor == ExprFlavor::INT_LITERAL) {
+					*exprPointer = createIntLiteral(unary->start, value->end, &TYPE_BOOL, static_cast<ExprLiteral *>(value)->unsignedValue == 0);
+				}
 
 				break;
 			}
@@ -5870,7 +6191,7 @@ bool inferFunction(FunctionJob *job) {
 		}
 	}
 
-	if (function->type) {
+	if (function->type && isDone(&job->value)) {
 		for (auto argument : function->arguments.declarations) {
 			addSizeDependency(&job->sizeDependencies, static_cast<ExprLiteral *>(argument->type)->typeValue);
 		}
@@ -5880,7 +6201,12 @@ bool inferFunction(FunctionJob *job) {
 		}
 
 		if (function->flags & EXPR_FUNCTION_IS_EXTERNAL) {
-			assert(!job->function->body);
+			if (function->body->flavor != ExprFlavor::STRING_LITERAL) {
+				reportError(function->body, "Error: External function library must be a constant string");
+				return false;
+			}
+
+			libraries.add(static_cast<ExprStringLiteral *>(function->body)->string);
 
 			if (!function->valueOfDeclaration) {
 				reportError(function, "Error: External functions must be named");
@@ -5899,11 +6225,9 @@ bool inferFunction(FunctionJob *job) {
 		else {
 			assert(job->function->body);
 
-			if (isDone(&job->value)) {
 
-				removeJob(&functionJobs, job);
-				functionWaitingOnSize.add(job);
-			}
+			removeJob(&functionJobs, job);
+			functionWaitingOnSize.add(job);
 		}
 	}
 

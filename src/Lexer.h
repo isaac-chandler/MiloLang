@@ -112,7 +112,9 @@ enum class TokenT : u8 {
 	THROUGH, 
 	COMPLETE, 
 	STATIC_IF, 
-	DEFER
+	DEFER, 
+	RUN, 
+	C_CALL
 };
 
 struct Token {

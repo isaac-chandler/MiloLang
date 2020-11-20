@@ -316,6 +316,7 @@ def vt         : SDNode<"ISD::VALUETYPE" , SDTOther   , [], "VTSDNode">;
 def bb         : SDNode<"ISD::BasicBlock", SDTOther   , [], "BasicBlockSDNode">;
 def cond       : SDNode<"ISD::CONDCODE"  , SDTOther   , [], "CondCodeSDNode">;
 def undef      : SDNode<"ISD::UNDEF"     , SDTUNDEF   , []>;
+def vscale     : SDNode<"ISD::VSCALE"    , SDTIntUnaryOp, []>;
 def globaladdr : SDNode<"ISD::GlobalAddress",         SDTPtrLeaf, [],
                         "GlobalAddressSDNode">;
 def tglobaladdr : SDNode<"ISD::TargetGlobalAddress",  SDTPtrLeaf, [],
@@ -395,13 +396,17 @@ def saddsat    : SDNode<"ISD::SADDSAT"   , SDTIntBinOp, [SDNPCommutative]>;
 def uaddsat    : SDNode<"ISD::UADDSAT"   , SDTIntBinOp, [SDNPCommutative]>;
 def ssubsat    : SDNode<"ISD::SSUBSAT"   , SDTIntBinOp>;
 def usubsat    : SDNode<"ISD::USUBSAT"   , SDTIntBinOp>;
+def sshlsat    : SDNode<"ISD::SSHLSAT"   , SDTIntBinOp>;
+def ushlsat    : SDNode<"ISD::USHLSAT"   , SDTIntBinOp>;
 
 def smulfix    : SDNode<"ISD::SMULFIX"   , SDTIntScaledBinOp, [SDNPCommutative]>;
 def smulfixsat : SDNode<"ISD::SMULFIXSAT", SDTIntScaledBinOp, [SDNPCommutative]>;
 def umulfix    : SDNode<"ISD::UMULFIX"   , SDTIntScaledBinOp, [SDNPCommutative]>;
 def umulfixsat : SDNode<"ISD::UMULFIXSAT", SDTIntScaledBinOp, [SDNPCommutative]>;
 def sdivfix    : SDNode<"ISD::SDIVFIX"   , SDTIntScaledBinOp>;
+def sdivfixsat : SDNode<"ISD::SDIVFIXSAT", SDTIntScaledBinOp>;
 def udivfix    : SDNode<"ISD::UDIVFIX"   , SDTIntScaledBinOp>;
+def udivfixsat : SDNode<"ISD::UDIVFIXSAT", SDTIntScaledBinOp>;
 
 def sext_inreg : SDNode<"ISD::SIGN_EXTEND_INREG", SDTExtInreg>;
 def sext_invec : SDNode<"ISD::SIGN_EXTEND_VECTOR_INREG", SDTExtInvec>;
@@ -550,6 +555,8 @@ def strict_sint_to_fp : SDNode<"ISD::STRICT_SINT_TO_FP",
                                SDTIntToFPOp, [SDNPHasChain]>;
 def strict_uint_to_fp : SDNode<"ISD::STRICT_UINT_TO_FP",
                                SDTIntToFPOp, [SDNPHasChain]>;
+def strict_fsetcc  : SDNode<"ISD::STRICT_FSETCC",  SDTSetCC, [SDNPHasChain]>;
+def strict_fsetccs : SDNode<"ISD::STRICT_FSETCCS", SDTSetCC, [SDNPHasChain]>;
 
 def setcc      : SDNode<"ISD::SETCC"      , SDTSetCC>;
 def select     : SDNode<"ISD::SELECT"     , SDTSelect>;
@@ -563,8 +570,6 @@ def br         : SDNode<"ISD::BR"         , SDTBr,     [SDNPHasChain]>;
 def catchret   : SDNode<"ISD::CATCHRET"   , SDTCatchret,
                         [SDNPHasChain, SDNPSideEffect]>;
 def cleanupret : SDNode<"ISD::CLEANUPRET" , SDTNone,   [SDNPHasChain]>;
-def catchpad   : SDNode<"ISD::CATCHPAD"   , SDTNone,
-                        [SDNPHasChain, SDNPSideEffect]>;
 
 def trap       : SDNode<"ISD::TRAP"       , SDTNone,
                         [SDNPHasChain, SDNPSideEffect]>;
@@ -633,6 +638,7 @@ def ist        : SDNode<"ISD::STORE"      , SDTIStore,
 
 def vector_shuffle : SDNode<"ISD::VECTOR_SHUFFLE", SDTVecShuffle, []>;
 def build_vector : SDNode<"ISD::BUILD_VECTOR", SDTypeProfile<1, -1, []>, []>;
+def splat_vector : SDNode<"ISD::SPLAT_VECTOR", SDTypeProfile<1, 1, []>, []>;
 def scalar_to_vector : SDNode<"ISD::SCALAR_TO_VECTOR", SDTypeProfile<1, 1, []>,
                               []>;
 
@@ -666,10 +672,11 @@ def intrinsic_w_chain : SDNode<"ISD::INTRINSIC_W_CHAIN",
 def intrinsic_wo_chain : SDNode<"ISD::INTRINSIC_WO_CHAIN",
                                 SDTypeProfile<1, -1, [SDTCisPtrTy<1>]>, []>;
 
-def SDT_assertext : SDTypeProfile<1, 1,
+def SDT_assert : SDTypeProfile<1, 1,
   [SDTCisInt<0>, SDTCisInt<1>, SDTCisSameAs<1, 0>]>;
-def assertsext : SDNode<"ISD::AssertSext", SDT_assertext>;
-def assertzext : SDNode<"ISD::AssertZext", SDT_assertext>;
+def assertsext : SDNode<"ISD::AssertSext", SDT_assert>;
+def assertzext : SDNode<"ISD::AssertZext", SDT_assert>;
+def assertalign : SDNode<"ISD::AssertAlign", SDT_assert>;
 
 
 //===----------------------------------------------------------------------===//
@@ -717,19 +724,6 @@ class SDNodeXForm<SDNode opc, code xformFunction> {
 def NOOP_SDNodeXForm : SDNodeXForm<imm, [{}]>;
 
 //===----------------------------------------------------------------------===//
-// PatPred Subclasses.
-//
-// These allow specifying different sorts of predicates that control whether a
-// node is matched.
-//
-class PatPred;
-
-class CodePatPred<code predicate> : PatPred {
-  code PredicateCode = predicate;
-}
-
-
-//===----------------------------------------------------------------------===//
 // Selection DAG Pattern Fragments.
 //
 // Pattern fragments are reusable chunks of dags that match specific things.
@@ -741,7 +735,7 @@ class CodePatPred<code predicate> : PatPred {
 /// PatFrags - Represents a set of pattern fragments.  Each single fragment
 /// can match something on the DAG, from a single node to multiple nested other
 /// fragments.   The whole set of fragments matches if any of the single
-/// fragemnts match.  This allows e.g. matching and "add with overflow" and
+/// fragments match.  This allows e.g. matching and "add with overflow" and
 /// a regular "add" with the same fragment set.
 ///
 class PatFrags<dag ops, list<dag> frags, code pred = [{}],
@@ -959,6 +953,10 @@ def extloadi32 : PatFrag<(ops node:$ptr), (extload node:$ptr)> {
   let IsLoad = 1;
   let MemoryVT = i32;
 }
+def extloadf16 : PatFrag<(ops node:$ptr), (extload node:$ptr)> {
+  let IsLoad = 1;
+  let MemoryVT = f16;
+}
 def extloadf32 : PatFrag<(ops node:$ptr), (extload node:$ptr)> {
   let IsLoad = 1;
   let MemoryVT = f32;
@@ -1093,6 +1091,11 @@ def truncstorei32 : PatFrag<(ops node:$val, node:$ptr),
                             (truncstore node:$val, node:$ptr)> {
   let IsStore = 1;
   let MemoryVT = i32;
+}
+def truncstoref16 : PatFrag<(ops node:$val, node:$ptr),
+                            (truncstore node:$val, node:$ptr)> {
+  let IsStore = 1;
+  let MemoryVT = f16;
 }
 def truncstoref32 : PatFrag<(ops node:$val, node:$ptr),
                             (truncstore node:$val, node:$ptr)> {
@@ -1422,58 +1425,64 @@ def any_sint_to_fp : PatFrags<(ops node:$src),
 def any_uint_to_fp : PatFrags<(ops node:$src),
                               [(strict_uint_to_fp node:$src),
                                (uint_to_fp node:$src)]>;
+def any_fsetcc : PatFrags<(ops node:$lhs, node:$rhs, node:$pred),
+                          [(strict_fsetcc node:$lhs, node:$rhs, node:$pred),
+                           (setcc node:$lhs, node:$rhs, node:$pred)]>;
+def any_fsetccs : PatFrags<(ops node:$lhs, node:$rhs, node:$pred),
+                          [(strict_fsetccs node:$lhs, node:$rhs, node:$pred),
+                           (setcc node:$lhs, node:$rhs, node:$pred)]>;
 
 multiclass binary_atomic_op_ord<SDNode atomic_op> {
-  def #NAME#_monotonic : PatFrag<(ops node:$ptr, node:$val),
-      (!cast<SDPatternOperator>(#NAME) node:$ptr, node:$val)> {
+  def NAME#_monotonic : PatFrag<(ops node:$ptr, node:$val),
+      (!cast<SDPatternOperator>(NAME) node:$ptr, node:$val)> {
     let IsAtomic = 1;
     let IsAtomicOrderingMonotonic = 1;
   }
-  def #NAME#_acquire : PatFrag<(ops node:$ptr, node:$val),
-      (!cast<SDPatternOperator>(#NAME) node:$ptr, node:$val)> {
+  def NAME#_acquire : PatFrag<(ops node:$ptr, node:$val),
+      (!cast<SDPatternOperator>(NAME) node:$ptr, node:$val)> {
     let IsAtomic = 1;
     let IsAtomicOrderingAcquire = 1;
   }
-  def #NAME#_release : PatFrag<(ops node:$ptr, node:$val),
-      (!cast<SDPatternOperator>(#NAME) node:$ptr, node:$val)> {
+  def NAME#_release : PatFrag<(ops node:$ptr, node:$val),
+      (!cast<SDPatternOperator>(NAME) node:$ptr, node:$val)> {
     let IsAtomic = 1;
     let IsAtomicOrderingRelease = 1;
   }
-  def #NAME#_acq_rel : PatFrag<(ops node:$ptr, node:$val),
-      (!cast<SDPatternOperator>(#NAME) node:$ptr, node:$val)> {
+  def NAME#_acq_rel : PatFrag<(ops node:$ptr, node:$val),
+      (!cast<SDPatternOperator>(NAME) node:$ptr, node:$val)> {
     let IsAtomic = 1;
     let IsAtomicOrderingAcquireRelease = 1;
   }
-  def #NAME#_seq_cst : PatFrag<(ops node:$ptr, node:$val),
-      (!cast<SDPatternOperator>(#NAME) node:$ptr, node:$val)> {
+  def NAME#_seq_cst : PatFrag<(ops node:$ptr, node:$val),
+      (!cast<SDPatternOperator>(NAME) node:$ptr, node:$val)> {
     let IsAtomic = 1;
     let IsAtomicOrderingSequentiallyConsistent = 1;
   }
 }
 
 multiclass ternary_atomic_op_ord<SDNode atomic_op> {
-  def #NAME#_monotonic : PatFrag<(ops node:$ptr, node:$cmp, node:$val),
-      (!cast<SDPatternOperator>(#NAME) node:$ptr, node:$cmp, node:$val)> {
+  def NAME#_monotonic : PatFrag<(ops node:$ptr, node:$cmp, node:$val),
+      (!cast<SDPatternOperator>(NAME) node:$ptr, node:$cmp, node:$val)> {
     let IsAtomic = 1;
     let IsAtomicOrderingMonotonic = 1;
   }
-  def #NAME#_acquire : PatFrag<(ops node:$ptr, node:$cmp, node:$val),
-      (!cast<SDPatternOperator>(#NAME) node:$ptr, node:$cmp, node:$val)> {
+  def NAME#_acquire : PatFrag<(ops node:$ptr, node:$cmp, node:$val),
+      (!cast<SDPatternOperator>(NAME) node:$ptr, node:$cmp, node:$val)> {
     let IsAtomic = 1;
     let IsAtomicOrderingAcquire = 1;
   }
-  def #NAME#_release : PatFrag<(ops node:$ptr, node:$cmp, node:$val),
-      (!cast<SDPatternOperator>(#NAME) node:$ptr, node:$cmp, node:$val)> {
+  def NAME#_release : PatFrag<(ops node:$ptr, node:$cmp, node:$val),
+      (!cast<SDPatternOperator>(NAME) node:$ptr, node:$cmp, node:$val)> {
     let IsAtomic = 1;
     let IsAtomicOrderingRelease = 1;
   }
-  def #NAME#_acq_rel : PatFrag<(ops node:$ptr, node:$cmp, node:$val),
-      (!cast<SDPatternOperator>(#NAME) node:$ptr, node:$cmp, node:$val)> {
+  def NAME#_acq_rel : PatFrag<(ops node:$ptr, node:$cmp, node:$val),
+      (!cast<SDPatternOperator>(NAME) node:$ptr, node:$cmp, node:$val)> {
     let IsAtomic = 1;
     let IsAtomicOrderingAcquireRelease = 1;
   }
-  def #NAME#_seq_cst : PatFrag<(ops node:$ptr, node:$cmp, node:$val),
-      (!cast<SDPatternOperator>(#NAME) node:$ptr, node:$cmp, node:$val)> {
+  def NAME#_seq_cst : PatFrag<(ops node:$ptr, node:$cmp, node:$val),
+      (!cast<SDPatternOperator>(NAME) node:$ptr, node:$cmp, node:$val)> {
     let IsAtomic = 1;
     let IsAtomicOrderingSequentiallyConsistent = 1;
   }

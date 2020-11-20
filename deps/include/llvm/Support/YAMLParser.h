@@ -40,6 +40,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/SMLoc.h"
+#include "llvm/Support/SourceMgr.h"
 #include <cassert>
 #include <cstddef>
 #include <iterator>
@@ -51,7 +52,6 @@
 namespace llvm {
 
 class MemoryBufferRef;
-class SourceMgr;
 class raw_ostream;
 class Twine;
 
@@ -100,7 +100,8 @@ public:
     return !failed();
   }
 
-  void printError(Node *N, const Twine &Msg);
+  void printError(Node *N, const Twine &Msg,
+                  SourceMgr::DiagKind Kind = SourceMgr::DK_Error);
 
 private:
   friend class Document;
@@ -139,7 +140,7 @@ public:
 
   void operator delete(void *Ptr, BumpPtrAllocator &Alloc,
                        size_t Size) noexcept {
-    Alloc.Deallocate(Ptr, Size);
+    Alloc.Deallocate(Ptr, Size, 0);
   }
 
   void operator delete(void *) noexcept = delete;
@@ -222,7 +223,7 @@ public:
 
   /// Gets the value of this node as a StringRef.
   ///
-  /// \param Storage is used to store the content of the returned StringRef iff
+  /// \param Storage is used to store the content of the returned StringRef if
   ///        it requires any modification from how it appeared in the source.
   ///        This happens with escaped characters and multi-line literals.
   StringRef getValue(SmallVectorImpl<char> &Storage) const;
