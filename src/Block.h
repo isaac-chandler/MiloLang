@@ -67,7 +67,8 @@ struct Declaration {
 
 	struct DeclarationJob *inferJob = nullptr;
 
-	Array<struct SubJob *> sleepingOnMe;
+	Array<struct SubJob *> sleepingOnMyType;
+	Array<struct SubJob *> sleepingOnMyValue;
 
 	union {
 		struct {
@@ -100,8 +101,6 @@ struct Importer {
 	Block *enclosingScope = nullptr;
 	Expr *import;
 	Expr *structAccess = nullptr;
-
-	Array<SubJob *> sleepingOnMe;
 
 	u64 flags = 0;
 };

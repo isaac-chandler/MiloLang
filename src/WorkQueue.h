@@ -33,7 +33,7 @@ struct alignas(64) MPMCWorkQueue{
 		input->next = nullptr;
 		output = input;
 	}
-
+	
 	void add(T job) {
 		PROFILE_FUNC();
 
@@ -80,8 +80,10 @@ struct alignas(64) MPMCWorkQueue{
 
 	T take() {
 		PROFILE_FUNC();
-
-		WaitForSingleObject(semaphore, INFINITE);
+		{
+			PROFILE_ZONE("Work Queue stall", PROFILE_ORANGE);
+			WaitForSingleObject(semaphore, INFINITE);
+		}
 
 		u64 index;
 

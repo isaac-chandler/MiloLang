@@ -52,25 +52,26 @@
 
 #pragma warning(error: 4715)
 
+// Magic color names for chrome://tracing
+#define PROFILE_BLUE "vsync_highlight_color"
+#define PROFILE_BLACK "black"
+#define PROFILE_LIGHT_BLUE "thread_state_runnable"
+#define PROFILE_OLIVE "olive"
+#define PROFILE_YELLOW "yellow"
+#define PROFILE_WHITE "white"
+#define PROFILE_ORANGE "bad"
+#define PROFILE_LIGHT_GREEN "thread_state_running"
+#define PROFILE_DARK_RED "terrible"
+
 
 #if BUILD_PROFILE
 #define CONCAT2(x, y) x##y
 #define CONCAT(x, y) CONCAT2(x, y)
-#define PROFILE_FUNC()                 Timer CONCAT(timer,__LINE__)(__FUNCTION__)
-#define PROFILE_FUNC_DATA(data)        Timer CONCAT(timer,__LINE__)(__FUNCTION__, (char *)(data))
-#define PROFILE_ZONE(name)             Timer CONCAT(timer,__LINE__)(name)
-#define PROFILE_ZONE_DATA(name, data)  Timer CONCAT(timer,__LINE__)(name, (char*)(data))
-#define PROFILE_START(name)			   startProfile(name)
-#define PROFILE_START_DATA(name, data) startProfile(name, data)
-#define PROFILE_END()                  endProfile()
+#define PROFILE_FUNC(...)       Timer CONCAT(timer,__LINE__)(__FUNCTION__, __VA_ARGS__)
+#define PROFILE_ZONE(name, ...) Timer CONCAT(timer,__LINE__)(name, __VA_ARGS__)
 #else
-#define PROFILE_FUNC()
-#define PROFILE_FUNC_DATA(data)
-#define PROFILE_ZONE(name)
-#define PROFILE_ZONE_DATA(name, data)
-#define PROFILE_START(name)
-#define PROFILE_START_DATA(name, data)
-#define PROFILE_END()
+#define PROFILE_FUNC(...)
+#define PROFILE_ZONE(...)
 #endif
 
 #define ARRAY_COUNT(arr) (sizeof(arr) / (sizeof(arr[0])))
@@ -115,11 +116,10 @@ struct ScopeLock {
 	~ScopeLock() { lock.unlock(); }
 };
 
-
 #if BUILD_PROFILE
 struct Profile {
 	const char *name;
-	const char *data;
+	const char *color;
 	u64 time;
 	s32 threadId;
 };
@@ -138,11 +138,11 @@ struct Timer {
 		profiles[write].threadId = *reinterpret_cast<s32 *>(reinterpret_cast<u8 *>(__readgsqword(0x30)) + 0x48);
 	}
 
-	Timer(const char *name, char *data) {
+	Timer(const char *name, const char *color) {
 		u32 write = profileIndex++;
 
 		profiles[write].name = name;
-		profiles[write].data = data;
+		profiles[write].color = color;
 
 		QueryPerformanceCounter(reinterpret_cast<LARGE_INTEGER *>(&profiles[write].time));
 
@@ -157,35 +157,5 @@ struct Timer {
 		profiles[write].threadId = *reinterpret_cast<s32 *>(reinterpret_cast<u8 *>(__readgsqword(0x30)) + 0x48);
 	}
 };
-
-inline void startProfile(const char *name) {
-	u32 write = profileIndex++;
-
-	profiles[write].name = name;
-
-	QueryPerformanceCounter(reinterpret_cast<LARGE_INTEGER *>(&profiles[write].time));
-
-	profiles[write].threadId = *reinterpret_cast<s32 *>(reinterpret_cast<u8 *>(__readgsqword(0x30)) + 0x48);
-}
-
-inline void startProfile(const char *name, char *data) {
-	u32 write = profileIndex++;
-
-	profiles[write].name = name;
-	profiles[write].data = data;
-
-	QueryPerformanceCounter(reinterpret_cast<LARGE_INTEGER *>(&profiles[write].time));
-
-	profiles[write].threadId = *reinterpret_cast<s32 *>(reinterpret_cast<u8 *>(__readgsqword(0x30)) + 0x48);
-}
-
-inline void endProfile() {
-	u32 write = profileIndex++;
-
-
-	QueryPerformanceCounter(reinterpret_cast<LARGE_INTEGER *>(&profiles[write].time));
-
-	profiles[write].threadId = *reinterpret_cast<s32 *>(reinterpret_cast<u8 *>(__readgsqword(0x30)) + 0x48);
-}
 
 #endif

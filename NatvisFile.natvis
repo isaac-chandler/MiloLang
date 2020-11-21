@@ -39,6 +39,11 @@
   <Type Name="Argument">
     <DisplayString>{number}</DisplayString>
   </Type>
+
+  <Type Name="ExprFunction">
+    <DisplayString Condition="valueOfDeclaration">{valueOfDeclaration->name}</DisplayString>
+    <DisplayString>(function)</DisplayString>
+  </Type>
   
 
   <Type Name="Ir">
@@ -54,51 +59,6 @@
 
   <Type Name="Declaration">
     <DisplayString>Decl{{{name}}}</DisplayString>
-  </Type>
-
-  <Type Name="DeclarationJob">
-    <Expand>
-      <CustomListItems>
-        <Variable Name="current" InitialValue="this"/>
-
-        <Loop>
-          <Break Condition="current == nullptr"/>
-          <Item>*current,!</Item>
-          <Exec>current = current->next</Exec>
-        </Loop>
-      </CustomListItems>
-    </Expand>
-  </Type>
-
-
-  <Type Name="SizeJob">
-    <Expand>
-      <CustomListItems>
-        <Variable Name="current" InitialValue="this"/>
-
-        <Loop>
-          <Break Condition="current == nullptr"/>
-          <Item>*current,!</Item>
-          <Exec>current = current->next</Exec>
-        </Loop>
-      </CustomListItems>
-    </Expand>
-  </Type>
-
-
-
-  <Type Name="FunctionJob">
-    <Expand>
-      <CustomListItems>
-        <Variable Name="current" InitialValue="this"/>
-
-        <Loop>
-          <Break Condition="current == nullptr"/>
-          <Item>*current,!</Item>
-          <Exec>current = current->next</Exec>
-        </Loop>
-      </CustomListItems>
-    </Expand>
   </Type>
 
 </AutoVisualizer>

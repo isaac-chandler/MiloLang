@@ -1693,8 +1693,6 @@ bool parseArguments(LexerFile *lexer, Arguments *args, const char *message) {
 	Array<Expr *> arguments;
 	Array<String> names;
 
-	bool hadNamed = false;
-
 	do {
 		String name = { nullptr, 0ULL };
 
@@ -1704,7 +1702,6 @@ bool parseArguments(LexerFile *lexer, Arguments *args, const char *message) {
 			lexer->peekTokenTypes(1, &peek);
 
 			if (peek == TOKEN('=')) {
-				hadNamed = true;
 				name = lexer->token.text;
 
 				lexer->advance();
@@ -1720,7 +1717,7 @@ bool parseArguments(LexerFile *lexer, Arguments *args, const char *message) {
 		else {
 		unnamed:
 
-			if (hadNamed) {
+			if (names.count) {
 				reportError(&lexer->token, "Error: Cannot have unnamed %s after named %s", message, message);
 				return false;
 			}
@@ -1732,8 +1729,16 @@ bool parseArguments(LexerFile *lexer, Arguments *args, const char *message) {
 			return false;
 
 		arguments.add(argument);
-		names.add(name);
+
+		if (name.length) {
+			for (u64 i = names.count + 1; i < arguments.count; i++) {
+				names.add("");
+			}
+
+			names.add(name);
+		}
 	} while (expectAndConsume(lexer, ',')); // @Incomple: We currently don't allow trailing comma in function calls, should we?
+
 
 	args->count = arguments.count;
 	args->values = arguments.storage;

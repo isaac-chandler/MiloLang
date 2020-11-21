@@ -625,12 +625,11 @@ int main(int argc, char *argv[]) {
 			if (p.name) {
 				out << ",\"ph\":\"B\",\"name\":\"" << p.name;
 
-				if (p.data) {
-					out << "\",\"args\":{\"data\":\"" << p.data << "\"}}";
+				if (p.color) {
+					out << "\",\"cname\":\"" << p.color;
 				}
-				else {
-					out << "\"}";
-				}
+
+				out << "\"}";
 			}
 			else {
 				out << ",\"ph\":\"E\"}";

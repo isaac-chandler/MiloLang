@@ -8,6 +8,18 @@
 #include "TypeTable.h"
 #include "ArraySet.h"
 
+
+BucketedArenaAllocator inferArena(1024 * 1024);
+
+#if 1
+#define INFER_NEW(T) new (static_cast<T *>(inferArena.allocate(sizeof(T)))) T
+#define INFER_NEW_ARRAY(T, C) new (static_cast<T *>(inferArena.allocate((C) * sizeof(T)))) T[C]
+
+#else
+#define PARSER_NEW(T) new T
+#define PARSER_NEW_ARRAY(T, C) new T[C]
+#endif
+
 enum class JobFlavor {
 	SIZE,
 	DECLARATION_TYPE,
@@ -18,7 +30,7 @@ enum class JobFlavor {
 };
 
 ExprLiteral *inferMakeTypeLiteral(CodeLocation &start, EndLocation &end, Type *type) {
-	ExprLiteral *literal = new ExprLiteral;
+	ExprLiteral *literal = INFER_NEW(ExprLiteral);
 	literal->flavor = ExprFlavor::TYPE_LITERAL;
 	literal->start = start;
 	literal->end = end;
@@ -29,7 +41,7 @@ ExprLiteral *inferMakeTypeLiteral(CodeLocation &start, EndLocation &end, Type *t
 }
 
 ExprLiteral *createFloatLiteral(CodeLocation start, EndLocation end, Type *type, double value) {
-	auto literal = new ExprLiteral;
+	auto literal = INFER_NEW(ExprLiteral);
 	literal->flavor = ExprFlavor::FLOAT_LITERAL;
 	literal->type = type;
 	literal->floatValue = value;
@@ -40,7 +52,7 @@ ExprLiteral *createFloatLiteral(CodeLocation start, EndLocation end, Type *type,
 }
 
 ExprLiteral *createIntLiteral(CodeLocation start, EndLocation end, Type *type, u64 value) {
-	auto literal = new ExprLiteral;
+	auto literal = INFER_NEW(ExprLiteral);
 	literal->flavor = ExprFlavor::INT_LITERAL;
 	literal->type = type;
 	literal->unsignedValue = value;
@@ -205,13 +217,33 @@ SizeJob *sizeJobs;
 ImporterJob *importerJobs;
 
 Array<SubJob *> subJobs;
+Array<SubJob *> priorityJobs;
+
+inline void addSubJob(SubJob *job, bool highPriority = false) {
+#if BUILD_DEBUG
+	for (auto x : priorityJobs) {
+		assert(x != job);
+	}
+
+	for (auto x : subJobs) {
+		assert(x != job);
+	}
+#endif
+
+	if (highPriority) {
+		priorityJobs.add(job);
+	}
+	else {
+		subJobs.add(job);
+	}
+}
 
 bool addDeclaration(Declaration *declaration);
 
-void wakeUpSleepers(Array<SubJob *> *sleepers, String name = String(nullptr, 0ULL)) {
+void wakeUpSleepers(Array<SubJob *> *sleepers, bool priority = false, String name = String(nullptr, 0ULL)) {
 	if (name.length == 0) {
 		for (auto sleeper : *sleepers) {
-			subJobs.add(sleeper);
+			addSubJob(sleeper);
 		}
 
 		sleepers->clear();
@@ -222,7 +254,7 @@ void wakeUpSleepers(Array<SubJob *> *sleepers, String name = String(nullptr, 0UL
 
 			if (sleeper->sleepingOnName.length == 0 || name == sleeper->sleepingOnName) {
 				sleepers->unordered_remove(i--);
-				subJobs.add(sleeper);
+				addSubJob(sleeper, priority);
 			}
 		}
 	}
@@ -268,9 +300,10 @@ void addFunction(ExprFunction *function) {
 	assert(function->body);
 	beginFlatten(&job->value, &function->body);
 
-	subJobs.add(&job->value);
+	addSubJob(&job->type, true);
 
-	subJobs.add(&job->type);
+	addSubJob(&job->value);
+
 
 	++totalFunctions;
 
@@ -281,11 +314,11 @@ void addTypeBlock(Expr *expr) {
 	auto type = static_cast<ExprLiteral *>(expr)->typeValue;
 
 	if (type->flavor == TypeFlavor::STRUCT) {
-		auto struct_ = static_cast<TypeStruct *>(type);
-
-		addBlock(&struct_->members);
-
 		if (!type->sizeJob) {
+			auto struct_ = static_cast<TypeStruct *>(type);
+
+			addBlock(&struct_->members);
+
 			SizeJob *job = allocateSizeJob();
 
 			job->type = type;
@@ -297,16 +330,16 @@ void addTypeBlock(Expr *expr) {
 			++totalTypesSized;
 
 			addJob(&sizeJobs, job);
-			subJobs.add(job);
+			addSubJob(job);
 		}
 	}
 	else if (type->flavor == TypeFlavor::ENUM) {
-		auto enum_ = static_cast<TypeEnum *>(type);
-
-		addBlock(enum_->values);
-		addBlock(&enum_->members);
-
 		if (!type->sizeJob) {
+			auto enum_ = static_cast<TypeEnum *>(type);
+
+			addBlock(enum_->values);
+			addBlock(&enum_->members);
+
 			SizeJob *job = allocateSizeJob();
 
 			job->type = type;
@@ -320,7 +353,7 @@ void addTypeBlock(Expr *expr) {
 			++totalTypesSized;
 
 			addJob(&sizeJobs, job);
-			subJobs.add(job);
+			addSubJob(job, true);
 		}
 	}
 }
@@ -1030,7 +1063,7 @@ void doConstantCast(Expr **cast) {
 }
 
 void insertImplicitCast(Array<Type *> *sizeDependencies, Expr **castFrom, Type *castTo) {
-	ExprBinaryOperator *cast = new ExprBinaryOperator;
+	ExprBinaryOperator *cast = INFER_NEW(ExprBinaryOperator);
 	cast->flavor = ExprFlavor::BINARY_OPERATOR;
 	cast->op = TokenT::CAST;
 	cast->type = castTo;
@@ -1108,7 +1141,7 @@ void copyLiteral(Expr **exprPointer, Expr *expr) {
 	case ExprFlavor::TYPE_LITERAL:
 	case ExprFlavor::FLOAT_LITERAL:
 	case ExprFlavor::INT_LITERAL: {
-		ExprLiteral *newLiteral = new ExprLiteral;
+		ExprLiteral *newLiteral = INFER_NEW(ExprLiteral);
 		*newLiteral = *static_cast<ExprLiteral *>(expr);
 		newLiteral->start = (*exprPointer)->start;
 		newLiteral->end = (*exprPointer)->end;
@@ -1157,7 +1190,7 @@ Expr *pushStructAccessDown(ExprIdentifier *accesses, Expr *base, CodeLocation st
 		return base;
 	}
 
-	auto result = new ExprIdentifier;
+	auto result = INFER_NEW(ExprIdentifier);
 	auto current = result;
 
 	while (true) {
@@ -1166,7 +1199,7 @@ Expr *pushStructAccessDown(ExprIdentifier *accesses, Expr *base, CodeLocation st
 		current->end = end;
 
 		if (current->structAccess) {
-			current->structAccess = new ExprIdentifier;
+			current->structAccess = INFER_NEW(ExprIdentifier);
 			current = static_cast<ExprIdentifier *>(current->structAccess);
 
 			assert(accesses->structAccess->flavor == ExprFlavor::IDENTIFIER);
@@ -1230,7 +1263,7 @@ bool inferIdentifier(SubJob *job, Expr **exprPointer, ExprIdentifier *identifier
 			}
 		}
 		else {
-			goToSleep(job, &identifier->declaration->sleepingOnMe);
+			goToSleep(job, &identifier->declaration->sleepingOnMyType);
 
 			*yield = true;
 			return false;
@@ -1241,7 +1274,7 @@ bool inferIdentifier(SubJob *job, Expr **exprPointer, ExprIdentifier *identifier
 				copyLiteral(exprPointer, identifier->declaration->initialValue);
 			}
 			else {
-				goToSleep(job, &identifier->declaration->sleepingOnMe);
+				goToSleep(job, &identifier->declaration->sleepingOnMyValue);
 
 				*yield = true;
 				return false;
@@ -1337,7 +1370,7 @@ bool tryUsingConversion(SubJob *job, Type *correct, Expr **exprPointer, bool *yi
 		return false;
 	}
 
-	auto identifier = new ExprIdentifier;
+	auto identifier = INFER_NEW(ExprIdentifier);
 	identifier->start = given->start;
 	identifier->end = given->end;
 	identifier->flavor = ExprFlavor::IDENTIFIER;
@@ -1357,7 +1390,7 @@ bool tryUsingConversion(SubJob *job, Type *correct, Expr **exprPointer, bool *yi
 	if (getDeclarationType(found) != correct) {
 		assert(given->type->flavor == TypeFlavor::POINTER && !(found->flags & DECLARATION_IS_CONSTANT) && getPointer(getDeclarationType(found)) == correct);
 
-		auto unary = new ExprUnaryOperator;
+		auto unary = INFER_NEW(ExprUnaryOperator);
 
 		unary->start = given->start;
 		unary->end = given->end;
@@ -2131,7 +2164,7 @@ bool defaultValueIsZero(SubJob *job, Type *type, bool *yield) {
 			if (member->flags & DECLARATION_IS_UNINITIALIZED) return false;
 
 			if (!(member->flags & DECLARATION_VALUE_IS_READY)) {
-				goToSleep(job, &member->sleepingOnMe);
+				goToSleep(job, &member->sleepingOnMyValue);
 
 				*yield = true;
 				return false;
@@ -2179,14 +2212,14 @@ Expr *createDefaultValue(SubJob *job, Declaration *location, Type *type, bool *s
 		return nullptr;
 	}
 	case TypeFlavor::STRUCT: {
-		Expr *literal = new Expr;
+		Expr *literal = INFER_NEW(Expr);
 		literal->flavor = ExprFlavor::STRUCT_DEFAULT;
 		literal->type = type;
 
 		return literal;
 	}
 	case TypeFlavor::STRING: {
-		ExprStringLiteral *empty = new ExprStringLiteral;
+		ExprStringLiteral *empty = INFER_NEW(ExprStringLiteral);
 		empty->flavor = ExprFlavor::STRING_LITERAL;
 		empty->string = "";
 		empty->type = type;
@@ -2195,7 +2228,7 @@ Expr *createDefaultValue(SubJob *job, Declaration *location, Type *type, bool *s
 
 	}
 	case TypeFlavor::ARRAY: {
-		ExprArray *defaults = new ExprArray;
+		ExprArray *defaults = INFER_NEW(ExprArray);
 		defaults->flavor = ExprFlavor::ARRAY;
 		defaults->type = type;
 
@@ -2205,7 +2238,7 @@ Expr *createDefaultValue(SubJob *job, Declaration *location, Type *type, bool *s
 			defaults->count = array->count;
 
 
-			defaults->storage = new Expr * [my_min(defaults->count, 2)];
+			defaults->storage = INFER_NEW_ARRAY(Expr *, my_min(defaults->count, 2));
 
 			bool yield;
 
@@ -2237,7 +2270,7 @@ Expr *createDefaultValue(SubJob *job, Declaration *location, Type *type, bool *s
 			return first->initialValue;
 		}
 		else {
-			goToSleep(job, &first->sleepingOnMe);
+			goToSleep(job, &first->sleepingOnMyValue);
 
 			*shouldYield = true;
 			return nullptr;
@@ -2543,11 +2576,21 @@ bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char 
 		functionName = functionLocation->valueOfDeclaration->name;
 	}
 
-	u64 minArguments = block->declarations.count;
 
-	for (auto declaration : block->declarations) {
-		if (declaration->initialValue) {
-			--minArguments;
+	if (!arguments->names && arguments->count != block->declarations.count && !(functionLocation->flags & EXPR_FUNCTION_HAS_VARARGS)) {
+		if (arguments->count > block->declarations.count) {
+			reportError(callLocation, "Error: Too many %ss for %.*s (Expected: %" PRIu64 ", Given: %" PRIu64 ")",
+				message, STRING_PRINTF(functionName), block->declarations.count, arguments->count);
+			return false;
+		}
+		else {
+			for (u64 i = arguments->count; i < block->declarations.count; i++) {
+				if (!block->declarations[i]->initialValue) {
+					reportError(callLocation, "Error: Too few %ss for %.*s (Expected: %" PRIu64 ", Given: %" PRIu64 ")",
+						message, STRING_PRINTF(functionName), block->declarations.count, arguments->count);
+					return false;
+				}
+			}
 		}
 	}
 
@@ -2557,110 +2600,120 @@ bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char 
 	}
 #endif
 
-	bool hadNamedArguments = false;
-	Expr **sortedArguments = new Expr * [block->declarations.count]{};
+	if (arguments->names || arguments->count != block->declarations.count || (functionLocation->flags & EXPR_FUNCTION_HAS_VARARGS)) {
+		Expr **sortedArguments = INFER_NEW_ARRAY(Expr *, block->declarations.count){};
 
-	for (u64 i = 0; i < arguments->count; i++) {
-		auto argument = block->declarations[i];
-
-		u64 argIndex = i;
-		if (arguments->names[i].length) {
-			hadNamedArguments = true;
-
-			argument = findDeclarationNoYield(block, arguments->names[i]);
-		}
-		else if (hadNamedArguments) {
-			reportError(arguments->values[i], "Error: Cannot have unnamed arguments after named arguments were given");
-		}
-
-		if (!argument) {
-			reportError(arguments->values[i], "Error: %.*s does not have a %s called %.*s", STRING_PRINTF(functionName), message, STRING_PRINTF(arguments->names[i]));
-			return false;
-		}
-
-		argIndex = argument->indexInBlock;
-		assert(!(argument->flags & DECLARATION_IMPORTED_BY_USING));
-
-		if (sortedArguments[argIndex]) {
-			reportError(arguments->values[i], "Error: %s %.*s was supplied twice", message, STRING_PRINTF(block->declarations[argIndex]->name));
-			reportError(sortedArguments[argIndex], "   ..: It was previously given here");
-			return false;
-		}
-
-		if (argument->flags & DECLARATION_IS_VARARGS) {
-			Array<Expr *> varargs;
-
-			auto array = new ExprArray;
-			array->flavor = ExprFlavor::ARRAY;
-			array->start = arguments->values[i]->start;
-
-			Type *varargsType = static_cast<TypeArray *>(static_cast<ExprLiteral *>(argument->type)->typeValue)->arrayOf;
-
-			for (; i < arguments->count; i++) {
-				if (arguments->names[i].length) {
-					break;
-				}
-
-				if (!assignOp(job, arguments->values[i], varargsType, arguments->values[i], yield)) {
-					return false;
-				}
-
-				varargs.add(arguments->values[i]);
-				array->end = arguments->values[i]->end;
-			}
-
-			array->storage = varargs.storage;
-			array->count = varargs.count;
-
-			array->type = getStaticArray(varargsType, varargs.count);
-			if (array->type->size == 0 && !array->type->sizeJob) {
-				auto sizeJob = allocateSizeJob();
-				sizeJob->type = array->type;
-				sizeJob->type->sizeJob = sizeJob;
-
-				addJob(&sizeJobs, sizeJob);
-				subJobs.add(sizeJob);
-				++totalTypesSized;
-			}
-
-
-			addSizeDependency(job->sizeDependencies, array->type);
-
-			sortedArguments[argIndex] = array;
-		}
-		else {
-			sortedArguments[argIndex] = arguments->values[i];
-		}
-	}
-
-	bool failed = false;
-
-	for (u64 i = 0; i < block->declarations.count; i++) {
-		if (!sortedArguments[i]) {
+		for (u64 i = 0; i < arguments->count; i++) {
 			auto argument = block->declarations[i];
 
-			if (argument->initialValue) {
-				sortedArguments[i] = argument->initialValue;
-				addSizeDependency(job->sizeDependencies, argument->initialValue->type);
+			u64 argIndex = i;
+			if (arguments->names && arguments->names[i].length) {
+				argument = findDeclarationNoYield(block, arguments->names[i]);
 			}
-			else if (argument->flags & DECLARATION_IS_VARARGS) {
-				auto literal = createIntLiteral(argument->start, argument->end, static_cast<ExprLiteral *>(argument->type)->typeValue, 0);
-				sortedArguments[i] = literal;
-				addSizeDependency(job->sizeDependencies, literal->type);
+
+			if (!argument) {
+				reportError(arguments->values[i], "Error: %.*s does not have a %s called %.*s", STRING_PRINTF(functionName), message, STRING_PRINTF(arguments->names[i]));
+				return false;
+			}
+
+			argIndex = argument->indexInBlock;
+			assert(!(argument->flags & DECLARATION_IMPORTED_BY_USING));
+
+			if (sortedArguments[argIndex]) {
+				reportError(arguments->values[i], "Error: %s %.*s was supplied twice", message, STRING_PRINTF(block->declarations[argIndex]->name));
+				reportError(sortedArguments[argIndex], "   ..: It was previously given here");
+				return false;
+			}
+
+			if (argument->flags & DECLARATION_IS_VARARGS) {
+				Array<Expr *> varargs;
+
+				auto array = INFER_NEW(ExprArray);
+				array->flavor = ExprFlavor::ARRAY;
+				array->start = arguments->values[i]->start;
+
+				Type *varargsType = static_cast<TypeArray *>(static_cast<ExprLiteral *>(argument->type)->typeValue)->arrayOf;
+
+				for (; i < arguments->count; i++) {
+					if (arguments->names && arguments->names[i].length) {
+						break;
+					}
+
+					if (!assignOp(job, arguments->values[i], varargsType, arguments->values[i], yield)) {
+						return false;
+					}
+
+					varargs.add(arguments->values[i]);
+					array->end = arguments->values[i]->end;
+				}
+
+				array->storage = varargs.storage;
+				array->count = varargs.count;
+
+				array->type = getStaticArray(varargsType, varargs.count);
+				if (array->type->size == 0 && !array->type->sizeJob) {
+					auto sizeJob = allocateSizeJob();
+					sizeJob->type = array->type;
+					sizeJob->type->sizeJob = sizeJob;
+
+					addJob(&sizeJobs, sizeJob);
+					addSubJob(sizeJob);
+					++totalTypesSized;
+				}
+
+
+				addSizeDependency(job->sizeDependencies, array->type);
+
+				sortedArguments[argIndex] = array;
 			}
 			else {
-				reportError(callLocation, "Error: Required %s '%.*s' was not given", message, STRING_PRINTF(argument->name));
-				reportError(argument, "   ..: Here is the %s", message);
-				failed = true;
+				sortedArguments[argIndex] = arguments->values[i];
 			}
 		}
+
+		bool failed = false;
+
+		for (u64 i = 0; i < block->declarations.count; i++) {
+			if (!sortedArguments[i]) {
+				auto argument = block->declarations[i];
+
+				if (argument->initialValue) {
+					if (argument->flags & DECLARATION_VALUE_IS_READY) {
+						if (!isLiteral(argument->initialValue)) {
+							reportError(argument, "Error: Default %ss must be a constant value", message);
+							return false;
+						}
+
+						sortedArguments[i] = argument->initialValue;
+						addSizeDependency(job->sizeDependencies, argument->initialValue->type);
+					}
+					else {
+						*yield = true;
+						goToSleep(job, &argument->sleepingOnMyValue);
+
+						return false;
+					}
+				}
+				else if (argument->flags & DECLARATION_IS_VARARGS) {
+					auto literal = createIntLiteral(argument->start, argument->end, static_cast<ExprLiteral *>(argument->type)->typeValue, 0);
+					sortedArguments[i] = literal;
+					addSizeDependency(job->sizeDependencies, literal->type);
+				}
+				else {
+					reportError(callLocation, "Error: Required %s '%.*s' was not given", message, STRING_PRINTF(argument->name));
+					reportError(argument, "   ..: Here is the %s", message);
+					failed = true;
+				}
+			}
+		}
+
+		if (failed)
+			return false;
+
+		arguments->values = sortedArguments;
+		arguments->names = nullptr;
+		arguments->count = block->declarations.count;
 	}
-
-	if (failed)
-		return false;
-
-	arguments->values = sortedArguments;
-	arguments->count = block->declarations.count;
 
 	for (u64 i = 0; i < arguments->count; i++) {
 		Type *correct = static_cast<ExprLiteral *>(block->declarations[i]->type)->typeValue;
@@ -2691,7 +2744,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 		auto declaration = static_cast<ExprIdentifier *>(left)->declaration;
 
 		if (!(declaration->flags & DECLARATION_VALUE_IS_READY)) {
-			goToSleep(job, &declaration->sleepingOnMe);
+			goToSleep(job, &declaration->sleepingOnMyValue);
 
 			*yield = true;
 			return true;
@@ -3825,7 +3878,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 				sizeJob->type->sizeJob = sizeJob;
 
 				addJob(&sizeJobs, sizeJob);
-				subJobs.add(sizeJob);
+				addSubJob(sizeJob);
 				++totalTypesSized;
 			}
 		}
@@ -3950,6 +4003,8 @@ bool inferFlattened(SubJob *job) {
 
 							if (!identifier->declaration) {
 								goToSleep(job, &globalBlock.sleepingOnMe, identifier->name);
+
+								return true;
 							}
 						}
 					}
@@ -4001,7 +4056,7 @@ bool inferFlattened(SubJob *job) {
 				assert(argument);
 
 				if (!(argument->flags & DECLARATION_TYPE_IS_READY)) {
-					goToSleep(job, &argument->sleepingOnMe);
+					goToSleep(job, &argument->sleepingOnMyType);
 
 					return true;
 				}
@@ -4012,7 +4067,7 @@ bool inferFlattened(SubJob *job) {
 				assert(return_);
 
 				if (!(return_->flags & DECLARATION_TYPE_IS_READY)) {
-					goToSleep(job, &return_->sleepingOnMe);
+					goToSleep(job, &return_->sleepingOnMyType);
 
 					return true;
 				}
@@ -4037,7 +4092,7 @@ bool inferFlattened(SubJob *job) {
 			for (auto declaration : block->declarations.declarations) {
 				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT))) {
 					if (!(declaration->flags & DECLARATION_TYPE_IS_READY)) {
-						goToSleep(job, &declaration->sleepingOnMe);
+						goToSleep(job, &declaration->sleepingOnMyType);
 
 						return true;
 					}
@@ -4222,7 +4277,7 @@ bool inferFlattened(SubJob *job) {
 
 				for (auto member : enum_->values->declarations) {
 					if (!(member->flags & DECLARATION_VALUE_IS_READY)) {
-						goToSleep(job, &member->sleepingOnMe);
+						goToSleep(job, &member->sleepingOnMyValue);
 						return true;
 					}
 				}
@@ -4405,7 +4460,6 @@ bool inferFlattened(SubJob *job) {
 					}
 
 					it->type = inferMakeTypeLiteral(it->start, it->end, loop->forEnd->type);
-					it->flags |= DECLARATION_TYPE_IS_READY;
 				}
 				else if (loop->forBegin->type->flavor == TypeFlavor::POINTER) {
 					if (loop->forBegin->type != loop->forEnd->type) {
@@ -4417,7 +4471,6 @@ bool inferFlattened(SubJob *job) {
 
 					if (loop->flags & EXPR_FOR_BY_POINTER) {
 						it->type = inferMakeTypeLiteral(it->start, it->end, pointer);
-						it->flags |= DECLARATION_TYPE_IS_READY;
 					}
 					else {
 						if (loop->forBegin->type == TYPE_VOID_POINTER) {
@@ -4426,8 +4479,6 @@ bool inferFlattened(SubJob *job) {
 						}
 
 						it->type = inferMakeTypeLiteral(it->start, it->end, pointer->pointerTo);
-
-						it->flags |= DECLARATION_TYPE_IS_READY;
 					}
 				}
 				else if (loop->forBegin->type->flavor == TypeFlavor::STRING) {
@@ -4456,7 +4507,6 @@ bool inferFlattened(SubJob *job) {
 					loop->forBegin = createIntLiteral(loop->start, loop->end, loop->forEnd->type, 0);
 
 					it->type = inferMakeTypeLiteral(it->start, it->end, loop->forEnd->type);
-					it->flags |= DECLARATION_TYPE_IS_READY;
 				}
 				else if (loop->forBegin->type->flavor == TypeFlavor::STRING) {
 					if (loop->flags & EXPR_FOR_BY_POINTER) {
@@ -4465,7 +4515,6 @@ bool inferFlattened(SubJob *job) {
 					else {
 						it->type = inferMakeTypeLiteral(it->start, it->end, &TYPE_U8);
 					}
-					it->flags |= DECLARATION_TYPE_IS_READY;
 				}
 				else if (loop->forBegin->type->flavor == TypeFlavor::ARRAY) {
 					auto array = static_cast<TypeArray *>(loop->forBegin->type);
@@ -4478,7 +4527,6 @@ bool inferFlattened(SubJob *job) {
 					else {
 						it->type = inferMakeTypeLiteral(it->start, it->end, array->arrayOf);
 					}
-					it->flags |= DECLARATION_TYPE_IS_READY;
 				}
 				else if (loop->forBegin->type->flavor == TypeFlavor::POINTER) {
 					reportError(loop->forBegin, "Error: Cannot iterate over a lone pointer, you must specify a begin and end");
@@ -4491,13 +4539,15 @@ bool inferFlattened(SubJob *job) {
 			}
 
 			it_index->type = inferMakeTypeLiteral(it_index->start, it_index->end, &TYPE_U64);
+
+			it->flags |= DECLARATION_TYPE_IS_READY;
 			it_index->flags |= DECLARATION_TYPE_IS_READY;
+			wakeUpSleepers(&it->sleepingOnMyType);
+			wakeUpSleepers(&it_index->sleepingOnMyType);
+			it->sleepingOnMyType.free();
+			it_index->sleepingOnMyType.free();
 
 			addSizeDependency(job->sizeDependencies, getDeclarationType(it));
-
-
-			wakeUpSleepers(&it->sleepingOnMe);
-			wakeUpSleepers(&it_index->sleepingOnMe);
 
 			break;
 		}
@@ -4548,7 +4598,8 @@ bool inferFlattened(SubJob *job) {
 					declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, identifier->type);
 
 					declaration->flags |= DECLARATION_TYPE_IS_READY;
-					wakeUpSleepers(&declaration->sleepingOnMe);
+					wakeUpSleepers(&declaration->sleepingOnMyType);
+					declaration->sleepingOnMyType.free();
 				}
 			}
 			else {
@@ -4617,14 +4668,8 @@ bool inferFlattened(SubJob *job) {
 				}
 			}
 
-			bool hasNamedArguments = false;
+			bool hasNamedArguments = call->arguments.names != nullptr;
 
-
-			for (u64 i = 0; i < call->arguments.count; i++) {
-				if (call->arguments.names[i].length != 0) {
-					hasNamedArguments = true;
-				}
-			}
 
 			if (hasNamedArguments && !functionForArgumentNames) {
 				reportError(call, "Error: Cannot use named arguments with a non-constant function"); // @Improvement better message
@@ -4648,7 +4693,7 @@ bool inferFlattened(SubJob *job) {
 							return false;
 						}
 						else if (call->arguments.count == function->argumentCount - 1) {
-							auto newArguments = new Expr * [function->argumentCount];
+							auto newArguments = INFER_NEW_ARRAY(Expr *, function->argumentCount);
 
 							for (u64 i = 0; i < call->arguments.count; i++) {
 								newArguments[i] = call->arguments.values[i];
@@ -4662,14 +4707,14 @@ bool inferFlattened(SubJob *job) {
 							call->arguments.count = function->argumentCount;
 						}
 						else {
-							auto array = new ExprArray;
+							auto array = INFER_NEW(ExprArray);
 							array->flavor = ExprFlavor::ARRAY;
 							array->start = call->arguments.values[function->argumentCount - 1]->start;
 
 							Type *varargsType = static_cast<TypeArray *>(function->argumentTypes[function->argumentCount - 1])->arrayOf;
 
 							array->count = call->arguments.count - function->argumentCount + 1;
-							array->storage = new Expr * [array->count];
+							array->storage = INFER_NEW_ARRAY(Expr *, array->count);
 
 							for (u64 i = 0; i < array->count; i++) {
 								bool yield = false;
@@ -5266,7 +5311,7 @@ bool inferFlattened(SubJob *job) {
 				*exprPointer = literal;
 			}
 			else {
-				goToSleep(job, &increment->previous->sleepingOnMe);
+				goToSleep(job, &increment->previous->sleepingOnMyValue);
 
 				return true;
 			}
@@ -5466,7 +5511,7 @@ void addImporter(Importer *importer) {
 
 	addJob(&importerJobs, job);
 
-	subJobs.add(job);
+	addSubJob(job);
 }
 
 bool addDeclaration(Declaration *declaration) {
@@ -5489,7 +5534,7 @@ bool addDeclaration(Declaration *declaration) {
 			return false;
 		}
 
-		wakeUpSleepers(&globalBlock.sleepingOnMe, declaration->name);
+		wakeUpSleepers(&globalBlock.sleepingOnMe, false, declaration->name);
 	}
 
 	if ((declaration->flags & DECLARATION_TYPE_IS_READY) && (declaration->flags & DECLARATION_VALUE_IS_READY)) {
@@ -5502,7 +5547,10 @@ bool addDeclaration(Declaration *declaration) {
 		if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::INT_LITERAL) {
 			declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, &TYPE_UNSIGNED_INT_LITERAL);
 			declaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
-			wakeUpSleepers(&declaration->sleepingOnMe);
+			wakeUpSleepers(&declaration->sleepingOnMyType);
+			wakeUpSleepers(&declaration->sleepingOnMyValue);
+			declaration->sleepingOnMyType.free();
+			declaration->sleepingOnMyValue.free();
 			return true;
 		}
 		else if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::FUNCTION) {
@@ -5516,7 +5564,10 @@ bool addDeclaration(Declaration *declaration) {
 			trySolidifyNumericLiteralToDefault(declaration->initialValue);
 			declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, declaration->initialValue->type);
 			declaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
-			wakeUpSleepers(&declaration->sleepingOnMe);
+			wakeUpSleepers(&declaration->sleepingOnMyType);
+			wakeUpSleepers(&declaration->sleepingOnMyValue);
+			declaration->sleepingOnMyType.free();
+			declaration->sleepingOnMyValue.free();
 			return true;
 		}
 		else if (declaration->type && declaration->type->flavor == ExprFlavor::TYPE_LITERAL && !declaration->initialValue && (declaration->flags & (DECLARATION_IS_ARGUMENT | DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_RETURN))) {
@@ -5524,7 +5575,8 @@ bool addDeclaration(Declaration *declaration) {
 
 			addTypeBlock(declaration->type);
 
-			wakeUpSleepers(&declaration->sleepingOnMe);
+			wakeUpSleepers(&declaration->sleepingOnMyType);
+			declaration->sleepingOnMyType.free();
 			return true;
 		}
 		else if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::FUNCTION) {
@@ -5542,12 +5594,12 @@ bool addDeclaration(Declaration *declaration) {
 
 	if (declaration->type) {
 		beginFlatten(&job->type, &declaration->type);
-		subJobs.add(&job->type);
+		addSubJob(&job->type, true);
 	}
 
 	if (declaration->initialValue) {
 		beginFlatten(&job->value, &declaration->initialValue);
-		subJobs.add(&job->value);
+		addSubJob(&job->value);
 	}
 
 	addJob(&declarationJobs, job);
@@ -5716,7 +5768,7 @@ bool inferImporter(ImporterJob *job) {
 	if (block) {
 		for (auto member : block->importers) {
 			if (!(member->flags & IMPORTER_IS_IMPORTED)) {
-				auto import = new Importer;
+				auto import = INFER_NEW(Importer);
 				import->flags = member->flags;
 
 				if (onlyConstants) {
@@ -5742,7 +5794,7 @@ bool inferImporter(ImporterJob *job) {
 						if (!onlyConstants || (member->flags & DECLARATION_IS_CONSTANT)) {
 							addDeclarationToBlockUnchecked(importer->enclosingScope, member, importer->indexInBlock);
 
-							wakeUpSleepers(&importer->enclosingScope->sleepingOnMe, member->name);
+							wakeUpSleepers(&importer->enclosingScope->sleepingOnMe, false, member->name);
 
 							if (!addDeclaration(member)) {
 								return false;
@@ -5760,7 +5812,7 @@ bool inferImporter(ImporterJob *job) {
 				if (!(member->flags & (DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING))) {
 					if (checkForRedeclaration(importer->enclosingScope, member, importer->import)) {
 						if (!onlyConstants || (member->flags & DECLARATION_IS_CONSTANT)) {
-							auto import = new Declaration;
+							auto import = INFER_NEW(Declaration);
 							import->start = member->start;
 							import->end = member->end;
 							import->name = member->name;
@@ -5780,7 +5832,7 @@ bool inferImporter(ImporterJob *job) {
 							addDeclarationToBlockUnchecked(importer->enclosingScope, import, importer->indexInBlock);
 
 							assert(import->name.length);
-							wakeUpSleepers(&importer->enclosingScope->sleepingOnMe, import->name);
+							wakeUpSleepers(&importer->enclosingScope->sleepingOnMe, true, import->name);
 
 							if (member->flags & DECLARATION_IS_CONSTANT) {
 								if (!addDeclaration(import)) {
@@ -5806,11 +5858,12 @@ bool inferImporter(ImporterJob *job) {
 	return true;
 }
 
-bool inferDeclaration(DeclarationJob *job) {
+
+bool inferDeclarationType(DeclarationJob *job) {
 	PROFILE_FUNC();
 	auto declaration = job->declaration;
 
-	if (!(declaration->flags & DECLARATION_TYPE_IS_READY) && declaration->type && isDone(&job->type)) {
+	if (!(declaration->flags & DECLARATION_TYPE_IS_READY) && declaration->type) {
 		bool yield = false;
 		if (!assignOp(&job->value, declaration->type, &TYPE_TYPE, declaration->type, &yield)) {
 			if (yield)
@@ -5851,99 +5904,112 @@ bool inferDeclaration(DeclarationJob *job) {
 		}
 
 		declaration->flags |= DECLARATION_TYPE_IS_READY;
-
-		wakeUpSleepers(&declaration->sleepingOnMe);
+		wakeUpSleepers(&declaration->sleepingOnMyType);
+		declaration->sleepingOnMyType.free();
 	}
 
-	if (declaration->type && declaration->initialValue) {
-		if (isDone(&job->type) && isDone(&job->value)) {
-			assert(declaration->initialValue->type);
-
-			Type *correct = static_cast<ExprLiteral *>(declaration->type)->typeValue;
-
-			if (declaration->flags & DECLARATION_IS_ENUM_VALUE) {
-				assert(correct->flavor == TypeFlavor::ENUM);
-
-				if (declaration->initialValue->type == &TYPE_SIGNED_INT_LITERAL || declaration->initialValue->type == &TYPE_UNSIGNED_INT_LITERAL) {
-					assert(declaration->initialValue->flavor == ExprFlavor::INT_LITERAL);
-
-					if (!static_cast<TypeEnum *>(correct)->integerType) {
-						goToSleep(&job->type, &correct->sleepingOnMe);
-
-						return true;
-					}
-
-					if (!boundsCheckImplicitConversion(declaration->initialValue, static_cast<TypeEnum *>(correct)->integerType, static_cast<ExprLiteral *>(declaration->initialValue))) {
-						reportError(CAST_FROM_SUBSTRUCT(ExprEnum, struct_, static_cast<TypeEnum *>(correct))->integerType, "   ..: Here is the enum type declaration");
-
-						return false;
-					}
-
-					declaration->initialValue->type = correct;
-				}
-			}
+	if (declaration->type && !declaration->initialValue) {
+		if ((declaration->flags & DECLARATION_IS_EXPLICIT_DEFAULT) || !(declaration->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_ITERATOR | DECLARATION_IS_ITERATOR_INDEX | DECLARATION_IS_ARGUMENT | DECLARATION_IS_RETURN))) {
+			auto type = static_cast<ExprLiteral *>(declaration->type)->typeValue;
 
 			bool yield;
-			if (!assignOp(&job->value, declaration->initialValue, correct, declaration->initialValue, &yield)) {
-				return yield;
+			declaration->initialValue = createDefaultValue(&job->type, declaration, type, &yield);
+
+			if (yield) {
+				return true;
 			}
 
-			if ((declaration->flags & DECLARATION_IS_CONSTANT) || declaration->enclosingScope == &globalBlock ||
-				(declaration->enclosingScope->flags & (BLOCK_IS_STRUCT | BLOCK_IS_ARGUMENTS | BLOCK_IS_RETURNS))) {
-				if (!isLiteral(declaration->initialValue)) {
-					reportError(declaration->type, "Error: Declaration value must be a constant");
-					return false;
-				}
+			if (!declaration->initialValue) {
+				return false;
 			}
 
-			removeJob(&declarationJobs, job);
+			declaration->initialValue->valueOfDeclaration = declaration;
 
-			declaration->flags |= DECLARATION_VALUE_IS_READY;
+			declaration->initialValue->start = declaration->start;
+			declaration->initialValue->end = declaration->end;
+		}
 
-			wakeUpSleepers(&declaration->sleepingOnMe);
+		removeJob(&declarationJobs, job);
 
-			if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
-				declarationWaitingOnSize.add(job);
-			}
-			else {
-				freeJob(job);
-			}
+		declaration->flags |= DECLARATION_VALUE_IS_READY;
+		wakeUpSleepers(&declaration->sleepingOnMyValue);
+		declaration->sleepingOnMyValue.free();
+
+
+		if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
+			declarationWaitingOnSize.add(job);
+		}
+		else {
+			freeJob(job);
 		}
 	}
-	else if (declaration->type) {
-		if (isDone(&job->type)) {
-			if ((declaration->flags & DECLARATION_IS_EXPLICIT_DEFAULT) || !(declaration->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_ITERATOR | DECLARATION_IS_ITERATOR_INDEX | DECLARATION_IS_ARGUMENT | DECLARATION_IS_RETURN))) {
-				auto type = static_cast<ExprLiteral *>(declaration->type)->typeValue;
 
-				bool yield;
-				declaration->initialValue = createDefaultValue(&job->value, declaration, type, &yield);
+	return true;
+}
 
-				if (yield)
+bool inferDeclarationValue(DeclarationJob *job) {
+	PROFILE_FUNC();
+
+	auto declaration = job->declaration;
+
+	if (declaration->type && declaration->initialValue) {
+		if (declaration->flags & DECLARATION_VALUE_IS_READY) return true;
+
+		if (!(declaration->flags & DECLARATION_TYPE_IS_READY)) {
+			goToSleep(&job->value, &declaration->sleepingOnMyType);
+			return true;
+		}
+
+		assert(declaration->initialValue->type);
+
+		Type *correct = static_cast<ExprLiteral *>(declaration->type)->typeValue;
+
+		if (declaration->flags & DECLARATION_IS_ENUM_VALUE) {
+			assert(correct->flavor == TypeFlavor::ENUM);
+
+			if (declaration->initialValue->type == &TYPE_SIGNED_INT_LITERAL || declaration->initialValue->type == &TYPE_UNSIGNED_INT_LITERAL) {
+				assert(declaration->initialValue->flavor == ExprFlavor::INT_LITERAL);
+
+				if (!static_cast<TypeEnum *>(correct)->integerType) {
+					goToSleep(&job->type, &correct->sleepingOnMe);
+
 					return true;
+				}
 
-				if (!declaration->initialValue) {
+				if (!boundsCheckImplicitConversion(declaration->initialValue, static_cast<TypeEnum *>(correct)->integerType, static_cast<ExprLiteral *>(declaration->initialValue))) {
+					reportError(CAST_FROM_SUBSTRUCT(ExprEnum, struct_, static_cast<TypeEnum *>(correct))->integerType, "   ..: Here is the enum type declaration");
+
 					return false;
 				}
 
-				declaration->initialValue->valueOfDeclaration = declaration;
-
-				declaration->initialValue->start = declaration->start;
-				declaration->initialValue->end = declaration->end;
+				declaration->initialValue->type = correct;
 			}
+		}
 
-			removeJob(&declarationJobs, job);
+		bool yield;
+		if (!assignOp(&job->value, declaration->initialValue, correct, declaration->initialValue, &yield)) {
+			return yield;
+		}
 
-			declaration->flags |= DECLARATION_VALUE_IS_READY;
-
-			wakeUpSleepers(&declaration->sleepingOnMe);
-
-
-			if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
-				declarationWaitingOnSize.add(job);
+		if ((declaration->flags & DECLARATION_IS_CONSTANT) || declaration->enclosingScope == &globalBlock ||
+			(declaration->enclosingScope->flags & (BLOCK_IS_STRUCT | BLOCK_IS_ARGUMENTS | BLOCK_IS_RETURNS))) {
+			if (!isLiteral(declaration->initialValue)) {
+				reportError(declaration->type, "Error: Declaration value must be a constant");
+				return false;
 			}
-			else {
-				freeJob(job);
-			}
+		}
+
+		removeJob(&declarationJobs, job);
+
+		declaration->flags |= DECLARATION_VALUE_IS_READY;
+		wakeUpSleepers(&declaration->sleepingOnMyValue);
+		declaration->sleepingOnMyValue.free();
+
+		if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
+			declarationWaitingOnSize.add(job);
+		}
+		else {
+			freeJob(job);
 		}
 	}
 	else if (declaration->initialValue) {
@@ -5981,7 +6047,10 @@ bool inferDeclaration(DeclarationJob *job) {
 
 			declaration->flags |= DECLARATION_VALUE_IS_READY;
 			declaration->flags |= DECLARATION_TYPE_IS_READY;
-			wakeUpSleepers(&declaration->sleepingOnMe);
+			wakeUpSleepers(&declaration->sleepingOnMyType);
+			wakeUpSleepers(&declaration->sleepingOnMyValue);
+			declaration->sleepingOnMyType.free();
+			declaration->sleepingOnMyValue.free();
 
 
 			if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
@@ -5996,125 +6065,99 @@ bool inferDeclaration(DeclarationJob *job) {
 	return true;
 }
 
-bool inferFunction(FunctionJob *job) {
+bool inferFunctionType(FunctionJob *job) {
+	PROFILE_FUNC();
+
+	auto function = job->function;
+
+	for (auto argument : function->arguments.declarations) {
+		assert(argument);
+
+		if (!(argument->flags & DECLARATION_TYPE_IS_READY)) {
+			goToSleep(&job->type, &argument->sleepingOnMyType);
+
+			return true;
+		}
+	}
+
+
+	for (auto return_ : function->returns.declarations) {
+		assert(return_);
+
+		if (!(return_->flags & DECLARATION_TYPE_IS_READY)) {
+			goToSleep(&job->type, &return_->sleepingOnMyType);
+
+			return true;
+		}
+		else if (static_cast<ExprLiteral *>(return_->type)->typeValue == &TYPE_VOID && function->returns.declarations.count != 1) {
+			reportError(return_, "Error: Functions with multiple return values cannot return a void value");
+			return false;
+		}
+	}
+
+	function->type = getFunctionType(function);
+
+	wakeUpSleepers(&function->sleepingOnMe);
+
+	if (function->valueOfDeclaration && !function->valueOfDeclaration->type && !function->valueOfDeclaration->inferJob) {
+		function->valueOfDeclaration->type = inferMakeTypeLiteral(function->start, function->end, function->type);
+		function->valueOfDeclaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
+		wakeUpSleepers(&function->valueOfDeclaration->sleepingOnMyType);
+		wakeUpSleepers(&function->valueOfDeclaration->sleepingOnMyValue);
+		function->valueOfDeclaration->sleepingOnMyType.free();
+		function->valueOfDeclaration->sleepingOnMyValue.free();
+	}
+
+	for (auto argument : function->arguments.declarations) {
+		addSizeDependency(&job->sizeDependencies, static_cast<ExprLiteral *>(argument->type)->typeValue);
+	}
+
+	for (auto return_ : function->returns.declarations) {
+		addSizeDependency(&job->sizeDependencies, static_cast<ExprLiteral *>(return_->type)->typeValue);
+	}
+
+	return true;
+}
+
+bool inferFunctionValue(FunctionJob *job) {
 	PROFILE_FUNC();
 
 	auto function = job->function;
 
 	if (!function->type) {
-		bool typesInferred = true;
-
-		for (auto argument : function->arguments.declarations) {
-			assert(argument);
-
-			if (!(argument->flags & DECLARATION_TYPE_IS_READY)) {
-				goToSleep(&job->type, &argument->sleepingOnMe);
-
-				typesInferred = false;
-				break;
-			}
-
-
-			if (argument->initialValue) {
-				if (argument->flags & DECLARATION_VALUE_IS_READY) {
-					if (!isLiteral(argument->initialValue)) {
-						reportError(argument, "Error: Default arguments must be a constant value");
-						return false;
-					}
-				}
-				else {
-					goToSleep(&job->type, &argument->sleepingOnMe);
-
-					typesInferred = false;
-					break;
-				}
-			}
-		}
-
-
-		for (auto return_ : function->returns.declarations) {
-			assert(return_);
-
-			if (!(return_->flags & DECLARATION_TYPE_IS_READY)) {
-				goToSleep(&job->type, &return_->sleepingOnMe);
-
-				typesInferred = false;
-				break;
-			}
-			else if (static_cast<ExprLiteral *>(return_->type)->typeValue == &TYPE_VOID && function->returns.declarations.count != 1) {
-				reportError(return_, "Error: Functions with multiple return values cannot return a void value");
-				return false;
-			}
-
-
-			if (return_->initialValue) {
-				if (return_->flags & DECLARATION_VALUE_IS_READY) {
-					if (!isLiteral(return_->initialValue)) {
-						reportError(return_, "Error: Default returns must be a constant value");
-						return false;
-					}
-				}
-				else {
-					goToSleep(&job->type, &return_->sleepingOnMe);
-
-					typesInferred = false;
-					break;
-				}
-			}
-		}
-
-		if (typesInferred) {
-			function->type = getFunctionType(function);
-
-			wakeUpSleepers(&function->sleepingOnMe);
-
-			if (function->valueOfDeclaration && !function->valueOfDeclaration->type && !function->valueOfDeclaration->inferJob) {
-				function->valueOfDeclaration->type = inferMakeTypeLiteral(function->start, function->end, function->type);
-				function->valueOfDeclaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
-
-				wakeUpSleepers(&function->valueOfDeclaration->sleepingOnMe);
-			}
-		}
+		goToSleep(&job->value, &function->sleepingOnMe);
+		return true;
 	}
 
-	if (function->type && isDone(&job->value)) {
-		for (auto argument : function->arguments.declarations) {
-			addSizeDependency(&job->sizeDependencies, static_cast<ExprLiteral *>(argument->type)->typeValue);
+	if (function->flags & EXPR_FUNCTION_IS_EXTERNAL) {
+		if (function->body->flavor != ExprFlavor::STRING_LITERAL) {
+			reportError(function->body, "Error: External function library must be a constant string");
+			return false;
 		}
 
-		for (auto return_ : function->returns.declarations) {
-			addSizeDependency(&job->sizeDependencies, static_cast<ExprLiteral *>(return_->type)->typeValue);
+		libraries.add(static_cast<ExprStringLiteral *>(function->body)->string);
+
+		if (!function->valueOfDeclaration) {
+			reportError(function, "Error: External functions must be named");
+			return false;
 		}
 
-		if (function->flags & EXPR_FUNCTION_IS_EXTERNAL) {
-			if (function->body->flavor != ExprFlavor::STRING_LITERAL) {
-				reportError(function->body, "Error: External function library must be a constant string");
-				return false;
-			}
+		CoffJob coff;
+		coff.flavor = CoffJobFlavor::FUNCTION;
+		coff.function = function;
 
-			libraries.add(static_cast<ExprStringLiteral *>(function->body)->string);
+		coffWriterQueue.add(coff);
 
-			if (!function->valueOfDeclaration) {
-				reportError(function, "Error: External functions must be named");
-				return false;
-			}
+		removeJob(&functionJobs, job);
+		function->sleepingOnMe.free();
+		freeJob(job);
+	}
+	else {
+		assert(job->function->body);
 
-			CoffJob coff;
-			coff.flavor = CoffJobFlavor::FUNCTION;
-			coff.function = function;
-
-			coffWriterQueue.add(coff);
-
-			removeJob(&functionJobs, job);
-			freeJob(job);
-		}
-		else {
-			assert(job->function->body);
-
-
-			removeJob(&functionJobs, job);
-			functionWaitingOnSize.add(job);
-		}
+		removeJob(&functionJobs, job);
+		function->sleepingOnMe.free();
+		functionWaitingOnSize.add(job);
 	}
 
 	return true;
@@ -6136,9 +6179,9 @@ bool inferSize(SizeJob *job) {
 
 			if (!(member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING))) {
 				if (!(member->flags & DECLARATION_TYPE_IS_READY)) {
-					goToSleep(job, &member->sleepingOnMe);
+					goToSleep(job, &member->sleepingOnMyType);
 
-					break;
+					return true;
 				}
 
 				auto memberType = static_cast<ExprLiteral *>(member->type)->typeValue;
@@ -6146,7 +6189,7 @@ bool inferSize(SizeJob *job) {
 				if (!memberType->size) {
 					goToSleep(job, &memberType->sleepingOnMe);
 
-					break;
+					return true;
 				}
 
 				if (!(struct_->flags & TYPE_STRUCT_IS_PACKED)) {
@@ -6192,6 +6235,7 @@ bool inferSize(SizeJob *job) {
 			wakeUpSleepers(&struct_->sleepingOnMe);
 
 			removeJob(&sizeJobs, job);
+			type->sleepingOnMe.free();
 			freeJob(job);
 		}
 	}
@@ -6206,10 +6250,12 @@ bool inferSize(SizeJob *job) {
 
 			wakeUpSleepers(&array->sleepingOnMe);
 			removeJob(&sizeJobs, job);
+			type->sleepingOnMe.free();
 			freeJob(job);
 		}
 		else {
 			goToSleep(job, &array->arrayOf->sleepingOnMe);
+			return true;
 		}
 	}
 	else if (type->flavor == TypeFlavor::ENUM) {
@@ -6240,9 +6286,10 @@ bool inferSize(SizeJob *job) {
 		enum_->struct_.size = enum_->struct_.integerType->size;
 		enum_->struct_.flags |= enum_->struct_.integerType->flags & TYPE_INTEGER_IS_SIGNED;
 
-		wakeUpSleepers(&struct_->sleepingOnMe);
+		wakeUpSleepers(&struct_->sleepingOnMe, true);
 
 		removeJob(&sizeJobs, job);
+		type->sleepingOnMe.free();
 		freeJob(job);
 	}
 	else {
@@ -6253,7 +6300,7 @@ bool inferSize(SizeJob *job) {
 }
 
 void createBasicDeclarations() {
-	Declaration *targetWindows = new Declaration;
+	Declaration *targetWindows = INFER_NEW(Declaration);
 	targetWindows->enclosingScope = nullptr;
 	targetWindows->start = {};
 	targetWindows->end = {};
@@ -6261,20 +6308,50 @@ void createBasicDeclarations() {
 	targetWindows->type = inferMakeTypeLiteral(targetWindows->start, targetWindows->end, &TYPE_BOOL);
 
 	auto literal = createIntLiteral(targetWindows->start, targetWindows->end, &TYPE_BOOL, BUILD_WINDOWS);
-	
+
 	targetWindows->initialValue = literal;
 	targetWindows->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY | DECLARATION_IS_CONSTANT;
 
 	addDeclarationToBlock(&globalBlock, targetWindows);
 }
 
+bool doJob(SubJob *job) {
+	if (!inferFlattened(job)) {
+		return false;
+	}
+	else if (isDone(job)) {
+		if (job->flavor == JobFlavor::DECLARATION_TYPE) {
+			if (!inferDeclarationType(CAST_FROM_SUBSTRUCT(DeclarationJob, type, job)))
+				return false;
+		}
+		else if (job->flavor == JobFlavor::DECLARATION_VALUE) {
+			if (!inferDeclarationValue(CAST_FROM_SUBSTRUCT(DeclarationJob, value, job)))
+				return false;
+		}
+		else if (job->flavor == JobFlavor::FUNCTION_TYPE) {
+			if (!inferFunctionType(CAST_FROM_SUBSTRUCT(FunctionJob, type, job)))
+				return false;
+		}
+		else if (job->flavor == JobFlavor::FUNCTION_VALUE) {
+			if (!inferFunctionValue(CAST_FROM_SUBSTRUCT(FunctionJob, value, job)))
+				return false;
+		}
+		else if (job->flavor == JobFlavor::SIZE) {
+			if (!inferSize(static_cast<SizeJob *>(job))) {
+				return false;
+			}
+		}
+		else if (job->flavor == JobFlavor::IMPORTER) {
+			if (!inferImporter(static_cast<ImporterJob *>(job)));
+		}
+	}
+
+	return true;
+}
+
 void runInfer() {
 	PROFILE_FUNC();
 
-	ArraySet<DeclarationJob *> declarationsToWorkOn;
-	ArraySet<FunctionJob *> functionsToWorkOn;
-	ArraySet<SizeJob *> sizesToWorkOn;
-	ArraySet<ImporterJob *> importersToWorkOn;
 
 	createBasicDeclarations();
 
@@ -6292,67 +6369,13 @@ void runInfer() {
 				goto error;
 		}
 
-		do {
-			while (subJobs.count) {
-				auto job = subJobs.pop();
+		while (subJobs.count || priorityJobs.count) {
+			auto job = priorityJobs.count ? priorityJobs.pop() : subJobs.pop();
 
-				if (!inferFlattened(job)) {
-					goto error;
-				}
-				else if (isDone(job)) {
-					if (job->flavor == JobFlavor::DECLARATION_TYPE) {
-						declarationsToWorkOn.add(CAST_FROM_SUBSTRUCT(DeclarationJob, type, job));
-					}
-					else if (job->flavor == JobFlavor::DECLARATION_VALUE) {
-						declarationsToWorkOn.add(CAST_FROM_SUBSTRUCT(DeclarationJob, value, job));
-					}
-					else if (job->flavor == JobFlavor::FUNCTION_TYPE) {
-						functionsToWorkOn.add(CAST_FROM_SUBSTRUCT(FunctionJob, type, job));
-					}
-					else if (job->flavor == JobFlavor::FUNCTION_VALUE) {
-						functionsToWorkOn.add(CAST_FROM_SUBSTRUCT(FunctionJob, value, job));
-					}
-					else if (job->flavor == JobFlavor::SIZE) {
-						sizesToWorkOn.add(static_cast<SizeJob *>(job));
-					}
-					else if (job->flavor == JobFlavor::IMPORTER) {
-						importersToWorkOn.add(static_cast<ImporterJob *>(job));
-					}
-				}
+			if (!doJob(job)) {
+				goto error;
 			}
-
-			subJobs.clear();
-
-
-			for (auto job : importersToWorkOn) {
-				if (!inferImporter(job))
-					goto error;
-			}
-
-			importersToWorkOn.clear();
-
-			for (auto job : declarationsToWorkOn) {
-				if (!inferDeclaration(job))
-					goto error;
-			}
-
-			declarationsToWorkOn.clear();
-
-			for (auto job : sizesToWorkOn) {
-				if (!inferSize(job))
-					goto error;
-			}
-
-			sizesToWorkOn.clear();
-
-			for (auto job : functionsToWorkOn) {
-				if (!inferFunction(job)) {
-					goto error;
-				}
-			}
-
-			functionsToWorkOn.clear();
-		} while (subJobs.count);
+		}
 
 		{
 			PROFILE_ZONE("Check size dependencies");
@@ -6540,14 +6563,26 @@ void runInfer() {
 				reportError(job->function, "Function halted after completing infer");
 
 				for (auto declaration : job->function->arguments.declarations) {
-					if (declaration->sleepingOnMe.count) {
-						reportError(declaration, "Declaration has sleepers, flags: %llx", declaration->flags);
+					if (declaration->sleepingOnMyType.count) {
+						reportError(declaration, "Declaration type has sleepers, flags: %llx", declaration->flags);
+					}
+				}
+
+				for (auto declaration : job->function->arguments.declarations) {
+					if (declaration->sleepingOnMyValue.count) {
+						reportError(declaration, "Declaration value has sleepers, flags: %llx", declaration->flags);
 					}
 				}
 
 				for (auto declaration : job->function->returns.declarations) {
-					if (declaration->sleepingOnMe.count) {
-						reportError(declaration, "Declaration has sleepers, flags: %llx", declaration->flags);
+					if (declaration->sleepingOnMyType.count) {
+						reportError(declaration, "Declaration type has sleepers, flags: %llx", declaration->flags);
+					}
+				}
+
+				for (auto declaration : job->function->returns.declarations) {
+					if (declaration->sleepingOnMyValue.count) {
+						reportError(declaration, "Declaration value has sleepers, flags: %llx", declaration->flags);
 					}
 				}
 			}
