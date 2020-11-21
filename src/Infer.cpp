@@ -1475,9 +1475,12 @@ bool evaluateConstantBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 		break;
 	}
 	case TOKEN('['): {
-		assert(right->flavor == ExprFlavor::INT_LITERAL);
+		if (right->flavor != ExprFlavor::INT_LITERAL)
+			break;
 
-		if (binary->left->type->flavor == TypeFlavor::ARRAY && (binary->left->flavor == ExprFlavor::ARRAY || binary->left->flavor == ExprFlavor::INT_LITERAL)) {
+		if (binary->left->type->flavor == TypeFlavor::ARRAY && 
+			(binary->left->type->flags & TYPE_ARRAY_IS_FIXED) && 
+			(binary->left->flavor == ExprFlavor::ARRAY || binary->left->flavor == ExprFlavor::INT_LITERAL)) {
 			auto arrayType = static_cast<TypeArray *>(binary->left->type);
 
 			if ((right->type->flags & TYPE_INTEGER_IS_SIGNED) && right->signedValue < 0) {
@@ -1524,100 +1527,100 @@ bool evaluateConstantBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 		break;
 	}
 	case TokenT::NOT_EQUAL: {
-		if (left->flavor != right->flavor)
+		if (binary->left->flavor != binary->right->flavor)
 			break;
 
-		if (left->flavor == ExprFlavor::INT_LITERAL) {
+		if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->unsignedValue != right->unsignedValue);
 		}
-		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
+		else if (binary->left->flavor == ExprFlavor::FLOAT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->floatValue != right->floatValue);
 		}
-		else if (left->flavor == ExprFlavor::STRING_LITERAL) {
+		else if (binary->left->flavor == ExprFlavor::STRING_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(stringLeft->start, stringRight->end, &TYPE_BOOL, stringLeft->string != stringRight->string);
 		}
 		break;
 	}
 	case TokenT::EQUAL: {
-		if (left->flavor != right->flavor)
+		if (binary->left->flavor != binary->right->flavor)
 			break;
 
-		if (left->flavor == ExprFlavor::INT_LITERAL) {
+		if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->unsignedValue == right->unsignedValue);
 		}
-		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
+		else if (binary->left->flavor == ExprFlavor::FLOAT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->floatValue == right->floatValue);
 		}
-		else if (left->flavor == ExprFlavor::STRING_LITERAL) {
+		else if (binary->left->flavor == ExprFlavor::STRING_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(stringLeft->start, stringRight->end, &TYPE_BOOL, stringLeft->string == stringRight->string);
 		}
 		break;
 	}
 	case TokenT::GREATER_EQUAL: {
-		if (left->flavor != right->flavor)
+		if (binary->left->flavor != binary->right->flavor)
 			break;
 
-		if (left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
+		if (binary->left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->signedValue >= right->signedValue);
 		}
-		else if (left->flavor == ExprFlavor::INT_LITERAL) {
+		else if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->unsignedValue >= right->unsignedValue);
 		}
-		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
+		else if (binary->left->flavor == ExprFlavor::FLOAT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->floatValue >= right->floatValue);
 		}
 		break;
 	}
 	case TokenT::LESS_EQUAL: {
-		if (left->flavor != right->flavor)
+		if (binary->left->flavor != binary->right->flavor)
 			break;
 
-		if (left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
+		if (binary->left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->signedValue <= right->signedValue);
 		}
-		else if (left->flavor == ExprFlavor::INT_LITERAL) {
+		else if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->unsignedValue <= right->unsignedValue);
 		}
-		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
+		else if (binary->left->flavor == ExprFlavor::FLOAT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->floatValue <= right->floatValue);
 		}
 		break;
 	}
 	case TOKEN('>'): {
-		if (left->flavor != right->flavor)
+		if (binary->left->flavor != binary->right->flavor)
 			break;
 
-		if (left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
+		if (binary->left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->signedValue > right->signedValue);
 		}
-		else if (left->flavor == ExprFlavor::INT_LITERAL) {
+		else if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->unsignedValue > right->unsignedValue);
 		}
-		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
+		else if (binary->left->flavor == ExprFlavor::FLOAT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->floatValue > right->floatValue);
 		}
 		break;
 	}
 	case TOKEN('<'): {
-		if (left->flavor != right->flavor)
+		if (binary->left->flavor != binary->right->flavor)
 			break;
 
-		if (left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
+		if (binary->left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->signedValue < right->signedValue);
 		}
-		else if (left->flavor == ExprFlavor::INT_LITERAL) {
+		else if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->unsignedValue < right->unsignedValue);
 		}
-		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
+		else if (binary->left->flavor == ExprFlavor::FLOAT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->floatValue < right->floatValue);
 		}
 		break;
 	}
 	case TOKEN('+'): {
-		if (left->flavor != right->flavor)
+		if (binary->left->flavor != binary->right->flavor)
 			break;
 
-		if (left->flavor == ExprFlavor::INT_LITERAL) {
+		if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
 			if (left->type->flavor == TypeFlavor::INTEGER) {
 				auto literal = createInBoundsIntLiteral(left->start, right->end, left->type, left->signedValue + right->signedValue);
 
@@ -1641,16 +1644,16 @@ bool evaluateConstantBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 				*exprPointer = createIntLiteral(left->start, right->end, left->type, left->unsignedValue + right->unsignedValue * pointerTo->size);
 			}
 		}
-		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
+		else if (binary->left->flavor == ExprFlavor::FLOAT_LITERAL) {
 			*exprPointer = createFloatLiteral(left->start, right->end, left->type, left->floatValue < right->floatValue);
 		}
 		break;
 	}
 	case TOKEN('-'): {
-		if (left->flavor != right->flavor)
+		if (binary->left->flavor != binary->right->flavor)
 			break;
 
-		if (left->flavor == ExprFlavor::INT_LITERAL) {
+		if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
 			if (left->type->flavor == TypeFlavor::INTEGER) {
 				auto literal = createInBoundsIntLiteral(left->start, right->end, left->type, left->signedValue - right->signedValue);
 
@@ -1682,64 +1685,64 @@ bool evaluateConstantBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 				}
 			}
 		}
-		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
+		else if (binary->left->flavor == ExprFlavor::FLOAT_LITERAL) {
 			*exprPointer = createFloatLiteral(left->start, right->end, left->type, left->floatValue < right->floatValue);
 		}
 		break;
 	}
 	case TOKEN('&'): {
-		if (left->flavor != right->flavor)
+		if (binary->left->flavor != binary->right->flavor)
 			break;
 
-		if (left->flavor == ExprFlavor::INT_LITERAL) {
+		if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, left->type, left->unsignedValue & right->unsignedValue);
 		}
 		break;
 	}
 	case TOKEN('|'): {
-		if (left->flavor != right->flavor)
+		if (binary->left->flavor != binary->right->flavor)
 			break;
 
-		if (left->flavor == ExprFlavor::INT_LITERAL) {
+		if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, left->type, left->unsignedValue | right->unsignedValue);
 		}
 		break;
 	}
 	case TOKEN('^'): {
-		if (left->flavor != right->flavor)
+		if (binary->left->flavor != binary->right->flavor)
 			break;
 
-		if (left->flavor == ExprFlavor::INT_LITERAL) {
+		if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, left->type, left->unsignedValue ^ right->unsignedValue);
 		}
 		break;
 	}
 	case TokenT::SHIFT_LEFT: {
-		if (left->flavor != right->flavor)
+		if (binary->left->flavor != binary->right->flavor)
 			break;
 
-		if (left->flavor == ExprFlavor::INT_LITERAL) {
+		if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, left->type, left->unsignedValue << right->unsignedValue);
 		}
 		break;
 	}
 	case TokenT::SHIFT_RIGHT: {
-		if (left->flavor != right->flavor)
+		if (binary->left->flavor != binary->right->flavor)
 			break;
 
-		if (left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
+		if (binary->left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, left->type, left->signedValue >> right->signedValue);
 		}
-		else if (left->flavor == ExprFlavor::INT_LITERAL) {
+		else if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, left->type, left->unsignedValue >> right->unsignedValue);
 		}
 		break;
 	}
 	case TOKEN('*'): {
-		if (left->flavor != right->flavor)
+		if (binary->left->flavor != binary->right->flavor)
 			break;
 
-		if (left->flavor == ExprFlavor::INT_LITERAL) {
+		if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
 			auto literal = createInBoundsIntLiteral(left->start, right->end, left->type, left->unsignedValue * right->unsignedValue);
 
 			if (left->type == &TYPE_SIGNED_INT_LITERAL && literal->signedValue >= 0) {
@@ -1748,16 +1751,16 @@ bool evaluateConstantBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 
 			*exprPointer = literal;
 		}
-		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
+		else if (binary->left->flavor == ExprFlavor::FLOAT_LITERAL) {
 			*exprPointer = createFloatLiteral(left->start, right->end, left->type, left->floatValue * right->floatValue);
 		}
 		break;
 	}
 	case TOKEN('/'): {
-		if (left->flavor != right->flavor)
+		if (binary->left->flavor != binary->right->flavor)
 			break;
 
-		if (left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
+		if (binary->left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
 			auto literal = createInBoundsIntLiteral(left->start, right->end, left->type, left->signedValue / right->signedValue);
 
 			if (left->type == &TYPE_SIGNED_INT_LITERAL && literal->signedValue >= 0) {
@@ -1766,19 +1769,19 @@ bool evaluateConstantBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 
 			*exprPointer = literal;
 		}
-		else if (left->flavor == ExprFlavor::INT_LITERAL) {
+		else if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, left->type, left->unsignedValue / right->unsignedValue);
 		}
-		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
+		else if (binary->left->flavor == ExprFlavor::FLOAT_LITERAL) {
 			*exprPointer = createFloatLiteral(left->start, right->end, left->type, left->floatValue * right->floatValue);
 		}
 		break;
 	}
 	case TOKEN('%'): {
-		if (left->flavor != right->flavor)
+		if (binary->left->flavor != binary->right->flavor)
 			break;
 
-		if (left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
+		if (binary->left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
 			auto literal = createInBoundsIntLiteral(left->start, right->end, left->type, left->signedValue % right->signedValue);
 
 			if (left->type == &TYPE_SIGNED_INT_LITERAL && literal->signedValue >= 0) {
@@ -1787,28 +1790,28 @@ bool evaluateConstantBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 
 			*exprPointer = literal;
 		}
-		else if (left->flavor == ExprFlavor::INT_LITERAL) {
+		else if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, left->type, left->unsignedValue % right->unsignedValue);
 		}
-		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
+		else if (binary->left->flavor == ExprFlavor::FLOAT_LITERAL) {
 			*exprPointer = createFloatLiteral(left->start, right->end, left->type, fmod(left->floatValue, right->floatValue));
 		}
 		break;
 	}
 	case TokenT::LOGIC_AND: {
-		if (left->flavor != right->flavor)
+		if (binary->left->flavor != binary->right->flavor)
 			break;
 
-		if (left->flavor == ExprFlavor::INT_LITERAL) {
+		if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, left->type, left->unsignedValue != 0 && right->unsignedValue != 0);
 		}
 		break;
 	}
 	case TokenT::LOGIC_OR: {
-		if (left->flavor != right->flavor)
+		if (binary->left->flavor != binary->right->flavor)
 			break;
 
-		if (left->flavor == ExprFlavor::INT_LITERAL) {
+		if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, left->type, left->unsignedValue != 0 || right->unsignedValue != 0);
 		}
 		break;
@@ -3845,8 +3848,10 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 		return false;
 	}
 
-	if (!evaluateConstantBinary(job, exprPointer, yield)) {
-		return *yield;
+	if ((*exprPointer)->flavor == ExprFlavor::BINARY_OPERATOR) {
+		if (!evaluateConstantBinary(job, exprPointer, yield)) {
+			return *yield;
+		}
 	}
 
 	return true;

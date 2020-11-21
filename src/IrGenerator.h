@@ -6,7 +6,7 @@
 inline ExprFunction *removeFunction = nullptr;
 inline ExprFunction *stringsEqualFunction = nullptr;
 
-inline MPSCWorkQueue<ExprFunction *> irGeneratorQueue;
+inline MPMCWorkQueue<ExprFunction *> irGeneratorQueue;
 
 void runIrGenerator();
 

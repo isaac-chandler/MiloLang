@@ -4,6 +4,6 @@
 #include "WorkQueue.h"
 
 
-extern MPSCWorkQueue<CoffJob> coffWriterQueue;
+inline MPMCWorkQueue<CoffJob> coffWriterQueue;
 
 void runCoffWriter();

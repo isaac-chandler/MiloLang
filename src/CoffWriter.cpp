@@ -5,8 +5,6 @@
 #include "TypeTable.h"
 #include "CompilerMain.h"
 
-MPSCWorkQueue<CoffJob> coffWriterQueue;
-
 union SymbolName {
 	char name[8];
 	struct {
