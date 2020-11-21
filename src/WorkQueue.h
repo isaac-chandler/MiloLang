@@ -9,22 +9,23 @@ T *CompareExchangePointers(T *volatile *dest, T *value, T *compare) {
 }
 
 template <typename T>
-class MPMCWorkQueue {
-public:
-	HANDLE semaphore;
-
+struct alignas(64) MPMCWorkQueue{
 	struct Buffer {
 		Buffer *volatile next;
 		T data[128];
 	};
 
-	Buffer *volatile input;
-	Buffer *volatile output;
-
+	alignas(64) HANDLE semaphore;
 	Buffer *volatile free = nullptr;
-	
+
+
+	alignas(64) Buffer *volatile input;
 	s64 volatile inputCursor = 0;
+
+	alignas(64) Buffer *volatile output;
 	s64 volatile outputCursor = 0;
+
+	
 
 	MPMCWorkQueue() {
 		semaphore = CreateSemaphoreA(NULL, 0, LONG_MAX, NULL);
