@@ -661,29 +661,6 @@ struct TypePatch {
 	u64 *location;
 };
 
-Type *getTypeForExpr(Expr *expr) {
-	auto type = expr->type;
-
-	if (type == &TYPE_SIGNED_INT_LITERAL) {
-		return &TYPE_S64;
-	}
-	else if (type == &TYPE_UNSIGNED_INT_LITERAL) {
-		assert(expr->flavor == ExprFlavor::INT_LITERAL);
-
-		if (static_cast<ExprLiteral *>(expr)->unsignedValue < static_cast<u64>(INT64_MAX)) {
-			return &TYPE_S64;
-		}
-		else {
-			return &TYPE_U64;
-		}
-	}
-	else if (type == &TYPE_FLOAT_LITERAL) {
-		return &TYPE_F64;
-	}
-
-	return type;
-}
-
 
 void writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataRelocations, BucketArray<Symbol> *symbols, BucketedArenaAllocator *stringTable, Expr *value, s64 *emptyStringSymbolIndex, BucketedArenaAllocator *rdata) {
 	auto type = getTypeForExpr(value);
@@ -717,7 +694,8 @@ void writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataRelocations,
 		dataRelocations->add4(string);
 		dataRelocations->add2(IMAGE_REL_AMD64_ADDR64);
 
-		*reinterpret_cast<u64 *>(data) = 0;
+		reinterpret_cast<u64 *>(data)[0] = 0;
+		reinterpret_cast<u64 *>(data)[1] = static_cast<ExprStringLiteral *>(value)->string.length;
 	}
 	else if (value->flavor == ExprFlavor::ARRAY) {
 		auto array = static_cast<ExprArray *>(value);
@@ -753,7 +731,7 @@ void writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataRelocations,
 		if (value->type->size == 4) {
 			*reinterpret_cast<float *>(data) = static_cast<float>(static_cast<ExprLiteral *>(value)->floatValue);
 		}
-		else if (value->type->size == 8) {
+		else if (value->type->size == 8 || value->type->size == 0 /* Any values of float literal type should be a double */) {
 			*reinterpret_cast<double *>(data) = static_cast<ExprLiteral *>(value)->floatValue;
 		}
 		else {
@@ -761,13 +739,13 @@ void writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataRelocations,
 		}
 	}
 	else if (value->flavor == ExprFlavor::INT_LITERAL) {
-		if (!isStandardSize(type->size)) {
+		if (type->size != 0 && !isStandardSize(type->size)) {
 			assert(static_cast<ExprLiteral *>(value)->unsignedValue == 0);
 
 			memset(data, 0, type->size);
 		}
 		else {
-			memcpy(data, &static_cast<ExprLiteral *>(value)->unsignedValue, type->size);
+			memcpy(data, &static_cast<ExprLiteral *>(value)->unsignedValue, type->size == 0 ? 8 : type->size /* Any values of int literal type should be 64 bit */);
 		}
 	}
 	else if (value->flavor == ExprFlavor::TYPE_LITERAL) {
@@ -893,9 +871,6 @@ u32 getCoffTypeIndex(Type *type) {
 	else if (type == &TYPE_U64) {
 		return T_UINT8;
 	}
-	else if (type == &TYPE_STRING) {
-		return T_64PUCHAR;
-	}
 	else if (type->flavor == TypeFlavor::POINTER) {
 		auto pointer = static_cast<TypePointer *>(type);
 
@@ -986,7 +961,6 @@ void emitBasicTypeDebugInfo(BucketedArenaAllocator *debugSymbols) {
 
 	u32 previousSize = debugSymbols->totalSize;
 
-	emitBasicType(debugSymbols, T_64PUCHAR, "string"); // @StringFormat
 	emitBasicType(debugSymbols, T_INT1, "s8");
 	emitBasicType(debugSymbols, T_INT2, "s16");
 	emitBasicType(debugSymbols, T_INT4, "s32");
@@ -1919,6 +1893,7 @@ void runCoffWriter() {
 						}
 					}
 				} break;
+				case IrOp::TYPE_INFO: // Currently at runtime a type is just a *Type_Info so a TYPE_INFO instruction is equivalent to a transfer
 				case IrOp::SET: {
 					if (ir.opSize == ir.destSize || ir.a == 0) {
 						writeSet(&code, function, ir.opSize, ir.dest, ir.a);
@@ -2848,6 +2823,9 @@ void runCoffWriter() {
 					code.add4(0);
 
 					storeFromIntRegister(&code, function, 8, ir.dest, RAX);
+
+					loadImmediateIntoRAX(&code, ir.string->string.length);
+					storeFromIntRegister(&code, function, 8, ir.dest + 1, RAX);
 				} break;
 				case IrOp::LINE_MARKER: {
 					addLineInfo(&lineInfo, &columnInfo, code.totalSize - functionStart, ir.location.start, ir.location.end);
@@ -2975,8 +2953,6 @@ void runCoffWriter() {
 				debugSymbols.add(columnInfo.storage, columnInfo.count * sizeof(ColumnInfo));
 			}
 
-			function->state.allocator.free();
-			function->state.ir.free();
 		}
 		else if (job.flavor == CoffJobFlavor::GLOBAL_DECLARATION) {
 			PROFILE_ZONE("Write Declaration");
@@ -3111,7 +3087,7 @@ void runCoffWriter() {
 					info.tag = infoTag;
 					info.size = type->size;
 					info.alignment = type->alignment;
-					info.name = nullptr;
+					info.name = { nullptr, type->name.length };
 
 					if (name)
 						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
@@ -3130,7 +3106,7 @@ void runCoffWriter() {
 					info.tag = infoTag;
 					info.size = type->size;
 					info.alignment = type->alignment;
-					info.name = nullptr;
+					info.name = { nullptr, type->name.length };
 					info.signed_ = type->flags & TYPE_INTEGER_IS_SIGNED;
 
 					if (name)
@@ -3150,7 +3126,7 @@ void runCoffWriter() {
 					info.tag = infoTag;
 					info.size = type->size;
 					info.alignment = type->alignment;
-					info.name = nullptr;
+					info.name = { nullptr, type->name.length };
 					info.value_type = nullptr;
 
 					if (name)
@@ -3189,7 +3165,7 @@ void runCoffWriter() {
 					info.tag = infoTag;
 					info.size = type->size;
 					info.alignment = type->alignment;
-					info.name = nullptr;
+					info.name = { nullptr, type->name.length };
 					info.arguments.data = nullptr;
 					info.arguments.count = function->argumentCount;
 					info.returns.data = nullptr;
@@ -3215,7 +3191,7 @@ void runCoffWriter() {
 					info.tag = infoTag;
 					info.size = type->size;
 					info.alignment = type->alignment;
-					info.name = nullptr;
+					info.name = { nullptr, type->name.length };
 					info.flavor = type->flags & TYPE_ARRAY_IS_FIXED ?
 						Type_Info_Array::Flavor::FIXED : type->flags & TYPE_ARRAY_IS_DYNAMIC ?
 						Type_Info_Array::Flavor::DYNMAIC : Type_Info_Array::Flavor::NORMAL;
@@ -3254,9 +3230,8 @@ void runCoffWriter() {
 
 						auto type = getTypeForExpr(member->initialValue);
 
-						if (type == &TYPE_UNSIGNED_INT_LITERAL) {
-
-						}
+						if (member->initialValue->flavor == ExprFlavor::TYPE_LITERAL && static_cast<ExprLiteral *>(member->initialValue)->typeValue->flavor == TypeFlavor::NAMESPACE)
+							continue;
 
 						rdata.allocateUnaligned(AlignPO2(rdata.totalSize, type->alignment) - rdata.totalSize);
 
@@ -3280,7 +3255,7 @@ void runCoffWriter() {
 
 						Type_Info_Struct::Member data;
 
-						data.name = nullptr;
+						data.name = { nullptr, member->name.length };
 						data.offset = (member->flags & DECLARATION_IS_CONSTANT) ? 0 : member->physicalStorage;
 						data.member_type = nullptr;
 						data.initial_value = nullptr;
@@ -3291,7 +3266,7 @@ void runCoffWriter() {
 						if (member->flags & DECLARATION_MARKED_AS_USING) data.flags |= Type_Info_Struct::Member::Flags::USING;
 
 
-						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), name), names + nameCount);
+						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), name.characters), names + nameCount);
 
 						if (member->initialValue) {
 							addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), member_type),
@@ -3302,10 +3277,11 @@ void runCoffWriter() {
 								createSymbolForType(&symbols, static_cast<ExprLiteral *>(member->type)->typeValue));
 						}
 
-						if (member->initialValue) {
-							addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), initial_value), values + valueCount);
-							expf(1);
-							++valueCount;
+						if (member->initialValue) { // @Incomplete: Export info for namespaces
+							if (member->initialValue->flavor != ExprFlavor::TYPE_LITERAL || static_cast<ExprLiteral *>(member->initialValue)->typeValue->flavor != TypeFlavor::NAMESPACE) {
+								addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), initial_value), values + valueCount);
+								++valueCount;
+							}
 						}
 
 						rdata.add(&data, sizeof(data));
@@ -3320,7 +3296,7 @@ void runCoffWriter() {
 					info.tag = infoTag;
 					info.size = type->size;
 					info.alignment = type->alignment;
-					info.name = nullptr;
+					info.name = { nullptr, type->name.length };
 					info.flags = 0;
 
 					if (struct_->flags & TYPE_STRUCT_IS_UNION) info.flags |= Type_Info_Struct::Flags::UNION;
@@ -3356,10 +3332,10 @@ void runCoffWriter() {
 
 						Type_Info_Enum::Value data;
 
-						data.name = nullptr;
+						data.name = { nullptr, member->name.length };
 						data.value = static_cast<ExprLiteral *>(member->initialValue)->unsignedValue;
 
-						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), name), names + i);
+						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), name.characters), names + i);
 
 						rdata.add(&data, sizeof(data));
 					}
@@ -3371,7 +3347,7 @@ void runCoffWriter() {
 					info.tag = infoTag;
 					info.size = type->size;
 					info.alignment = type->alignment;
-					info.name = nullptr;
+					info.name = { nullptr, type->name.length };
 					info.base_type = nullptr;
 					info.is_flags = enum_->flags & TYPE_ENUM_IS_FLAGS ? true : false;
 				

@@ -303,7 +303,6 @@ using Stock_Object.members
 GetClientRect :: (hWnd: HWND, lpRect: *RECT) -> s32 #external "user32"
 
 STD_INPUT_HANDLE  :: cast(u32) -10
-STD_OUTPUT_HANDLE :: cast(u32) -11
 STD_ERROR_HANDLE  :: cast(u32) -12
 
 GetLastError :: () -> u32 #external "kernel32"
@@ -341,7 +340,7 @@ Peek_Message_Options :: enum u32 {
 using Peek_Message_Options.members
 
 
-GetCommandLineA :: () -> string #external "kernel32"
+GetCommandLineA :: () -> *u8 #external "kernel32"
 
 
 SwapBuffers :: (Arg1: HDC) -> s32 #external "gdi32"
@@ -510,8 +509,6 @@ ExitProcess :: (uExitCode: u32) #external "kernel32"
 HeapAlloc :: (hHeap: HANDLE, dwFlags: u32, dwBytes: u64) -> *void #external "kernel32"
 HeapReAlloc :: (hHeap: HANDLE, dwFlags: u32, lpMem: *void, dwBytes: u64) -> *void #external "kernel32"
 HeapFree :: (hHeap: HANDLE, dwFlags: u32, lpMem: *void) -> s32 #external "kernel32"
-GetProcessHeap :: () -> HANDLE #external "kernel32"
-GetStdHandle :: (nStdHandle: u32) -> HANDLE #external "kernel32"
 
 Create_Thread_Flags :: enum_flags u32 {
 	CREATE_SUSPENDED :: 0x4

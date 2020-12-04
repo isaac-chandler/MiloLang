@@ -31,7 +31,16 @@ FileInfo *getFileInfoByUid(u32 fileUid);
 
 Array<FileInfo> getAllFilesNoLock();
 
-inline ArraySet<String> libraries;
+struct Library {
+	String name;
+	HMODULE handle;
+
+	bool operator==(const Library &other) const {
+		return other.name == name;
+	}
+};
+
+inline ArraySet<Library> libraries;
 
 #ifdef BUILD_WINDOWS
 #define CHECK_PRINTF _Printf_format_string_

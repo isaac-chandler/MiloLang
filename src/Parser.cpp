@@ -84,10 +84,6 @@ static bool expectAndConsume(LexerFile *lexer, char c) {
 	return expectAndConsume(lexer, TOKEN(c));
 }
 
-static bool matches(TokenT *a, TokenT *b, u64 length) {
-	return memcmp(a, b, sizeof(TokenT) * length) == 0;
-}
-
 Declaration *parseDeclaration(LexerFile *lexer);
 Expr *parseExpr(LexerFile *lexer);
 ExprBlock *parseBlock(LexerFile *lexer, ExprBlock *block = nullptr);
@@ -329,7 +325,7 @@ Expr *parseExprStatemenet(LexerFile *lexer, bool allowDeclarations) {
 		MODIFY_ASSIGN(TokenT::AND_EQUALS)
 		MODIFY_ASSIGN(TokenT::OR_EQUALS)
 	else {
-		if (expr->flavor != ExprFlavor::FUNCTION_CALL) {
+		if (expr->flavor != ExprFlavor::FUNCTION_CALL && expr->flavor != ExprFlavor::RUN) {
 			auto unary = static_cast<ExprUnaryOperator *>(expr);
 			auto binary = static_cast<ExprBinaryOperator *>(expr);
 
@@ -349,7 +345,7 @@ Expr *parseExprStatemenet(LexerFile *lexer, bool allowDeclarations) {
 				reportError(&lexer->token, "Error: '--' is not supported as an operator");
 			}
 			else {
-				reportError(expr, "Error: Can only have an assignment or function call expression at statement level");
+				reportError(expr, "Error: Can only have an function call or #run expression at statement level");
 			}
 			return nullptr;
 		}
@@ -752,6 +748,7 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 			identifier->flavor = ExprFlavor::IDENTIFIER;
 			identifier->resolveFrom = currentBlock;
 			identifier->enclosingScope = currentBlock;
+			identifier->declaration = nullptr;
 			identifier->flags |= EXPR_IDENTIFIER_IS_BREAK_OR_CONTINUE_LABEL;
 			identifier->structAccess = nullptr;
 
@@ -760,6 +757,7 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 			}
 
 			continue_->label = identifier;
+			continue_->refersTo = nullptr;
 
 			continue_->end = lexer->token.end;
 
@@ -1723,10 +1721,16 @@ bool parseArguments(LexerFile *lexer, Arguments *args, const char *message) {
 			}
 		}
 
+		bool spread = expectAndConsume(lexer, TokenT::DOUBLE_DOT);
+
 		Expr *argument = parseExpr(lexer);
 
 		if (!argument)
 			return false;
+
+		if (spread) {
+			argument->flags |= EXPR_IS_SPREAD;
+		}
 
 		arguments.add(argument);
 
@@ -2363,37 +2367,54 @@ Expr *parseUnaryExpr(LexerFile *lexer, CodeLocation plusStart) {
 		function->returns.flags |= BLOCK_IS_RETURNS;
 		insertBlock(&function->returns);
 
+		Expr *expr;
+		Expr *type;
 
-		auto expr = parseExpr(lexer);
-		run->end = lexer->previousTokenEnd;
+		if (lexer->token.type == TOKEN('{')) {
+			expr = parseBlock(lexer);
+			run->end = lexer->previousTokenEnd;
+
+			type = parserMakeTypeLiteral(run->start, run->end, &TYPE_VOID);
+
+			function->body = expr;
+		}
+		else {
+			expr = parseExpr(lexer);
+			run->end = lexer->previousTokenEnd;
+
+			auto typeOf = PARSER_NEW(ExprUnaryOperator);
+			typeOf->flavor = ExprFlavor::UNARY_OPERATOR;
+			typeOf->start = run->start;
+			typeOf->end = run->end;
+			typeOf->op = TokenT::TYPE_OF;
+			typeOf->value = expr;
+
+			type = typeOf;
+
+			auto return_ = PARSER_NEW(ExprReturn);
+			return_->flavor = ExprFlavor::RETURN;
+			return_->start = run->start;
+			return_->end = run->end;
+			return_->returnsFrom = function;
+			return_->returns.count = 1;
+			return_->returns.names = PARSER_NEW_ARRAY(String, 1) { "" };
+			return_->returns.values = PARSER_NEW_ARRAY(Expr *, 1) { expr };
+
+			function->body = return_;
+		}
+
+		popBlock(&function->arguments);
+
 		function->end = lexer->previousTokenEnd;
-
-		run->expr = function;
-
-		auto return_ = PARSER_NEW(ExprReturn);
-		return_->flavor = ExprFlavor::RETURN;
-		return_->start = run->start;
-		return_->end = run->end;
-		return_->returnsFrom = function;
-		return_->returns.count = 1;
-		return_->returns.names = PARSER_NEW_ARRAY(String, 1) { "" };
-		return_->returns.values = PARSER_NEW_ARRAY(Expr *, 1) { expr };
-
-		function->body = return_;
+		run->function = function;
 		function->flags |= EXPR_FUNCTION_IS_RUN;
 
-		auto typeOf = PARSER_NEW(ExprUnaryOperator);
-		typeOf->flavor = ExprFlavor::UNARY_OPERATOR;
-		typeOf->start = run->start;
-		typeOf->end = run->end;
-		typeOf->op = TokenT::TYPE_OF;
-		typeOf->value = expr;
 
 		auto returnType = PARSER_NEW(Declaration);
 		returnType->start = function->start;
 		returnType->end = function->end;
 		returnType->flags |= DECLARATION_IS_RETURN;
-		returnType->type = typeOf;
+		returnType->type = type;
 		returnType->initialValue = nullptr;
 		returnType->name = "";
 
@@ -2890,4 +2911,6 @@ void parseFile(FileInfo *file) {
 			break;
 		}
 	}
+
+	//printf("Parser memory used %llukb\n", parserArena.totalSize / 1024);
 }

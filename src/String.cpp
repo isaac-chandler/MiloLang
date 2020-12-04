@@ -11,13 +11,11 @@ String::String(const char *cString) {
 
 String::String(const char *begin, const char *end) {
 	assert(end >= begin);
-	length = (u32)(end - begin);
+	length = static_cast<u64>(end - begin);
 
 	characters = static_cast<char *>(malloc(length));
 
-	for (u32 i = 0; i < length; i++) {
-		characters[i] = begin[i];
-	}
+	memcpy(characters, begin, length);
 }
 
 bool String::operator==(const String &other) const {

@@ -57,7 +57,9 @@ struct Type {
 	union Symbol *symbol = nullptr;
 	u32 physicalStorage;
 
-	struct llvm::GlobalVariable *llvmStorage = nullptr;
+	struct Expr *defaultValue = nullptr;
+	class llvm::GlobalVariable *llvmStorage = nullptr;
+	struct Type_Info *runtimeTypeInfo = nullptr;
 };
 
 struct TypePointer : Type {
@@ -125,12 +127,13 @@ inline Type TYPE_TYPE = { 8, 8, "type", 53, 0, TypeFlavor::TYPE };
 
 inline Type TYPE_AUTO_CAST = { 0, 0, "<auto cast>", 59, TYPE_IS_INTERNAL, TypeFlavor::AUTO_CAST };
 
-// @StringFormat make strings length based, currently they are the same as *u8
-inline Type TYPE_STRING = { 8, 8, "string", 61, 0, TypeFlavor::STRING };
+inline TypeStruct TYPE_STRING = { 16, 8, "string", 61, 0, TypeFlavor::STRING };
 
 inline Type TYPE_UNARY_DOT = { 0, 0, "<unary dot>", 67, TYPE_IS_INTERNAL, TypeFlavor::AUTO_CAST };
 
 inline Type *TYPE_VOID_POINTER;
+inline Type *TYPE_U8_POINTER;
+inline Type *TYPE_U8_ARRAY;
 
 inline Type *TYPE_ANY;
 inline Type *TYPE_TYPE_INFO;
@@ -191,7 +194,7 @@ struct Type_Info {
 	Tag tag;
 	u64 size;
 	u64 alignment;
-	char *name;
+	String name;
 };
 
 struct Type_Info_Integer : Type_Info {
@@ -205,6 +208,8 @@ struct Type_Info_Pointer : Type_Info {
 struct Type_Info_Function : Type_Info {
 	MiloArray<Type_Info *> arguments;
 	MiloArray<Type_Info *> returns;
+	bool c_call;
+	bool varargs;
 };
 
 struct Type_Info_Array : Type_Info {
@@ -227,7 +232,7 @@ struct Type_Info_Struct : Type_Info {
 			constexpr static u64 USING         = 0x4;
 		};
 
-		char *name;
+		String name;
 		u64 offset;
 		Type_Info *member_type;
 		void *initial_value;
@@ -245,7 +250,7 @@ struct Type_Info_Struct : Type_Info {
 
 struct Type_Info_Enum : Type_Info {
 	struct Value {
-		char *name;
+		String name;
 		u64 value;
 	};
 

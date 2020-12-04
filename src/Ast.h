@@ -64,11 +64,12 @@ enum class IrOp : u8 {
 	STRING, 
 	LINE_MARKER, 
 	TYPE, 
-	DEFER
+	TYPE_INFO
 };
 
 #define IR_SIGNED_OP 0x1
 #define IR_FLOAT_OP 0x2
+#define IR_C_CALL 0x4
 
 
 inline bool isStandardSize(u64 size) {
@@ -107,7 +108,7 @@ struct Ir {
 				FunctionCall *arguments;
 			};
 
-			u8 opSize;
+			u64 opSize;
 		};
 
 		struct {
@@ -198,7 +199,10 @@ struct ExprSlice : Expr {
 };
 
 struct ExprRun : Expr {
-	Expr *expr;
+	Expr *returnValue = nullptr;
+	struct RunJob *runJob = nullptr;
+	Array<struct SubJob *> sleepingOnMe;
+	Expr *function;
 };
 
 struct ExprDefer : Expr {
@@ -265,6 +269,11 @@ struct ExprDefer : Expr {
 
 #define EXPR_FUNCTION_IS_RUN 0x4'0000
 
+#define EXPR_FUNCTION_RUN_READY 0x8'0000
+#define EXPR_FUNCTION_RUN_CHECKED 0x10'0000
+
+#define EXPR_IS_SPREAD 0x20'000
+
 struct ExprLiteral : Expr {
 	union {
 		u64 unsignedValue;
@@ -282,7 +291,7 @@ struct ExprSwitch : Expr {
 
 		union {
 			u64 irBranch;
-			struct llvm::BasicBlock *llvmCaseBlock;
+			class llvm::BasicBlock *llvmCaseBlock;
 		};
 
 		u64 irSkip;
@@ -302,8 +311,6 @@ struct ExprStringLiteral : Expr {
 			union Symbol *symbol;
 			u32 physicalStorage;
 		};
-
-		struct llvm::Value *llvmStorage;
 	};
 };
 
@@ -366,7 +373,8 @@ struct ExprFunction : Expr {
 
 	Expr *body;
 
-	Array<struct SubJob *> sleepingOnMe;
+	Array<struct SubJob *> sleepingOnInfer;
+	Array<struct SubJob *> sleepingOnIr;
 
 	union {
 		struct {
@@ -376,6 +384,8 @@ struct ExprFunction : Expr {
 
 		llvm::Function *llvmStorage;
 	};
+
+	void *loadedFunctionPointer = nullptr;
 
 	ExprFunction() : llvmStorage(nullptr) {}
 };
@@ -398,12 +408,12 @@ struct ExprLoop : Expr {
 
 	union {
 		u64 irPointer;
-		struct llvm::Value *llvmPointer;
+		class llvm::Value *llvmPointer;
 	};
 
 	union {
 		u64 arrayPointer;
-		struct llvm::Value *llvmArrayPointer;
+		class llvm::Value *llvmArrayPointer;
 	};
 
 	Block iteratorBlock;
@@ -431,3 +441,28 @@ struct ExprCommaAssignment : Expr {
 
 	Expr *call;
 };
+
+inline Type *getTypeForExpr(Expr *expr) {
+	auto type = expr->type;
+
+	if (type == &TYPE_SIGNED_INT_LITERAL) {
+		assert(expr->flavor == ExprFlavor::INT_LITERAL);
+		return &TYPE_S64;
+	}
+	else if (type == &TYPE_UNSIGNED_INT_LITERAL) {
+		assert(expr->flavor == ExprFlavor::INT_LITERAL);
+
+		if (static_cast<ExprLiteral *>(expr)->unsignedValue < static_cast<u64>(INT64_MAX)) {
+			return &TYPE_S64;
+		}
+		else {
+			return &TYPE_U64;
+		}
+	}
+	else if (type == &TYPE_FLOAT_LITERAL) {
+		assert(expr->flavor == ExprFlavor::FLOAT_LITERAL);
+		return &TYPE_F64;
+	}
+
+	return type;
+}

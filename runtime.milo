@@ -37,6 +37,9 @@ Type_Info_Function :: struct {
 	
 	arguments: []*Type_Info
 	returns: []*Type_Info
+	
+	c_call: bool
+	varargs: bool
 }
 
 Type_Info_Array :: struct {
@@ -116,24 +119,12 @@ __remove :: (array: *[]u8, value: *u8, size: u64) -> *u8 {
 	return value - size
 }
 
-// @StringFormat
 // The function called when the == operator is used on two string types
-__strings_equal :: (a_: string, b_: string) -> bool {	
-	a := a_
-	b := b_
-
-	while true {
-		a_char := a[0]
-		b_char := b[0]
-		
-		a = a[1..]
-		b = b[1..]
-		
+__strings_equal :: (a: string, b: string) -> bool {
+	if a.count != b.count return false
 	
-		if a_char == 0
-			return b_char == 0
-		
-		if a_char != b_char
-			return false
-	}
+
+	for a if it != b[it_index] return false
+
+	return true
 }

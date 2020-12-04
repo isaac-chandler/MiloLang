@@ -323,6 +323,7 @@ bool directoryExists(wchar_t *file) {
 		(attributes & FILE_ATTRIBUTE_DIRECTORY));
 }
 
+#if 1
 int main(int argc, char *argv[]) {
 #if BUILD_WINDOWS
 	{
@@ -388,7 +389,6 @@ int main(int argc, char *argv[]) {
 		SetThreadDescription(irGenerator.native_handle(), L"Ir Generator");
 		SetThreadDescription(backend.native_handle(), useLlvm ? L"LLVM" : L"Coff Writer");
 
-		infer.detach();
 		irGenerator.detach();
 		{
 			u64 i;
@@ -407,6 +407,7 @@ int main(int argc, char *argv[]) {
 			}
 		}
 
+		infer.join();
 		backend.join();
 	}
 
@@ -569,8 +570,8 @@ int main(int argc, char *argv[]) {
 
 				for (auto lib : libraries) {
 					*(libOffset++) = ' ';
-					memcpy(libOffset, lib.characters, lib.length);
-					libOffset += lib.length;
+					memcpy(libOffset, lib.name.characters, lib.name.length);
+					libOffset += lib.name.length;
 					*(libOffset++) = '.';
 					*(libOffset++) = 'l';
 					*(libOffset++) = 'i';
@@ -654,4 +655,121 @@ int main(int argc, char *argv[]) {
 
 	return hadError;
 }
+#else
 
+using namespace std::chrono;
+
+MPMCWorkQueue<long> queue1;
+MPMCWorkQueue<long> queue2;
+
+double sInsertSpeed;
+double sRemoveSpeed;
+
+double mInsertSpeed;
+double mRemoveSpeed;
+
+std::mutex speedLock;
+
+#define TSIZE 10'000'000
+
+
+DWORD testSPSCInserter(void *param) {
+	auto start = high_resolution_clock::now();
+
+	for (u64 i = 1; i <= TSIZE; i++) {
+		queue1.add(i);
+	}
+
+
+	sInsertSpeed = 10.0 / duration<double, seconds::period>(high_resolution_clock::now() - start).count();
+
+	return 0;
+}
+
+DWORD testSPSCExtractor(void *param) {
+	auto start = high_resolution_clock::now();
+
+	for (u64 i = 1; i <= TSIZE; i++) {
+		int x = queue1.take();
+
+		if (x != i)
+			printf("Error\n");
+	}
+
+	sRemoveSpeed = 10.0 / duration<double, seconds::period>(high_resolution_clock::now() - start).count();
+
+	return 0;
+}
+
+long long volatile mpmcTest[TSIZE];
+
+DWORD testMPMCInserter(void *param) {
+	auto start = high_resolution_clock::now();
+
+	for (u64 i = 1; i <= TSIZE; i++) {
+		queue2.add(i);
+	}
+
+	queue2.add(0);
+
+	speedLock.lock();
+	mInsertSpeed += 10.0 / duration<double, seconds::period>(high_resolution_clock::now() - start).count();
+	speedLock.unlock();
+
+	return 0;
+}
+
+DWORD testMPMCExtractor(void *param) {
+	auto start = high_resolution_clock::now();
+
+	while (true) {
+		long x = queue2.take();
+
+		if (x == 0)
+			break;
+		else {
+			_InterlockedExchangeAdd64(&mpmcTest[x - 1], 1);
+		}
+
+		x = 0;
+	}
+
+	speedLock.lock();
+	mRemoveSpeed += 10.0 / duration<double, seconds::period>(high_resolution_clock::now() - start).count();
+	speedLock.unlock();
+
+	return 0;
+}
+
+void main() {
+	CreateThread(NULL, 0, testSPSCInserter, NULL, 0, NULL);
+	auto t2 = CreateThread(NULL, 0, testSPSCExtractor, NULL, 0, NULL);
+
+	WaitForSingleObject(t2, INFINITE);
+
+	std::cout << sInsertSpeed << "M inserts/s\n";
+	std::cout << sRemoveSpeed << "M removes/s\n";
+
+	for (u64 i = 0; i < 6; i++) {
+		CreateThread(NULL, 0, testMPMCInserter, NULL, 0, NULL);
+	}
+
+	HANDLE t6[6];
+	for (u64 i = 0; i < 6; i++) {
+		t6[i] = CreateThread(NULL, 0, testMPMCExtractor, NULL, 0, NULL);
+	}
+
+	WaitForMultipleObjects(6, t6, 1, INFINITE);
+
+	for (u64 i = 0; i < TSIZE; i++) {
+		if (mpmcTest[i] != 6) {
+			printf("MPMC Error\n");
+		}
+	}
+
+	std::cout << mInsertSpeed << "M inserts/s\n";
+	std::cout << mRemoveSpeed << "M removes/s\n";
+
+	std::cin.get();
+}
+#endif

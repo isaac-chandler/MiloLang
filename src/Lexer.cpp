@@ -1328,7 +1328,9 @@ stringLiteralRead:
 		return;
 	}
 	else if (c == '"') {
+		stringBuilder.add(0); // Null terminate all string literals so that they can be implicitly converted to c strings
 		token.text = String(reinterpret_cast<char *>(stringBuilder.begin()), reinterpret_cast<char *>(stringBuilder.end()));
+		token.text.length -= 1;
 		token.end = location;
 		token.type = TokenT::STRING_LITERAL;
 		return;

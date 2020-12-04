@@ -76,8 +76,10 @@ struct Declaration {
 			u64 physicalStorage;
 		};
 
-		struct llvm::Value *llvmStorage;
+		class llvm::Value *llvmStorage;
 	};
+
+	void *runtimeValue = nullptr;
 
 	u64 flags = 0;
 

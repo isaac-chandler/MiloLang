@@ -1085,7 +1085,7 @@ PFNGLGETCOLORTABLEPARAMETERFVEXTPROC :: (target: u32, pname: u32, params: *f32) 
 
 load_gl_extensions :: () {
 	#if TARGET_WINDOWS {
-		wglSwapIntervalEXT = wglGetProcAddress(cast() "wglSwapIntervalEXT")
+		wglSwapIntervalEXT = wglGetProcAddress("wglSwapIntervalEXT")
 	}
 }
 
@@ -1096,9 +1096,7 @@ check_gl_errors :: () {
 		if !error
 			break;
 			
-		print_string("GL error: ")
-		print_u64(error)
-		print_string("\n")
+		print("GL error: %\n", error)
 	}
 
 }

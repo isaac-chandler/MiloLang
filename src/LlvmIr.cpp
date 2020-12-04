@@ -50,6 +50,9 @@ static llvm::Type *createLlvmType(llvm::LLVMContext &context, Type *type) {
 	else if (type == TYPE_VOID_POINTER || type == &TYPE_TYPE || type == &TYPE_STRING) {
 		return llvm::Type::getInt8PtrTy(context);
 	}
+	else if (type == &TYPE_STRING) {
+		return llvm::StructType::get(llvm::Type::getInt8PtrTy(context), llvm::Type::getInt64Ty(context));
+	}
 	else if (type->flavor == TypeFlavor::POINTER) {
 		return llvm::PointerType::getUnqual(getLlvmType(context, static_cast<TypePointer *>(type)->pointerTo));
 	}
@@ -211,6 +214,11 @@ struct State {
 	llvm::DIFile *diFile; // @Incomplete: Dummy file info
 };
 
+llvm::Constant *createLlvmString(State *state, String string) {
+	return llvm::ConstantStruct::get(static_cast<llvm::StructType *>(getLlvmType(state->context, &TYPE_STRING)),
+		state->builder.CreateGlobalStringPtr(stringRef(string)), llvm::ConstantInt::get(llvm::Type::getInt64Ty(state->context), string.length));
+}
+
 llvm::Value *generateLlvmIr(State *state, Expr *expr);
 
 static llvm::GlobalVariable *createUnnnamedConstant(State *state, llvm::Type *type) {
@@ -228,6 +236,10 @@ static llvm::GlobalVariable *createTypeInfoVariable(State *state, Type *type) {
 
 	if (type == &TYPE_SIGNED_INT_LITERAL) {
 		return createTypeInfoVariable(state, &TYPE_S64);
+	}
+
+	if (type == &TYPE_FLOAT_LITERAL) {
+		return createTypeInfoVariable(state, &TYPE_F64);
 	}
 
 	if (type->llvmStorage) {
@@ -401,9 +413,7 @@ static llvm::Constant *createConstant(State *state, Expr *expr) {
 }
 
 static llvm::GlobalVariable *createLlvmGlobal(State *state, Declaration *declaration) {
-	if (!(declaration->flags & DECLARATION_HAS_STORAGE)) {
-		declaration->flags |= DECLARATION_HAS_STORAGE;
-
+	if (!declaration->llvmStorage) {
 		auto llvmType = getLlvmType(state->context, static_cast<ExprLiteral *>(declaration->type)->typeValue);
 
 		auto global = static_cast<llvm::GlobalVariable *>(state->module.getOrInsertGlobal(stringRef(declaration->name), 
@@ -494,7 +504,7 @@ static void popLoop(State *state) {
 
 
 bool isStoredByPointer(Type *type) {
-	return type->flavor == TypeFlavor::ARRAY || type->flavor == TypeFlavor::STRUCT;
+	return type->flavor == TypeFlavor::ARRAY || type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::STRING;
 }
 
 llvm::Value *generateIrAndLoadIfStoredByPointer(State *state, Expr *expr) {
@@ -596,9 +606,7 @@ static void exitBlock(State *state, Block *block, bool isBreak) {
 static Block externalsBlock;
 
 static llvm::Function *createLlvmFunction(State *state, ExprFunction *function) {
-	if (!(function->flags & EXPR_HAS_STORAGE)) {
-		function->flags |= EXPR_HAS_STORAGE;
-
+	if (!function->llvmStorage) {
 		if (function->flags & EXPR_FUNCTION_IS_EXTERNAL) {
 			if (Declaration *declaration = findDeclarationNoYield(&externalsBlock, function->valueOfDeclaration->name)) {
 				function->llvmStorage = static_cast<ExprFunction *>(declaration->initialValue)->llvmStorage;
@@ -710,8 +718,7 @@ llvm::Value *loadAddressOf(State *state, Expr *expr) {
 
 		assert(binary->op == TOKEN('['));
 
-		// @StringFormat
-		if (binary->left->type->flavor == TypeFlavor::POINTER || binary->left->type->flavor == TypeFlavor::STRING) {
+		if (binary->left->type->flavor == TypeFlavor::POINTER) {
 			return state->builder.CreateGEP(generateLlvmIr(state, binary->left), generateLlvmIr(state, binary->right));
 		}
 		else if (binary->left->type->flags & TYPE_ARRAY_IS_FIXED) {
@@ -726,7 +733,7 @@ llvm::Value *loadAddressOf(State *state, Expr *expr) {
 				llvm::ArrayRef( values, 2));
 		}
 		else {
-			assert(binary->left->type->flavor == TypeFlavor::ARRAY);
+			assert(binary->left->type->flavor == TypeFlavor::ARRAY || binary->left->type->flavor == TypeFlavor::STRING);
 
 			llvm::Value *dataPointer;
 
@@ -983,37 +990,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 				return any;
 			}
 			case TypeFlavor::BOOL: {
-				if (right->type->flavor == TypeFlavor::STRING) {
-					auto nullCheck = state->builder.GetInsertBlock();
-
-					auto string = generateLlvmIr(state, right);
-
-					auto cmp = state->builder.CreateICmpEQ(string, llvm::ConstantPointerNull::get(llvm::Type::getInt8PtrTy(state->context)));
-
-					auto zeroCheck = llvm::BasicBlock::Create(state->context, "string.to.bool.zero.check", state->function);
-					auto result = llvm::BasicBlock::Create(state->context, "string.to.bool.post", state->function);
-
-					state->builder.CreateCondBr(cmp, result, zeroCheck);
-
-					state->builder.SetInsertPoint(zeroCheck);
-
-					auto int8 = llvm::Type::getInt8Ty(state->context);
-					cmp = state->builder.CreateICmpNE(state->builder.CreateLoad(int8, string), llvm::ConstantInt::get(int8, 0));
-
-					state->builder.CreateBr(result);
-
-
-					state->builder.SetInsertPoint(result);
-
-					auto int1 = llvm::Type::getInt1Ty(state->context);
-					auto phi = state->builder.CreatePHI(int1, 2);
-
-					phi->addIncoming(llvm::ConstantInt::get(int1, 0), nullCheck);
-					phi->addIncoming(cmp, zeroCheck);
-
-					return phi;
-				}
-				else if (right->type->flavor == TypeFlavor::ARRAY) {
+				if (right->type->flavor == TypeFlavor::ARRAY || right->type == &TYPE_STRING) {
 					if (right->type->flags & TYPE_ARRAY_IS_FIXED) {
 						return llvm::ConstantInt::get(llvm::Type::getInt1Ty(state->context), 1); // We don't allow 0 size constant arrays so this is always true
 					}
@@ -1104,9 +1081,11 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 					return array;
 				}
 			}
-			case TypeFlavor::POINTER:
-			case TypeFlavor::FUNCTION:
 			case TypeFlavor::STRING: {
+				return generateLlvmIr(state, right);
+			}
+			case TypeFlavor::POINTER:
+			case TypeFlavor::FUNCTION: {
 				if (right->type->flavor == TypeFlavor::ARRAY && (right->type->flags & TYPE_ARRAY_IS_FIXED)) {
 					return state->builder.CreatePointerCast(loadAddressOf(state, right), getLlvmType(state->context, castTo));
 				}
@@ -1428,7 +1407,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 		llvm::Value *pointer = nullptr;
 		llvm::Value *count = nullptr;
 
-		if (slice->array->type == &TYPE_STRING || slice->array->type->flavor == TypeFlavor::POINTER) {
+		if (slice->array->type->flavor == TypeFlavor::POINTER) {
 			pointer = generateLlvmIr(state, slice->array);
 		}
 		else if (slice->array->type->flags & TYPE_ARRAY_IS_FIXED) {
@@ -1471,9 +1450,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 		auto block = static_cast<ExprBlock *>(expr);
 
 		for (auto declaration : block->declarations.declarations) {
-			if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT))) {
-				declaration->flags |= DECLARATION_HAS_STORAGE;
-				
+			if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT))) {				
 				declaration->llvmStorage = allocateType(state, static_cast<ExprLiteral *>(declaration->type)->typeValue, declaration->name);
 			}
 		}
@@ -1594,10 +1571,8 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 		auto it = loop->iteratorBlock.declarations[0];
 		auto it_index = loop->iteratorBlock.declarations[1];
 
-		it->flags |= DECLARATION_HAS_STORAGE;
 		it->llvmStorage = allocateType(state, static_cast<ExprLiteral *>(it->type)->typeValue, it->name);
 
-		it_index->flags |= DECLARATION_HAS_STORAGE;
 		it_index->llvmStorage = allocateType(state, static_cast<ExprLiteral *>(it_index->type)->typeValue, it_index->name);
 
 		state->builder.CreateStore(llvm::ConstantInt::get(llvm::Type::getInt64Ty(state->context), 0), it_index->llvmStorage);
@@ -1644,12 +1619,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 
 		llvm::Value *compare;
 
-		if (loop->forBegin->type->flavor == TypeFlavor::STRING) {
-			auto character = state->builder.CreateLoad(state->builder.CreateLoad(loop->llvmPointer));
-
-			compare = state->builder.CreateICmpNE(character, llvm::ConstantInt::get(llvm::Type::getInt8Ty(state->context), 0));
-		}
-		else if (loop->forBegin->type->flavor == TypeFlavor::ARRAY) {
+		if (loop->forBegin->type->flavor == TypeFlavor::ARRAY || loop->forBegin->type == &TYPE_STRING) {
 			llvm::Value *count;
 
 			if (loop->forBegin->type->flags & TYPE_ARRAY_IS_FIXED) {
@@ -1712,11 +1682,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 	case ExprFlavor::STRING_LITERAL: {
 		auto string = static_cast<ExprStringLiteral *>(expr);
 
-		if (!(string->flags & EXPR_HAS_STORAGE)) {
-			string->llvmStorage = state->builder.CreateGlobalStringPtr(stringRef(string->string));
-		}
-
-		return string->llvmStorage;
+		return storeIfPointerType(state, &TYPE_STRING, createLlvmString(state, string->string));
 	}
 	case ExprFlavor::FUNCTION_CALL: {
 		return generateLlvmCall(state, static_cast<ExprFunctionCall *>(expr), nullptr);
@@ -2195,7 +2161,7 @@ void runLlvm() {
 
 					auto variable = createTypeInfoVariable(&state, type);
 
-					auto name = state.builder.CreateGlobalStringPtr(stringRef(type->name));
+					auto name = createLlvmString(&state, type->name);
 
 					Type_Info::Tag infoTag;
 
@@ -2370,7 +2336,7 @@ void runLlvm() {
 
 							llvm::Constant *initial_value;
 
-							if (member->initialValue) {
+							if (member->initialValue && (member->initialValue->flavor != ExprFlavor::TYPE_LITERAL || static_cast<ExprLiteral *>(member->initialValue)->typeValue->flavor != TypeFlavor::NAMESPACE)) {
 								auto variable = createUnnnamedConstant(&state, getLlvmType(context, member->initialValue->type));
 								variable->setInitializer(createConstant(&state, member->initialValue));
 								initial_value = llvm::ConstantExpr::getBitCast(variable, llvm::Type::getInt8PtrTy(context));
@@ -2379,7 +2345,7 @@ void runLlvm() {
 								initial_value = llvm::ConstantPointerNull::get(llvm::Type::getInt8PtrTy(context));
 							}
 
-							auto memberName = state.builder.CreateGlobalStringPtr(stringRef(member->name));
+							auto memberName = createLlvmString(&state, member->name);
 							auto offset = llvm::ConstantInt::get(int64, member->physicalStorage);
 							auto member_type = TO_TYPE_INFO(static_cast<ExprLiteral *>(member->type)->typeValue);
 
@@ -2431,7 +2397,7 @@ void runLlvm() {
 						for (u64 i = 0; i < count; i++) {
 							auto value = enum_->values->declarations[i];
 
-							auto valueName = state.builder.CreateGlobalStringPtr(stringRef(value->name));
+							auto valueName = createLlvmString(&state, value->name);
 							auto valueValue = llvm::ConstantInt::get(int64, static_cast<ExprLiteral *>(value->initialValue)->unsignedValue);
 
 							values[i] = llvm::ConstantStruct::get(enumValue, valueName, valueValue);

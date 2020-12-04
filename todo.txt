@@ -10,6 +10,30 @@ array literals
 
 struct literals
 
+Modules
+ - Allow symbols to be locally scoped to a module
+ - Modules searched for relative to the path to the compiler binary, instead of the working directory
+
+
+Runtime execution support for non external #c_call functions
+ 
+Standard modules
+ - Hashtable
+ - Math
+ - String manipulation
+ - File I/O
+ - Standard basic operations -> array_add, memory allocation, printing?
+ 
+ 
+Remove void 
+ - Functions with no return will just have 0 return types
+ - Replace *void with another type that has the same operations, but doesn't have pointer syntax
+   - Having pointer syntax makes it seem like it should be dereferencable
+   - Pointer syntax means its not intuitive that it should be able to represent a function as well
+   - Call new type something like pointer or memory
+
+
+Allow symbols to be locally scoped to a file
 	
 Make it a compile time error to out of bounds index a static array if the index is a constant
  - Compile time error for constant negative index of normal and dynamic arrays?

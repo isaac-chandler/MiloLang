@@ -28,6 +28,14 @@ public:
 		return false;
 	}
 
+	T *begin() {
+		return array.begin();
+	}
+
+	T *end() {
+		return array.end();
+	}
+
 	const T *begin() const {
 		return array.begin();
 	}

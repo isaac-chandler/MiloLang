@@ -9,8 +9,8 @@ struct String;
 
 
 struct String {
-	u64 length;
 	char *characters;
+	u64 length;
 
 	String() : length(0), characters(0) {};
 	String(const char *cString);

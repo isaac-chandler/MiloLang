@@ -84,18 +84,25 @@ max :: (a: u64, b: u64) -> #must u64 {
 		return b
 }
 
-string_length :: (s: string) -> #must u64 {
-	len: u64 = 0
-	while s[len] len += 1
 
-	return len
+#if TARGET_WINDOWS {		
+	GetProcessHeap :: () -> *void #external "kernel32"
+	GetStdHandle :: (nStdHandle: u32) -> *void #external "kernel32"
+	STD_OUTPUT_HANDLE :: cast(u32) -11
+	
+	std_out: *void
+	process_heap: *void
+	
+} else {
+	unsupported_os: void
 }
-
 
 allocate :: (size: u64) -> #must *void {		
 	#if TARGET_WINDOWS {
+	
 		HeapAlloc :: (hHeap: *void, dwFlags: u32, dwBytes: u64) -> *void #external "kernel32"
 		
+		if !process_heap process_heap = GetProcessHeap()
 		return HeapAlloc(process_heap, 0, size)
 	} else {
 		unsupported_os = 1
@@ -109,6 +116,7 @@ reallocate :: (block: *void, size: u64) -> #must *void {
 		#if TARGET_WINDOWS {
 			HeapReAlloc :: (hHeap: *void, dwFlags: u32, lpMem: *void, dwBytes: u64) -> *void #external "kernel32"
 			
+			if !process_heap process_heap = GetProcessHeap()
 			return HeapReAlloc(process_heap, 0, block, size)
 		
 		} else {
@@ -121,6 +129,7 @@ deallocate :: (block: *void) {
 	#if TARGET_WINDOWS {
 		HeapFree :: (hHeap: *void, dwFlags: u32, lpMem: *void) -> s32 #external "kernel32"
 		
+		if !process_heap process_heap = GetProcessHeap()
 		HeapFree(process_heap, 0, block)
 	} else {
 		unsupported_os = 1
@@ -142,7 +151,8 @@ exit :: (code: u32 = 0) {
 print_buffer :: (buffer: []u8) {
 	#if TARGET_WINDOWS {
 		WriteConsoleA :: (hConsoleOutput: *void, lpBuffer: *void, nNumberOfCharactersToWrite: u32, lpNumberOfCharactersWritten: *u32 = null, lpReserved := null) -> s32 #external "kernel32"
-	
+		
+		if !std_out std_out = GetStdHandle(STD_OUTPUT_HANDLE)
 		WriteConsoleA(std_out, buffer.data, cast() buffer.count)
 	} else {
 		unsupported_os = 1
@@ -151,27 +161,17 @@ print_buffer :: (buffer: []u8) {
 
 
 print_string :: (s: string) {
-	buffer: []u8
-	
-	buffer.data = cast() s
-	buffer.count = string_length(s)
-
-	print_buffer(buffer)
+	print_buffer(cast() s)
 }
 
 copy_string :: (s: string) -> #must string {
-	memory: *u8 = allocate(string_length(s) + 1)
+	result := s
+
+	result.data = allocate(s.count)
 	
-	buf := memory
+	memory_copy(result.data, s.data, s.count)
 	
-	for s {
-		<< memory = it
-		memory += 1
-	}
-	
-	<< memory = 0
-	
-	return cast() buf
+	return result
 }
 
 args: []string
@@ -250,27 +250,16 @@ array_remove_string_by_pointer :: (array: *[]string, value: *string) {
 	array_remove_generic_by_pointer(cast() array, value, size_of(string))
 }
 
-#if TARGET_WINDOWS {
-	std_out: *void
-	process_heap: *void
-}
-
 
 // @Incomplete, only converts ascii to UTF16, not UTF8
 create_wide_string :: (s: string) -> #must *u16 {
-	result: *u16 = allocate((string_length(s) + 1) * size_of(u16))
+	result: *u16 = allocate((s.count + 1) * size_of(u16))
 	
-	buffer := result
-	
-	sbuf := cast(*u8) s
-	
-	while <<sbuf {
-		<<buffer = <<sbuf
-		buffer += 1
-		sbuf += 1
+	for s {
+		result[it_index] = it
 	}
 	
-	<<buffer = 0
+	result[s.count] = 0
 	
 	return result
 }
@@ -278,18 +267,6 @@ create_wide_string :: (s: string) -> #must *u16 {
 main :: () {
 	//args.data = argv
 	//args.count = cast(u64) argc
-	#if TARGET_WINDOWS {		
-		GetProcessHeap :: () -> *void #external "kernel32"
-		GetStdHandle :: (nStdHandle: u32) -> *void #external "kernel32"
-		STD_OUTPUT_HANDLE :: cast(u32) -11
-
-	
-		process_heap = GetProcessHeap()
-		std_out = GetStdHandle(STD_OUTPUT_HANDLE)
-		
-	} else {
-		unsupported_os = 1
-	}
 
 	_main()
 	
@@ -308,43 +285,38 @@ u64_to_string :: (value: u64, base: u64 = 10) -> #must string {
 	}
 
 	if value == 0 {
-		result := cast(*u8) allocate(2)
-		result[0] = '0'
-		result[1] = 0
-		
-		return cast() result
+		return copy_string("0")
 	}
 
+	result: string
 	digitCount: u64
 	
 	remaining := value
 	
 	while remaining {
-		digitCount += 1
+		result.count += 1
 		
 		remaining /= base
 	}
 	
-	result := cast(*u8) allocate(digitCount + 1)
+	result.data = allocate(result.count)
 	
-	result += digitCount;
-	
-	<<result = 0
+	index := result.count
 	remaining = value
 	
 	while remaining {
-		result -= 1;
+		index -= 1;
 		
-		<<result = cast() (DIGIT_TABLE[remaining % base])
+		result[index] = DIGIT_TABLE[remaining % base]
 		remaining /= base
 	}
 	
-	return cast() result
+	return result
 }
 
 print_u64 :: (num: u64, base: u64 = 10) {
 	s := u64_to_string(num, base)
-	defer deallocate(cast() s)
+	defer deallocate(s.data)
 	
 	print_string(s)
 }
@@ -460,7 +432,7 @@ print_any :: (using val: any) {
 		print_string("void")
 	else if value_type == type_info(type) {
 	
-		print_string(type_info(cast(type) val).name)
+		print_string(type_info(cast() val).name)
 		
 	} else if value_type == type_info(bool) {
 		value := cast(bool) val
@@ -469,10 +441,6 @@ print_any :: (using val: any) {
 			print_string("true")
 		else
 			print_string("false")
-		
-	} else if value_type == type_info(type) {
-	
-		print_string(type_info(cast(type) val).name)
 		
 	} else if value_type == type_info(string) {
 	

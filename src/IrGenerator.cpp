@@ -7,6 +7,7 @@
 #include "BucketedArenaAllocator.h"
 #include "CoffWriter.h"
 #include "TypeTable.h"
+#include "Infer.h"
 
 struct Loop {
 	struct ExprLoop *loop;
@@ -76,6 +77,11 @@ static void generateIncrement(IrState *state, ExprLoop *loop) {
 		auto array = static_cast<TypeArray *>(loop->forBegin->type);
 
 		increment.b = array->arrayOf->size;
+		increment.opSize = 8;
+	}
+	else if (loop->forBegin->type->flavor == TypeFlavor::STRING) {
+		increment.b = 1;
+		increment.opSize = 8;
 	}
 	else {
 		increment.b = 1;
@@ -537,6 +543,10 @@ void generateCall(IrState *state, ExprFunctionCall *call, u64 dest, ExprCommaAss
 	ir.arguments = argumentInfo;
 	ir.dest = dest;
 	ir.opSize = call->type->size;
+
+	if (call->function->type->flags & TYPE_FUNCTION_IS_C_CALL) {
+		ir.flags |= IR_C_CALL;
+	}
 }
 
 u64 generateEquals(IrState *state, u64 leftReg, Expr *right, u64 dest, bool equals) {
@@ -554,17 +564,17 @@ u64 generateEquals(IrState *state, u64 leftReg, Expr *right, u64 dest, bool equa
 		FunctionCall *argumentInfo = static_cast<FunctionCall *>(state->allocator.allocate(sizeof(FunctionCall) + sizeof(argumentInfo->args[0]) * 2));
 		argumentInfo->argCount = 2;
 
-		u64 callAuxStorage = 4;
+		u64 callAuxStorage = 8;
 
 		argumentInfo->args[0].number = leftReg;
-		argumentInfo->args[0].type = TYPE_VOID_POINTER;
+		argumentInfo->args[0].type = &TYPE_STRING;
 		argumentInfo->args[1].number = rightReg;
-		argumentInfo->args[1].type = TYPE_VOID_POINTER;
+		argumentInfo->args[1].type = &TYPE_STRING;
 
 		argumentInfo->returnType = &TYPE_BOOL;
 
-		if (4 > state->callAuxStorage) {
-			state->callAuxStorage = 4;
+		if (state->callAuxStorage < callAuxStorage) {
+			state->callAuxStorage = callAuxStorage;
 		}
 
 		Ir &ir = state->ir.add();
@@ -607,7 +617,6 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 		// @Hack when ir generation was originally written it wasn't designed for large types, the dest register is often used for intermediates which may be larger than the final value
 		// so if we are going to write a large value we should write it somewhere other than where they requested to be safe
 
-		// @StringFormat this assumption is violated if strings are large since for loops force the dest for strings into a pointer size register
 		// If we forced the dest we know it was safe
 
 		dest = allocateSpaceForType(state, expr->type);
@@ -627,17 +636,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				array = generateIr(state, slice->array, state->nextRegister++);
 			}
 
-			if (slice->array->type == &TYPE_STRING) {
-				auto offset = generateIr(state, slice->sliceStart, state->nextRegister++);
-
-				auto &add = state->ir.add();
-				add.op = IrOp::ADD;
-				add.dest = dest;
-				add.a = array;
-				add.b = offset;
-				add.opSize = 8;
-			}
-			else if (slice->array->type->flavor == TypeFlavor::POINTER) {
+			if (slice->array->type->flavor == TypeFlavor::POINTER) {
 				auto pointer = static_cast<TypePointer *>(slice->array->type);
 
 				if (slice->sliceStart) {
@@ -682,8 +681,8 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				}
 
 			}
-			else if (slice->array->type->flavor == TypeFlavor::ARRAY) {
-				auto arrayType = static_cast<TypeArray *>(slice->array->type);
+			else if (slice->array->type->flavor == TypeFlavor::ARRAY || slice->array->type == &TYPE_STRING) {
+				auto arrayOf = slice->array->type == &TYPE_STRING ? &TYPE_U8 : static_cast<TypeArray *>(slice->array->type)->arrayOf;
 
 				if (slice->sliceStart && slice->sliceEnd) {
 					auto offset = generateIr(state, slice->sliceStart, state->nextRegister++);
@@ -697,12 +696,12 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 					count.b = offset;
 					count.opSize = 8;
 
-					if (arrayType->arrayOf->size != 1) {
+					if (arrayOf->size != 1) {
 						auto &mul = state->ir.add();
 						mul.op = IrOp::MUL_BY_CONSTANT;
 						mul.dest = dest;
 						mul.a = offset;
-						mul.b = arrayType->arrayOf->size;
+						mul.b = arrayOf->size;
 						mul.opSize = 8;
 
 						offset = dest;
@@ -720,13 +719,13 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 					u64 length = array + 1;
 
-					if (arrayType->flags & TYPE_ARRAY_IS_FIXED) {
+					if (slice->array->type->flags & TYPE_ARRAY_IS_FIXED) {
 						length = state->nextRegister++;
 
 						auto &immediate = state->ir.add();
 						immediate.op = IrOp::IMMEDIATE;
 						immediate.dest = length;
-						immediate.a = arrayType->count;
+						immediate.a = static_cast<TypeArray *>(slice->array->type)->count;
 						immediate.opSize = 8;
 					}
 
@@ -737,12 +736,12 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 					count.b = offset;
 					count.opSize = 8;
 
-					if (arrayType->arrayOf->size != 1) {
+					if (arrayOf->size != 1) {
 						auto &mul = state->ir.add();
 						mul.op = IrOp::MUL_BY_CONSTANT;
 						mul.dest = dest;
 						mul.a = offset;
-						mul.b = arrayType->arrayOf->size;
+						mul.b = arrayOf->size;
 						mul.opSize = 8;
 
 						offset = dest;
@@ -829,42 +828,20 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 							type.type = right->type;
 							type.opSize = 8;
 
+							Ir &typeInfo = state->ir.add();
+							typeInfo.op = IrOp::TYPE_INFO;
+							typeInfo.dest = dest + 1;
+							typeInfo.a = dest + 1;
+							typeInfo.destSize = 8;
+							typeInfo.opSize = 8;
+
 							return dest;
 						}
 						case TypeFlavor::BOOL: {
 							u64 src;
 							u64 size;
 
-							u64 patch;
-
-							if (right->type->flavor == TypeFlavor::STRING) {
-								Ir &set = state->ir.add();
-
-								set.op = IrOp::SET;
-								set.dest = dest;
-								set.a = rightReg;
-								set.b = 0;
-								set.opSize = right->type->size;
-								set.destSize = set.opSize;
-
-								patch = state->ir.count;
-
-								Ir &branch = state->ir.add();
-								branch.op = IrOp::IF_Z_GOTO;
-								branch.a = dest;
-								branch.opSize = right->type->size;
-
-								Ir &read = state->ir.add();
-								read.op = IrOp::READ;
-								read.dest = rightReg;
-								read.a = rightReg;
-								read.destSize = 1;
-								read.opSize = 8;
-
-								src = dest;
-								size = 1;
-							}
-							else if (right->type->flavor == TypeFlavor::ARRAY) {
+							if (right->type->flavor == TypeFlavor::ARRAY || right->type == &TYPE_STRING) {
 								if (right->type->flags & TYPE_ARRAY_IS_FIXED) {
 									Ir &one = state->ir.add();
 
@@ -895,10 +872,6 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 							if (right->type->flavor == TypeFlavor::FLOAT)
 								ir.flags |= IR_FLOAT_OP;
-
-							if (right->type->flavor == TypeFlavor::STRING) {
-								state->ir[patch].b = state->ir.count;
-							}
 							
 							return dest;
 						}
@@ -921,7 +894,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 							return dest;
 						}
 						case TypeFlavor::ARRAY: {
-							if (right->type->flags & TYPE_ARRAY_IS_DYNAMIC) {
+							if (right->type == &TYPE_STRING || (right->type->flags & TYPE_ARRAY_IS_DYNAMIC)) {
 								assert(!(left->type->flags & TYPE_ARRAY_IS_FIXED));
 								return rightReg;
 							}
@@ -945,18 +918,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 							}
 						}
 						case TypeFlavor::POINTER: {
-							if (right->type->flavor == TypeFlavor::ARRAY && (right->type->flags & TYPE_ARRAY_IS_FIXED)) {
-								Ir &buffer = state->ir.add();
-								buffer.op = IrOp::ADDRESS_OF_LOCAL;
-								buffer.dest = dest;
-								buffer.a = rightReg;
-								buffer.b = 0;
-
-								return dest;
-							}
-							else {
-								return rightReg;
-							}
+							return rightReg;
 						}
 						case TypeFlavor::FUNCTION:
 						case TypeFlavor::STRING:
@@ -1530,7 +1492,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				loop->irPointer = itReg;
 			}
 
-			if (loop->forBegin->type->flavor == TypeFlavor::ARRAY) {
+			if (loop->forBegin->type->flavor == TypeFlavor::ARRAY || loop->forBegin->type == &TYPE_STRING) {
 				auto begin = loop->forBegin;
 
 				loop->arrayPointer = loadAddressOf(state, begin, state->nextRegister++);
@@ -1577,24 +1539,9 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 			u64 compareDest;
 
-			if (loop->forBegin->type->flavor == TypeFlavor::STRING && !(loop->flags & EXPR_FOR_BY_POINTER)) {
-				compareDest = it->physicalStorage;
-			}
-			else {
-				compareDest = state->nextRegister++;
-			}
+			compareDest = state->nextRegister++;
 			
-			if (loop->forBegin->type->flavor == TypeFlavor::STRING) {
-				// @StringFormat
-				Ir &read = state->ir.add();
-
-				read.op = IrOp::READ;
-				read.a = loop->irPointer;
-				read.opSize = 8;
-				read.dest = compareDest;
-				read.destSize = 1;
-			}
-			else if (loop->forBegin->type->flavor == TypeFlavor::ARRAY) {
+			if (loop->forBegin->type->flavor == TypeFlavor::ARRAY || loop->forBegin->type->flavor == TypeFlavor::STRING) {
 				if (loop->forBegin->type->flags & TYPE_ARRAY_IS_FIXED) {
 					Ir &immediate = state->ir.add();
 					immediate.op = IrOp::IMMEDIATE;
@@ -1645,7 +1592,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			branch.opSize = 1;
 
 			if (!(loop->flags & EXPR_FOR_BY_POINTER)) {
-				if (loop->forBegin->type->flavor == TypeFlavor::ARRAY || loop->forBegin->type->flavor == TypeFlavor::POINTER) {
+				if (loop->forBegin->type->flavor == TypeFlavor::ARRAY || loop->forBegin->type->flavor == TypeFlavor::POINTER || loop->forBegin->type == &TYPE_STRING) {
 					Ir &read = state->ir.add();
 					read.op = IrOp::READ;
 					read.dest = it->physicalStorage;
@@ -1697,9 +1644,9 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			if (dest == DEST_NONE) return dest;
 
 			Ir &address = state->ir.add();
-			address.dest = dest;
-			address.opSize = 8;
 			address.op = IrOp::STRING;
+			address.dest = dest;
+			address.opSize = 16;
 			address.string = static_cast<ExprStringLiteral *>(expr);
 
 			return dest;
@@ -2065,7 +2012,14 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 					return dest;
 				}
 				case TokenT::TYPE_INFO: {
-					generateIr(state, unary->value, dest);
+					u64 store = generateIr(state, unary->value, dest);
+
+					auto &ir = state->ir.add();
+					ir.op = IrOp::TYPE_INFO;
+					ir.dest = dest;
+					ir.a = store;
+					ir.opSize = 8;
+					ir.destSize = 8;
 
 					return dest;
 				}
@@ -2198,6 +2152,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 			return dest;
 		}
+		case ExprFlavor::RUN: // Statement level runs with a void return type are not removed from the ast but shouldn't generate code
 		case ExprFlavor::STATIC_IF: {
 			return DEST_NONE; // In the event that the static if returns false and there is no else block, we just leave the static if expression in the tree, 
 				   // so when we see a static if here we should just generate no code
@@ -2225,6 +2180,71 @@ u64 generateIrForceDest(IrState *state, Expr *expr, u64 dest) {
 	return dest;
 }
 
+bool generateIrForFunction(ExprFunction *function) {
+	u64 paramOffset;
+
+	if (!isStandardSize(static_cast<ExprLiteral *>(function->returns.declarations[0]->type)->typeValue->size)) {
+		paramOffset = 1;
+	}
+	else {
+		paramOffset = 0;
+	}
+
+
+	function->state.parameterSpace = my_max(4, function->arguments.declarations.count + paramOffset + function->returns.declarations.count - 1);
+	function->state.nextRegister += function->state.parameterSpace;
+
+	for (u64 i = 0; i < function->arguments.declarations.count; i++) {
+		auto declaration = function->arguments.declarations[i];
+		auto type = static_cast<ExprLiteral *>(declaration->type)->typeValue;
+
+		if (isStandardSize(type->size)) {
+			declaration->physicalStorage = i + 1 + paramOffset;
+		}
+		else {
+			declaration->physicalStorage = allocateSpaceForType(&function->state, type);
+		}
+	}
+
+	for (u64 i = 1; i < function->returns.declarations.count; i++) {
+		auto declaration = function->returns.declarations[i];
+
+		declaration->physicalStorage = function->arguments.declarations.count + paramOffset + i;
+	}
+
+
+	generateIr(&function->state, function->body, DEST_NONE);
+
+	exitBlock(&function->state, nullptr, true);
+
+	Ir &ir = function->state.ir.add();
+	ir.op = IrOp::RETURN;
+	ir.a = 0;
+	ir.opSize = 0;
+
+	if (hadError) {
+		return false;
+	}
+
+	//addLineMarker(&function->state, function->body->start.fileUid, function->body->end);
+
+	// @Incomplete @ErrorMessage check wether the function actually returns
+
+	function->flags |= EXPR_FUNCTION_RUN_READY;
+	_ReadWriteBarrier();
+	inferQueue.add(function);
+
+	CoffJob job;
+	job.function = function;
+	job.flavor = CoffJobFlavor::FUNCTION;
+	
+	coffWriterQueue.add(job);
+
+
+
+	return true;
+}
+
 void runIrGenerator() {
 	PROFILE_FUNC();
 	while (true) {
@@ -2234,55 +2254,11 @@ void runIrGenerator() {
 		if (!function)
 			break;
 
-		u64 paramOffset;
-
-		if (!isStandardSize(static_cast<ExprLiteral *>(function->returns.declarations[0]->type)->typeValue->size)) {
-			paramOffset = 1;
-		}
-		else {
-			paramOffset = 0;
-		}
-
-
-		function->state.parameterSpace = my_max(4, function->arguments.declarations.count + paramOffset + function->returns.declarations.count - 1);
-		function->state.nextRegister += function->state.parameterSpace;
-
-		for (u64 i = 0; i < function->arguments.declarations.count; i++) {
-			auto declaration = function->arguments.declarations[i];
-			auto type = static_cast<ExprLiteral *>(declaration->type)->typeValue;
-
-			if (isStandardSize(type->size)) {
-				declaration->physicalStorage = i + 1 + paramOffset;
-			}
-			else {
-				declaration->physicalStorage = allocateSpaceForType(&function->state, type);
-			}
-		}
-
-		for (u64 i = 1; i < function->returns.declarations.count; i++) {
-			auto declaration = function->returns.declarations[i];
-
-			declaration->physicalStorage = function->arguments.declarations.count + paramOffset + i;
-		}
-
-
-		generateIr(&function->state, function->body, DEST_NONE);
-
-		if (hadError) {
-			goto error;
-		}
-
-		//addLineMarker(&function->state, function->body->start.fileUid, function->body->end);
-
-		// @Incomplete @ErrorMessage check wether the function actually returns
-
-		CoffJob job;
-		job.function = function;
-		job.flavor = CoffJobFlavor::FUNCTION;
-
-		coffWriterQueue.add(job);
+		if (!generateIrForFunction(function))
+			break;
 	}
 
-	error:
+error:
+	inferQueue.add(static_cast<Declaration *>(nullptr));
 	coffWriterQueue.add({ nullptr, CoffJobFlavor::FUNCTION });
 }

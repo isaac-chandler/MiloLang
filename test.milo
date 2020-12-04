@@ -405,6 +405,7 @@ make_vector4 :: (x: f32, y: f32, z: f32, w: f32) -> Vector4 {
 }
 
 untextured_quad :: (using rectangle: *Rectangle) {
+
 	half_width := width * 0.5
 	half_height := height * 0.5
 
@@ -1073,8 +1074,7 @@ _main :: () {
 		for * entity: entities {
 			if !entity.occupied continue
 		
-			if entity.flags & .DRAW_RECTANGLE {		
-				
+			if entity.flags & .DRAW_RECTANGLE {
 			
 				if entity.texture_handle {
 					glEnable(GL_TEXTURE_2D)
@@ -1112,4 +1112,6 @@ _main :: () {
 		
 		last_time = current_time
 	}
+	
+	#run _main()
 }
