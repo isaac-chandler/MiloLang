@@ -329,7 +329,7 @@ if (op.flags & IR_FLOAT_OP) {\
 			break;
 		}
 		case IrOp::SUB: {
-			FLOAT_OP(+);
+			FLOAT_OP(-);
 			u64 result = A - B;
 			stack[op.dest] = result & opMask;
 			break;
@@ -418,6 +418,15 @@ if (op.flags & IR_FLOAT_OP) {\
 			}
 		}
 		case IrOp::NEG: {
+			if (op.flags & IR_FLOAT_OP) {
+				if (op.opSize == 4) {
+					*reinterpret_cast<float *>(stack + op.dest) = -*reinterpret_cast<float *>(stack + op.a);
+				}
+				else {
+					*reinterpret_cast<double *>(stack + op.dest) = -*reinterpret_cast<double *>(stack + op.a);
+				}
+				break;
+			}
 			u64 result = -A;
 			stack[op.dest] = result & opMask;
 			break;

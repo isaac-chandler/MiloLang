@@ -365,6 +365,7 @@ PIXELFORMATDESCRIPTOR :: struct {
 	cAccumRedBits: u8
 	cAccumGreenBits: u8
 	cAccumBlueBits: u8
+	cAccumAlphaBits: u8
 	cDepthBits: u8
 	cStencilBits: u8
 	cAuxBuffers: u8

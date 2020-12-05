@@ -786,7 +786,7 @@ _main :: () {
 	
 	
 	load_gl_extensions()
-	wglSwapIntervalEXT(1)
+	wglSwapIntervalEXT(0)
 	
 	player_index: u64
 
@@ -871,6 +871,12 @@ _main :: () {
 	dummy_player: u64
 	
 	while !should_quit {
+		current_time: s64
+		
+		QueryPerformanceCounter(*current_time)
+		
+		delta := cast() (current_time - last_time) * counter_scale
+		
 		message: MSG = --
 		
 		while PeekMessageW(*message, null) {
@@ -882,12 +888,6 @@ _main :: () {
 			TranslateMessage(*message)
 			DispatchMessageW(*message)
 		}
-		
-		current_time: s64
-		
-		QueryPerformanceCounter(*current_time)
-		
-		delta := cast() (current_time - last_time) * counter_scale
 		
 		#if DEVELOPER {
 			if shift_is_down
@@ -1101,9 +1101,9 @@ _main :: () {
 		glDisable(GL_TEXTURE_2D)
 		
 		
-		if (delta > 0.02) {
+		//if (delta > 1.0 / 55) {
 			print("%\n", delta)
-		}
+		//}
 		
 		// print(cast() (delta * 1000_000))
 		// print("\n")

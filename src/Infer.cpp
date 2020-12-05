@@ -717,9 +717,7 @@ bool solidifyOneLiteral(ExprBinaryOperator *binary) {
 	auto left = binary->left;
 	auto right = binary->right;
 
-	if (left->type == &TYPE_FLOAT_LITERAL) {
-		assert(right->type->flavor == TypeFlavor::FLOAT);
-
+	if (left->type == &TYPE_FLOAT_LITERAL && right->type->flavor == TypeFlavor::FLOAT) {
 		left->type = right->type;
 	}
 	else if (left->type == &TYPE_UNSIGNED_INT_LITERAL) {
@@ -805,9 +803,7 @@ bool solidifyOneLiteral(ExprBinaryOperator *binary) {
 
 		left->type = right->type;
 	}
-	else if (right->type == &TYPE_FLOAT_LITERAL) {
-		assert(left->type->flavor == TypeFlavor::FLOAT);
-
+	else if (right->type == &TYPE_FLOAT_LITERAL && left->type->flavor == TypeFlavor::FLOAT) {
 		right->type = left->type;
 	}
 	else if (right->type == &TYPE_UNSIGNED_INT_LITERAL) {
@@ -1814,7 +1810,7 @@ bool evaluateConstantBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, left->type, left->unsignedValue / right->unsignedValue);
 		}
 		else if (binary->left->flavor == ExprFlavor::FLOAT_LITERAL) {
-			*exprPointer = createFloatLiteral(left->start, right->end, left->type, left->floatValue * right->floatValue);
+			*exprPointer = createFloatLiteral(left->start, right->end, left->type, left->floatValue / right->floatValue);
 		}
 		break;
 	}
@@ -2038,8 +2034,6 @@ bool binaryOpForFloatAndIntLiteral(Expr **exprPointer) {
 
 	if (left->type->flavor == TypeFlavor::FLOAT && (right->type == &TYPE_UNSIGNED_INT_LITERAL || right->type == &TYPE_SIGNED_INT_LITERAL)) {
 		if (left->type == &TYPE_FLOAT_LITERAL) {
-			trySolidifyNumericLiteralToDefault(right);
-
 			if (!solidifyOneLiteral(binary))
 				return false;
 
