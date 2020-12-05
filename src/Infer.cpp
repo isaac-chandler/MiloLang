@@ -7051,6 +7051,8 @@ bool doJob(SubJob *job) {
 void runInfer() {
 	PROFILE_FUNC();
 
+	u64 irGenerationPending = 0;
+
 	u64 doneCount = 0;
 
 	createBasicDeclarations();
@@ -7073,6 +7075,9 @@ void runInfer() {
 		}
 		else {
 			assert(job.type == InferJobType::FUNCTION_IR);
+
+			assert(irGenerationPending > 0);
+			irGenerationPending--;
 
 			auto function = job.function;
 
@@ -7105,6 +7110,7 @@ void runInfer() {
 					functionWaitingOnSize.unordered_remove(i--);
 
 					irGeneratorQueue.add(job->function);
+					irGenerationPending++;
 
 					freeJob(job);
 				}
@@ -7134,7 +7140,7 @@ void runInfer() {
 			}
 		}
 
-		if (doneCount == 1 && !sizeJobs && !functionJobs && !declarationJobs) {
+		if (doneCount == 1 && irGenerationPending == 0) {
 			irGeneratorQueue.add(nullptr);
 		}
 	}

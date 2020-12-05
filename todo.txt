@@ -10,6 +10,8 @@ array literals
 
 struct literals
 
+Make how the infer phase being completed is checked better
+
 Modules
  - Allow symbols to be locally scoped to a module
  - Modules searched for relative to the path to the compiler binary, instead of the working directory

@@ -36,7 +36,6 @@ part1 :: (passport: *Passport, field: string, value: string) {
 }
 
 part2 :: (passport: *Passport, field: string, value: string) {
-	print("%:% ", field, value)
 	if field == {
 		case "byr"
 			year := read_u64(value)
@@ -98,8 +97,6 @@ _main :: () {
 				part2(*passport, field, value)
 			}
 		}
-		
-		print("\n%\n", passport._)
 		
 		for passport.fields
 			if !it
