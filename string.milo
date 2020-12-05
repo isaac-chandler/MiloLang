@@ -1,0 +1,51 @@
+read_line :: (s: string) (-> line: string, remaining: string) {
+	remaining := s
+	line := s
+	line.count = 0
+
+	while remaining && remaining[0] != '\r' && remaining[0] != '\n' {
+		remaining = remaining[1..]
+		line.count += 1
+	}
+	
+	if remaining.count >= 2 && remaining[0..2] == "\r\n"
+		remaining = remaining[2..]
+	else if remaining
+		remaining = remaining[1..]
+		
+	return line, remaining
+}
+
+read_u64 :: (s: string) (-> value: u64, remaining: string) {
+	remaining := s
+	
+	value: u64
+	
+	
+	while remaining && '0' <= remaining[0] && remaining[0] <= '9' {
+		value *= 10
+		value += remaining[0] - '0'
+		remaining = remaining[1..]
+	}
+
+	return value, remaining
+}
+
+// @Unicode
+split_at_first :: (s: string, c: u8) (-> before: string, after: string) {
+	before := s
+	after := s
+	
+	before.count = 0
+	
+	for s {
+		defer after = after[1..]
+		
+		if it == c
+			break;
+		
+		before.count += 1
+	}
+	
+	return before, after
+}

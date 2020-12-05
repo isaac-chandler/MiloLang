@@ -1,0 +1,50 @@
+#load "standard.milo"
+#load "file.milo"
+#load "string.milo"
+
+part1 :: (min: u64, max: u64, c: u8, password: string) -> bool {
+	count: u64
+		
+	for password {
+		if it == c
+			count += 1
+	}
+	
+	return min <= count && count <= max
+}
+
+part2 :: (min: u64, max: u64, c: u8, password: string) -> bool {
+	return (password[min - 1] == c && password[max - 1] != c) || (password[min - 1] != c && password[max - 1] == c)
+}
+
+_main :: () {
+	data := cast(string) read_entire_file("AdventOfCode2020/Day02.txt")
+	
+	valid: u64
+	
+	while data {
+		line: string
+		
+		line, data = read_line(data)
+		
+		if !line
+			continue;
+			
+		min: u64
+		max: u64
+		
+		min, line = read_u64(line)
+		line = line[1..]
+		max, line = read_u64(line)
+		
+		c := line[1]
+		
+		password := line[4..]
+		
+		if part2(min, max, c, password)
+			valid += 1
+		
+	}
+	
+	print("%\n", valid)
+}

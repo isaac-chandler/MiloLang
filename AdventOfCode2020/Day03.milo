@@ -1,0 +1,48 @@
+#load "standard.milo"
+#load "file.milo"
+#load "string.milo"
+
+check_slope :: (map: []string, x_step: u64, y_step: u64) -> u64 {
+	x: u64
+	y: u64
+	trees: u64
+	
+	while y < map.count {
+		if map[y][x % map[y].count] == '#'
+			trees += 1
+			
+		x += x_step
+		y += y_step
+	}
+	
+	return trees
+}
+
+part1 :: (map: []string) {
+	print("%\n", check_slope(map, 3, 1))
+}
+
+part2 :: (map: []string) {
+	print("%\n", check_slope(map, 1, 1) * check_slope(map, 3, 1) * check_slope(map, 5, 1) * check_slope(map, 7, 1) * check_slope(map, 1, 2))
+}
+
+_main :: () {
+	data := cast(string) read_entire_file("AdventOfCode2020/Day03.txt")
+	
+	map: [..]string
+	
+	while data {
+		line: string
+		
+		line, data = read_line(data)
+		
+		if !line
+			continue;
+		
+		array_add(cast() *map, line)
+	}
+	
+	part2(map)
+	
+	#run _main()
+}

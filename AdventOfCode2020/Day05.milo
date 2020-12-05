@@ -1,0 +1,56 @@
+#load "standard.milo"
+#load "file.milo"
+#load "string.milo"
+
+_main :: () {
+	data := cast(string) read_entire_file("AdventOfCode2020/Day05.txt")
+	max_seat: u64
+	
+	seats: [..]u64
+	
+	while data {
+		line: string
+		line, data = read_line(data)
+		
+		if !line
+			continue;
+				
+		seat: u64
+		
+		for line {
+			seat <<= 1
+			seat |= cast() (it == 'B' || it == 'R')
+		}
+		
+		max_seat = max(seat, max_seat)
+		
+		array_add(cast() *seats, seat)
+	}
+
+	part1 :: false
+	
+	#if part1 {
+		print("%\n", max_seat)
+	} else {
+		for seat: 1 .. max_seat {
+			before: bool
+			after: bool
+		
+			for seats {
+				if it == seat
+					continue seat
+				else if it == seat - 1
+					before = true
+				else if it == seat + 1
+					after = true
+			}
+			
+			if before && after {
+				print("%\n", seat)
+				break
+			}
+		}
+	}
+	
+	#run _main()
+}

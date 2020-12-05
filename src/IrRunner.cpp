@@ -122,6 +122,7 @@ char getSigChar(Type *type) {
 }
 
 void createRuntimeValue(Expr *value, void *dest) {
+	PROFILE_FUNC();
 	if (value->flavor == ExprFlavor::INT_LITERAL) {
 		auto literal = static_cast<ExprLiteral *>(value);
 
@@ -216,7 +217,17 @@ void deinitVMState(VMState *state) {
 }
 
 void runFunction(VMState *state, ExprFunction *expr, const Ir *caller, DCArgs *dcArgs, u64 *callerStack) {
-	u64 *stack = allocateStack(state, expr->state.nextRegister);
+	u64 dummyStorage = 0;
+	u64 outParameters = expr->returns.declarations.count - 1;
+
+	for (u64 i = 0; i < outParameters; i++) {
+		if (caller->arguments->args[expr->arguments.declarations.count + i].number == static_cast<u64>(-1)) {
+			dummyStorage = my_max(dummyStorage,
+				(static_cast<ExprLiteral *>(expr->returns.declarations[i + 1]->type)->typeValue->size + 7) / 8);
+		}
+	}
+
+	u64 *stack = allocateStack(state, expr->state.nextRegister + dummyStorage);
 	stack[0] = 0; // The 0th register is the special constant 0 value
 
 #if BUILD_DEBUG
@@ -252,7 +263,6 @@ void runFunction(VMState *state, ExprFunction *expr, const Ir *caller, DCArgs *d
 		}
 	}
 	else {
-		u64 outParameters = expr->returns.declarations.count - 1;
 
 		assert(expr->arguments.declarations.count == caller->arguments->argCount - outParameters);
 
@@ -264,7 +274,11 @@ void runFunction(VMState *state, ExprFunction *expr, const Ir *caller, DCArgs *d
 		}
 
 		for (u64 i = 0; i < outParameters; i++) {
-			stack[expr->returns.declarations[i + 1]->physicalStorage] = callerStack[caller->arguments->args[expr->arguments.declarations.count + i].number];
+			auto number = caller->arguments->args[expr->arguments.declarations.count + i].number;
+			if (number == static_cast<u64>(-1))
+				stack[expr->returns.declarations[i + 1]->physicalStorage] = reinterpret_cast<u64>(stack + expr->state.nextRegister);
+			else
+				stack[expr->returns.declarations[i + 1]->physicalStorage] = callerStack[number];
 		}
 	}
 
@@ -1009,6 +1023,7 @@ Expr *getReturnValueFromBytes(CodeLocation start, EndLocation end, Type *type, v
 }
 
 Expr *runFunctionRoot(VMState *state, ExprFunction *expr) {
+	PROFILE_FUNC();
 	u64 store[32];
 
 	u64 *stackPointer = store;

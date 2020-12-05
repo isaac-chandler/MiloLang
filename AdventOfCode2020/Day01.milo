@@ -1,0 +1,44 @@
+#load "standard.milo"
+#load "file.milo"
+#load "string.milo"
+
+part1 :: (values: []u64) {
+	for i: values {
+		for j: values {
+			if i + j == 2020 {
+				print("%\n", i * j)
+				break i
+			}
+		}
+	}
+}
+
+part2 :: (values: []u64) {
+	for i: values
+		for j: values
+			for k: values
+				if i + j + k == 2020 {
+					print("%\n", i * j * k)
+					break i
+				}
+}
+
+_main :: () {
+	data := cast(string) read_entire_file("AdventOfCode2020/Day01.txt")
+	
+	values: [..]u64
+	
+	while data {
+		line: string
+		
+		
+		line, data = read_line(data)
+		
+		if !line
+			continue;
+			
+		array_add(cast() *values, read_u64(line))
+	}
+	
+	part2(values)
+}

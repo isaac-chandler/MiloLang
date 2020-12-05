@@ -50,6 +50,7 @@ Compile option for runtime checking
  - Array bounds checking
  - Cast bounds checking
  - Check casts from any to a type
+ - Slice bounds checking
 
 Function inlining
 
@@ -64,12 +65,7 @@ Make comma assignments work for things other than function calls
  - Do we really need this, I can't think of any other use cases than a swap, if we really want this functionality, maybe just add a swap primitive i.e. #swap a, b
 
 string representation
- - same memory as []u8 but a different type (allow casting?)
-   - different types convey intent
-   - can have separate display behaviour (when printing and debugging)
- - string literals implicitly convert to C-strings
-   - is it worth having implict conversion to utf16 C-strings (windows wide strings) and utf32 C-strings
-   
+ - is it worth having implict conversion to utf16 C-strings (windows wide strings) and utf32 C-strings  
  - utf16 and utf32 string types?
  
 error if non-void functions don't have all control paths return
@@ -109,8 +105,6 @@ debug info
  - do we have to do some natvis embedding bs to get arrays to show correctly in the debugger
  
 improve external function interface
- - don't hardcode lib files to link with
- - separate function types for external functions (so our calling convention doesn't need to be C-compatible)
  - parse C header files so we don't need to manually declare external functions
  
 llvm
@@ -126,12 +120,5 @@ predefined constant variables
  
 utf8 identifiers?
 
-run ir at compile time
-
 function polymorhpism
 struct polymorhpism
-
-cache default values for each type
-
-syntax for array slicing
- - option for slice bounds checking

@@ -24,6 +24,7 @@ static u32 nextStructHash = STRUCT_HASH_PRIME;
 static u32 count;
 
 void rehash() {
+	PROFILE_FUNC();
 	u32 newCapacity = typeTableCapacity * 2;
 	TypeTableEntry *newEntries = new TypeTableEntry[newCapacity];
 
@@ -48,6 +49,7 @@ void rehash() {
 }
 
 void insertIntoTable(Type *type, u32 slot) {
+	PROFILE_FUNC();
 	if (count * 10 > typeTableCapacity * 7) {
 		rehash();
 
@@ -63,6 +65,7 @@ void insertIntoTable(Type *type, u32 slot) {
 }
 
 void insertIntoTable(Type *type) {
+	PROFILE_FUNC();
 	if (count * 10 > typeTableCapacity * 7) {
 		rehash();
 	}
@@ -78,6 +81,7 @@ void insertIntoTable(Type *type) {
 }
 
 void addStruct(TypeStruct *struct_) {
+	PROFILE_FUNC();
 	if (!struct_->hash) {
 		if (nextStructHash == 0) nextStructHash = 1;
 		u32 hash = nextStructHash;
@@ -90,6 +94,7 @@ void addStruct(TypeStruct *struct_) {
 }
 
 TypePointer *getPointer(Type *type) {
+	PROFILE_FUNC();
 	u32 hash = (type->hash + 1) * POINTER_HASH_PRIME;
 	if (hash == 0) hash = 1;
 
@@ -127,6 +132,7 @@ Declaration *countDeclaration;
 Declaration *capacityDeclaration;
 
 Declaration *createDataDeclaration(Type *type) {
+	PROFILE_FUNC();
 	u32 slot;
 
 	auto dataType = TYPE_NEW(ExprLiteral);
@@ -149,6 +155,7 @@ Declaration *createDataDeclaration(Type *type) {
 }
 
 TypeArray *getArray(Type *type) {
+	PROFILE_FUNC();
 	u32 hash = (type->hash + 1) * ARRAY_HASH_PRIME;
 	if (hash == 0) hash = 1;
 
@@ -191,6 +198,7 @@ TypeArray *getArray(Type *type) {
 }
 
 TypeArray *getDynamicArray(Type *type) {
+	PROFILE_FUNC();
 	u32 hash = (type->hash + 1) * DYNAMIC_ARRAY_HASH_PRIME;
 	if (hash == 0) hash = 1;
 
@@ -237,6 +245,7 @@ TypeArray *getDynamicArray(Type *type) {
 }
 
 TypeArray *getStaticArray(Type *type, u64 count) {
+	PROFILE_FUNC();
 	u32 hash = type->hash * STATIC_ARRAY_TYPE_HASH_PRIME + count * STATIC_ARRAY_SIZE_HASH_PRIME;
 	if (hash == 0) hash = 1;
 
@@ -306,6 +315,7 @@ TypeArray *getStaticArray(Type *type, u64 count) {
 
 
 void generateTypeNameForFunction(TypeFunction *function) {
+	PROFILE_FUNC();
 	function->name.length = 6; // "() -> "
 
 	if (function->returnCount != 1) {
@@ -394,6 +404,7 @@ void generateTypeNameForFunction(TypeFunction *function) {
 }
 
 TypeFunction *getFunctionType(ExprFunction *expr) {
+	PROFILE_FUNC();
 	auto &arguments = expr->arguments.declarations;
 	auto &returns = expr->returns.declarations;
 
@@ -488,6 +499,7 @@ TypeFunction *getFunctionType(ExprFunction *expr) {
 }
 
 void setupTypeTable() {
+	PROFILE_FUNC();
 	typeTableCapacity = 1024;
 	typeTableEntries = new TypeTableEntry[typeTableCapacity];
 	count = 0;

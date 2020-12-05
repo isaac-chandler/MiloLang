@@ -1,0 +1,114 @@
+#load "standard.milo"
+#load "file.milo"
+#load "string.milo"
+
+Passport :: union {
+	using _: struct {
+		byr: bool
+		iyr: bool
+		eyr: bool
+		hgt: bool
+		hcl: bool
+		ecl: bool
+		pid: bool
+	}
+	
+	fields: [size_of(type_of(_))]bool = --
+}
+
+part1 :: (passport: *Passport, field: string, value: string) {
+	if field == {
+		case "byr"
+			passport.byr = true
+		case "iyr"
+			passport.iyr = true
+		case "eyr"
+			passport.eyr = true
+		case "hgt"
+			passport.hgt = true
+		case "hcl"
+			passport.hcl = true
+		case "ecl"
+			passport.ecl = true
+		case "pid"
+			passport.pid = true
+	}
+}
+
+part2 :: (passport: *Passport, field: string, value: string) {
+	print("%:% ", field, value)
+	if field == {
+		case "byr"
+			year := read_u64(value)
+			passport.byr = 1920 <= year && year <= 2002
+		case "iyr"
+			year := read_u64(value)
+			passport.iyr = 2010 <= year && year <= 2020
+		case "eyr"
+			year := read_u64(value)
+			passport.eyr = 2020 <= year && year <= 2030
+		case "hgt"
+			height, unit := read_u64(value)
+			
+			if unit == {
+				case "cm"
+					passport.hgt = 150 <= height && height <= 193
+				case "in"
+					passport.hgt = 59 <= height && height <= 76
+			}
+		case "hcl"
+			if value.count == 7 && value[0] == '#'
+				for value[1..]
+					if ('0' > it || it > '9') && ('a' > it || it > 'f')
+						break
+				or
+					passport.hcl = true
+		case "ecl"
+			passport.ecl = value == "amb" || value == "blu" || value == "brn" || value == "gry" || value == "grn" || value == "hzl" || value == "oth"
+		case "pid"
+			if value.count == 9
+				for value
+					if '0' > it || it > '9'
+						break
+				or
+					passport.pid = true
+	}
+}
+
+_main :: () {
+	data := cast(string) read_entire_file("AdventOfCode2020/Day04.txt")
+	valid: u64
+	
+	while data {
+		passport: Passport
+		
+		while true {
+			line: string
+			line, data = read_line(data)
+			
+			if !line
+				break;
+				
+			while line {
+				field: string
+				value: string
+				field, line = split_at_first(line, ':')
+				value, line = split_at_first(line, ' ')
+				
+				part2(*passport, field, value)
+			}
+		}
+		
+		print("\n%\n", passport._)
+		
+		for passport.fields
+			if !it
+				break
+		or
+			valid += 1
+	}
+	
+	print("%\n", valid)
+	
+	#run _main()
+}

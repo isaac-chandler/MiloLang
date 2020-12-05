@@ -6787,7 +6787,7 @@ void fillTypeInfo(Type *type) {
 
 			auto &memberInfo = structInfo->members.data[count++];
 
-			memberInfo.name = structInfo->name;
+			memberInfo.name = member->name;
 			memberInfo.offset = (member->flags & DECLARATION_IS_CONSTANT) ? 0 : member->physicalStorage;
 
 			auto memberType = static_cast<ExprLiteral *>(member->type)->typeValue;
@@ -6827,6 +6827,7 @@ void createAllTypeInfos(ArraySet<Type *> types) {
 }
 
 bool ensureTypeInfos(SubJob *job, Type *type) {
+	PROFILE_FUNC();
 	ArraySet<Type *> types;
 
 	if (!findTypeInfoRecurse(job, &types, type)) {
@@ -6842,6 +6843,7 @@ bool ensureTypeInfos(SubJob *job, Type *type) {
 }
 
 bool ensureTypeInfos(SubJob *job, Expr *expr) {
+	PROFILE_FUNC();
 	ArraySet<Type *> types;
 
 	if (!findTypeInfoInExprRecurse(job, &types, expr)) {

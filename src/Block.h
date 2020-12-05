@@ -143,6 +143,7 @@ inline Declaration *findDeclarationIncludeImplictImports(Block *block, String na
 }
 
 inline Declaration *findDeclarationNoYield(Block *block, String name) {
+	PROFILE_FUNC();
 	auto declaration = findDeclarationIncludeImplictImports(block, name);
 
 	if (!declaration)
@@ -164,6 +165,7 @@ inline void replaceDeclaration(Block *block, Declaration *&old, Declaration *dec
 }
 
 inline bool checkForRedeclaration(Block *block, Declaration *declaration, struct Expr *using_) {
+	PROFILE_FUNC();
 	assert(block);
 	assert(declaration);
 
@@ -212,6 +214,7 @@ inline void addImporterToBlock(Block *block, Importer *importer, s64 index = -1)
 }
 
 inline void putDeclarationInBlock(Block *block, Declaration *declaration) {
+	PROFILE_FUNC();
 	block->declarations.add(declaration);
 
 	if (block->table) {
@@ -240,6 +243,7 @@ inline bool addDeclarationToBlock(Block *block, Declaration *declaration, s64 in
 }
 
 inline Declaration *findDeclaration(Block *block, String name, bool *yield, u64 usingYieldLimit = -1) {
+	PROFILE_FUNC();
 	if (usingYieldLimit == -1) {
 		usingYieldLimit = block->declarations.count;
 	}

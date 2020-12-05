@@ -1,0 +1,227 @@
+#load "windows.milo"
+#load "gl.milo"
+#load "standard.milo"
+
+should_quit: bool
+
+window_width: s32 = 1280
+window_height: s32 = 720
+
+set_gl_color :: (color: Vector4) {
+	glColor4f(color.r, color.g, color.b, color.a)
+}
+
+make_vector4 :: (x: f32, y: f32, z: f32, w: f32) -> Vector4 {
+	vector: Vector4 = --
+	vector.x = x
+	vector.y = y
+	vector.z = z
+	vector.w = w
+	
+	return vector
+}
+
+
+Rectangle :: struct {
+	x: f32
+	y: f32
+	width: f32
+	height: f32
+}
+
+untextured_quad :: (using rectangle: *Rectangle) {
+
+	half_width := width * 0.5
+	half_height := height * 0.5
+
+	glVertex2f(x - half_width, y - half_height)
+	
+	glVertex2f(x + half_width, y - half_height)
+	
+	glVertex2f(x + half_width, y + half_height)
+	
+	glVertex2f(x - half_width, y + half_height)
+}
+
+textured_quad :: (using rectangle: *Rectangle) {
+	half_width := width * 0.5
+	half_height := height * 0.5
+	
+	glTexCoord2f(0, 0)
+	glVertex2f(x - half_width, y - half_height)
+	
+	
+	glTexCoord2f(1, 0)
+	glVertex2f(x + half_width, y - half_height)
+	
+	
+	glTexCoord2f(1, 1)
+	glVertex2f(x + half_width, y + half_height)
+	
+	
+	glTexCoord2f(0, 1)
+	glVertex2f(x - half_width, y + half_height)
+}
+
+gl_context: HGLRC
+
+_main :: () {	
+	startup_info: STARTUPINFOW
+	
+	GetStartupInfoW(*startup_info)
+	
+	show_command: u16 = SW_SHOWDEFAULT
+	
+	if startup_info.dwFlags & STARTF_USESHOWWINDOW {
+		show_command = startup_info.wShowWindow
+	}
+	
+	instance := GetModuleHandleW(null)
+	
+	class_name := create_wide_string("Window Class")
+	window_class: WNDCLASSW
+	
+	window_class.style = CS_OWNDC | CS_VREDRAW | CS_HREDRAW
+	window_class.lpfnWndProc = (hwnd: HWND, uMsg: MSG.Message, wParam: u64, lParam: s64) -> s64 #c_call {	
+		if uMsg == {
+			case WM_CLOSE
+				glFinish()
+				wglDeleteContext(gl_context)
+
+				DestroyWindow(hwnd)
+				
+			case WM_DESTROY
+				PostQuitMessage(0)
+				
+			case WM_PAINT
+				paint: PAINTSTRUCT = --
+				
+				dc := BeginPaint(hwnd, *paint)
+				EndPaint(hwnd, *paint)
+				
+			case WM_SIZE
+				client_rect: RECT = --
+				
+				GetClientRect(hwnd, *client_rect)
+				
+				window_width = client_rect.right - client_rect.left
+				window_height = client_rect.bottom - client_rect.top
+				
+				print("%x%\n", window_width, window_height)
+				print("----------\n")
+				
+			else
+				return DefWindowProcW(hwnd, uMsg, wParam, lParam)
+		}
+		
+		return 0
+	}
+	window_class.hInstance = instance
+	window_class.lpszClassName = class_name
+	window_class.hbrBackground = GetStockObject(BLACK_BRUSH)
+	
+	
+	if RegisterClassW(*window_class) == 0 {
+		print("Failed to register window class\n")
+		print("%\n", GetLastError())
+		return
+	}
+	
+	
+	window_style := WS_OVERLAPPEDWINDOW ^ WS_THICKFRAME ^ WS_MAXIMIZEBOX
+	
+	window_rect: RECT
+	
+	window_rect.top = 0
+	window_rect.bottom = window_height
+	window_rect.left = 0
+	window_rect.right = window_width
+	
+	AdjustWindowRectEx(*window_rect, window_style ^ WS_OVERLAPPED | WS_TILED)
+	
+	window_handle := CreateWindowExW(lpClassName = class_name, lpWindowName = create_wide_string("Test Window"), dwStyle = window_style, 
+		nWidth = window_rect.right - window_rect.left, nHeight = window_rect.bottom - window_rect.top, hInstance = instance)
+	
+	if window_handle == null {
+		print("Failed to open window\n")
+		print("%\n", GetLastError())
+		return
+	}
+	
+	device_context := GetDC(window_handle)
+	
+	desired_format: PIXELFORMATDESCRIPTOR
+	desired_format.dwFlags = PFD_SUPPORT_OPENGL | PFD_DRAW_TO_WINDOW | PFD_DOUBLEBUFFER
+	desired_format.cColorBits = 32
+	desired_format.cAlphaBits = 8
+	desired_format.iLayerType = PFD_MAIN_PLANE
+	
+	found_format := ChoosePixelFormat(device_context, *desired_format)
+	
+	if found_format == 0 {
+		print("Could not find a pixel format\n")
+		return
+	}
+	
+	used_format: PIXELFORMATDESCRIPTOR
+	
+	if !SetPixelFormat(device_context, found_format, *used_format) {
+		print("Failed to set pixel format")
+		return
+	}
+	
+	
+	gl_context = wglCreateContext(device_context)
+	
+	if !gl_context {
+		print("Failed to create gl context")
+		return
+	}
+	
+	wglMakeCurrent(device_context, gl_context)
+	
+	
+	load_gl_extensions()
+	wglSwapIntervalEXT(1)
+	
+	ShowWindow(window_handle, cast() show_command)
+	
+	rect: Rectangle
+	rect.x = 500
+	rect.y = 500
+	rect.width = 100
+	rect.height = 100
+	
+	while outer: !should_quit {
+		message: MSG = --
+		
+		while PeekMessageW(*message, null) {
+			if (message.message == WM_QUIT) {
+				should_quit = true
+				break outer
+			}
+			
+			TranslateMessage(*message)
+			DispatchMessageW(*message)
+		}
+		
+		glViewport(0, 0, window_width, window_height)
+		glClearColor(0, 0.1, 0.2, 0)
+		glClear(GL_COLOR_BUFFER_BIT)
+		
+		glMatrixMode(GL_PROJECTION)
+		glLoadIdentity()
+		glOrtho(0, 1280, 0, 720, -5, 5)
+		
+		glBegin(GL_QUADS)
+		untextured_quad(*rect)
+		glEnd()
+		
+		check_gl_errors()
+		
+		if !SwapBuffers(device_context)
+			print("SwapBuffers failed\n")
+	}
+	
+	#run _main()
+}
