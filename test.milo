@@ -1112,6 +1112,4 @@ _main :: () {
 		
 		last_time = current_time
 	}
-	
-	#run _main()
 }

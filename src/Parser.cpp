@@ -638,8 +638,19 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 						return nullptr;
 					}
 
+					auto through = lexer->token;
+
 					if (expectAndConsume(lexer, TokenT::THROUGH)) {
 						case_.fallsThrough = true;
+					}
+
+					case_.block->start = start;
+					case_.block->end = lexer->token.end;
+
+					if (case_.fallsThrough && lexer->token.type == TOKEN('}')) {
+						reportError(&through, "Error: The last case in an if == statement cannot be #through");
+						reportError(&lexer->token, "");
+						return nullptr;
 					}
 
 					switch_->cases.add(case_);
@@ -665,6 +676,8 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 						return nullptr;
 					}
 
+					auto through = lexer->token;
+					
 					if (expectAndConsume(lexer, TokenT::THROUGH)) {
 						case_.fallsThrough = true;
 					}
@@ -674,6 +687,12 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 
 					else_ = case_.block;
 
+					if (case_.fallsThrough && lexer->token.type == TOKEN('}')) {
+						reportError(&through, "Error: The last case in an if == statement cannot be #through");
+						reportError(&lexer->token, "");
+						return nullptr;
+					}
+
 					switch_->cases.add(case_);
 				}
 				else if (lexer->token.type == TOKEN('}')) {
@@ -682,6 +701,10 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 			}
 
 			lexer->advance();
+
+			if (switch_->cases.count) {
+				assert(!switch_->cases[switch_->cases.count - 1].fallsThrough);
+			}
 
 
 			popBlock(block);
@@ -694,7 +717,7 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 			ifElse->start = start;
 			ifElse->condition = condition;
 
-			if (expectAndConsume(lexer, ';')) {
+			if (expectAndConsume(lexer, ';') || lexer->token.type == TokenT::ELSE) {
 				ifElse->ifBody = nullptr;
 
 				ifElse->end = lexer->previousTokenEnd;
@@ -821,11 +844,28 @@ ExprBlock *parseCase(LexerFile *lexer) {
 
 	pushBlock(&block->declarations);
 
+	Expr *exitingStatement = nullptr;
+
 	while (true) {
 		if (expectAndConsume(lexer, ';')) {
 			continue;
 		}
-		else if (lexer->token.type == TOKEN('}') || lexer->token.type == TokenT::CASE || lexer->token.type == TokenT::ELSE || lexer->token.type == TokenT::THROUGH) {
+		else if (lexer->token.type == TOKEN('}') || lexer->token.type == TokenT::CASE || lexer->token.type == TokenT::ELSE) {
+			break;
+		}
+
+
+
+
+		if (exitingStatement) {
+			const char *label = exitingStatement->flavor == ExprFlavor::RETURN ? "return" : exitingStatement->flavor == ExprFlavor::BREAK ? "break" : "continue";
+			reportError(&lexer->token, "Error: Cannot have statements in a case after a %s", label);
+			reportError(exitingStatement, "   ..: Here is the %s", label);
+			return nullptr;
+		}
+
+		// a #through statement is checked for separately to }, case, else since it cannot occur after an exiting statement
+		if (lexer->token.type == TokenT::THROUGH) {
 			break;
 		}
 		else if (lexer->token.type == TokenT::USING) {
@@ -939,6 +979,8 @@ ExprBlock *parseBlock(LexerFile *lexer, ExprBlock *block) {
 		return nullptr;
 	}
 
+	Expr *exitingStatement = nullptr;
+
 	while (true) {
 		if (expectAndConsume(lexer, ';')) {
 			continue;
@@ -946,7 +988,17 @@ ExprBlock *parseBlock(LexerFile *lexer, ExprBlock *block) {
 		else if (expectAndConsume(lexer, '}')) {
 			break;
 		}
-		else if (lexer->token.type == TokenT::DEFER) {
+
+
+		if (exitingStatement) {
+			const char *label = exitingStatement->flavor == ExprFlavor::RETURN ? "return" : exitingStatement->flavor == ExprFlavor::BREAK ? "break" : "continue";
+			reportError(&lexer->token,    "Error: Cannot have statements in a block after a %s", label);
+			reportError(exitingStatement, "   ..: Here is the %s", label);
+			return nullptr;
+		}
+
+		
+		if (lexer->token.type == TokenT::DEFER) {
 			auto defer = PARSER_NEW(ExprDefer);
 			defer->flavor = ExprFlavor::DEFER;
 			defer->start = lexer->token.start;
@@ -1050,9 +1102,13 @@ ExprBlock *parseBlock(LexerFile *lexer, ExprBlock *block) {
 		}
 
 		Expr *expr = parseStatement(lexer, true);
-
 		if (!expr)
 			return nullptr;
+
+		if (expr->flavor == ExprFlavor::RETURN || expr->flavor == ExprFlavor::BREAK || expr->flavor == ExprFlavor::CONTINUE) {
+			exitingStatement = expr;
+		}
+
 
 		block->exprs.add(expr);
 	}
@@ -2912,5 +2968,5 @@ void parseFile(FileInfo *file) {
 		}
 	}
 
-	//printf("Parser memory used %llukb\n", parserArena.totalSize / 1024);
+	printf("Parser memory used %llukb\n", parserArena.totalSize / 1024);
 }

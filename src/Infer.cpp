@@ -5588,11 +5588,11 @@ bool checkStructDeclaration(Declaration *declaration, Type *&value, String name)
 bool checkFunctionDeclaration(Declaration *declaration, ExprFunction *&value, String name) {
 	if (declaration->name == name) {
 		if (!(declaration->flags & DECLARATION_IS_CONSTANT)) {
-			reportError(declaration, "Internal Compiler Error: Declaration for %.*s must be a constant", name);
+			reportError(declaration, "Internal Compiler Error: Declaration for %.*s must be a constant", STRING_PRINTF(name));
 			return false;
 		}
 		else if (!declaration->initialValue || declaration->initialValue->flavor != ExprFlavor::FUNCTION) {
-			reportError(declaration, "Internal Compiler Error: %.*s must be a function", name);
+			reportError(declaration, "Internal Compiler Error: %.*s must be a function", STRING_PRINTF(name));
 			return false;
 		}
 
@@ -6201,6 +6201,56 @@ bool inferDeclarationValue(DeclarationJob *job) {
 	return true;
 }
 
+bool checkGuaranteedReturn(Expr *expr) {
+	switch (expr->flavor) {
+	case ExprFlavor::RETURN:
+		return true;
+	case ExprFlavor::BLOCK: {
+		for (auto statement : static_cast<ExprBlock *>(expr)->exprs) {
+			if (checkGuaranteedReturn(statement))
+				return true;
+		}
+
+		return false;
+	}
+	case ExprFlavor::IF: {
+		auto if_ = static_cast<ExprIf *>(expr);
+
+		if (if_->condition->flavor == ExprFlavor::INT_LITERAL) {
+			if (static_cast<ExprLiteral *>(if_->condition)->unsignedValue) {
+				return if_->ifBody && checkGuaranteedReturn(if_->ifBody);
+			}
+			else {
+				return if_->elseBody && checkGuaranteedReturn(if_->elseBody);
+			}
+		}
+		else {
+			return if_->ifBody && if_->elseBody && checkGuaranteedReturn(if_->ifBody) && checkGuaranteedReturn(if_->elseBody);
+		}
+	}
+	case ExprFlavor::SWITCH: {
+		auto switch_ = static_cast<ExprSwitch *>(expr);
+
+		bool hasElse = false;
+	
+		for (u64 i = 0; i < switch_->cases.count; i++) {
+			auto &case_ = switch_->cases[i];
+
+			if (!case_.condition)
+				hasElse = true;
+
+			if (!checkGuaranteedReturn(case_.block) && !(case_.fallsThrough && checkGuaranteedReturn(switch_->cases[i + 1].block))) {
+				return false;
+			}
+		}
+
+		return hasElse;
+	}
+	default:
+		return false;
+	}
+}
+
 bool inferFunctionType(FunctionJob *job) {
 	PROFILE_FUNC();
 
@@ -6300,6 +6350,38 @@ bool inferFunctionValue(FunctionJob *job) {
 	}
 	else {
 		assert(job->function->body);
+
+		if (!checkGuaranteedReturn(function->body)) {
+			bool needsReturn = false;
+
+			if (static_cast<ExprLiteral *>(function->returns.declarations[0]->type)->typeValue != &TYPE_VOID) {
+				for (auto declaration : function->returns.declarations) {
+					if (!declaration->initialValue)
+						needsReturn = true;
+				}
+			}
+
+
+			if (needsReturn) {
+				reportError(job->function, "Error: Not all control paths return a value");
+				return false;	
+			}
+			else {
+				auto return_ = INFER_NEW(ExprReturn);
+				return_->flavor = ExprFlavor::RETURN;
+				return_->start = function->start;
+				return_->end = function->end;
+				return_->returnsFrom = function;
+				return_->returns.count = 0;
+
+				auto body = static_cast<ExprBlock *>(function->body);
+				beginFlatten(&job->value, &body->exprs.add(return_));
+
+				subJobs.add(&job->value);
+				return true;
+			}
+		}
+
 
 		removeJob(&functionJobs, job);
 		function->sleepingOnInfer.free();

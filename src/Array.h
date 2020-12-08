@@ -232,13 +232,15 @@ public:
 		return storage[count - 1];
 	}
 
-	void add(const T &value) {
+	T &add(const T &value) {
 		if (count >= capacity) {
 			resize(my_max(count + 1, capacity * 2));
 		}
 
 		storage[count] = value;
 		count++;
+
+		return storage[count - 1];
 	}
 
 	const T &operator[] (u64 index) const {

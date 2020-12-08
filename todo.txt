@@ -12,13 +12,26 @@ struct literals
 
 Make how the infer phase being completed is checked better
 
+Give compile time execution new abilitiess
+ - Add files/strings to compilation
+ - Control build settings i.e. optimization, bounds checking
+ - Receive information about program
+ - Report errors and warnings
+
+
+Move sleepingOnMe onto SubJob
+
+Move ir generation to infer thread?
+
+Reduce sizes of integer types in compiler (i.e. u64 in Array -> u32	)
+ 
+Syntax for for loops to iterate in reverse
+
 Modules
  - Allow symbols to be locally scoped to a module
  - Modules searched for relative to the path to the compiler binary, instead of the working directory
 
 
-Runtime execution support for non external #c_call functions
- 
 Standard modules
  - Hashtable
  - Math
@@ -53,6 +66,25 @@ Compile option for runtime checking
  - Cast bounds checking
  - Check casts from any to a type
  - Slice bounds checking
+ - if == #complete { never hits an else case
+ 
+ 
+Should this be legal
+
+	Enum :: enum {
+		A
+		B
+	}
+
+	// Currently this is an error because not all control paths return a value
+	is_a :: (e: Enum) -> bool {
+		if e == #complete {
+			case .A
+				return true
+			case .B
+				return false
+		}
+	}
 
 Function inlining
 

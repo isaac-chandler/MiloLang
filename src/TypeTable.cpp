@@ -133,8 +133,7 @@ Declaration *capacityDeclaration;
 
 Declaration *createDataDeclaration(Type *type) {
 	PROFILE_FUNC();
-	u32 slot;
-
+	
 	auto dataType = TYPE_NEW(ExprLiteral);
 	dataType->flavor = ExprFlavor::TYPE_LITERAL;
 	dataType->start = {};

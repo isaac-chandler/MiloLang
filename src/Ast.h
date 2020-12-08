@@ -117,7 +117,7 @@ struct Ir {
 		} location;
 	};
 
-	u64 flags = 0;
+	u8 flags = 0;
 	IrOp op;
 };
 

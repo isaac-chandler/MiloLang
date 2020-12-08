@@ -2217,18 +2217,16 @@ bool generateIrForFunction(ExprFunction *function) {
 
 	exitBlock(&function->state, nullptr, true);
 
-	Ir &ir = function->state.ir.add();
+	/*Ir &ir = function->state.ir.add();
 	ir.op = IrOp::RETURN;
 	ir.a = 0;
-	ir.opSize = 0;
+	ir.opSize = 0;*/
 
 	if (hadError) {
 		return false;
 	}
 
 	//addLineMarker(&function->state, function->body->start.fileUid, function->body->end);
-
-	// @Incomplete @ErrorMessage check wether the function actually returns
 
 	function->flags |= EXPR_FUNCTION_RUN_READY;
 	_ReadWriteBarrier();

@@ -54,6 +54,7 @@
 struct Declaration {
 	CodeLocation start;
 	EndLocation end;
+	u32 flags = 0;
 	String name;
 	union {
 		struct Expr *type;
@@ -80,9 +81,6 @@ struct Declaration {
 	};
 
 	void *runtimeValue = nullptr;
-
-	u64 flags = 0;
-
 };
 
 
