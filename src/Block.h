@@ -51,6 +51,8 @@
 // Set if a declaration is initialized using the x := .. or x :: .. syntax
 #define DECLARATION_IS_EXPLICIT_DEFAULT 0x1'0000
 
+#define DECLARATION_IS_RUN_RETURN 0x2'0000
+
 struct Declaration {
 	CodeLocation start;
 	EndLocation end;

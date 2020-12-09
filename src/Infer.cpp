@@ -4974,12 +4974,18 @@ bool inferFlattened(SubJob *job) {
 
 			Block *returnTypes = &return_->returnsFrom->returns;
 
-			if (returnTypes->declarations.count == 1 && static_cast<ExprLiteral *>(returnTypes->declarations[0]->type)->typeValue == &TYPE_VOID) {
-				if (return_->returns.count == 1 && return_->returns.values[0]->type == &TYPE_VOID && (return_->returnsFrom->flags & EXPR_FUNCTION_IS_RUN)) {
-					// #run implicitly generated functions always return their value if it is an expression since we have no way of knowing it has void type at parse time
-					*exprPointer = return_->returns.values[0];
-				}
-				else if (return_->returns.count) {
+			assert(returnTypes->declarations.count >= 1);
+
+			if (static_cast<ExprLiteral *>(returnTypes->declarations[0]->type)->typeValue == &TYPE_VOID) {
+				if (returnTypes->declarations[0]->initialValue) {
+					assert(returnTypes->declarations[0]->flags & DECLARATION_IS_RUN_RETURN);
+					*exprPointer = returnTypes->declarations[0]->initialValue;
+
+					assert(return_->returnsFrom->body->flavor == ExprFlavor::BLOCK);
+					auto block = static_cast<ExprBlock *>(return_->returnsFrom->body);
+					assert(block->exprs[block->exprs.count - 1] == returnTypes->declarations[0]->initialValue);
+					block->exprs.add(return_);
+				} else if (return_->returns.count) {
 					reportError(return_->returns.values[0], "Error: A function with void return type cannot return a value");
 					return false;
 				}
@@ -6156,7 +6162,7 @@ bool inferDeclarationValue(DeclarationJob *job) {
 				trySolidifyNumericLiteralToDefault(declaration->initialValue);
 			}
 
-			if (declaration->initialValue->type == &TYPE_VOID) {
+			if (declaration->initialValue->type == &TYPE_VOID && !(declaration->flags & DECLARATION_IS_RUN_RETURN)) {
 				reportError(declaration->type, "Error: Declaration cannot have type void");
 				return false;
 			}
@@ -6173,7 +6179,7 @@ bool inferDeclarationValue(DeclarationJob *job) {
 
 			if ((declaration->flags & DECLARATION_IS_CONSTANT) || declaration->enclosingScope == &globalBlock ||
 				(declaration->enclosingScope->flags & (BLOCK_IS_STRUCT | BLOCK_IS_ARGUMENTS | BLOCK_IS_RETURNS))) {
-				if (!isLiteral(declaration->initialValue)) {
+				if (!(declaration->flags & DECLARATION_IS_RUN_RETURN) && !isLiteral(declaration->initialValue)) {
 					reportError(declaration->type, "Error: Declaration value must be a constant");
 					return false;
 				}
@@ -6367,6 +6373,8 @@ bool inferFunctionValue(FunctionJob *job) {
 				return false;	
 			}
 			else {
+				assert(function->body->flavor == ExprFlavor::BLOCK);
+
 				auto return_ = INFER_NEW(ExprReturn);
 				return_->flavor = ExprFlavor::RETURN;
 				return_->start = function->start;
@@ -6572,9 +6580,24 @@ void createTypeInfo(Type *type) {
 	}
 }
 
-bool findTypeInfoRecurse(SubJob *job, ArraySet<Type *> *types, Type *type);
+bool pushFunctionToRunCheck(RunJob *job, ExprFunction *function) {
+	if (function->flags & EXPR_FUNCTION_RUN_CHECKED)
+		return false;
 
-bool findTypeInfoInExprRecurse(SubJob *job, ArraySet<Type *> *types, Expr *expr) {
+	for (auto pending : job->checkingFunctions) {
+		if (pending == function) {
+			return false;
+		}
+	}
+
+	job->checkingFunctions.add(function);
+	job->checkingFunctionIndices.add(0);
+	return true;
+}
+
+bool findTypeInfoRecurse(RunJob *job, ArraySet<Type *> *types, Type *type);
+
+bool findTypeInfoInExprRecurse(RunJob *job, ArraySet<Type *> *types, Expr *expr) {
 	switch (expr->flavor) {
 	case ExprFlavor::ARRAY: {
 		auto array = static_cast<ExprArray *>(expr);
@@ -6591,6 +6614,14 @@ bool findTypeInfoInExprRecurse(SubJob *job, ArraySet<Type *> *types, Expr *expr)
 	}
 	case ExprFlavor::TYPE_LITERAL: {
 		return findTypeInfoRecurse(job, types, static_cast<ExprLiteral *>(expr)->typeValue);
+	}
+	case ExprFlavor::FUNCTION: {
+		if (pushFunctionToRunCheck(job, static_cast<ExprFunction *>(expr))) {
+			subJobs.add(job);
+			return false;
+		}
+
+		return true;
 	}
 	case ExprFlavor::STRUCT_DEFAULT: {
 		if (types->contains(expr->type)) // Optimisation since if we have already emitted the Type_Info for a struct type, it's default value has been outputted
@@ -6617,7 +6648,7 @@ bool findTypeInfoInExprRecurse(SubJob *job, ArraySet<Type *> *types, Expr *expr)
 	}
 }
 
-bool findTypeInfoRecurse(SubJob *job, ArraySet<Type *> *types, Type *type) {
+bool findTypeInfoRecurse(RunJob *job, ArraySet<Type *> *types, Type *type) {
 	if (type->runtimeTypeInfo) {
 		return true;
 	}
@@ -6908,7 +6939,7 @@ void createAllTypeInfos(ArraySet<Type *> types) {
 	}
 }
 
-bool ensureTypeInfos(SubJob *job, Type *type) {
+bool ensureTypeInfos(RunJob *job, Type *type) {
 	PROFILE_FUNC();
 	ArraySet<Type *> types;
 
@@ -6924,7 +6955,7 @@ bool ensureTypeInfos(SubJob *job, Type *type) {
 	return true;
 }
 
-bool ensureTypeInfos(SubJob *job, Expr *expr) {
+bool ensureTypeInfos(RunJob *job, Expr *expr) {
 	PROFILE_FUNC();
 	ArraySet<Type *> types;
 
@@ -7009,18 +7040,7 @@ bool inferRun(RunJob *job) {
 					}
 					else if (op.op == IrOp::FUNCTION) {
 						if (!(op.function->flags & EXPR_FUNCTION_RUN_CHECKED)) {
-							bool checking = false;
-
-							for (auto pending : job->checkingFunctions) {
-								if (pending == op.function) {
-									checking = true;
-									break;
-								}
-							}
-
-							if (!checking) {
-								job->checkingFunctions.add(op.function);
-								job->checkingFunctionIndices.add(0);
+							if (pushFunctionToRunCheck(job, op.function)) {
 								break;
 							}
 						}

@@ -2152,7 +2152,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 			return dest;
 		}
-		case ExprFlavor::RUN: // Statement level runs with a void return type are not removed from the ast but shouldn't generate code
+		case ExprFlavor::RUN: // Statement level runs are not removed from the ast but shouldn't generate code
 		case ExprFlavor::STATIC_IF: {
 			return DEST_NONE; // In the event that the static if returns false and there is no else block, we just leave the static if expression in the tree, 
 				   // so when we see a static if here we should just generate no code

@@ -2238,6 +2238,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 			if (expectAndConsume(lexer, ')')) {
 				call->arguments.count = 0;
 				call->arguments.values = nullptr;
+				call->arguments.names = nullptr;
 			}
 			else {
 				if (!parseArguments(lexer, &call->arguments, "arguments"))
@@ -2423,55 +2424,49 @@ Expr *parseUnaryExpr(LexerFile *lexer, CodeLocation plusStart) {
 		function->returns.flags |= BLOCK_IS_RETURNS;
 		insertBlock(&function->returns);
 
-		Expr *expr;
-		Expr *type;
+		Expr *type = nullptr;
+		Expr *returnValue = nullptr;
 
 		if (lexer->token.type == TOKEN('{')) {
-			expr = parseBlock(lexer);
+			auto block = parseBlock(lexer);
+			if (!block)
+				return nullptr;
 			run->end = lexer->previousTokenEnd;
 
 			type = parserMakeTypeLiteral(run->start, run->end, &TYPE_VOID);
 
-			function->body = expr;
+			function->body = block;
 		}
 		else {
-			expr = parseExpr(lexer);
+			auto block = PARSER_NEW(ExprBlock);
+			block->flavor = ExprFlavor::BLOCK;
+			pushBlock(&block->declarations);
+
+			returnValue = parseExpr(lexer);
+			if (!returnValue)
+				return nullptr;
+
+			block->start = returnValue->start;
+			block->end = returnValue->end;
 			run->end = lexer->previousTokenEnd;
 
-			auto typeOf = PARSER_NEW(ExprUnaryOperator);
-			typeOf->flavor = ExprFlavor::UNARY_OPERATOR;
-			typeOf->start = run->start;
-			typeOf->end = run->end;
-			typeOf->op = TokenT::TYPE_OF;
-			typeOf->value = expr;
+			popBlock(&block->declarations);
 
-			type = typeOf;
-
-			auto return_ = PARSER_NEW(ExprReturn);
-			return_->flavor = ExprFlavor::RETURN;
-			return_->start = run->start;
-			return_->end = run->end;
-			return_->returnsFrom = function;
-			return_->returns.count = 1;
-			return_->returns.names = PARSER_NEW_ARRAY(String, 1) { "" };
-			return_->returns.values = PARSER_NEW_ARRAY(Expr *, 1) { expr };
-
-			function->body = return_;
+			function->body = block;
 		}
 
 		popBlock(&function->arguments);
 
 		function->end = lexer->previousTokenEnd;
 		run->function = function;
-		function->flags |= EXPR_FUNCTION_IS_RUN;
 
 
 		auto returnType = PARSER_NEW(Declaration);
 		returnType->start = function->start;
 		returnType->end = function->end;
-		returnType->flags |= DECLARATION_IS_RETURN;
+		returnType->flags |= DECLARATION_IS_RETURN | DECLARATION_IS_RUN_RETURN;
 		returnType->type = type;
-		returnType->initialValue = nullptr;
+		returnType->initialValue = returnValue;
 		returnType->name = "";
 
 		addDeclarationToBlock(&function->returns, returnType);

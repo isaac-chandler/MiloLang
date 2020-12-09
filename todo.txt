@@ -66,7 +66,7 @@ Compile option for runtime checking
  - Cast bounds checking
  - Check casts from any to a type
  - Slice bounds checking
- - if == #complete { never hits an else case
+ - Check that if == #complete { never hits an else case (i.e. only valid enums are given)
  
  
 Should this be legal
