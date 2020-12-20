@@ -243,7 +243,7 @@ TypeArray *getDynamicArray(Type *type) {
 	return result;
 }
 
-TypeArray *getStaticArray(Type *type, u64 count) {
+TypeArray *getStaticArray(Type *type, u32 count) {
 	PROFILE_FUNC();
 	u32 hash = type->hash * STATIC_ARRAY_TYPE_HASH_PRIME + count * STATIC_ARRAY_SIZE_HASH_PRIME;
 	if (hash == 0) hash = 1;
@@ -307,7 +307,7 @@ TypeArray *getStaticArray(Type *type, u64 count) {
 
 	memcpy(buffer + 1, type->name.characters, type->name.length);
 
-	result->name.length = (buffer - result->name.characters) + 1 + type->name.length;
+	result->name.length = static_cast<u32>((buffer - result->name.characters) + 1 + type->name.length);
 
 	return result;
 }
@@ -447,13 +447,13 @@ TypeFunction *getFunctionType(ExprFunction *expr) {
 			}
 
 			if (function->argumentCount == arguments.count && function->returnCount == returns.count) {
-				for (u64 i = 0; i < arguments.count; i++) {
+				for (u32 i = 0; i < arguments.count; i++) {
 					if (function->argumentTypes[i] != static_cast<ExprLiteral *>(arguments[i]->type)->typeValue) {
 						goto cont;
 					}
 				}
 
-				for (u64 i = 0; i < returns.count; i++) {
+				for (u32 i = 0; i < returns.count; i++) {
 					if (function->returnTypes[i] != static_cast<ExprLiteral *>(returns[i]->type)->typeValue) {
 						goto cont;
 					}
@@ -481,11 +481,11 @@ TypeFunction *getFunctionType(ExprFunction *expr) {
 		result->flags |= TYPE_FUNCTION_IS_C_CALL;
 	}
 
-	for (u64 i = 0; i < returns.count; i++) {
+	for (u32 i = 0; i < returns.count; i++) {
 		result->returnTypes[i] = static_cast<ExprLiteral *>(returns[i]->type)->typeValue;
 	}
 
-	for (u64 i = 0; i < arguments.count; i++) {
+	for (u32 i = 0; i < arguments.count; i++) {
 		result->argumentTypes[i] = static_cast<ExprLiteral *>(arguments[i]->type)->typeValue;
 	}
 

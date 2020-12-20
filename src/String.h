@@ -3,18 +3,18 @@
 #include "Basic.h"
 #include "Array.h"
 
-#define STRING_PRINTF(val) static_cast<u32>((val).length), (val).characters
+#define STRING_PRINTF(val) ((val).length), ((val).characters)
 
 struct String;
 
 
 struct String {
 	char *characters;
-	u64 length;
+	u32 length;
 
 	String() : length(0), characters(0) {};
 	String(const char *cString);
-	String(char *characters, u64 length) : length(length), characters(characters) {};
+	String(char *characters, u32 length) : length(length), characters(characters) {};
 	String(const char *begin, const char *end);
 
 
@@ -42,7 +42,7 @@ inline char *copyString(const char *s) {
 std::ostream &operator<<(std::ostream &out, const String &str);
 
 inline char *toCString(const String &s) {
-	char *c = static_cast<char *>(malloc((size_t)s.length + 1));
+	char *c = static_cast<char *>(malloc(s.length + 1));
 	memcpy(c, s.characters, s.length);
 	c[s.length] = 0;
 

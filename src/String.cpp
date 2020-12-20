@@ -2,7 +2,7 @@
 #include "String.h"
 
 String::String(const char *cString) {
-	length = strlen(cString);
+	length = static_cast<u32>(strlen(cString));
 	
 	const char *s = cString;
 	characters = static_cast<char *>(malloc(length));
@@ -11,7 +11,7 @@ String::String(const char *cString) {
 
 String::String(const char *begin, const char *end) {
 	assert(end >= begin);
-	length = static_cast<u64>(end - begin);
+	length = static_cast<u32>(end - begin);
 
 	characters = static_cast<char *>(malloc(length));
 

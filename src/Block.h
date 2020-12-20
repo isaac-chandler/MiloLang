@@ -66,7 +66,7 @@ struct Declaration {
 	struct Expr *initialValue;
 
 	struct Block *enclosingScope;
-	u64 indexInBlock;
+	u32 indexInBlock;
 
 	struct DeclarationJob *inferJob = nullptr;
 
@@ -76,7 +76,7 @@ struct Declaration {
 	union {
 		struct {
 			union Symbol *symbol;
-			u64 physicalStorage;
+			u32 physicalStorage;
 		};
 
 		class llvm::Value *llvmStorage;
@@ -98,13 +98,13 @@ struct Declaration {
 #define BLOCK_HASHTABLE_MIN_COUNT 32
 
 struct Importer {
-	u64 indexInBlock;
+	u32 indexInBlock;
+	u8 flags = 0;
 
 	Block *enclosingScope = nullptr;
 	Expr *import;
 	Expr *structAccess = nullptr;
 
-	u64 flags = 0;
 };
 
 struct Block {
@@ -112,13 +112,12 @@ struct Block {
 	Array<Importer *> importers;
 
 	struct BlockEntry *table = nullptr;
-	u64 tableCapacity;
-
-	u64 currentIndex = 0;
+	u32 tableCapacity;
+	u32 currentIndex = 0;
 
 	Block *parentBlock = nullptr;
-	u64 indexInParent;
-	u64 flags = 0;
+	u32 indexInParent;
+	u8 flags = 0;
 
 	Array<struct SubJob *> sleepingOnMe;
 };
@@ -207,7 +206,7 @@ void initTable(Block *block);
 inline void addImporterToBlock(Block *block, Importer *importer, s64 index = -1) {
 
 
-	importer->indexInBlock = index == -1 ? block->currentIndex++ : index;
+	importer->indexInBlock = index == -1 ? block->currentIndex++ : static_cast<u32>(index);
 	importer->enclosingScope = block;
 
 	block->importers.add(importer);
@@ -226,7 +225,7 @@ inline void putDeclarationInBlock(Block *block, Declaration *declaration) {
 }
 
 inline void addDeclarationToBlockUnchecked(Block *block, Declaration *declaration, s64 index = -1) {
-	declaration->indexInBlock = index == -1 ? block->currentIndex++ : index;
+	declaration->indexInBlock = index == -1 ? block->currentIndex++ : static_cast<u32>(index);
 	declaration->enclosingScope = block;
 	
 	putDeclarationInBlock(block, declaration);

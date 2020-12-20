@@ -43,8 +43,8 @@ enum class TypeFlavor : u8 {
 #define TYPE_FUNCTION_IS_C_CALL 0x100
 
 struct Type {
-	u64 size;
-	u64 alignment;
+	u32 size;
+	u32 alignment;
 	String name;
 	u32 hash;
 	u16 flags = 0;
@@ -77,7 +77,7 @@ struct TypeEnum : TypeStruct {
 
 struct TypeArray : TypeStruct {
 	Type *arrayOf;
-	u64 count;
+	u32 count;
 };
 
 constexpr inline u64 getDigitCount(u64 value) {
@@ -94,11 +94,11 @@ struct Expr;
 
 
 struct TypeFunction : Type {
-	u64 returnCount;
+	Type **argumentTypes;
 	Type **returnTypes;
 
-	u64 argumentCount;
-	Type **argumentTypes;
+	u32 argumentCount;
+	u32 returnCount;
 	bool isVarargs;
 };
 
@@ -154,7 +154,7 @@ TypeArray *getArray(Type *type);
 
 TypeArray *getDynamicArray(Type *type);
 
-TypeArray *getStaticArray(Type *type, u64 count);
+TypeArray *getStaticArray(Type *type, u32 count);
 
 TypeFunction *getFunctionType(struct ExprFunction *expr);
 

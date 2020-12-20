@@ -2,12 +2,12 @@
 
 #include "Basic.h"
 
-template <typename T, u64 smallSize>
+template <typename T, u32 smallSize>
 class SmallArray {
 public:
 	T *storage = 0;
-	u64 count = 0;
-	u64 capacity = smallSize;
+	u32 count = 0;
+	u32 capacity = smallSize;
 
 	T small[smallSize];
 
@@ -16,7 +16,7 @@ public:
 		resize(count);
 	}
 
-	void resizeAndMaybeTrim(u64 newCapacity) {
+	void resizeAndMaybeTrim(u32 newCapacity) {
 		count = my_min(count, newCapacity);
 
 		if (newCapacity <= smallSize) {
@@ -42,7 +42,7 @@ public:
 		capacity = newCapacity;
 	}
 
-	void resize(u64 newCapacity) {
+	void resize(u32 newCapacity) {
 		assert(count <= newCapacity);
 
 		resizeAndMaybeTrim(newCapacity);
@@ -52,7 +52,7 @@ public:
 		resizeAndMaybeTrim(smallSize);
 	}
 
-	SmallArray(u64 capacity) {
+	SmallArray(u32 capacity) {
 		resizeAndMaybeTrim(capacity);
 	}
 
@@ -67,7 +67,7 @@ public:
 
 	template<typename Range, typename = std::enable_if_t<!std::is_integral<Range>::value>>
 	explicit SmallArray(const Range& values) {
-		count = static_cast<u64>(values.end() - values.begin());
+		count = static_cast<u32>(values.end() - values.begin());
 		resizeAndMaybeTrim(count);
 
 		memcpy(begin(), values.begin(), sizeof(T) * count);
@@ -81,12 +81,12 @@ public:
 		begin()[count++] = value;
 	}
 
-	const T &operator[] (u64 index) const {
+	const T &operator[] (u32 index) const {
 		assert(index < count);
 		return begin()[index];
 	}
 
-	T &operator[] (u64 index) {
+	T &operator[] (u32 index) {
 		assert(index < count);
 		return begin()[index];
 	}
@@ -126,7 +126,7 @@ public:
 	}
 
 	bool unordered_remove(const T &value) {
-		for (u64 i = 0; i < count; i++) {
+		for (u32 i = 0; i < count; i++) {
 			if (begin()[i] == value) {
 				unordered_remove(i);
 
@@ -138,7 +138,7 @@ public:
 	}
 
 
-	void unordered_remove(u64 index) {
+	void unordered_remove(u32 index) {
 		if (index != count - 1) {
 			begin()[index] = begin()[count - 1];
 		}
@@ -160,7 +160,7 @@ public:
 		count = 0;
 	}
 
-	void reserve(u64 capacity) {
+	void reserve(u32 capacity) {
 		if (this->capacity < capacity) {
 			resizeAndMaybeTrim(capacity);
 		}
@@ -178,11 +178,11 @@ template <typename T>
 class Array {
 public:
 	T *storage = 0;
-	u64 count = 0;
-	u64 capacity = 0;
+	u32 count = 0;
+	u32 capacity = 0;
 
 
-	void resizeAndMaybeTrim(u64 newCapacity) {
+	void resizeAndMaybeTrim(u32 newCapacity) {
 		storage = static_cast<T *>(realloc(storage, newCapacity * sizeof(T)));
 
 		if (newCapacity < count) {
@@ -192,13 +192,13 @@ public:
 		capacity = newCapacity;
 	}
 
-	void resize(u64 newCapacity) {
+	void resize(u32 newCapacity) {
 		assert(count <= newCapacity);
 
 		resizeAndMaybeTrim(newCapacity);
 	}
 
-	void reserve(u64 capacity) {
+	void reserve(u32 capacity) {
 		if (this->capacity < capacity) {
 			resizeAndMaybeTrim(capacity);
 		}
@@ -206,13 +206,13 @@ public:
 
 	Array() {}
 
-	Array(u64 capacity) {
+	Array(u32 capacity) {
 		resizeAndMaybeTrim(capacity);
 	}
 
 
 	Array(std::initializer_list<T> values) {
-		count = static_cast<u64>(values.size());
+		count = static_cast<u32>(values.size());
 		resizeAndMaybeTrim(count);
 
 		memcpy(storage, values.begin(), sizeof(T) * count);
@@ -220,7 +220,7 @@ public:
 
 	template<typename Range, typename = std::enable_if_t<!std::is_integral<Range>::value>>
 	explicit Array(const Range& values) {
-		count = static_cast<u64>(values.end() - values.begin());
+		count = static_cast<u32>(values.end() - values.begin());
 		resizeAndMaybeTrim(count);
 
 		memcpy(begin(), values.begin(), sizeof(T) * count);
@@ -243,12 +243,12 @@ public:
 		return storage[count - 1];
 	}
 
-	const T &operator[] (u64 index) const {
+	const T &operator[] (u32 index) const {
 		assert(index < count);
 		return storage[index];
 	}
 
-	T &operator[] (u64 index) {
+	T &operator[] (u32 index) {
 		assert(index < count);
 		return storage[index];
 	}
@@ -270,7 +270,7 @@ public:
 	}
 
 	bool unordered_remove(const T &value) {
-		for (u64 i = 0; i < count; i++) {
+		for (u32 i = 0; i < count; i++) {
 			if (storage[i] == value) {
 				unordered_remove(i);
 				return true;
@@ -280,7 +280,7 @@ public:
 		return false;
 	}
 
-	void unordered_remove(u64 index) {
+	void unordered_remove(u32 index) {
 		if (index != count - 1) {
 			storage[index] = storage[count - 1];
 		}

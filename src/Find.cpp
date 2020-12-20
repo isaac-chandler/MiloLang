@@ -192,10 +192,10 @@ wchar_t *concat(wchar_t *a, wchar_t *b, wchar_t *c = nullptr, wchar_t *d = nullp
     auto len_b = wcslen(b);
 
     auto len_c = 0;
-    if (c) len_c = wcslen(c);
+    if (c) len_c = static_cast<int>(wcslen(c));
 
     auto len_d = 0;
-    if (d) len_d = wcslen(d);
+    if (d) len_d = static_cast<int>(wcslen(d));
 
     wchar_t *result = (wchar_t *) malloc((len_a + len_b + len_c + len_d + 1) * 2);
     memcpy(result, a, len_a * 2);
@@ -457,7 +457,7 @@ bool find_visual_studio_2017_by_fighting_through_microsoft_craziness(Find_Result
         wchar_t *version = (wchar_t *) malloc(version_bytes);
         defer{ free(version); };
 
-        auto read_result = fgetws(version, version_bytes, f);
+        auto read_result = fgetws(version, static_cast<int>(version_bytes), f);
         if (!read_result) continue;
 
         auto version_tail = wcschr(version, '\n');

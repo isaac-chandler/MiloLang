@@ -11,19 +11,19 @@
 
 struct Loop {
 	struct ExprLoop *loop;
-	u64 start;
+	u32 start;
 
-	Array<u64> endPatches;
+	Array<u32> endPatches;
 };
 
 Array<Expr *> deferStack;
 static Block *currentBlock;
 
 Array<Loop> loopStack;
-u64 loopCount;
+u32 loopCount;
 
-u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced = false);
-u64 generateIrForceDest(IrState *state, Expr *expr, u64 dest);
+u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced = false);
+u32 generateIrForceDest(IrState *state, Expr *expr, u32 dest);
 
 static void pushLoop(IrState *state, ExprLoop *loop) {
 	if (loopCount >= loopStack.count) {
@@ -45,7 +45,7 @@ static void popLoop(IrState *state) {
 	Loop loop = loopStack[loopCount];
 
 	for (auto patch : loop.endPatches) {
-		state->ir[patch].b = state->ir.count;
+		state->ir[patch].branchTarget = state->ir.count;
 	}
 }
 
@@ -59,7 +59,7 @@ static void generateIncrement(IrState *state, ExprLoop *loop) {
 	index.op = IrOp::ADD_CONSTANT;
 	index.opSize = 8;
 	index.a = it_index->physicalStorage;
-	index.b = 1;
+	index.immediate = 1;
 	index.dest = it_index->physicalStorage;
 
 	Ir &increment = state->ir.add();
@@ -71,20 +71,20 @@ static void generateIncrement(IrState *state, ExprLoop *loop) {
 	if (loop->forBegin->type->flavor == TypeFlavor::POINTER) {
 		auto pointer = static_cast<TypePointer *>(loop->forBegin->type);
 
-		increment.b = pointer->pointerTo->size;
+		increment.immediate = pointer->pointerTo->size;
 	}
 	else if (loop->forBegin->type->flavor == TypeFlavor::ARRAY) {
 		auto array = static_cast<TypeArray *>(loop->forBegin->type);
 
-		increment.b = array->arrayOf->size;
+		increment.immediate = array->arrayOf->size;
 		increment.opSize = 8;
 	}
 	else if (loop->forBegin->type->flavor == TypeFlavor::STRING) {
-		increment.b = 1;
+		increment.immediate = 1;
 		increment.opSize = 8;
 	}
 	else {
-		increment.b = 1;
+		increment.immediate = 1;
 	}
 }
 
@@ -98,8 +98,8 @@ void addLineMarker(IrState *state, Expr *expr) {
 
 
 static void exitBlock(IrState *state, Block *block, bool isBreak) {
-	for (s64 i = deferStack.count - 1; i >= 0; --i) {
-		auto expr = deferStack[i];
+	for (s64 i = static_cast<s64>(deferStack.count) - 1; i >= 0; --i) {
+		auto expr = deferStack[static_cast<u32>(i)];
 
 		if (expr->flavor == ExprFlavor::FOR) {
 			auto loop = static_cast<ExprLoop *>(expr);
@@ -171,7 +171,7 @@ bool binaryOpHasSideEffects(TokenT op) {
 	}
 }
 
-void convertNumericType(IrState *state, Type *destType, u64 dest, Type *srcType, u64 src) {
+void convertNumericType(IrState *state, Type *destType, u32 dest, Type *srcType, u32 src) {
 	Ir &extend = state->ir.add();
 
 
@@ -268,14 +268,14 @@ IrOp getIrOpForMultiply(TokenT op) {
 }
 
 struct IrModifyWrite {
-	u64 addressReg;
-	u64 leftReg;
-	u64 rightReg;
+	u32 addressReg;
+	u32 leftReg;
+	u32 rightReg;
 };
 
-u64 loadAddressForArrayDereference(IrState *state, Expr *deref, u64 dest);
+u32 loadAddressForArrayDereference(IrState *state, Expr *deref, u32 dest);
 
-u64 loadAddressOf(IrState *state, Expr *expr, u64 dest) {
+u32 loadAddressOf(IrState *state, Expr *expr, u32 dest) {
 	if (expr->flavor == ExprFlavor::BINARY_OPERATOR && static_cast<ExprBinaryOperator *>(expr)->op == TOKEN('[')) {
 		dest = loadAddressForArrayDereference(state, expr, dest);
 	}
@@ -293,7 +293,7 @@ u64 loadAddressOf(IrState *state, Expr *expr, u64 dest) {
 			auto type = identifier->structAccess->type;
 
 
-			u64 store;
+			u32 store;
 
 			if (identifier->structAccess->type->flavor == TypeFlavor::POINTER) {
 				store = generateIr(state, identifier->structAccess, dest);
@@ -311,7 +311,7 @@ u64 loadAddressOf(IrState *state, Expr *expr, u64 dest) {
 				type = static_cast<TypePointer *>(type)->pointerTo;
 			}
 
-			u64 offset = identifier->declaration->physicalStorage; // In the case of struct members, physicalStorage is the offset within the struct
+			u32 offset = identifier->declaration->physicalStorage; // In the case of struct members, physicalStorage is the offset within the struct
 
 			if (offset == 0) {
 				return store;
@@ -321,7 +321,7 @@ u64 loadAddressOf(IrState *state, Expr *expr, u64 dest) {
 				add.op = IrOp::ADD_CONSTANT;
 				add.dest = dest;
 				add.a = store;
-				add.b = offset;
+				add.immediate = offset;
 				add.opSize = 8;
 
 				return dest;
@@ -339,19 +339,19 @@ u64 loadAddressOf(IrState *state, Expr *expr, u64 dest) {
 				Ir &address = state->ir.add();
 				address.op = IrOp::ADDRESS_OF_LOCAL;
 				address.a = identifier->declaration->physicalStorage;
-				address.b = 0;
+				address.immediate = 0;
 				address.dest = dest;
 				address.opSize = 8;
 			}
 		}
 	}
 	else {
-		u64 in = generateIr(state, expr, dest);
+		u32 in = generateIr(state, expr, dest);
 
 		Ir &address = state->ir.add();
 		address.op = IrOp::ADDRESS_OF_LOCAL;
 		address.a = in;
-		address.b = 0;
+		address.immediate = 0;
 		address.dest = dest;
 		address.opSize = 8;
 	}
@@ -359,12 +359,12 @@ u64 loadAddressOf(IrState *state, Expr *expr, u64 dest) {
 	return dest;
 }
 
-u64 loadAddressForArrayDereference(IrState *state, Expr *deref, u64 dest) {
+u32 loadAddressForArrayDereference(IrState *state, Expr *deref, u32 dest) {
 	auto binary = static_cast<ExprBinaryOperator *>(deref);
 
 	assert(binary->op == TOKEN('['));
 
-	u64 leftReg;
+	u32 leftReg;
 
 	if (binary->left->type->flags & TYPE_ARRAY_IS_FIXED) {
 		leftReg = loadAddressOf(state, binary->left, dest);
@@ -373,8 +373,8 @@ u64 loadAddressForArrayDereference(IrState *state, Expr *deref, u64 dest) {
 		leftReg = generateIr(state, binary->left, dest);
 	}
 
-	u64 temp = state->nextRegister++;
-	u64 rightReg = generateIrForceDest(state, binary->right, temp);
+	u32 temp = state->nextRegister++;
+	u32 rightReg = generateIrForceDest(state, binary->right, temp);
 
 	assert(temp == rightReg);
 
@@ -384,7 +384,7 @@ u64 loadAddressForArrayDereference(IrState *state, Expr *deref, u64 dest) {
 		mul.op = IrOp::MUL_BY_CONSTANT;
 		mul.dest = temp;
 		mul.a = temp;
-		mul.b = binary->type->size;
+		mul.immediate = binary->type->size;
 		mul.opSize = 8;
 
 		rightReg = temp;
@@ -400,8 +400,8 @@ u64 loadAddressForArrayDereference(IrState *state, Expr *deref, u64 dest) {
 	return dest;
 }
 
-u64 allocateSpaceForType(IrState *state, Type *type) {
-	u64 reg = state->nextRegister;
+u32 allocateSpaceForType(IrState *state, Type *type) {
+	u32 reg = state->nextRegister;
 
 	state->nextRegister += (type->size + 7) / 8;
 
@@ -411,7 +411,7 @@ u64 allocateSpaceForType(IrState *state, Type *type) {
 IrModifyWrite readForModifyWrite(IrState *state, Expr *left, Expr *right) {
 	IrModifyWrite info;
 
-	u64 dest;
+	u32 dest;
 
 	if (left->flavor == ExprFlavor::IDENTIFIER && !static_cast<ExprIdentifier *>(left)->structAccess) {
 		auto identifier = static_cast<ExprIdentifier *>(left);
@@ -424,7 +424,6 @@ IrModifyWrite readForModifyWrite(IrState *state, Expr *left, Expr *right) {
 			address.dest = dest;
 			address.declaration = identifier->declaration;
 			address.opSize = 8;
-			address.destSize = 8;
 
 			Ir &read = state->ir.add();
 			read.op = IrOp::READ;
@@ -469,29 +468,29 @@ void writeForModifyWrite(IrState *state, IrModifyWrite info, Expr *left) {
 		write.b = info.leftReg;
 	}
 }
-void generateCall(IrState *state, ExprFunctionCall *call, u64 dest, ExprCommaAssignment *comma) {
+void generateCall(IrState *state, ExprFunctionCall *call, u32 dest, ExprCommaAssignment *comma) {
 	auto type = static_cast<TypeFunction *>(call->function->type);
 
 	FunctionCall *argumentInfo = static_cast<FunctionCall *>(state->allocator.allocate(sizeof(FunctionCall) + sizeof(argumentInfo->args[0]) * (call->arguments.count + type->returnCount - 1)));
 	argumentInfo->argCount = call->arguments.count + type->returnCount - 1;
 
-	for (u64 i = 1; i < type->returnCount; i++) {
+	for (u32 i = 1; i < type->returnCount; i++) {
 		if (comma && i < comma->exprCount) {
-			u64 address = loadAddressOf(state, comma->left[i], state->nextRegister++);
+			u32 address = loadAddressOf(state, comma->left[i], state->nextRegister++);
 
 			argumentInfo->args[call->arguments.count + i - 1].number = address;
 			argumentInfo->args[call->arguments.count + i - 1].type = TYPE_VOID_POINTER;
 		}
 		else {
-			argumentInfo->args[call->arguments.count + i - 1].number = static_cast<u64>(-1LL);
+			argumentInfo->args[call->arguments.count + i - 1].number = static_cast<u32>(-1);
 			argumentInfo->args[call->arguments.count + i - 1].type = TYPE_VOID_POINTER;
 		}
 	}
 
-	u64 function = generateIr(state, call->function, state->nextRegister++);
+	u32 function = generateIr(state, call->function, state->nextRegister++);
 
 	
-	u64 paramOffset;
+	u32 paramOffset;
 
 	if (!isStandardSize(type->returnTypes[0]->size)) {
 		paramOffset = 1;
@@ -500,9 +499,9 @@ void generateCall(IrState *state, ExprFunctionCall *call, u64 dest, ExprCommaAss
 		paramOffset = 0;
 	}
 
-	u64 callAuxStorage = my_max(4, type->argumentCount + type->returnCount - 1 + paramOffset);
+	u32 callAuxStorage = my_max(4, type->argumentCount + type->returnCount - 1 + paramOffset);
 
-	for (u64 i = 0; i < call->arguments.count; i++) {
+	for (u32 i = 0; i < call->arguments.count; i++) {
 		argumentInfo->args[i].number = generateIr(state, call->arguments.values[i], state->nextRegister++);
 		argumentInfo->args[i].type = call->arguments.values[i]->type;
 
@@ -518,7 +517,7 @@ void generateCall(IrState *state, ExprFunctionCall *call, u64 dest, ExprCommaAss
 
 	argumentInfo->returnType = call->type;
 
-	u64 returnSize = 0;
+	u32 returnSize = 0;
 
 	if (dest == 0) {
 		returnSize = (call->type->size + 7) / 8;
@@ -527,7 +526,7 @@ void generateCall(IrState *state, ExprFunctionCall *call, u64 dest, ExprCommaAss
 		callAuxStorage += (call->type->size + 7) / 8;
 	}
 
-	for (u64 i = comma ? comma->exprCount : 1; i < type->returnCount; i++) {
+	for (u32 i = comma ? comma->exprCount : 1; i < type->returnCount; i++) {
 		returnSize = my_max(returnSize, (type->returnTypes[i]->size + 7) / 8);
 	}
 
@@ -549,8 +548,8 @@ void generateCall(IrState *state, ExprFunctionCall *call, u64 dest, ExprCommaAss
 	}
 }
 
-u64 generateEquals(IrState *state, u64 leftReg, Expr *right, u64 dest, bool equals) {
-	u64 rightReg = generateIr(state, right, state->nextRegister++);
+u32 generateEquals(IrState *state, u32 leftReg, Expr *right, u32 dest, bool equals) {
+	u32 rightReg = generateIr(state, right, state->nextRegister++);
 
 	if (right->type->flavor == TypeFlavor::STRING) {
 		if (!stringsEqualFunction) {
@@ -559,12 +558,12 @@ u64 generateEquals(IrState *state, u64 leftReg, Expr *right, u64 dest, bool equa
 			exit(1); // @Cleanup Forceful exit since we don't have good error handling here and its an internal compiler error
 		}
 
-		u64 function = generateIr(state, stringsEqualFunction, state->nextRegister++);
+		u32 function = generateIr(state, stringsEqualFunction, state->nextRegister++);
 
 		FunctionCall *argumentInfo = static_cast<FunctionCall *>(state->allocator.allocate(sizeof(FunctionCall) + sizeof(argumentInfo->args[0]) * 2));
 		argumentInfo->argCount = 2;
 
-		u64 callAuxStorage = 8;
+		u32 callAuxStorage = 8;
 
 		argumentInfo->args[0].number = leftReg;
 		argumentInfo->args[0].type = &TYPE_STRING;
@@ -611,7 +610,7 @@ u64 generateEquals(IrState *state, u64 leftReg, Expr *right, u64 dest, bool equa
 	return dest;
 }
 
-u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
+u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 	PROFILE_FUNC();
 	if (dest != DEST_NONE && expr->type->size > 8 && !destWasForced) {
 		// @Hack when ir generation was originally written it wasn't designed for large types, the dest register is often used for intermediates which may be larger than the final value
@@ -627,7 +626,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 			auto slice = static_cast<ExprSlice *>(expr);
 
-			u64 array;
+			u32 array;
 
 			if (slice->array->type->flags & TYPE_ARRAY_IS_FIXED) {
 				array = loadAddressOf(state, slice->array, state->nextRegister++);
@@ -656,7 +655,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 						mul.op = IrOp::MUL_BY_CONSTANT;
 						mul.dest = dest;
 						mul.a = offset;
-						mul.b = pointer->pointerTo->size;
+						mul.immediate = pointer->pointerTo->size;
 						mul.opSize = 8;
 
 						offset = dest;
@@ -701,7 +700,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 						mul.op = IrOp::MUL_BY_CONSTANT;
 						mul.dest = dest;
 						mul.a = offset;
-						mul.b = arrayOf->size;
+						mul.immediate = arrayOf->size;
 						mul.opSize = 8;
 
 						offset = dest;
@@ -717,7 +716,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				else if (slice->sliceStart) {
 					auto offset = generateIr(state, slice->sliceStart, state->nextRegister++);
 
-					u64 length = array + 1;
+					u32 length = array + 1;
 
 					if (slice->array->type->flags & TYPE_ARRAY_IS_FIXED) {
 						length = state->nextRegister++;
@@ -725,7 +724,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 						auto &immediate = state->ir.add();
 						immediate.op = IrOp::IMMEDIATE;
 						immediate.dest = length;
-						immediate.a = static_cast<TypeArray *>(slice->array->type)->count;
+						immediate.immediate = static_cast<TypeArray *>(slice->array->type)->count;
 						immediate.opSize = 8;
 					}
 
@@ -741,7 +740,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 						mul.op = IrOp::MUL_BY_CONSTANT;
 						mul.dest = dest;
 						mul.a = offset;
-						mul.b = arrayOf->size;
+						mul.immediate = arrayOf->size;
 						mul.opSize = 8;
 
 						offset = dest;
@@ -783,7 +782,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				case TokenT::CAST: {
 					assert(binary->left->flavor == ExprFlavor::TYPE_LITERAL);
 
-					u64 rightReg = generateIr(state, right, state->nextRegister++);
+					u32 rightReg = generateIr(state, right, state->nextRegister++);
 
 					Type *castTo = binary->type;
 
@@ -806,7 +805,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 						case TypeFlavor::STRUCT: {
 							assert(castTo == TYPE_ANY);
 
-							u64 storage = allocateSpaceForType(state, right->type);
+							u32 storage = allocateSpaceForType(state, right->type);
 
 							Ir &copy = state->ir.add();
 							copy.op = IrOp::SET;
@@ -819,7 +818,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 							address.op = IrOp::ADDRESS_OF_LOCAL;
 							address.dest = dest;
 							address.a = storage;
-							address.b = 0;
+							address.immediate = 0;
 							address.opSize = 8;
 
 							Ir &type = state->ir.add();
@@ -838,8 +837,8 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 							return dest;
 						}
 						case TypeFlavor::BOOL: {
-							u64 src;
-							u64 size;
+							u32 src;
+							u32 size;
 
 							if (right->type->flavor == TypeFlavor::ARRAY || right->type == &TYPE_STRING) {
 								if (right->type->flags & TYPE_ARRAY_IS_FIXED) {
@@ -847,7 +846,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 									one.op = IrOp::IMMEDIATE;
 									one.dest = dest;
-									one.a = 1;
+									one.immediate = 1;
 									one.opSize = 1;
 
 									return dest;
@@ -906,12 +905,12 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 								buffer.op = IrOp::ADDRESS_OF_LOCAL;
 								buffer.dest = dest;
 								buffer.a = rightReg;
-								buffer.b = 0;
+								buffer.immediate = 0;
 
 								Ir &count = state->ir.add();
 								count.op = IrOp::IMMEDIATE;
 								count.dest = dest + 1;
-								count.a = static_cast<TypeArray *>(right->type)->count;
+								count.immediate = static_cast<TypeArray *>(right->type)->count;
 								count.opSize = 8;
 
 								return dest;
@@ -932,7 +931,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 					assert(false);
 				}
 				case TOKEN('['): {
-					u64 address = loadAddressForArrayDereference(state, binary, dest);
+					u32 address = loadAddressForArrayDereference(state, binary, dest);
 
 					Ir &read = state->ir.add();
 					read.op = IrOp::READ;
@@ -953,9 +952,9 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				case TokenT::LESS_EQUAL:
 				case TOKEN('>'):
 				case TOKEN('<'): {
-					u64 leftReg = generateIr(state, left, state->nextRegister++);
+					u32 leftReg = generateIr(state, left, state->nextRegister++);
 
-					u64 rightReg = generateIr(state, right, state->nextRegister++);
+					u32 rightReg = generateIr(state, right, state->nextRegister++);
 
 					Ir &ir = state->ir.add();
 
@@ -980,11 +979,11 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 					if (left->type->flavor == TypeFlavor::POINTER) {
 						auto pointer = static_cast<TypePointer *>(left->type);
 
-						u64 leftReg = generateIr(state, left, state->nextRegister++);
+						u32 leftReg = generateIr(state, left, state->nextRegister++);
 
-						u64 temp = state->nextRegister++;
+						u32 temp = state->nextRegister++;
 
-						u64 rightReg = generateIr(state, right, temp);
+						u32 rightReg = generateIr(state, right, temp);
 
 						if (right->type->flavor == TypeFlavor::POINTER) {
 							assert(binary->op == TOKEN('-'));
@@ -999,7 +998,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 							div.op = IrOp::DIVIDE_BY_CONSTANT;
 							div.dest = dest;
 							div.a = dest;
-							div.b = pointer->pointerTo->size;
+							div.immediate = pointer->pointerTo->size;
 							div.opSize = 8;
 							div.flags |= IR_SIGNED_OP;
 						}
@@ -1010,7 +1009,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 								mul.op = IrOp::MUL_BY_CONSTANT;
 								mul.dest = temp;
 								mul.a = rightReg;
-								mul.b = pointer->pointerTo->size;
+								mul.immediate = pointer->pointerTo->size;
 								mul.opSize = 8;
 
 								rightReg = temp;
@@ -1025,9 +1024,9 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 						}
 					}
 					else {
-						u64 leftReg = generateIr(state, left, state->nextRegister++);
+						u32 leftReg = generateIr(state, left, state->nextRegister++);
 
-						u64 rightReg = generateIr(state, right, state->nextRegister++);
+						u32 rightReg = generateIr(state, right, state->nextRegister++);
 
 						Ir &ir = state->ir.add();
 
@@ -1048,9 +1047,9 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				case TOKEN('^'):
 				case TokenT::SHIFT_LEFT:
 				case TokenT::SHIFT_RIGHT: {
-					u64 leftReg = generateIr(state, left, state->nextRegister++);
+					u32 leftReg = generateIr(state, left, state->nextRegister++);
 
-					u64 rightReg = generateIr(state, right, state->nextRegister++);
+					u32 rightReg = generateIr(state, right, state->nextRegister++);
 
 					Ir &ir = state->ir.add();
 
@@ -1071,9 +1070,9 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				case TOKEN('*'):
 				case TOKEN('/'):
 				case TOKEN('%'): {
-					u64 leftReg = generateIr(state, left, state->nextRegister++);
+					u32 leftReg = generateIr(state, left, state->nextRegister++);
 
-					u64 rightReg = generateIr(state, right, state->nextRegister++);
+					u32 rightReg = generateIr(state, right, state->nextRegister++);
 
 					Ir &ir = state->ir.add();
 
@@ -1109,7 +1108,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 							address.dest = dest;
 							address.opSize = 8;
 
-							u64 rightReg = generateIr(state, right, state->nextRegister++);
+							u32 rightReg = generateIr(state, right, state->nextRegister++);
 							
 							Ir &write = state->ir.add();
 							write.op = IrOp::WRITE;
@@ -1120,7 +1119,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 							return rightReg;
 						}
 						else {
-							u64 stored = generateIrForceDest(state, right, identifier->declaration->physicalStorage);
+							u32 stored = generateIrForceDest(state, right, identifier->declaration->physicalStorage);
 
 							assert(stored == identifier->declaration->physicalStorage);
 
@@ -1131,7 +1130,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 						dest = loadAddressOf(state, left, state->nextRegister++);
 
 
-						u64 rightReg = generateIr(state, right, state->nextRegister++);
+						u32 rightReg = generateIr(state, right, state->nextRegister++);
 
 						Ir &write = state->ir.add();
 						write.op = IrOp::WRITE;
@@ -1154,7 +1153,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 					if (left->type->flavor == TypeFlavor::POINTER) {
 						auto pointer = static_cast<TypePointer *>(left->type);
 
-						u64 temp = state->nextRegister++;
+						u32 temp = state->nextRegister++;
 
 						if (pointer->pointerTo->size != 1) {
 							Ir &mul = state->ir.add();
@@ -1162,7 +1161,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 							mul.op = IrOp::MUL_BY_CONSTANT;
 							mul.dest = temp;
 							mul.a = info.rightReg;
-							mul.b = pointer->pointerTo->size;
+							mul.immediate = pointer->pointerTo->size;
 							mul.opSize = 8;
 
 							info.rightReg = temp;
@@ -1196,12 +1195,12 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				case TokenT::LOGIC_OR: {
 					assert(dest != DEST_NONE);
 					
-					u64 temp = state->nextRegister++;
+					u32 temp = state->nextRegister++;
 
 
 					generateIrForceDest(state, left, temp);
 					
-					u64 patch = state->ir.count;
+					u32 patch = state->ir.count;
 
 					Ir &branch = state->ir.add();
 					branch.op = binary->op == TokenT::LOGIC_AND ? IrOp::IF_Z_GOTO : IrOp::IF_NZ_GOTO;
@@ -1211,7 +1210,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 					addLineMarker(state, right);
 					generateIrForceDest(state, right, temp);
 
-					state->ir[patch].b = state->ir.count;
+					state->ir[patch].branchTarget = state->ir.count;
 
 					Ir &set = state->ir.add();
 					set.op = IrOp::SET;
@@ -1325,7 +1324,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			auto break_ = static_cast<ExprBreakOrContinue *>(expr);
 
 
-			for (u64 i = loopCount; i-- != 0;) {
+			for (u32 i = loopCount; i-- != 0;) {
 
 				if (loopStack[i].loop == break_->refersTo) {
 					exitBlock(state, &loopStack[i].loop->iteratorBlock, true);
@@ -1342,10 +1341,10 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 		case ExprFlavor::CONTINUE: {
 			auto continue_ = static_cast<ExprBreakOrContinue *>(expr);
 
-			u64 begin;
+			u32 begin;
 
 
-			for (u64 i = loopCount; i-- != 0;) {
+			for (u32 i = loopCount; i-- != 0;) {
 				if (loopStack[i].loop == continue_->refersTo) {
 					exitBlock(state, &loopStack[i].loop->iteratorBlock, false);
 					begin = loopStack[i].start;
@@ -1355,7 +1354,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 			Ir &jump = state->ir.add();
 			jump.op = IrOp::GOTO;
-			jump.b = begin;
+			jump.branchTarget = begin;
 
 			return DEST_NONE;
 		}
@@ -1371,19 +1370,19 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			assert(remove->refersTo->forBegin->type->flavor == TypeFlavor::ARRAY);
 			assert(!(remove->refersTo->forBegin->type->flags & TYPE_ARRAY_IS_FIXED));
 
-			u64 function = generateIr(state, removeFunction, state->nextRegister++);
+			u32 function = generateIr(state, removeFunction, state->nextRegister++);
 
 			FunctionCall *argumentInfo = static_cast<FunctionCall *>(state->allocator.allocate(sizeof(FunctionCall) + sizeof(argumentInfo->args[0]) * 3));
 			argumentInfo->argCount = 3;
 
-			u64 callAuxStorage = 4;
+			u32 callAuxStorage = 4;
 
-			u64 sizeReg = state->nextRegister++;
+			u32 sizeReg = state->nextRegister++;
 
 			Ir &size = state->ir.add();
 			size.op = IrOp::IMMEDIATE;
 			size.dest = sizeReg;
-			size.a = static_cast<TypeArray *>(remove->refersTo->forBegin->type)->arrayOf->size;
+			size.immediate = static_cast<TypeArray *>(remove->refersTo->forBegin->type)->arrayOf->size;
 			size.opSize = 8;
 
 
@@ -1411,7 +1410,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			sub.op = IrOp::ADD_CONSTANT;
 			sub.dest = remove->refersTo->iteratorBlock.declarations[1]->physicalStorage;
 			sub.a = remove->refersTo->iteratorBlock.declarations[1]->physicalStorage;
-			sub.b = static_cast<u64>(-1LL);
+			sub.immediate = static_cast<u64>(-1LL);
 			sub.opSize = 8;
 
 			return DEST_NONE;
@@ -1430,7 +1429,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				Ir &load = state->ir.add();
 				load.op = IrOp::IMMEDIATE;
 				load.dest = dest;
-				load.a = literal->unsignedValue;
+				load.immediate = literal->unsignedValue;
 				load.opSize = literal->type->size;
 
 				if (literal->type->flags & TYPE_INTEGER_IS_SIGNED)
@@ -1463,7 +1462,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				Ir &load = state->ir.add();
 				load.op = IrOp::IMMEDIATE;
 				load.dest = dest;
-				load.a = value;
+				load.immediate = value;
 				load.opSize = literal->type->size;
 
 				load.flags |= IR_FLOAT_OP;
@@ -1482,8 +1481,8 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			assert(static_cast<ExprLiteral *>(it_index->type)->typeValue == &TYPE_U64);
 			it_index->physicalStorage = state->nextRegister++;
 
-			u64 itReg = it->physicalStorage;
-			u64 it_indexReg = it_index->physicalStorage;
+			u32 itReg = it->physicalStorage;
+			u32 it_indexReg = it_index->physicalStorage;
 
 			if ((loop->forBegin->type->flavor != TypeFlavor::INTEGER) && !(loop->flags & EXPR_FOR_BY_POINTER)) {
 				loop->irPointer = state->nextRegister++;
@@ -1525,7 +1524,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			initItIndex.opSize = 8;
 			initItIndex.destSize = 8;
 
-			u64 irEnd;
+			u32 irEnd;
 
 			if (loop->forEnd) {
 				irEnd = generateIr(state, loop->forEnd, state->nextRegister++);
@@ -1537,7 +1536,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 
 
-			u64 compareDest;
+			u32 compareDest;
 
 			compareDest = state->nextRegister++;
 			
@@ -1546,7 +1545,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 					Ir &immediate = state->ir.add();
 					immediate.op = IrOp::IMMEDIATE;
 					immediate.dest = compareDest;
-					immediate.a = static_cast<TypeArray *>(loop->forBegin->type)->count;
+					immediate.immediate = static_cast<TypeArray *>(loop->forBegin->type)->count;
 					immediate.opSize = 8;
 				}
 				else {
@@ -1554,7 +1553,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 					add.op = IrOp::ADD_CONSTANT;
 					add.dest = compareDest;
 					add.a = loop->arrayPointer;
-					add.b = 8;
+					add.immediate = 8;
 					add.opSize = 8;
 
 					Ir &read = state->ir.add();
@@ -1584,7 +1583,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 					compare.flags |= IR_SIGNED_OP;
 			}
 
-			u64 patch = state->ir.count; // Patch this manually so it doesn't skip the completed block if it exists
+			u32 patch = state->ir.count; // Patch this manually so it doesn't skip the completed block if it exists
 
 			Ir &branch = state->ir.add();
 			branch.op = IrOp::IF_Z_GOTO;
@@ -1616,9 +1615,9 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 			Ir &jump = state->ir.add();
 			jump.op = IrOp::GOTO;
-			jump.b = loopStack[loopCount - 1].start;
+			jump.branchTarget = loopStack[loopCount - 1].start;
 
-			state->ir[patch].b = state->ir.count;
+			state->ir[patch].branchTarget = state->ir.count;
 
 			if (loop->completedBody) {
 				addLineMarker(state, loop->completedBody);
@@ -1664,7 +1663,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			auto identifier = static_cast<ExprIdentifier *>(expr);
 
 			if (identifier->structAccess) {
-				u64 stored = loadAddressOf(state, expr, dest);
+				u32 stored = loadAddressOf(state, expr, dest);
 
 				Ir &read = state->ir.add();
 				read.op = IrOp::READ;
@@ -1704,9 +1703,9 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 			auto switch_ = static_cast<ExprSwitch *>(expr);
 
-			u64 value = generateIr(state, switch_->condition, state->nextRegister++);
+			u32 value = generateIr(state, switch_->condition, state->nextRegister++);
 
-			u64 compareResult = state->nextRegister++;
+			u32 compareResult = state->nextRegister++;
 			
 			ExprSwitch::Case *else_ = nullptr;
 
@@ -1718,7 +1717,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 					assert(condition->right->type == switch_->condition->type);
 
-					u64 result = generateEquals(state, value, condition->right, compareResult, true);
+					u32 result = generateEquals(state, value, condition->right, compareResult, true);
 
 					case_.irBranch = state->ir.count;
 
@@ -1733,7 +1732,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				}
 			}
 
-			u64 finalPatch = state->ir.count;
+			u32 finalPatch = state->ir.count;
 
 			Ir &final = state->ir.add();
 			final.op = IrOp::GOTO;
@@ -1743,7 +1742,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			}
 
 			for (auto &case_ : switch_->cases) {
-				state->ir[case_.irBranch].b = state->ir.count;
+				state->ir[case_.irBranch].branchTarget = state->ir.count;
 
 				addLineMarker(state, case_.block);
 				generateIr(state, case_.block, DEST_NONE);
@@ -1757,14 +1756,14 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			}
 
 			if (!else_) {
-				state->ir[finalPatch].b = state->ir.count;
+				state->ir[finalPatch].branchTarget = state->ir.count;
 			}
 
-			for (u64 i = 0; i + 1 < switch_->cases.count; i++) {
+			for (u32 i = 0; i + 1 < switch_->cases.count; i++) {
 				auto &case_ = switch_->cases[i];
 
 				if (!case_.fallsThrough)
-					state->ir[case_.irSkip].b = state->ir.count;
+					state->ir[case_.irSkip].branchTarget = state->ir.count;
 			}
 
 			return DEST_NONE;
@@ -1772,10 +1771,10 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 		case ExprFlavor::IF: {
 			auto ifElse = static_cast<ExprIf *>(expr);
 
-			u64 conditionReg = generateIr(state, ifElse->condition, state->nextRegister++);
+			u32 conditionReg = generateIr(state, ifElse->condition, state->nextRegister++);
 
 			if (ifElse->ifBody && ifElse->elseBody) {
-				u64 patchIfZ = state->ir.count;
+				u32 patchIfZ = state->ir.count;
 				Ir &ifZ = state->ir.add();
 				ifZ.op = IrOp::IF_Z_GOTO;
 				ifZ.a = conditionReg;
@@ -1784,19 +1783,19 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				addLineMarker(state, ifElse->ifBody);
 				generateIr(state, ifElse->ifBody, DEST_NONE);
 				
-				u64 patchJump = state->ir.count;
+				u32 patchJump = state->ir.count;
 				Ir &jump = state->ir.add();
 				jump.op = IrOp::GOTO;
 				
-				state->ir[patchIfZ].b = state->ir.count;
+				state->ir[patchIfZ].branchTarget = state->ir.count;
 
 				addLineMarker(state, ifElse->elseBody);
 				generateIr(state, ifElse->elseBody, DEST_NONE);
 
-				state->ir[patchJump].b = state->ir.count;
+				state->ir[patchJump].branchTarget = state->ir.count;
 			}
 			else if (ifElse->ifBody) {
-				u64 patchIfZ = state->ir.count;
+				u32 patchIfZ = state->ir.count;
 				Ir &ifZ = state->ir.add();
 				ifZ.op = IrOp::IF_Z_GOTO;
 				ifZ.a = conditionReg;
@@ -1805,10 +1804,10 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				addLineMarker(state, ifElse->ifBody);
 				generateIr(state, ifElse->ifBody, DEST_NONE);
 
-				state->ir[patchIfZ].b = state->ir.count;
+				state->ir[patchIfZ].branchTarget = state->ir.count;
 			}
 			else if (ifElse->elseBody) {
-				u64 patchIfNZ = state->ir.count;
+				u32 patchIfNZ = state->ir.count;
 				Ir &ifNZ = state->ir.add();
 				ifNZ.op = IrOp::IF_NZ_GOTO;
 				ifNZ.a = conditionReg;
@@ -1817,7 +1816,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				addLineMarker(state, ifElse->elseBody);
 				generateIr(state, ifElse->elseBody, DEST_NONE);
 
-				state->ir[patchIfNZ].b = state->ir.count;
+				state->ir[patchIfNZ].branchTarget = state->ir.count;
 			}
 
 			return DEST_NONE;
@@ -1827,7 +1826,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			
 			auto comma = static_cast<ExprCommaAssignment *>(expr);
 
-			u64 address = loadAddressOf(state, comma->left[0], state->nextRegister++);
+			u32 address = loadAddressOf(state, comma->left[0], state->nextRegister++);
 
 			dest = allocateSpaceForType(state, comma->left[0]->type);
 
@@ -1845,13 +1844,13 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 		case ExprFlavor::RETURN: {
 			auto return_ = static_cast<ExprReturn *>(expr);
 
-			u64 result = 0;
+			u32 result = 0;
 
 			if (return_->returns.count) {
-				u64 result = generateIr(state, return_->returns.values[0], state->nextRegister++);
+				u32 result = generateIr(state, return_->returns.values[0], state->nextRegister++);
 
-				for (u64 i = 1; i < return_->returns.count; i++) {
-					u64 store = generateIr(state, return_->returns.values[i], state->nextRegister++);
+				for (u32 i = 1; i < return_->returns.count; i++) {
+					u32 store = generateIr(state, return_->returns.values[i], state->nextRegister++);
 
 					Ir &write = state->ir.add();
 					write.op = IrOp::WRITE;
@@ -1887,7 +1886,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 		case ExprFlavor::STRUCT_DEFAULT: {
 			if (dest == DEST_NONE) return DEST_NONE;
 
-			u64 memberSize = 0;
+			u32 memberSize = 0;
 
 			auto struct_ = static_cast<TypeStruct *>(expr->type);
 
@@ -1899,8 +1898,8 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 				}
 			}
 
-			u64 addressReg = state->nextRegister++;
-			u64 memberTemp = state->nextRegister;
+			u32 addressReg = state->nextRegister++;
+			u32 memberTemp = state->nextRegister;
 			state->nextRegister += (memberSize + 7) / 8;
 
 			for (auto decl : struct_->members.declarations) {
@@ -1912,7 +1911,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 					Ir &address = state->ir.add();
 					address.op = IrOp::ADDRESS_OF_LOCAL;
 					address.a = dest;
-					address.b = decl->physicalStorage;
+					address.immediate = decl->physicalStorage;
 					address.dest = addressReg;
 					address.opSize = 8;
 
@@ -1960,7 +1959,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 					return loadAddressOf(state, unary->value, dest);
 				}
 				case TOKEN('-'): {
-					u64 toNegate = generateIr(state, unary->value, dest);
+					u32 toNegate = generateIr(state, unary->value, dest);
 
 					Ir &negate = state->ir.add();
 					negate.op = IrOp::NEG;
@@ -1976,7 +1975,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 					return dest;
 				}
 				case TOKEN('~'): {
-					u64 toInvert = generateIr(state, unary->value, dest);
+					u32 toInvert = generateIr(state, unary->value, dest);
 
 					Ir &invert = state->ir.add();
 					invert.op = IrOp::NOT;
@@ -1988,7 +1987,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 					return dest;
 				}
 				case TOKEN('!'): {
-					u64 toInvert = generateIr(state, unary->value, dest);
+					u32 toInvert = generateIr(state, unary->value, dest);
 
 					Ir &invert = state->ir.add();
 					invert.op = IrOp::EQUAL;
@@ -2000,7 +1999,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 					return dest;
 				}
 				case TokenT::SHIFT_LEFT: {
-					u64 addressReg = generateIr(state, unary->value, dest);
+					u32 addressReg = generateIr(state, unary->value, dest);
 
 					Ir &read = state->ir.add();
 					read.op = IrOp::READ;
@@ -2012,7 +2011,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 					return dest;
 				}
 				case TokenT::TYPE_INFO: {
-					u64 store = generateIr(state, unary->value, dest);
+					u32 store = generateIr(state, unary->value, dest);
 
 					auto &ir = state->ir.add();
 					ir.op = IrOp::TYPE_INFO;
@@ -2033,9 +2032,9 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 			pushLoop(state, loop);
 
-			u64 conditionReg = generateIr(state, loop->whileCondition, state->nextRegister++);
+			u32 conditionReg = generateIr(state, loop->whileCondition, state->nextRegister++);
 			
-			u64 patch = state->ir.count; // Patch this manually so it doesn't skip the completed block if it exists
+			u32 patch = state->ir.count; // Patch this manually so it doesn't skip the completed block if it exists
 
 			Ir &ifZ = state->ir.add();
 			ifZ.op = IrOp::IF_Z_GOTO;
@@ -2049,9 +2048,9 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 
 			Ir &jump = state->ir.add();
 			jump.op = IrOp::GOTO;
-			jump.b = loopStack[loopCount - 1].start;
+			jump.branchTarget = loopStack[loopCount - 1].start;
 
-			state->ir[patch].b = state->ir.count;
+			state->ir[patch].branchTarget = state->ir.count;
 
 			if (loop->completedBody) {
 				addLineMarker(state, loop->completedBody);
@@ -2070,25 +2069,25 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 			if (array->type->flags & TYPE_ARRAY_IS_FIXED) {
 				auto elementType = static_cast<TypeArray *>(array->type)->arrayOf;
 
-				u64 addressReg = state->nextRegister++;
-				u64 valueReg = allocateSpaceForType(state, elementType);
-				for (u64 i = 0; i < array->count; i++) {
+				u32 addressReg = state->nextRegister++;
+				u32 valueReg = allocateSpaceForType(state, elementType);
+				for (u32 i = 0; i < array->count; i++) {
 					if (i + 1 < array->count && array->storage[i + 1] == nullptr) {
-						u64 countReg = state->nextRegister++;
+						u32 countReg = state->nextRegister++;
 						Ir &count = state->ir.add();
 						count.op = IrOp::IMMEDIATE;
 						count.dest = countReg;
-						count.a = array->count - i;
+						count.immediate = array->count - i;
 						count.opSize = 8;
 						
 						Ir &address = state->ir.add();
 						address.op = IrOp::ADDRESS_OF_LOCAL;
 						address.dest = addressReg;
 						address.a = dest;
-						address.b = dest + i * elementType->size;
+						address.immediate = dest + i * elementType->size;
 						address.opSize = 8;
 
-						u64 patch = state->ir.count;
+						u32 patch = state->ir.count;
 
 						generateIrForceDest(state, array->storage[i], valueReg);
 
@@ -2102,14 +2101,14 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 						add.op = IrOp::ADD_CONSTANT;
 						add.dest = addressReg;
 						add.a = addressReg;
-						add.b = elementType->size;
+						add.immediate = elementType->size;
 						add.opSize = 8;
 
 						Ir &dec = state->ir.add();
 						dec.op = IrOp::ADD_CONSTANT;
 						dec.dest = countReg;
 						dec.a = countReg;
-						dec.b = static_cast<u64>(-1LL);
+						dec.immediate = static_cast<u64>(-1LL);
 						dec.opSize = 8;
 
 						Ir &branch = state->ir.add();
@@ -2125,7 +2124,7 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 						address.op = IrOp::ADDRESS_OF_LOCAL;
 						address.dest = addressReg;
 						address.a = dest;
-						address.b = i * elementType->size;
+						address.immediate = i * elementType->size;
 						address.opSize = 8;
 
 						generateIrForceDest(state, array->storage[i], valueReg);
@@ -2163,10 +2162,10 @@ u64 generateIr(IrState *state, Expr *expr, u64 dest, bool destWasForced) {
 	}
 }
 
-u64 generateIrForceDest(IrState *state, Expr *expr, u64 dest) {
+u32 generateIrForceDest(IrState *state, Expr *expr, u32 dest) {
 	assert(dest != DEST_NONE);
 
-	u64 stored = generateIr(state, expr, dest, true);
+	u32 stored = generateIr(state, expr, dest, true);
 
 	if (stored != dest) {
 		Ir &set = state->ir.add();
@@ -2181,7 +2180,7 @@ u64 generateIrForceDest(IrState *state, Expr *expr, u64 dest) {
 }
 
 bool generateIrForFunction(ExprFunction *function) {
-	u64 paramOffset;
+	u32 paramOffset;
 
 	if (!isStandardSize(static_cast<ExprLiteral *>(function->returns.declarations[0]->type)->typeValue->size)) {
 		paramOffset = 1;
@@ -2194,7 +2193,7 @@ bool generateIrForFunction(ExprFunction *function) {
 	function->state.parameterSpace = my_max(4, function->arguments.declarations.count + paramOffset + function->returns.declarations.count - 1);
 	function->state.nextRegister += function->state.parameterSpace;
 
-	for (u64 i = 0; i < function->arguments.declarations.count; i++) {
+	for (u32 i = 0; i < function->arguments.declarations.count; i++) {
 		auto declaration = function->arguments.declarations[i];
 		auto type = static_cast<ExprLiteral *>(declaration->type)->typeValue;
 
@@ -2206,7 +2205,7 @@ bool generateIrForFunction(ExprFunction *function) {
 		}
 	}
 
-	for (u64 i = 1; i < function->returns.declarations.count; i++) {
+	for (u32 i = 1; i < function->returns.declarations.count; i++) {
 		auto declaration = function->returns.declarations[i];
 
 		declaration->physicalStorage = function->arguments.declarations.count + paramOffset + i;
@@ -2236,7 +2235,9 @@ bool generateIrForFunction(ExprFunction *function) {
 	job.function = function;
 	job.flavor = CoffJobFlavor::FUNCTION;
 	
-	coffWriterQueue.add(job);
+	if (!(function->returns.declarations[0]->flags & DECLARATION_IS_RUN_RETURN)) {
+		coffWriterQueue.add(job);
+	}
 
 
 
@@ -2256,7 +2257,6 @@ void runIrGenerator() {
 			break;
 	}
 
-error:
 	inferQueue.add(static_cast<Declaration *>(nullptr));
 	coffWriterQueue.add({ nullptr, CoffJobFlavor::FUNCTION });
 }

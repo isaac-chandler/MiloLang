@@ -1146,7 +1146,7 @@ void addVoidReturn(CodeLocation &start, EndLocation &end, ExprFunction *function
 	returnType->type = parserMakeTypeLiteral(start, end, &TYPE_VOID);
 	returnType->start = start;
 	returnType->end = end;
-	returnType->name = String(nullptr, 0ULL);
+	returnType->name = String(nullptr, 0u);
 	returnType->initialValue = nullptr;
 	returnType->flags |= DECLARATION_IS_RETURN;
 
@@ -1172,7 +1172,7 @@ bool parseFunctionReturnTypes(LexerFile *lexer, ExprFunction *function, bool *ha
 		returnType->type = expr;
 		returnType->start = expr->start;
 		returnType->end = expr->end;
-		returnType->name = String(nullptr, 0ULL);
+		returnType->name = String(nullptr, 0u);
 		returnType->initialValue = nullptr;
 		returnType->flags |= DECLARATION_IS_RETURN;
 
@@ -1271,7 +1271,7 @@ bool parseFunctionReturnTypes(LexerFile *lexer, ExprFunction *function, bool *ha
 				returnType->type = expr;
 				returnType->start = expr->start;
 				returnType->end = expr->end;
-				returnType->name = String(nullptr, 0ULL);
+				returnType->name = String(nullptr, 0u);
 				returnType->initialValue = nullptr;
 				returnType->flags |= DECLARATION_IS_RETURN;
 
@@ -1565,7 +1565,7 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 				}
 				argument->start = expr->start;
 				argument->end = expr->end;
-				argument->name = String(nullptr, 0ULL);
+				argument->name = String(nullptr, 0u);
 				argument->initialValue = nullptr;
 				argument->flags |= DECLARATION_IS_ARGUMENT;
 
@@ -1637,7 +1637,7 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 			}
 			argument->start = expr->start;
 			argument->end = expr->end;
-			argument->name = String(nullptr, 0ULL);
+			argument->name = String(nullptr, 0u);
 			argument->initialValue = nullptr;
 			argument->flags |= DECLARATION_IS_ARGUMENT;
 
@@ -1677,7 +1677,7 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 				}
 				argument->start = arg->start;
 				argument->end = arg->end;
-				argument->name = String(nullptr, 0ULL);
+				argument->name = String(nullptr, 0u);
 				argument->initialValue = nullptr;
 				argument->flags |= DECLARATION_IS_ARGUMENT;
 
@@ -1748,7 +1748,7 @@ bool parseArguments(LexerFile *lexer, Arguments *args, const char *message) {
 	Array<String> names;
 
 	do {
-		String name = { nullptr, 0ULL };
+		String name = { nullptr, 0u };
 
 		if (lexer->token.type == TokenT::IDENTIFIER) {
 			TokenT peek;
@@ -2963,5 +2963,5 @@ void parseFile(FileInfo *file) {
 		}
 	}
 
-	printf("Parser memory used %llukb\n", parserArena.totalSize / 1024);
+	printf("Parser memory used %ukb\n", parserArena.totalSize / 1024);
 }

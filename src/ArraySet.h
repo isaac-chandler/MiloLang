@@ -44,15 +44,15 @@ public:
 		return array.end();
 	}
 
-	const T &operator[](u64 index) const {
+	const T &operator[](u32 index) const {
 		return array[index];
 	}
 
-	T &operator[](u64 index) {
+	T &operator[](u32 index) {
 		return array[index];
 	}
 
-	const u64 size() const {
+	const u32 size() const {
 		return array.count;
 	}
 

@@ -6,26 +6,26 @@
 struct ArenaAllocatorBucket {
 	ArenaAllocatorBucket *next;
 	char *memory;
-	u64 remaining;
+	u32 remaining;
 };
 
-ArenaAllocatorBucket *makeBucket(u64 size);
+ArenaAllocatorBucket *makeBucket(u32 size);
 
 struct BucketedArenaAllocator {
 	ArenaAllocatorBucket *first;
 	ArenaAllocatorBucket *current;
-	u64 bucketSize;
-	u64 totalSize;
+	u32 bucketSize;
+	u32 totalSize;
 
-	BucketedArenaAllocator(u64 bucketSize) : bucketSize(bucketSize), totalSize(0) {
+	BucketedArenaAllocator(u32 bucketSize) : bucketSize(bucketSize), totalSize(0) {
 		assert((bucketSize & 7) == 0);
 
 		current = makeBucket(bucketSize);
 		first = current;
 	}
 
-	void *allocate(u64 size);
-	void *allocateUnaligned(u64 size);
+	void *allocate(u32 size);
+	void *allocateUnaligned(u32 size);
 
 	inline void free() {
 		while (first) {
@@ -40,13 +40,13 @@ struct BucketedArenaAllocator {
 	u16 *add2(u16 value);
 	u32 *add4(u32 value);
 	u64 *add8(u64 value);
-	void add(const void *value, u64 size);
+	void add(const void *value, u32 size);
 	void addNullTerminatedString(String string);
 	void addNullTerminatedString(const char *string);
-	void ensure(u64 size);
+	void ensure(u32 size);
 };
 
-template<typename T, u64 bucketSize = 1024> 
+template<typename T, u32 bucketSize = 1024>
 struct BucketArray {
 	BucketedArenaAllocator allocator;
 
@@ -61,7 +61,7 @@ struct BucketArray {
 		return result;
 	}
 
-	u64 count() const {
+	u32 count() const {
 		return allocator.totalSize / sizeof(T);
 	}
 };

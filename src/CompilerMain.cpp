@@ -391,7 +391,7 @@ int main(int argc, char *argv[]) {
 
 		irGenerator.detach();
 		{
-			u64 i;
+			u32 i;
 			for (i = 0; i < files.size(); i++) {
 				parseFile(getFileInfoByUid(static_cast<u32>(i)));
 

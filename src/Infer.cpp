@@ -105,12 +105,12 @@ struct SubJob {
 	Array<Type *> *sizeDependencies;
 
 	Array<Array<Expr **>> flatteneds;
-	Array<u64> indices;
-	u64 flattenedCount = 0;
+	Array<u32> indices;
+	u32 flattenedCount = 0;
+	u32 sleepCount = 0;
+	String sleepingOnName;
 
 	JobFlavor flavor;
-	u64 sleepCount = 0;
-	String sleepingOnName;
 
 	SubJob(JobFlavor flavor, Array<Type *> *sizeDependencies) : flavor(flavor), sizeDependencies(sizeDependencies) {}
 };
@@ -123,7 +123,7 @@ Expr **getHalt(SubJob *job) {
 	return job->flatteneds[job->flattenedCount - 1][job->indices[job->flattenedCount - 1]];
 }
 
-void goToSleep(SubJob *job, Array<SubJob *> *sleepingOnMe, String name = String(nullptr, 0ULL)) {
+void goToSleep(SubJob *job, Array<SubJob *> *sleepingOnMe, String name = String(nullptr, 0u)) {
 	_ReadWriteBarrier();
 
 	job->sleepCount++;
@@ -196,8 +196,8 @@ struct FunctionJob {
 struct SizeJob : SubJob {
 	Type *type;
 
-	u64 sizingIndexInMembers = 0;
-	u64 runningSize = 0;
+	u32 sizingIndexInMembers = 0;
+	u32 runningSize = 0;
 
 	SizeJob *next = nullptr;
 	SizeJob *previous = nullptr;
@@ -216,7 +216,7 @@ struct ImporterJob : SubJob {
 
 struct RunJob : SubJob {
 	Array<ExprFunction *> checkingFunctions;
-	Array<u64> checkingFunctionIndices;
+	Array<u32> checkingFunctionIndices;
 
 	Array<Type *> generatingTypeInfos;
 
@@ -258,7 +258,7 @@ inline void addSubJob(SubJob *job, bool highPriority = false) {
 
 bool addDeclaration(Declaration *declaration);
 
-void wakeUpSleepers(Array<SubJob *> *sleepers, bool priority = false, String name = String(nullptr, 0ULL)) {
+void wakeUpSleepers(Array<SubJob *> *sleepers, bool priority = false, String name = String(nullptr, 0u)) {
 	if (name.length == 0) {
 		for (auto sleeper : *sleepers) {
 			if (--sleeper->sleepCount == 0)
@@ -268,7 +268,7 @@ void wakeUpSleepers(Array<SubJob *> *sleepers, bool priority = false, String nam
 		sleepers->clear();
 	}
 	else {
-		for (u64 i = 0; i < sleepers->count; i++) {
+		for (u32 i = 0; i < sleepers->count; i++) {
 			auto sleeper = (*sleepers)[i];
 
 			if (sleeper->sleepingOnName.length == 0 || name == sleeper->sleepingOnName) {
@@ -1056,6 +1056,12 @@ void doConstantCast(Expr **cast) {
 		if (castTo == &TYPE_BOOL) {
 			auto string = static_cast<ExprStringLiteral *>(expr);
 			*cast = createIntLiteral(binary->start, expr->end, castTo, string->string.length != 0 ? 1 : 0);
+		}
+	}
+	else if (expr->flavor == ExprFlavor::FUNCTION) {
+		if (castTo == &TYPE_BOOL) {
+			auto array = static_cast<ExprArray *>(expr);
+			*cast = createIntLiteral(binary->start, expr->end, castTo, 1);
 		}
 	}
 }
@@ -2607,7 +2613,7 @@ bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char 
 			return false;
 		}
 		else {
-			for (u64 i = arguments->count; i < block->declarations.count; i++) {
+			for (u32 i = arguments->count; i < block->declarations.count; i++) {
 				if (!block->declarations[i]->initialValue) {
 					reportError(callLocation, "Error: Too few %ss for %.*s (Expected: %" PRIu64 ", Given: %" PRIu64 ")",
 						message, STRING_PRINTF(functionName), block->declarations.count, arguments->count);
@@ -2626,10 +2632,10 @@ bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char 
 	if (arguments->names || arguments->count != block->declarations.count || (functionLocation->flags & EXPR_FUNCTION_HAS_VARARGS)) {
 		Expr **sortedArguments = INFER_NEW_ARRAY(Expr *, block->declarations.count){};
 
-		for (u64 i = 0; i < arguments->count; i++) {
+		for (u32 i = 0; i < arguments->count; i++) {
 			auto argument = block->declarations[i];
 
-			u64 argIndex = i;
+			u32 argIndex = i;
 			if (arguments->names && arguments->names[i].length) {
 				argument = findDeclarationNoYield(block, arguments->names[i]);
 			}
@@ -2701,7 +2707,7 @@ bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char 
 
 		bool failed = false;
 
-		for (u64 i = 0; i < block->declarations.count; i++) {
+		for (u32 i = 0; i < block->declarations.count; i++) {
 			if (!sortedArguments[i]) {
 				auto argument = block->declarations[i];
 
@@ -2744,7 +2750,7 @@ bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char 
 		arguments->count = block->declarations.count;
 	}
 
-	for (u64 i = 0; i < arguments->count; i++) {
+	for (u32 i = 0; i < arguments->count; i++) {
 		Type *correct = static_cast<ExprLiteral *>(block->declarations[i]->type)->typeValue;
 
 		if (!assignOp(job, arguments->values[i], correct, arguments->values[i], yield)) { // @Incomplete: Give function call specific error messages instead of general type conversion errors
@@ -3899,7 +3905,12 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 				return false;
 			}
 
-			array = getStaticArray(type->typeValue, size->unsignedValue);
+			if (size->unsignedValue > UINT32_MAX) {
+				reportError(right, "Error: Array size is too large, the max size is %u (given: %" PRIu64 ")", UINT32_MAX, size->unsignedValue);
+				return false;
+			}
+
+			array = getStaticArray(type->typeValue, static_cast<u32>(size->unsignedValue));
 
 			if (type->typeValue->size == 0 && !array->sizeJob) {
 				auto sizeJob = allocateSizeJob();
@@ -4673,7 +4684,7 @@ bool inferFlattened(SubJob *job) {
 			if (call->function->flavor == ExprFlavor::FUNCTION) {
 				functionForArgumentNames = static_cast<ExprFunction *>(call->function);
 
-				for (u64 i = comma->exprCount; i < functionForArgumentNames->returns.declarations.count; i++) {
+				for (u32 i = comma->exprCount; i < functionForArgumentNames->returns.declarations.count; i++) {
 					auto declaration = functionForArgumentNames->returns.declarations[i];
 
 					if (declaration->flags & DECLARATION_IS_MUST) {
@@ -4714,7 +4725,7 @@ bool inferFlattened(SubJob *job) {
 				}
 			}
 			else {
-				for (u64 i = 0; i < comma->exprCount; i++) {
+				for (u32 i = 0; i < comma->exprCount; i++) {
 					if (!isAssignable(comma->left[i])) {
 						reportError(comma->left[i], "Error: This expression cannot be assigned to");
 						return false;
@@ -4767,7 +4778,7 @@ bool inferFlattened(SubJob *job) {
 					}
 				}
 				else if (!(call->flags & EXPR_FUNCTION_CALL_IS_IN_COMMA_ASSIGNMENT)) {
-					for (u64 i = 1; i < functionForArgumentNames->returns.declarations.count; i++) {
+					for (u32 i = 1; i < functionForArgumentNames->returns.declarations.count; i++) {
 						auto declaration = functionForArgumentNames->returns.declarations[i];
 
 						if (declaration->flags & DECLARATION_IS_MUST) {
@@ -5794,7 +5805,7 @@ static s64 findLoop(Array<Declaration *> &loop, Declaration *declaration) {
 	if (!isDone(&job->type)) {
 		auto dependency = getDependency(*getHalt(&job->type));
 
-		for (u64 i = 0; i < loop.count; i++) {
+		for (u32 i = 0; i < loop.count; i++) {
 			if (loop[i] == dependency) {
 				return i;
 			}
@@ -5810,7 +5821,7 @@ static s64 findLoop(Array<Declaration *> &loop, Declaration *declaration) {
 	if (!isDone(&job->value)) {
 		auto dependency = getDependency(*getHalt(&job->value));
 
-		for (u64 i = 0; i < loop.count; i++) {
+		for (u32 i = 0; i < loop.count; i++) {
 			if (loop[i] == dependency) {
 				return i;
 			}
@@ -6239,7 +6250,7 @@ bool checkGuaranteedReturn(Expr *expr) {
 
 		bool hasElse = false;
 	
-		for (u64 i = 0; i < switch_->cases.count; i++) {
+		for (u32 i = 0; i < switch_->cases.count; i++) {
 			auto &case_ = switch_->cases[i];
 
 			if (!case_.condition)
@@ -6458,7 +6469,7 @@ bool inferSize(SizeJob *job) {
 		}
 
 		if (sleeping != -1) {
-			job->sizingIndexInMembers = sleeping;
+			job->sizingIndexInMembers = static_cast<u32>(sleeping);
 			return true;
 		}
 
@@ -6818,7 +6829,7 @@ void fillTypeInfo(Type *type) {
 		enumInfo->values.count = enum_->values->declarations.count;
 		enumInfo->values.data = INFER_NEW_ARRAY(Type_Info_Enum::Value, enum_->values->declarations.count);
 
-		for (u64 i = 0; i < enum_->values->declarations.count; i++) {
+		for (u32 i = 0; i < enum_->values->declarations.count; i++) {
 			enumInfo->values.data[i].name = enum_->values->declarations[i]->name;
 			enumInfo->values.data[i].value = static_cast<ExprLiteral *>(enum_->values->declarations[i]->initialValue)->unsignedValue;
 		}
@@ -6882,7 +6893,7 @@ void fillTypeInfo(Type *type) {
 		if (struct_->flags & TYPE_STRUCT_IS_UNION) structInfo->flags |= Type_Info_Struct::Flags::UNION;
 		if (struct_->flags & TYPE_STRUCT_IS_PACKED) structInfo->flags |= Type_Info_Struct::Flags::PACKED;
 
-		u64 count = 0;
+		u32 count = 0;
 
 		for (auto member : struct_->members.declarations) {
 			if (member->flags & (DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING)) continue;
@@ -7197,10 +7208,10 @@ void runInfer() {
 		{
 			PROFILE_ZONE("Check size dependencies");
 
-			for (u64 i = 0; i < functionWaitingOnSize.count; i++) {
+			for (u32 i = 0; i < functionWaitingOnSize.count; i++) {
 				auto job = functionWaitingOnSize[i];
 
-				for (u64 j = 0; j < job->sizeDependencies.count; j++) {
+				for (u32 j = 0; j < job->sizeDependencies.count; j++) {
 					auto depend = job->sizeDependencies[j];
 
 					if (depend->size) {
@@ -7218,10 +7229,10 @@ void runInfer() {
 				}
 			}
 
-			for (u64 i = 0; i < declarationWaitingOnSize.count; i++) {
+			for (u32 i = 0; i < declarationWaitingOnSize.count; i++) {
 				auto job = declarationWaitingOnSize[i];
 
-				for (u64 j = 0; j < job->sizeDependencies.count; j++) {
+				for (u32 j = 0; j < job->sizeDependencies.count; j++) {
 					auto depend = job->sizeDependencies[j];
 
 					if (depend->size) {
@@ -7327,26 +7338,26 @@ void runInfer() {
 
 			if (loopIndex == -1) continue;
 
-			reportError(loop[loopIndex], "Error: There were circular dependencies");
+			reportError(loop[static_cast<u32>(loopIndex)], "Error: There were circular dependencies");
 
 			if (loopIndex + 1 == loop.count) {
 				Expr *haltedOn;
 				bool typeDependece;
 
 
-				auto declaration = loop[loopIndex];
+				auto declaration = loop[static_cast<u32>(loopIndex)];
 
 				getHaltStatus(declaration, declaration, &haltedOn, &typeDependece);
 
 				reportError(haltedOn, "   ..: The %s of %.*s depends on itself", typeDependece ? "type" : "value", STRING_PRINTF(declaration->name));
 			}
 			else {
-				for (u64 i = static_cast<u64>(loopIndex); i < loop.count; i++) {
+				for (u32 i = static_cast<u32>(loopIndex); i < loop.count; i++) {
 					Expr *haltedOn;
 					bool typeDependece;
 
 					auto declaration = loop[i];
-					auto next = loop[i + 1 == loop.count ? loopIndex : i + 1];
+					auto next = loop[i + 1 == loop.count ? static_cast<u32>(loopIndex) : i + 1];
 
 					getHaltStatus(declaration, next, &haltedOn, &typeDependece);
 
@@ -7456,8 +7467,8 @@ void runInfer() {
 		goto error;
 	}
 
-	printf("Infer memory used: %llukb\n", inferArena.totalSize / 1024);
-	printf("Type table memory used: %llukb\n", typeArena.totalSize / 1024);
+	printf("Infer memory used: %ukb\n", inferArena.totalSize / 1024);
+	printf("Type table memory used: %ukb\n", typeArena.totalSize / 1024);
 
 	startLlvm.notify_one();
 

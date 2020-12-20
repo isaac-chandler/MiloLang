@@ -36,7 +36,7 @@ void setSymbolName(BucketedArenaAllocator *stringTable, SymbolName *header, Stri
 void setSymbolName(BucketedArenaAllocator *stringTable, SymbolName *header, u64 value) {
 	char buffer[17] = { '@' };
 
-	u64 characters = 0;
+	u32 characters = 0;
 
 
 	for (u64 shift = value;;) {
@@ -46,7 +46,7 @@ void setSymbolName(BucketedArenaAllocator *stringTable, SymbolName *header, u64 
 		if (!shift) break;
 	}
 
-	for (u64 i = 0; i < characters; i++) {
+	for (u32 i = 0; i < characters; i++) {
 		buffer[characters - i] = "0123456789ABCDEF"[value & 0xF];
 		value >>= 4;
 	}
@@ -118,23 +118,23 @@ struct Relocation {
 
 void writeAllocator(HANDLE out, BucketedArenaAllocator allocator) {
 	for (auto bucket = allocator.first; bucket; bucket = bucket->next) {
-		u64 count = (allocator.bucketSize - bucket->remaining);
+		u32 count = (allocator.bucketSize - bucket->remaining);
 
 		DWORD written;
 		WriteFile(out, bucket->memory - count, count, &written, 0);
 	}
 }
 
-u64 getRegisterOffset(ExprFunction *function, u64 regNo) {
+u32 getRegisterOffset(ExprFunction *function, u32 regNo) {
 	assert(regNo != 0);
 
 	if (regNo > function->state.parameterSpace) {
 		return (regNo - function->state.parameterSpace - 1 + function->state.callAuxStorage) * 8 + 16;
 	}
 
-	u64 registerCount = function->state.nextRegister - function->state.parameterSpace - 1 + function->state.callAuxStorage;
+	u32 registerCount = function->state.nextRegister - function->state.parameterSpace - 1 + function->state.callAuxStorage;
 
-	u64 spaceToAllocate = (registerCount >> 1) * 16 + 8;
+	u32 spaceToAllocate = (registerCount >> 1) * 16 + 8;
 
 	return spaceToAllocate + regNo * 8 + 16;
 }
@@ -212,11 +212,11 @@ void writeRSPOffsetByte(BucketedArenaAllocator *code, u8 physicalRegister, u64 o
 	}
 }
 
-void writeRSPRegisterByte(BucketedArenaAllocator *code, ExprFunction *function, u8 physicalRegister, u64 stackRegister, u64 addition = 0) {
+void writeRSPRegisterByte(BucketedArenaAllocator *code, ExprFunction *function, u8 physicalRegister, u32 stackRegister, u64 addition = 0) {
 	writeRSPOffsetByte(code, physicalRegister, getRegisterOffset(function, stackRegister) + addition);
 }
 
-void loadIntoIntRegister(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u8 loadInto, u64 regNo) {
+void loadIntoIntRegister(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u8 loadInto, u32 regNo) {
 	if (regNo == 0) {
 		if (loadInto >= 8) {
 			code->add1(0x45);
@@ -257,7 +257,7 @@ void loadIntoIntRegister(BucketedArenaAllocator *code, ExprFunction *function, u
 	writeRSPRegisterByte(code, function, loadInto, regNo);
 }
 
-void storeFromIntRegister(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u64 regNo, u8 storeFrom) {
+void storeFromIntRegister(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u32 regNo, u8 storeFrom) {
 	u8 rex = 0x40;
 
 	if (size == 8) {
@@ -287,7 +287,7 @@ void storeFromIntRegister(BucketedArenaAllocator *code, ExprFunction *function, 
 	writeRSPRegisterByte(code, function, storeFrom, regNo);
 }
 
-void loadIntoFloatRegister(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u8 loadInto, u64 regNo) {
+void loadIntoFloatRegister(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u8 loadInto, u32 regNo) {
 	if (regNo == 0) {
 		if (regNo >= 8) {
 			code->add1(0x45);
@@ -318,7 +318,7 @@ void loadIntoFloatRegister(BucketedArenaAllocator *code, ExprFunction *function,
 	writeRSPRegisterByte(code, function, loadInto, regNo);
 }
 
-void storeFromFloatRegister(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u64 regNo, u8 storeFrom) {
+void storeFromFloatRegister(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u32 regNo, u8 storeFrom) {
 	if (size == 8) {
 		code->add1(0xF2);
 	}
@@ -337,7 +337,7 @@ void storeFromFloatRegister(BucketedArenaAllocator *code, ExprFunction *function
 	writeRSPRegisterByte(code, function, storeFrom, regNo);
 }
 
-void storeImmediate(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u64 regNo, u64 immediate) {
+void storeImmediate(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u32 regNo, u64 immediate) {
 	assert(isStandardSize(size));
 
 	if (size == 8 && static_cast<s64>(immediate) != static_cast<s64>(static_cast<s32>(immediate))) {
@@ -376,13 +376,13 @@ void storeImmediate(BucketedArenaAllocator *code, ExprFunction *function, u64 si
 	}
 }
 
-void setCondition(BucketedArenaAllocator *code, ExprFunction *function, u64 dest, u8 condition) {
+void setCondition(BucketedArenaAllocator *code, ExprFunction *function, u32 dest, u8 condition) {
 	code->add1(0x0F);
 	code->add1(0x90 | condition);
 	writeRSPRegisterByte(code, function, 0, dest);
 }
 
-void setConditionInt(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u64 dest, u64 a, u64 b, u8 condition) {
+void setConditionInt(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u32 dest, u32 a, u32 b, u8 condition) {
 	loadIntoIntRegister(code, function, size, RAX, a);
 	loadIntoIntRegister(code, function, size, RCX, b);
 
@@ -405,7 +405,7 @@ void setConditionInt(BucketedArenaAllocator *code, ExprFunction *function, u64 s
 	setCondition(code, function, dest, condition);
 }
 
-void setConditionFloat(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u64 dest, u64 a, u64 b, u8 condition) {
+void setConditionFloat(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u32 dest, u32 a, u32 b, u8 condition) {
 	loadIntoFloatRegister(code, function, size, 0, a);
 	loadIntoFloatRegister(code, function, size, 1, b);
 
@@ -466,7 +466,7 @@ void loadImmediateIntoIntRegister(BucketedArenaAllocator *code, u8 loadInto, u64
 	}
 }
 
-void writeSet(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u64 dest, u64 src) {
+void writeSet(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u32 dest, u32 src) {
 	if (src == 0) {
 		if (isStandardSize(size)) {
 			storeImmediate(code, function, size, dest, 0);
@@ -651,7 +651,7 @@ u32 createSymbolForDeclaration(BucketArray<Symbol> *symbols, Declaration *declar
 }
 
 struct JumpPatch {
-	u64 opToPatch;
+	u32 opToPatch;
 	s32 *location;
 	u64 rip;
 };
@@ -949,7 +949,7 @@ struct REGREL32 {
 #pragma pack(pop)
 
 void emitBasicType(BucketedArenaAllocator *debugSymbols, u32 type, const char *name) {
-	debugSymbols->add2(7 + strlen(name));
+	debugSymbols->add2(static_cast<u16>(7 + strlen(name)));
 	debugSymbols->add2(S_UDT);
 	debugSymbols->add4(type);
 	debugSymbols->addNullTerminatedString(name);
@@ -1033,7 +1033,7 @@ void runCoffWriter() {
 
 		const char *compilerName = "Milo Compiler 0.1.1 (Windows-x64)";
 
-		debugSymbols.add2(sizeof(compileFlags) + strlen(compilerName) + 1);
+		debugSymbols.add2(static_cast<u16>(sizeof(compileFlags) + strlen(compilerName) + 1));
 		debugSymbols.add(&compileFlags, sizeof(compileFlags));
 
 		debugSymbols.addNullTerminatedString(compilerName);
@@ -1115,11 +1115,11 @@ void runCoffWriter() {
 				symbol->numberOfAuxSymbols = 0;
 			}
 
-			u64 registerCount = function->state.nextRegister - function->state.parameterSpace - 1 + function->state.callAuxStorage;
+			u32 registerCount = function->state.nextRegister - function->state.parameterSpace - 1 + function->state.callAuxStorage;
 
-			u64 spaceToAllocate = (registerCount >> 1) * 16 + 8;
+			u32 spaceToAllocate = (registerCount >> 1) * 16 + 8;
 
-			u64 paramOffset;
+			u32 paramOffset;
 
 			if (!isStandardSize(static_cast<ExprLiteral *>(function->returns.declarations[0]->type)->typeValue->size)) {
 				paramOffset = 1;
@@ -1203,7 +1203,7 @@ void runCoffWriter() {
 				code.add4(static_cast<u32>(spaceToAllocate));
 			}
 
-			for (u64 i = 0; i < function->arguments.declarations.count; i++) {
+			for (u32 i = 0; i < function->arguments.declarations.count; i++) {
 				auto type = static_cast<ExprLiteral *>(function->arguments.declarations[i]->type)->typeValue;
 
 				if (!isStandardSize(type->size)) {
@@ -1232,7 +1232,7 @@ void runCoffWriter() {
 
 			functionPreambleEnd = code.totalSize - functionStart;
 
-			for (u64 index = 0; index < function->state.ir.count; index++) {
+			for (u32 index = 0; index < function->state.ir.count; index++) {
 				auto &ir = function->state.ir[index];
 
 				instructionOffsets.add(code.totalSize);
@@ -1307,13 +1307,13 @@ void runCoffWriter() {
 				} break;
 				case IrOp::ADD_CONSTANT: {
 					if (ir.a == 0) {
-						storeImmediate(&code, function, ir.opSize, ir.dest, ir.b);
+						storeImmediate(&code, function, ir.opSize, ir.dest, ir.immediate);
 					}
 					else if (ir.b == 0) {
 						writeSet(&code, function, ir.opSize, ir.dest, ir.a);
 					}
 					else {
-						loadImmediateIntoRAX(&code, ir.b);
+						loadImmediateIntoRAX(&code, ir.immediate);
 
 						if (ir.opSize == 8) {
 							code.add1(0x48);
@@ -1436,7 +1436,7 @@ void runCoffWriter() {
 						storeImmediate(&code, function, ir.opSize, ir.dest, 0);
 					}
 					else {
-						loadImmediateIntoRAX(&code, ir.b);
+						loadImmediateIntoRAX(&code, ir.immediate);
 
 						code.add1(0x48);
 						code.add1(0x0F);
@@ -1533,7 +1533,7 @@ void runCoffWriter() {
 					}
 				} break;
 				case IrOp::DIVIDE_BY_CONSTANT: {
-					loadImmediateIntoRAX(&code, ir.b);
+					loadImmediateIntoRAX(&code, ir.immediate);
 
 					code.add1(0x48); // mov rcx, rax
 					code.add1(0x89);
@@ -1982,7 +1982,7 @@ void runCoffWriter() {
 					code.add1(0xE9);
 
 					JumpPatch patch;
-					patch.opToPatch = ir.b;
+					patch.opToPatch = ir.branchTarget;
 					patch.location = reinterpret_cast<s32 *>(code.add4(0));
 					patch.rip = code.totalSize;
 
@@ -2010,7 +2010,7 @@ void runCoffWriter() {
 					code.add1(0x80 | C_Z);
 
 					JumpPatch patch;
-					patch.opToPatch = ir.b;
+					patch.opToPatch = ir.branchTarget;
 					patch.location = reinterpret_cast<s32 *>(code.add4(0));
 					patch.rip = code.totalSize;
 
@@ -2038,7 +2038,7 @@ void runCoffWriter() {
 					code.add1(0x80 | C_NZ);
 
 					JumpPatch patch;
-					patch.opToPatch = ir.b;
+					patch.opToPatch = ir.branchTarget;
 					patch.location = reinterpret_cast<s32 *>(code.add4(0));
 					patch.rip = code.totalSize;
 
@@ -2132,11 +2132,11 @@ void runCoffWriter() {
 					code.add1(0x48);
 					code.add1(0x8D);
 
-					writeRSPRegisterByte(&code, function, RAX, ir.a, ir.b);
+					writeRSPRegisterByte(&code, function, RAX, ir.a, ir.immediate);
 					storeFromIntRegister(&code, function, 8, ir.dest, RAX);
 				} break;
 				case IrOp::IMMEDIATE: {
-					storeImmediate(&code, function, ir.opSize, ir.dest, ir.a);
+					storeImmediate(&code, function, ir.opSize, ir.dest, ir.immediate);
 				} break;
 				case IrOp::FLOAT_TO_INT: {
 					if (ir.a == 0) {
@@ -2264,7 +2264,7 @@ void runCoffWriter() {
 								code.add1(0x0D);
 
 								codeRelocations.add4(code.totalSize);
-								codeRelocations.add4(f32ToU64ConstantSymbolIndex);
+								codeRelocations.add4(static_cast<u32>(f32ToU64ConstantSymbolIndex));
 								codeRelocations.add2(IMAGE_REL_AMD64_REL32);
 
 								code.add4(0);
@@ -2399,7 +2399,7 @@ void runCoffWriter() {
 							code.add1(0x70 | C_S); // js .large
 
 							u8 *firstJumpPatch = code.add1(0);
-							u64 firstJumpRel = code.totalSize;
+							u32 firstJumpRel = code.totalSize;
 
 
 							if (ir.destSize == 8) {
@@ -2417,7 +2417,7 @@ void runCoffWriter() {
 							code.add1(0xEB); // jmp .done
 
 							u8 *secondJumpPatch = code.add1(0);
-							u64 secondJumpRel = code.totalSize;
+							u32 secondJumpRel = code.totalSize;
 
 
 							*firstJumpPatch = code.totalSize - firstJumpRel;
@@ -2428,7 +2428,7 @@ void runCoffWriter() {
 							code.add1(0xC1);
 
 							code.add1(0x83); // and ecx, 1
-							code.add1(0E1);
+							code.add1(0xE1);
 							code.add1(0x01);
 
 							code.add1(0x48); // shr rax, 1
@@ -2579,7 +2579,7 @@ void runCoffWriter() {
 					jumpPatches.add(patch);
 				} break;
 				case IrOp::CALL: {
-					u64 parameterOffset;
+					u32 parameterOffset;
 
 					if (!isStandardSize(ir.arguments->returnType->size)) {
 						parameterOffset = 1;
@@ -2588,15 +2588,15 @@ void runCoffWriter() {
 						parameterOffset = 0;
 					}
 
-					u64 parameterSpace = my_max(4, ir.arguments->argCount + parameterOffset);
+					u32 parameterSpace = my_max(4, ir.arguments->argCount + parameterOffset);
 
-					u64 largeStorage = parameterSpace;
+					u32 largeStorage = parameterSpace;
 
 					for (u64 i = 0; i < ir.arguments->argCount; i++) {
-						u64 size = ir.arguments->args[i].type->size;
-						u64 reg = ir.arguments->args[i].number;
+						u32 size = ir.arguments->args[i].type->size;
+						u32 reg = ir.arguments->args[i].number;
 
-						if (reg == static_cast<u64>(-1LL)) {
+						if (reg == static_cast<u32>(-1)) {
 							continue;
 						}
 
@@ -2689,7 +2689,7 @@ void runCoffWriter() {
 								code.add1(0x8D);
 								writeRSPOffsetByte(&code, intRegisters[i + parameterOffset] & 7, largeStorage * 8);
 
-								u64 size = type->size;
+								u32 size = type->size;
 								largeStorage += (size + 7) / 8;
 							}
 						}
@@ -2836,7 +2836,7 @@ void runCoffWriter() {
 				}
 			}
 
-			u64 functionPostambleStart = code.totalSize;
+			u32 functionPostambleStart = code.totalSize;
 
 			code.add1(0x5F); // pop rdi
 			code.add1(0x5E); // pop rsi
@@ -2871,7 +2871,7 @@ void runCoffWriter() {
 					u32 subsectionOffset = debugSymbols.totalSize;
 
 
-					debugSymbols.add2(sizeof(PROCSYM32) + function->valueOfDeclaration->name.length - 1);
+					debugSymbols.add2(static_cast<u16>(sizeof(PROCSYM32) + function->valueOfDeclaration->name.length - 1));
 					debugSymbols.add2(0x1147); // S_GPROC32_ID
 					debugSymbols.add4(0);
 					debugSymbols.add4(0);
@@ -2911,7 +2911,7 @@ void runCoffWriter() {
 						argumentInfo.off = getRegisterOffset(function, argument->physicalStorage);
 						argumentInfo.typind = getCoffTypeIndex(static_cast<ExprLiteral *>(argument->type)->typeValue);
 
-						debugSymbols.add2(sizeof(argumentInfo) + 1 + argument->name.length);
+						debugSymbols.add2(static_cast<u16>(sizeof(argumentInfo) + 1 + argument->name.length));
 						debugSymbols.add(&argumentInfo, sizeof(argumentInfo));
 						debugSymbols.addNullTerminatedString(argument->name);
 					}
@@ -3211,7 +3211,7 @@ void runCoffWriter() {
 				case Type_Info::Tag::STRUCT: {
 					auto struct_ = static_cast<TypeStruct *>(type);
 
-					u64 names = symbols.count();
+					u32 names = symbols.count();
 
 					for (auto member : struct_->members.declarations) {
 						if (member->flags & (DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING)) continue;
@@ -3221,7 +3221,7 @@ void runCoffWriter() {
 						rdata.addNullTerminatedString(member->name);
 					}
 
-					u64 values = symbols.count();
+					u32 values = symbols.count();
 
 					for (auto member : struct_->members.declarations) {
 						if (member->flags & (DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING)) continue;
@@ -3246,8 +3246,8 @@ void runCoffWriter() {
 					rdata.allocateUnaligned(AlignPO2(rdata.totalSize, 8) - rdata.totalSize);
 					u32 members = createRdataPointer(&stringTable, &symbols, &rdata);
 
-					u64 nameCount = 0;
-					u64 valueCount = 0;
+					u32 nameCount = 0;
+					u32 valueCount = 0;
 
 					for (auto member : struct_->members.declarations) {
 						if (member->flags & (DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING)) continue;
@@ -3317,7 +3317,7 @@ void runCoffWriter() {
 				case Type_Info::Tag::ENUM: {
 					auto enum_ = static_cast<TypeEnum *>(type);
 
-					u64 names = symbols.count();
+					u32 names = symbols.count();
 
 					for (auto member : enum_->values->declarations) {
 						createRdataPointer(&stringTable, &symbols, &rdata);
@@ -3327,7 +3327,7 @@ void runCoffWriter() {
 					rdata.allocateUnaligned(AlignPO2(rdata.totalSize, 8) - rdata.totalSize);
 					u32 values = createRdataPointer(&stringTable, &symbols, &rdata);
 
-					for (u64 i = 0; i < enum_->values->declarations.count; i++) {
+					for (u32 i = 0; i < enum_->values->declarations.count; i++) {
 						auto member = enum_->values->declarations[i];
 
 						Type_Info_Enum::Value data;
@@ -3389,7 +3389,7 @@ void runCoffWriter() {
 
 			GetFullPathNameA(toCString(file.path) /* @Leak */, sizeof(buffer), buffer, 0);
 
-			u32 len = strlen(buffer);
+			u32 len = static_cast<u32>(strlen(buffer));
 			totalSize += len + 1;
 
 			debugSymbols.addNullTerminatedString({ buffer, len });
@@ -3487,7 +3487,8 @@ void runCoffWriter() {
 						section.header->pointerToRelocations = AlignPO2(sectionPointer, 4);
 						assert(section.relocations->totalSize / sizeof(Relocation) < UINT16_MAX);
 
-						section.header->numberOfRelocations = section.relocations->totalSize / sizeof(Relocation);
+						// @Incomplete @Robustness, we need to do something else if there are more than 65535 relocations
+						section.header->numberOfRelocations = static_cast<u16>(section.relocations->totalSize / sizeof(Relocation));
 						sectionPointer += AlignPO2(section.relocations->totalSize, 4);
 					}
 					else {
@@ -3531,7 +3532,7 @@ void runCoffWriter() {
 
 			WriteFile(out, &alignmentPadding, AlignPO2(prefixSize, 4) - prefixSize, &written, 0);
 
-			for (u64 i = 0; i < sections.count; i++) {
+			for (u32 i = 0; i < sections.count; i++) {
 				auto section = sections[i];
 
 				if (section.data) {
@@ -3544,7 +3545,7 @@ void runCoffWriter() {
 					u64 zero = 0;
 
 					for (s64 write = section.header->sizeOfRawData; write > 0; write -= sizeof(zero)) {
-						WriteFile(out, &zero, my_min(sizeof(zero), write), &written, 0);
+						WriteFile(out, &zero, static_cast<u32>(my_min(sizeof(zero), write)), &written, 0);
 					}
 
 					WriteFile(out, &alignmentPadding, AlignPO2(section.header->sizeOfRawData, 4) - section.header->sizeOfRawData, &written, 0);

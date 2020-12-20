@@ -76,39 +76,39 @@ inline bool isStandardSize(u64 size) {
 	return size == 1 || size == 2 || size == 4 || size == 8;
 }
 
-#define DEST_NONE UINT64_MAX
+#define DEST_NONE UINT32_MAX
 
 struct Argument {
-	u64 number;
+	u32 number;
 	struct Type *type;
 };
 
 struct FunctionCall {
 	struct Type *returnType;
-	u64 argCount;
+	u32 argCount;
 	Argument args[];
 };
 
 struct Ir {
 	union {
 		struct {
-			u64 dest;
+			u32 dest;
+			u32 opSize;
+			u32 a;
+
 
 			union {
-				u64 a;
+				u32 b;
+				u64 immediate;
 				struct Declaration *declaration;
 				struct ExprFunction *function;
 				struct ExprStringLiteral *string;
 				struct Type *type;
-			};
-
-			union {
-				u64 b;
-				u64 destSize;
+				u32 branchTarget;
+				u32 destSize;
 				FunctionCall *arguments;
 			};
 
-			u64 opSize;
 		};
 
 		struct {
@@ -122,9 +122,9 @@ struct Ir {
 };
 
 struct IrState {
-	u64 nextRegister = 1;
-	u64 callAuxStorage = 0;
-	u64 parameterSpace = 0;
+	u32 nextRegister = 1;
+	u32 callAuxStorage = 0;
+	u32 parameterSpace = 0;
 	Array<Ir> ir;
 
 	BucketedArenaAllocator allocator;
@@ -287,12 +287,10 @@ struct ExprSwitch : Expr {
 		Expr *block;
 		bool fallsThrough; // @Memory this wastes 7 bytes
 
-		union {
-			u64 irBranch;
-			class llvm::BasicBlock *llvmCaseBlock;
-		};
+		class llvm::BasicBlock *llvmCaseBlock;
 
-		u64 irSkip;
+		u32 irBranch;
+		u32 irSkip;
 
 	};
 
@@ -304,17 +302,13 @@ struct ExprSwitch : Expr {
 struct ExprStringLiteral : Expr {
 	String string;
 
-	union {
-		struct {
-			union Symbol *symbol;
-			u32 physicalStorage;
-		};
-	};
+	union Symbol *symbol;
+	u32 physicalStorage;
 };
 
 struct ExprArray : Expr {
 	Expr **storage;
-	u64 count;
+	u32 count;
 };
 
 struct ExprBinaryOperator : Expr {
@@ -347,9 +341,9 @@ struct ExprEnumIncrement : Expr {
 };
 
 struct Arguments {
-	u64 count;
 	Expr **values;
 	String *names;
+	u32 count;
 
 };
 
@@ -404,15 +398,10 @@ struct ExprLoop : Expr {
 
 	Expr *completedBody;
 
-	union {
-		u64 irPointer;
-		class llvm::Value *llvmPointer;
-	};
-
-	union {
-		u64 arrayPointer;
-		class llvm::Value *llvmArrayPointer;
-	};
+	u32 irPointer;
+	u32 arrayPointer;
+	class llvm::Value *llvmPointer;
+	class llvm::Value *llvmArrayPointer;
 
 	Block iteratorBlock;
 };
@@ -434,10 +423,10 @@ struct ExprEnum : Expr {
 };
 
 struct ExprCommaAssignment : Expr {
-	u64 exprCount;
 	Expr **left;
 
 	Expr *call;
+	u32 exprCount;
 };
 
 inline Type *getTypeForExpr(Expr *expr) {

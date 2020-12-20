@@ -7,7 +7,7 @@ create_thread :: (procedure: (*void) -> u32, data := null) -> #must Thread {
 	thread: Thread = --
 
 	#if TARGET_WINDOWS {
-		CreateThread :: (lpThreadAttributes := null, dwStackSize: u64 = 0, lpStartAddress: (*void) -> u32, lpParameter := null, dwCreationFlags: u32 = 0, lpThreadId: *u32 = null) -> *void #external "kernel32"
+		CreateThread :: (lpThreadAttributes := null, dwStackSize: u64 = 0, lpStartAddress: (*void) -> u32 #c_call, lpParameter := null, dwCreationFlags: u32 = 0, lpThreadId: *u32 = null) -> *void #external "kernel32"
 	
 		thread.handle = CreateThread(null, 0, procedure, data, 0, *thread.id)
 	} else {

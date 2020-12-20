@@ -13,7 +13,7 @@ struct StackNode {
 	u64 data[];
 };
 
-StackNode *allocateStackBlock(u64 size) {
+StackNode *allocateStackBlock(u32 size) {
 	StackNode *block = static_cast<StackNode *>(malloc(sizeof(StackNode) + sizeof(u64) * size));
 
 	block->next = nullptr;
@@ -24,7 +24,7 @@ StackNode *allocateStackBlock(u64 size) {
 	return block;
 }
 
-u64 *allocateStack(VMState *state, u64 count) {
+u64 *allocateStack(VMState *state, u32 count) {
 	StackNode *previous = nullptr;
 
 	while (state->stackAllocator && count > state->stackAllocator->count - state->stackAllocator->offset) {
@@ -47,7 +47,7 @@ u64 *allocateStack(VMState *state, u64 count) {
 	return result;
 }
 
-void freeStack(VMState *state, u64 count) {
+void freeStack(VMState *state, u32 count) {
 	assert(state->stackAllocator);
 	assert(state->stackAllocator->offset >= count);
 
@@ -169,11 +169,11 @@ void createRuntimeValue(Expr *value, void *dest) {
 		auto arrayOf = static_cast<TypeArray *>(value->type)->arrayOf;
 		auto store = static_cast<u8 *>(dest);
 
-		for (u64 i = 0; i < array->count; i++) {
+		for (u32 i = 0; i < array->count; i++) {
 			createRuntimeValue(array->storage[i], store + i * arrayOf->size);
 
 			if (i + 1 != array->count && array->storage[i + 1] == nullptr) {
-				for (int j = i + 1; j < array->count; j++) {
+				for (u32 j = i + 1; j < array->count; j++) {
 					createRuntimeValue(array->storage[i], store + j * arrayOf->size);
 				}
 
@@ -217,11 +217,11 @@ void deinitVMState(VMState *state) {
 }
 
 void runFunction(VMState *state, ExprFunction *expr, const Ir *caller, DCArgs *dcArgs, u64 *callerStack) {
-	u64 dummyStorage = 0;
-	u64 outParameters = expr->returns.declarations.count - 1;
+	u32 dummyStorage = 0;
+	u32 outParameters = expr->returns.declarations.count - 1;
 
-	for (u64 i = 0; i < outParameters; i++) {
-		if (caller->arguments->args[expr->arguments.declarations.count + i].number == static_cast<u64>(-1)) {
+	for (u32 i = 0; i < outParameters; i++) {
+		if (caller->arguments->args[expr->arguments.declarations.count + i].number == static_cast<u32>(-1)) {
 			dummyStorage = my_max(dummyStorage,
 				(static_cast<ExprLiteral *>(expr->returns.declarations[i + 1]->type)->typeValue->size + 7) / 8);
 		}
@@ -235,7 +235,7 @@ void runFunction(VMState *state, ExprFunction *expr, const Ir *caller, DCArgs *d
 #endif
 
 	if (dcArgs) {
-		for (u64 i = 0; i < expr->arguments.declarations.count; i++) {
+		for (u32 i = 0; i < expr->arguments.declarations.count; i++) {
 			auto &argument = expr->arguments.declarations[i];
 			auto argumentType = static_cast<ExprLiteral *>(argument->type)->typeValue;
 
@@ -243,7 +243,7 @@ void runFunction(VMState *state, ExprFunction *expr, const Ir *caller, DCArgs *d
 				*reinterpret_cast<float *>(stack + expr->arguments.declarations[i]->physicalStorage) = dcbArgFloat(dcArgs);
 			}
 			else if (argumentType == &TYPE_F64) {
-				*reinterpret_cast<float *>(stack + expr->arguments.declarations[i]->physicalStorage) = dcbArgDouble(dcArgs);
+				*reinterpret_cast<double *>(stack + expr->arguments.declarations[i]->physicalStorage) = dcbArgDouble(dcArgs);
 			}
 			else if (argumentType->size == 1) {
 				stack[expr->arguments.declarations[i]->physicalStorage] = dcbArgUChar(dcArgs);
@@ -266,14 +266,14 @@ void runFunction(VMState *state, ExprFunction *expr, const Ir *caller, DCArgs *d
 
 		assert(expr->arguments.declarations.count == caller->arguments->argCount - outParameters);
 
-		for (u64 i = 0; i < expr->arguments.declarations.count; i++) {
+		for (u32 i = 0; i < expr->arguments.declarations.count; i++) {
 			auto &argument = caller->arguments->args[i];
-			for (u64 j = 0; j < (argument.type->size + 7) / 8; j++) {
+			for (u32 j = 0; j < (argument.type->size + 7) / 8; j++) {
 				stack[expr->arguments.declarations[i]->physicalStorage + j] = callerStack[argument.number + j];
 			}
 		}
 
-		for (u64 i = 0; i < outParameters; i++) {
+		for (u32 i = 0; i < outParameters; i++) {
 			auto number = caller->arguments->args[expr->arguments.declarations.count + i].number;
 			if (number == static_cast<u64>(-1))
 				stack[expr->returns.declarations[i + 1]->physicalStorage] = reinterpret_cast<u64>(stack + expr->state.nextRegister);
@@ -282,7 +282,7 @@ void runFunction(VMState *state, ExprFunction *expr, const Ir *caller, DCArgs *d
 		}
 	}
 
-	for (u64 i = 0; i < expr->state.ir.count;) {
+	for (u32 i = 0; i < expr->state.ir.count;) {
 #define A (stack[op.a] & opMask)
 #define B (stack[op.b] & opMask)
 #define S_A	(static_cast<s64>(stack[op.a] & signBit ? stack[op.a] | ~opMask : A))
@@ -1099,7 +1099,7 @@ void *createCCallFunction(ExprFunction *function) {
 
 		callback[0] = 'p';
 
-		for (u64 i = 0; i < function->arguments.declarations.count; i++) {
+		for (u32 i = 0; i < function->arguments.declarations.count; i++) {
 			auto arg = static_cast<ExprLiteral *>(function->arguments.declarations[i]->type)->typeValue;
 
 			callback[i + 1] = getSigChar(arg);
@@ -1112,7 +1112,7 @@ void *createCCallFunction(ExprFunction *function) {
 	else {
 		callback = static_cast<char *>(malloc(function->arguments.declarations.count + 3));
 
-		for (u64 i = 0; i < function->arguments.declarations.count; i++) {
+		for (u32 i = 0; i < function->arguments.declarations.count; i++) {
 			auto arg = static_cast<ExprLiteral *>(function->arguments.declarations[i]->type)->typeValue;
 
 			callback[i] = getSigChar(arg);

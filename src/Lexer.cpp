@@ -105,8 +105,8 @@ double BigInt::getDouble() {
 	double multiply = 1;
 
 	// @Efficiency, we could just look at the 53 most significant bits, but how often do we have giant float literals
-	for (u64 i = 0; i < numbers.count; i++) {
-		value += numbers[i] * multiply;
+	for (auto number : numbers) {
+		value += number * multiply;
 		multiply *= 0x1P+32;
 	}
 
@@ -881,8 +881,8 @@ void LexerFile::advance() {
 
 	token.unsignedValue = 0;
 	s64 digitsAfterDecimal = 0;
-	u64 base = 10;
-	u64 exponentBase;
+	u32 base = 10;
+	u32 exponentBase;
 	s64 exponent = 0;
 	u64 exponentIsNegative;
 
@@ -1702,7 +1702,7 @@ integerLiteral:
 	digit = getDigitForBase(c, base);
 
 	if (digit >= 0) {
-		bigInt.multiplyAdd(base, digit);
+		bigInt.multiplyAdd(base, static_cast<u32>(digit));
 		goto integerLiteral;
 	}
 	else if (c == '.') {
@@ -1741,7 +1741,7 @@ decimalPointFirst:
 	digit = getDigitForBase(c, base);
 
 	if (digit >= 0) {
-		bigInt.multiplyAdd(base, digit);
+		bigInt.multiplyAdd(base, static_cast<u32>(digit));
 		++digitsAfterDecimal;
 		goto decimalPoint;
 	}
@@ -1758,8 +1758,6 @@ decimalPointFirst:
 		goto exponentSign;
 	}
 	else if (c == '.') {
-		token.type == TokenT::INT_LITERAL;
-
 		bytesRemaining += location.locationInMemory - decimalPointUndoLocation.locationInMemory;
 		location = decimalPointUndoLocation;
 
@@ -1789,7 +1787,7 @@ decimalPoint:
 	digit = getDigitForBase(c, base);
 
 	if (digit >= 0) {
-		bigInt.multiplyAdd(base, digit);
+		bigInt.multiplyAdd(base, static_cast<u32>(digit));
 		++digitsAfterDecimal;
 		goto decimalPoint;
 	}
