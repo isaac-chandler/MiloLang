@@ -91,22 +91,6 @@ union Symbol {
 	};
 
 	u8 aux[18];
-
-	struct {
-		u32 tagIndex;
-		u32 totalSize;
-		u32 pointerToLinenumber;
-		u32 pointerToNextFunction;
-		u16 unused;
-	} functionDefinition;
-
-	struct {
-		u32 unused1;
-		u16 linenumber;
-		char unused2[6];
-		u32 pointerToNextFunction;
-		u16 unused3;
-	} bf;
 };
 
 struct Relocation {
@@ -537,6 +521,9 @@ void writeSet(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u3
 #define DATA_SECTION_NUMBER 3
 #define TEXT_SECTION_NUMBER 4
 #define DEBUG_SYMBOL_SECTION_NUMBER 5
+#define DEBUG_TYPE_SECTION_NUMBER 6
+#define PDATA_SECTION_NUMBER 7
+#define XDATA_SECTION_NUMBER 8
 
 u32 *addRelocationToUnkownSymbol(BucketedArenaAllocator *allocator, u32 virtualAddress, u16 type) {
 	allocator->add4(virtualAddress);
@@ -988,8 +975,10 @@ void runCoffWriter() {
 	BucketedArenaAllocator stringTable(4096);
 	BucketedArenaAllocator debugSymbols(4096);
 	BucketedArenaAllocator debugSymbolsRelocations(4096);
-
 	BucketedArenaAllocator debugTypes(4096);
+	BucketedArenaAllocator pdata(4096);
+	BucketedArenaAllocator pdataRelocations(4096);
+	BucketedArenaAllocator xdata(4096);
 
 	SectionHeader bssSection = {};
 	bssSection.virtualSize = 0;
@@ -1022,16 +1011,34 @@ void runCoffWriter() {
 	debugSymbols.add4(4);
 	debugTypes.add4(4);
 
+	u64 debugTypeId = 0x1000;
+
+	debugTypes.add2(6);
+	debugTypes.add2(0x1201); // LF_ARGLIST
+	debugTypes.add4(0); // argcount = 0
+	debugTypeId++;
+
+	debugTypes.add2(14);
+	debugTypes.add2(0x1008); // LF_PROCEDURE
+	debugTypes.add4(T_VOID); // returns void
+	debugTypes.add1(0); // C near call
+	debugTypes.add1(0);
+	debugTypes.add2(0); // 0 parameters
+	debugTypes.add4(0x1000); // refers to previous arglist
+	debugTypeId++;
+
 	{
 		debugSymbols.add4(0xF1);
 		auto subsectionSizePatch = debugSymbols.add4(0);
 		u32 subsectionOffset = debugSymbols.totalSize;
 
 		COMPILESYM3 compileFlags;
-		compileFlags.flags.iLanguage = 20; // @Cleanup Check noone uses this
+		compileFlags.flags.iLanguage = 20; // @Cleanup Check no other language uses this
 		compileFlags.flags.unused = 0;
 
+#if BUILD_WINDOWS
 		const char *compilerName = "Milo Compiler 0.1.1 (Windows-x64)";
+#endif
 
 		debugSymbols.add2(static_cast<u16>(sizeof(compileFlags) + strlen(compilerName) + 1));
 		debugSymbols.add(&compileFlags, sizeof(compileFlags));
@@ -1084,7 +1091,6 @@ void runCoffWriter() {
 
 			u32 functionStart = code.totalSize;
 
-			u32 functionPreambleEnd;
 
 			{
 				addLineInfo(&lineInfo, &columnInfo, code.totalSize - functionStart, function->start, function->end);
@@ -1187,7 +1193,9 @@ void runCoffWriter() {
 			}
 
 			code.add1(0x56); // push rsi
+			u32 pushRsiOffset = code.totalSize - functionStart;
 			code.add1(0x57); // push rdi
+			u32 pushRdiOffset = code.totalSize - functionStart;
 
 			// sub rsp, spaceToAllocate
 			if (spaceToAllocate < 0x80) {
@@ -1202,6 +1210,9 @@ void runCoffWriter() {
 				code.add1(0xEC);
 				code.add4(static_cast<u32>(spaceToAllocate));
 			}
+			u32 subRspOffset = code.totalSize - functionStart;
+
+			u32 functionPreambleEnd = code.totalSize - functionStart;
 
 			for (u32 i = 0; i < function->arguments.declarations.count; i++) {
 				auto type = static_cast<ExprLiteral *>(function->arguments.declarations[i]->type)->typeValue;
@@ -1229,8 +1240,6 @@ void runCoffWriter() {
 					}
 				}
 			}
-
-			functionPreambleEnd = code.totalSize - functionStart;
 
 			for (u32 index = 0; index < function->state.ir.count; index++) {
 				auto &ir = function->state.ir[index];
@@ -2835,11 +2844,8 @@ void runCoffWriter() {
 				}
 				}
 			}
-
+			
 			u32 functionPostambleStart = code.totalSize;
-
-			code.add1(0x5F); // pop rdi
-			code.add1(0x5E); // pop rsi
 
 			// add rsp, spaceToAllocate
 			if (spaceToAllocate < 0x80) {
@@ -2855,6 +2861,9 @@ void runCoffWriter() {
 				code.add4(static_cast<u32>(spaceToAllocate));
 			}
 
+			code.add1(0x5F); // pop rdi
+			code.add1(0x5E); // pop rsi
+
 			code.add1(0xC3);
 
 			instructionOffsets.add(functionPostambleStart);
@@ -2864,14 +2873,17 @@ void runCoffWriter() {
 			}
 
 			{
-				if (function->valueOfDeclaration && function->valueOfDeclaration->enclosingScope == &globalBlock) {
-					PROFILE_ZONE("Write Function Debug Symbols");
+				PROFILE_ZONE("Write Function Debug Symbols");
+
+				/*if (function->valueOfDeclaration && function->valueOfDeclaration->enclosingScope == &globalBlock)*/ {
 					debugSymbols.add4(0xF1);
 					auto subsectionSizePatch = debugSymbols.add4(0);
 					u32 subsectionOffset = debugSymbols.totalSize;
 
+					auto name = function->valueOfDeclaration ? function->valueOfDeclaration->name : "__unnamed";
 
-					debugSymbols.add2(static_cast<u16>(sizeof(PROCSYM32) + function->valueOfDeclaration->name.length - 1));
+
+					debugSymbols.add2(static_cast<u16>(sizeof(PROCSYM32) + name.length - 1));
 					debugSymbols.add2(0x1147); // S_GPROC32_ID
 					debugSymbols.add4(0);
 					debugSymbols.add4(0);
@@ -2879,7 +2891,16 @@ void runCoffWriter() {
 					debugSymbols.add4(code.totalSize - functionStart);
 					debugSymbols.add4(functionPreambleEnd);
 					debugSymbols.add4(functionPostambleStart - functionStart);
-					debugSymbols.add4(0);
+					debugSymbols.add4(debugTypeId);
+
+
+
+					debugTypes.add2(10 + name.length + 1);
+					debugTypes.add2(0x1601); // LF_FUNC_ID
+					debugTypes.add4(0);
+					debugTypes.add4(0x1001);
+					debugTypes.addNullTerminatedString(name);
+					debugTypeId++;
 
 
 					debugSymbolsRelocations.add4(debugSymbols.totalSize);
@@ -2895,7 +2916,7 @@ void runCoffWriter() {
 					debugSymbols.add2(0);
 
 					debugSymbols.add1(0);
-					debugSymbols.addNullTerminatedString(function->valueOfDeclaration->name);
+					debugSymbols.addNullTerminatedString(name);
 
 					FRAMEPROCSYM frame;
 					frame.cbFrame = spaceToAllocate;
@@ -2923,6 +2944,48 @@ void runCoffWriter() {
 
 					alignAllocator(&debugSymbols, 4);
 				}
+
+
+				pdataRelocations.add4(pdata.totalSize);
+				pdataRelocations.add4(function->physicalStorage);
+				pdataRelocations.add2(IMAGE_REL_AMD64_ADDR32NB);
+
+				pdata.add4(0);
+
+				pdataRelocations.add4(pdata.totalSize);
+				pdataRelocations.add4(function->physicalStorage);
+				pdataRelocations.add2(IMAGE_REL_AMD64_ADDR32NB);
+
+				pdata.add4(code.totalSize - functionStart);
+
+				pdataRelocations.add4(pdata.totalSize);
+				pdataRelocations.add4(symbols.count());
+				pdataRelocations.add2(IMAGE_REL_AMD64_ADDR32NB);
+
+				Symbol xdataSymbol;
+				setSymbolName(&stringTable, &xdataSymbol.name, symbols.count());
+				xdataSymbol.value = xdata.totalSize;
+				xdataSymbol.type = 0;
+				xdataSymbol.sectionNumber = XDATA_SECTION_NUMBER;
+				xdataSymbol.storageClass = IMAGE_SYM_CLASS_STATIC;
+				xdataSymbol.numberOfAuxSymbols = 0;
+
+				symbols.add(xdataSymbol);
+
+				pdata.add4(0);
+
+				xdata.add1(1);
+				xdata.add1(functionPreambleEnd);
+				xdata.add1(4);
+				xdata.add1(0);
+
+				xdata.add1(subRspOffset);
+				xdata.add1(0x01);
+				xdata.add2(spaceToAllocate / 8);
+				xdata.add1(pushRdiOffset);
+				xdata.add1(0x70);
+				xdata.add1(pushRsiOffset);
+				xdata.add1(0x60);
 			}
 
 			{
@@ -3421,26 +3484,34 @@ void runCoffWriter() {
 
 		SectionHeader rdataSection = {};
 		setSectionName(rdataSection.name, sizeof(rdataSection.name), ".rdata");
-		rdataSection.characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_ALIGN_4096BYTES;
+		rdataSection.characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_ALIGN_16BYTES;
 
 		setSectionName(bssSection.name, sizeof(bssSection.name), ".bss");
-		bssSection.characteristics = IMAGE_SCN_CNT_UNINITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE | IMAGE_SCN_ALIGN_4096BYTES;
+		bssSection.characteristics = IMAGE_SCN_CNT_UNINITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE | IMAGE_SCN_ALIGN_16BYTES;
 
 		SectionHeader dataSection = {};
 		setSectionName(dataSection.name, sizeof(dataSection.name), ".data");
-		dataSection.characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE | IMAGE_SCN_ALIGN_4096BYTES;
+		dataSection.characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE | IMAGE_SCN_ALIGN_16BYTES;
 
 		SectionHeader textSection = {};
 		setSectionName(textSection.name, sizeof(textSection.name), ".text");
-		textSection.characteristics = IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_ALIGN_4096BYTES;
+		textSection.characteristics = IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_ALIGN_16BYTES;
 
 		SectionHeader debugSymbolSection = {};
 		setSectionName(debugSymbolSection.name, sizeof(debugSymbolSection.name), ".debug$S");
-		debugSymbolSection.characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_DISCARDABLE;
+		debugSymbolSection.characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_DISCARDABLE | IMAGE_SCN_ALIGN_1BYTES;
 
 		SectionHeader debugTypeSection = {};
 		setSectionName(debugTypeSection.name, sizeof(debugTypeSection.name), ".debug$T");
-		debugTypeSection.characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_DISCARDABLE;
+		debugTypeSection.characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_DISCARDABLE | IMAGE_SCN_ALIGN_1BYTES;
+
+		SectionHeader pdataSection = {};
+		setSectionName(pdataSection.name, sizeof(pdataSection.name), ".pdata");
+		pdataSection.characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_ALIGN_4BYTES;
+		
+		SectionHeader xdataSection = {};
+		setSectionName(xdataSection.name, sizeof(xdataSection.name), ".xdata");
+		xdataSection.characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_ALIGN_4BYTES;
 
 		sections.add({ &rdataSection, &rdata, &rdataRelocations });
 		sections.add({ &bssSection });
@@ -3448,6 +3519,8 @@ void runCoffWriter() {
 		sections.add({ &textSection, &code, &codeRelocations });
 		sections.add({ &debugSymbolSection, &debugSymbols, &debugSymbolsRelocations });
 		sections.add({ &debugTypeSection, &debugTypes });
+		sections.add({ &pdataSection, &pdata, &pdataRelocations });
+		sections.add({ &xdataSection, &xdata });
 
 
 

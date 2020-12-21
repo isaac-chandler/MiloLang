@@ -469,6 +469,10 @@ void writeForModifyWrite(IrState *state, IrModifyWrite info, Expr *left) {
 	}
 }
 void generateCall(IrState *state, ExprFunctionCall *call, u32 dest, ExprCommaAssignment *comma) {
+	if ((call->flags & EXPR_FUNCTION_CALL_IS_STATEMENT_LEVEL) || comma) {
+		addLineMarker(state, call);
+	}
+
 	auto type = static_cast<TypeFunction *>(call->function->type);
 
 	FunctionCall *argumentInfo = static_cast<FunctionCall *>(state->allocator.allocate(sizeof(FunctionCall) + sizeof(argumentInfo->args[0]) * (call->arguments.count + type->returnCount - 1)));
@@ -1096,6 +1100,7 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 				case TOKEN('='): {
 					assert(dest == DEST_NONE);
 
+					addLineMarker(state, expr);
 					if (left->flavor == ExprFlavor::IDENTIFIER && !static_cast<ExprIdentifier *>(left)->structAccess) {
 						auto identifier = static_cast<ExprIdentifier *>(left);
 
@@ -1148,6 +1153,7 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 				case TokenT::MINUS_EQUALS: {
 					assert(dest == DEST_NONE);
 
+					addLineMarker(state, expr);
 					auto info = readForModifyWrite(state, left, right);
 
 					if (left->type->flavor == TypeFlavor::POINTER) {
@@ -1207,7 +1213,7 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 					branch.a = temp;
 					branch.opSize = 1;
 
-					addLineMarker(state, right);
+					//addLineMarker(state, right);
 					generateIrForceDest(state, right, temp);
 
 					state->ir[patch].branchTarget = state->ir.count;
@@ -1251,6 +1257,7 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 				case TokenT::DIVIDE_EQUALS:
 				case TokenT::MOD_EQUALS: {
 
+					addLineMarker(state, expr);
 					auto info = readForModifyWrite(state, left, right);
 
 					Ir &ir = state->ir.add();
@@ -1291,7 +1298,6 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 			}
 
 			for (auto subExpr : block->exprs) {
-				addLineMarker(state, subExpr);
 				generateIr(state, subExpr, DEST_NONE);
 			}
 
@@ -1321,6 +1327,7 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 			return DEST_NONE;
 		}
 		case ExprFlavor::BREAK: {
+			addLineMarker(state, expr);
 			auto break_ = static_cast<ExprBreakOrContinue *>(expr);
 
 
@@ -1339,6 +1346,7 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 			return DEST_NONE;
 		}
 		case ExprFlavor::CONTINUE: {
+			addLineMarker(state, expr);
 			auto continue_ = static_cast<ExprBreakOrContinue *>(expr);
 
 			u32 begin;
@@ -1359,6 +1367,7 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 			return DEST_NONE;
 		}
 		case ExprFlavor::REMOVE: {
+			addLineMarker(state, expr);
 			auto remove = static_cast<ExprBreakOrContinue *>(expr);
 
 			if (!removeFunction) {
@@ -1484,6 +1493,8 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 			u32 itReg = it->physicalStorage;
 			u32 it_indexReg = it_index->physicalStorage;
 
+			addLineMarker(state, expr);
+
 			if ((loop->forBegin->type->flavor != TypeFlavor::INTEGER) && !(loop->flags & EXPR_FOR_BY_POINTER)) {
 				loop->irPointer = state->nextRegister++;
 			}
@@ -1532,7 +1543,6 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 
 			pushLoop(state, loop);
 
-			addLineMarker(state, expr);
 
 
 
@@ -1604,7 +1614,6 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 			deferStack.add(loop);
 		
 			if (loop->body) {
-				addLineMarker(state, loop->body);
 				generateIr(state, loop->body, DEST_NONE);
 			}
 
@@ -1620,7 +1629,6 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 			state->ir[patch].branchTarget = state->ir.count;
 
 			if (loop->completedBody) {
-				addLineMarker(state, loop->completedBody);
 				generateIr(state, loop->completedBody, DEST_NONE);
 			}
 
@@ -1703,6 +1711,7 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 
 			auto switch_ = static_cast<ExprSwitch *>(expr);
 
+			addLineMarker(state, expr);
 			u32 value = generateIr(state, switch_->condition, state->nextRegister++);
 
 			u32 compareResult = state->nextRegister++;
@@ -1744,7 +1753,6 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 			for (auto &case_ : switch_->cases) {
 				state->ir[case_.irBranch].branchTarget = state->ir.count;
 
-				addLineMarker(state, case_.block);
 				generateIr(state, case_.block, DEST_NONE);
 
 				if (!case_.fallsThrough && &case_ + 1 != switch_->cases.end()) {
@@ -1771,6 +1779,7 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 		case ExprFlavor::IF: {
 			auto ifElse = static_cast<ExprIf *>(expr);
 
+			addLineMarker(state, expr);
 			u32 conditionReg = generateIr(state, ifElse->condition, state->nextRegister++);
 
 			if (ifElse->ifBody && ifElse->elseBody) {
@@ -1780,7 +1789,6 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 				ifZ.a = conditionReg;
 				ifZ.opSize = 1;
 
-				addLineMarker(state, ifElse->ifBody);
 				generateIr(state, ifElse->ifBody, DEST_NONE);
 				
 				u32 patchJump = state->ir.count;
@@ -1789,7 +1797,6 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 				
 				state->ir[patchIfZ].branchTarget = state->ir.count;
 
-				addLineMarker(state, ifElse->elseBody);
 				generateIr(state, ifElse->elseBody, DEST_NONE);
 
 				state->ir[patchJump].branchTarget = state->ir.count;
@@ -1801,7 +1808,6 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 				ifZ.a = conditionReg;
 				ifZ.opSize = 1;
 
-				addLineMarker(state, ifElse->ifBody);
 				generateIr(state, ifElse->ifBody, DEST_NONE);
 
 				state->ir[patchIfZ].branchTarget = state->ir.count;
@@ -1813,7 +1819,6 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 				ifNZ.a = conditionReg;
 				ifNZ.opSize = 1;
 
-				addLineMarker(state, ifElse->elseBody);
 				generateIr(state, ifElse->elseBody, DEST_NONE);
 
 				state->ir[patchIfNZ].branchTarget = state->ir.count;
@@ -1844,6 +1849,7 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 		case ExprFlavor::RETURN: {
 			auto return_ = static_cast<ExprReturn *>(expr);
 
+			addLineMarker(state, expr);
 			u32 result = 0;
 
 			if (return_->returns.count) {
@@ -2028,6 +2034,7 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 			}
 		}
 		case ExprFlavor::WHILE: {
+			addLineMarker(state, expr);
 			ExprLoop *loop = static_cast<ExprLoop *>(expr);
 
 			pushLoop(state, loop);
@@ -2042,7 +2049,6 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 			ifZ.opSize = 1;
 
 			if (loop->body) {
-				addLineMarker(state, loop->body);
 				generateIr(state, loop->body, DEST_NONE);
 			}
 
@@ -2053,7 +2059,6 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 			state->ir[patch].branchTarget = state->ir.count;
 
 			if (loop->completedBody) {
-				addLineMarker(state, loop->completedBody);
 				generateIr(state, loop->completedBody, DEST_NONE);
 			}
 
@@ -2164,7 +2169,7 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 
 u32 generateIrForceDest(IrState *state, Expr *expr, u32 dest) {
 	assert(dest != DEST_NONE);
-
+	
 	u32 stored = generateIr(state, expr, dest, true);
 
 	if (stored != dest) {
@@ -2215,11 +2220,6 @@ bool generateIrForFunction(ExprFunction *function) {
 	generateIr(&function->state, function->body, DEST_NONE);
 
 	exitBlock(&function->state, nullptr, true);
-
-	/*Ir &ir = function->state.ir.add();
-	ir.op = IrOp::RETURN;
-	ir.a = 0;
-	ir.opSize = 0;*/
 
 	if (hadError) {
 		return false;
