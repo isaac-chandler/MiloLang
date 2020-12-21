@@ -135,6 +135,7 @@ debug info
  - emit struct information
  - emit S_UDT for constant type declarations
  - emit constants
+ - global variables
  - deal with the local function nightmare
  - do we have to do some natvis embedding bs to get arrays to show correctly in the debugger
  
