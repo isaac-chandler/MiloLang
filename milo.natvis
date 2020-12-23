@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AutoVisualizer xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
+  <Type Name="Dynamic_Array&lt;*&gt;">
+    <DisplayString>{{ count={count} }}</DisplayString>
+    <Expand>
+      <Item Name="[count]" ExcludeView="simple">count</Item>
+      <Item Name="[capacity]" ExcludeView="simple">capacity</Item>
+      <ArrayItems>
+        <Size>count</Size>
+        <ValuePointer>data</ValuePointer>
+      </ArrayItems>
+    </Expand>
+  </Type>
+
+  <Type Name="Array&lt;*&gt;">
+    <DisplayString>{{ count={count} }}</DisplayString>
+    <Expand>
+      <Item Name="[count]" ExcludeView="simple">count</Item>
+      <ArrayItems>
+        <Size>count</Size>
+        <ValuePointer>data</ValuePointer>
+      </ArrayItems>
+    </Expand>
+  </Type>
+
+  <Type Name="type">
+    <DisplayString>{((Type_Info *) value)->name.data,[((Type_Info *) value)->name.count]sb}</DisplayString>
+  </Type>
+
+  <Type Name="string">
+    <DisplayString>{data,[count]s}</DisplayString>
+  </Type>
+</AutoVisualizer>

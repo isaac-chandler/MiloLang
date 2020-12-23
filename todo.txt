@@ -131,13 +131,9 @@ Allow #if to insert members into structs
 Allow #if to conditionally execute #load
  
 debug info
- - show locals
- - emit struct information
  - emit S_UDT for constant type declarations
  - emit constants
- - global variables
  - deal with the local function nightmare
- - do we have to do some natvis embedding bs to get arrays to show correctly in the debugger
  
 improve external function interface
  - parse C header files so we don't need to manually declare external functions
