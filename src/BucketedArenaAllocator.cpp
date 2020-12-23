@@ -61,13 +61,21 @@ void *BucketedArenaAllocator::allocateUnaligned(u32 size) {
 }
 
 void BucketedArenaAllocator::addNullTerminatedString(String string) {
-	add(string.characters, string.length);
+	addString(string);
 	add1(0);
 }
 
+void BucketedArenaAllocator::addString(String string) {
+	add(string.characters, string.length);
+}
+
 void BucketedArenaAllocator::addNullTerminatedString(const char *string) {
-	add(string, static_cast<u32>(strlen(string)));
+	addString(string);
 	add1(0);
+}
+
+void BucketedArenaAllocator::addString(const char *string) {
+	add(string, static_cast<u32>(strlen(string)));
 }
 
 void BucketedArenaAllocator::add(const void *value, u32 size) {

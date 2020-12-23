@@ -64,7 +64,8 @@ enum class IrOp : u8 {
 	STRING, 
 	LINE_MARKER, 
 	TYPE, 
-	TYPE_INFO
+	TYPE_INFO, 
+	BLOCK
 };
 
 #define IR_SIGNED_OP 0x1
@@ -104,6 +105,7 @@ struct Ir {
 				struct ExprFunction *function;
 				struct ExprStringLiteral *string;
 				struct Type *type;
+				struct Block *block;
 				u32 branchTarget;
 				u32 destSize;
 				FunctionCall *arguments;

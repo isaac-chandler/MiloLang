@@ -112,11 +112,6 @@ void free_resources(Find_Result *result) {
 // I can work it in here.
 //
 
-// Defer macro/thing.
-
-#define CONCAT_INTERNAL(x,y) x##y
-#define CONCAT(x,y) CONCAT_INTERNAL(x,y)
-
 template<typename T>
 struct ExitScope {
     T lambda;

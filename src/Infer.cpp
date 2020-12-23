@@ -345,7 +345,7 @@ void addTypeBlock(Expr *expr) {
 
 			job->type = type;
 
-			type->name = expr->valueOfDeclaration ? expr->valueOfDeclaration->name : "(struct)";
+			type->name = expr->valueOfDeclaration ? expr->valueOfDeclaration->name : (type->flags & TYPE_STRUCT_IS_UNION ? "(union)" : "(struct)");
 			addStruct(struct_);
 
 			type->sizeJob = job;
@@ -366,7 +366,7 @@ void addTypeBlock(Expr *expr) {
 
 			job->type = type;
 
-			type->name = expr->valueOfDeclaration ? expr->valueOfDeclaration->name : "(enum)";
+			type->name = expr->valueOfDeclaration ? expr->valueOfDeclaration->name : (type->flags & TYPE_ENUM_IS_FLAGS ? "(enum_flags)" : "(enum)");
 			addStruct(enum_);
 
 			beginFlatten(job, &CAST_FROM_SUBSTRUCT(ExprEnum, struct_, enum_)->integerType);

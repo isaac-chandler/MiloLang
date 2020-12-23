@@ -580,7 +580,7 @@ int main(int argc, char *argv[]) {
 
 				*libOffset = 0;
 			}
-			_snwprintf(buffer, 1024, L"\"%s\" out.obj /debug /entry:main%S \"/libpath:%s\" \"/libpath:%s\" /incremental:no /nologo", linkerPath, libBuffer, windowsLibPath, crtLibPath);
+			_snwprintf(buffer, 1024, L"\"%s\" out.obj /debug /entry:main%S \"/libpath:%s\" \"/libpath:%s\" /incremental:no /nologo /natvis:milo.natvis", linkerPath, libBuffer, windowsLibPath, crtLibPath);
 		}
 
 

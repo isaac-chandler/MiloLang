@@ -13,7 +13,7 @@
 #include <algorithm>
 #include <stdlib.h>
 #include <mutex>
-#include <immintrin.h>
+#include <intrin.h>
 #include <string_view>
 #include <cinttypes>
 #include <stdarg.h>
@@ -63,10 +63,10 @@
 #define PROFILE_LIGHT_GREEN "thread_state_running"
 #define PROFILE_DARK_RED "terrible"
 
-
-#if BUILD_PROFILE
 #define CONCAT2(x, y) x##y
 #define CONCAT(x, y) CONCAT2(x, y)
+
+#if BUILD_PROFILE
 #define PROFILE_FUNC(...)       Timer CONCAT(timer,__LINE__)(__FUNCTION__, __VA_ARGS__)
 #define PROFILE_ZONE(name, ...) Timer CONCAT(timer,__LINE__)(name, __VA_ARGS__)
 #else

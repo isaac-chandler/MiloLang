@@ -56,6 +56,7 @@ struct Type {
 
 	union Symbol *symbol = nullptr;
 	u32 physicalStorage;
+	u32 codeviewTypeIndex = 0;
 
 	struct Expr *defaultValue = nullptr;
 	class llvm::GlobalVariable *llvmStorage = nullptr;

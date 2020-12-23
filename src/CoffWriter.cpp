@@ -4,6 +4,7 @@
 #include "Block.h"
 #include "TypeTable.h"
 #include "CompilerMain.h"
+#include "IrGenerator.h"
 
 union SymbolName {
 	char name[8];
@@ -821,7 +822,107 @@ const u32 T_64PREAL64 = 0x0641;
 const u32 T_BOOL08 = 0x0030;
 const u32 T_64PBOOL08 = 0x0630;
 
-u32 getCoffTypeIndex(Type *type) {
+
+u32 getCoffTypeIndex(BucketedArenaAllocator *debugTypes, Type *type);
+
+u32 debugTypeId = 0x1000;
+
+void alignDebugTypes(BucketedArenaAllocator *debugTypes) {
+	u32 padding = AlignPO2(debugTypes->totalSize, 4) - debugTypes->totalSize;
+
+	for (u32 i = 0; i < padding; i++) {
+		debugTypes->add1(0xF0 + padding - i);
+	}
+
+	assert(!(debugTypes->totalSize & 3));
+}
+
+struct DebugLeaf {
+	BucketedArenaAllocator *debugTypes;
+
+	DebugLeaf(BucketedArenaAllocator *debugTypes) : debugTypes(debugTypes) {}
+
+	DebugLeaf(BucketedArenaAllocator &debugTypes) : debugTypes(&debugTypes) {}
+
+	template<typename T>
+	u32 operator+(T t) {
+		u16 *patch = debugTypes->add2(0);
+		u32 start = debugTypes->totalSize;
+		t();
+		alignDebugTypes(debugTypes);
+		*patch = static_cast<u16>(debugTypes->totalSize - start);
+		return debugTypeId++;
+	}
+};
+
+#define DEBUG_LEAF DebugLeaf(debugTypes) + [&]()
+
+void addStructUniqueName(BucketedArenaAllocator *debugTypes, u32 name = debugTypeId) {
+	debugTypes->add1('@');
+
+	char buffer[32];
+	
+	_itoa(static_cast<int>(name - 0x1000), buffer, 16);
+
+	debugTypes->addNullTerminatedString(buffer);
+}
+
+
+bool appendCoffName(BucketedArenaAllocator *debugSymbols, Type *type) {
+	if (type->flavor == TypeFlavor::POINTER) {
+
+	}
+	else if (type->flavor == TypeFlavor::ARRAY) {
+		auto array = static_cast<TypeArray *>(type);
+
+		if (array->flags & TYPE_ARRAY_IS_FIXED) {
+			appendCoffName(debugSymbols, array->arrayOf);
+			debugSymbols->addString(" [");
+
+			char buffer[16];
+			_itoa(array->count, buffer, 10);
+
+			debugSymbols->addString(buffer);
+			debugSymbols->add1(']');
+		}
+		else if (array->flags & TYPE_ARRAY_IS_DYNAMIC) {
+			debugSymbols->addString("Dynamic_Array<");
+			if (appendCoffName(debugSymbols, array->arrayOf)) {
+				debugSymbols->add1(' ');
+			}
+
+			debugSymbols->add1('>');
+			return true;
+		}
+		else {
+			debugSymbols->addString("Array<");
+			if (appendCoffName(debugSymbols, array->arrayOf)) {
+				debugSymbols->add1(' ');
+			}
+
+			debugSymbols->add1('>');
+			return true;
+		}
+	}
+	else {
+		debugSymbols->addString(type->name);
+	}
+
+	return false;
+}
+
+
+void emitUDT(BucketedArenaAllocator *debugSymbols, Type *type) {
+	u16 *size = debugSymbols->add2(0);
+	u32 start = debugSymbols->totalSize;
+	debugSymbols->add2(S_UDT);
+	debugSymbols->add4(type->codeviewTypeIndex);
+	appendCoffName(debugSymbols, type);
+	debugSymbols->add1(0);
+	*size = static_cast<u16>(debugSymbols->totalSize - start);
+}
+
+u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 	if (type == &TYPE_BOOL) {
 		return T_BOOL08;
 	}
@@ -861,19 +962,345 @@ u32 getCoffTypeIndex(Type *type) {
 	else if (type->flavor == TypeFlavor::POINTER) {
 		auto pointer = static_cast<TypePointer *>(type);
 
-		auto indexOfType = getCoffTypeIndex(pointer->pointerTo);
+		auto indexOfType = getCoffTypeIndex(debugTypes, pointer->pointerTo);
 
 
 		// @Incomplete change 0x100 to a more concrete value
 		if (indexOfType < 0x100) {
 			return indexOfType | 0x600;
 		}
+
+		return DEBUG_LEAF {
+			debugTypes->add2(0x1002); // LF_POINTER
+			debugTypes->add4(indexOfType);
+			debugTypes->add4(0x1000c); // 64 bit normal pointer
+		};
+	}
+	else if (type->flavor == TypeFlavor::STRING) {
+		auto fieldList = DEBUG_LEAF{
+			debugTypes->add2(0x1203); // LF_FIELDLIST
+
+			debugTypes->add2(0x150D); // LF_MEMBER
+			debugTypes->add2(0x3); // public
+			debugTypes->add4(T_64PUCHAR);
+			debugTypes->add2(0); // offset 0
+			debugTypes->addNullTerminatedString("data");
+			alignDebugTypes(debugTypes);
+
+			debugTypes->add2(0x150D); // LF_MEMBER
+			debugTypes->add2(0x3); // public
+			debugTypes->add4(T_UINT8);
+			debugTypes->add2(8); // offset 8
+			debugTypes->addNullTerminatedString("count");
+		};
+
+		return DEBUG_LEAF{
+			debugTypes->add2(0x1505); // LF_STRUCTURE
+			debugTypes->add2(2); // 2 members
+			debugTypes->add2(0x200); // Has a unique name
+			debugTypes->add4(fieldList); // field list
+			debugTypes->add4(0); // super class
+			debugTypes->add4(0); // vtable
+			debugTypes->add2(16);
+			debugTypes->addNullTerminatedString("string");
+			addStructUniqueName(debugTypes);
+		};
+	}
+	else if (type->flavor == TypeFlavor::ARRAY) {
+		auto array = static_cast<TypeArray *>(type);
+
+		if (array->flags & TYPE_ARRAY_IS_FIXED) {
+			u32 arrayOf = getCoffTypeIndex(debugTypes, array->arrayOf);
+
+			return DEBUG_LEAF{
+				debugTypes->add2(0x1503); // LF_ARRAY
+				debugTypes->add4(arrayOf);
+				debugTypes->add4(T_INT8);
+				debugTypes->add2(0x8004); // LF_ULONG
+				debugTypes->add4(array->size);
+				debugTypes->add1(0); // No name
+			};
+		}
 		else {
-			return 0;
+			u32 dataType = getCoffTypeIndex(debugTypes, static_cast<ExprLiteral *>(array->members.declarations[0]->type)->typeValue);
+
+			u32 fieldList = DEBUG_LEAF{
+				debugTypes->add2(0x1203); // LF_FIELDLIST
+
+				debugTypes->add2(0x150D); // LF_MEMBER
+				debugTypes->add2(0x3); // public
+				debugTypes->add4(dataType);
+				debugTypes->add2(0); // offset 0
+				debugTypes->addNullTerminatedString("data");
+				alignDebugTypes(debugTypes);
+
+				debugTypes->add2(0x150D); // LF_MEMBER
+				debugTypes->add2(0x3); // public
+				debugTypes->add4(T_UINT8);
+				debugTypes->add2(8); // offset 8
+				debugTypes->addNullTerminatedString("count");
+
+				if (array->flags & TYPE_ARRAY_IS_DYNAMIC) {
+					alignDebugTypes(debugTypes);
+
+					debugTypes->add2(0x150D); // LF_MEMBER
+					debugTypes->add2(0x3); // public
+					debugTypes->add4(T_UINT8);
+					debugTypes->add2(16); // offset 8
+					debugTypes->addNullTerminatedString("capacity");
+				}
+			};
+
+			return DEBUG_LEAF{
+				debugTypes->add2(0x1505); // LF_STRUCTURE
+				debugTypes->add2(array->flags & TYPE_ARRAY_IS_DYNAMIC ? 3 : 2); // 2 members
+				debugTypes->add2(0x200); // Has a unique name
+				debugTypes->add4(fieldList); // field list
+				debugTypes->add4(0); // super class
+				debugTypes->add4(0); // vtable
+				debugTypes->add2(array->size);
+				appendCoffName(debugTypes, array);
+				debugTypes->add1(0);
+				addStructUniqueName(debugTypes);
+			};
 		}
 	}
+	else if (type->flavor == TypeFlavor::FUNCTION) {
+		auto function = static_cast<TypeFunction *>(type);
+
+		for (u32 i = 0; i < function->argumentCount; i++) {
+			getCoffTypeIndex(debugTypes, function->argumentTypes[i]);
+		}
+
+		for (u32 i = 0; i < function->returnCount; i++) {
+			getCoffTypeIndex(debugTypes, function->returnTypes[i]);
+		}
+
+		u32 firstReturn = debugTypeId;
+
+		for (u32 i = 1; i < function->returnCount; i++) {
+			DEBUG_LEAF {
+				debugTypes->add2(0x1002); // LF_POINTER
+				debugTypes->add4(function->returnTypes[i]->codeviewTypeIndex);
+				debugTypes->add4(0x1000c); // 64 bit normal pointer
+			};
+		}
+
+		u32 argList = DEBUG_LEAF {
+			debugTypes->add2(0x1201); // LF_ARGLIST
+			debugTypes->add4(function->argumentCount + function->returnCount - 1);
+
+			for (u32 i = 0; i < function->argumentCount; i++) {
+				debugTypes->add4(function->argumentTypes[i]->codeviewTypeIndex);
+			}
+
+			for (u32 i = 1;	i < function->returnCount; i++) {
+				debugTypes->add4(firstReturn + i - 1);
+			}
+		};
+
+		u32 functionType = DEBUG_LEAF {
+			debugTypes->add2(0x1008); // LF_PROCEDURE
+			debugTypes->add4(function->returnTypes[0]->codeviewTypeIndex);
+			debugTypes->add1(0); // C near call
+			debugTypes->add1(0);
+			debugTypes->add2(function->argumentCount + function->returnCount - 1); // 0 parameters
+			debugTypes->add4(argList);
+		};
+
+		return DEBUG_LEAF {
+			debugTypes->add2(0x1002); // LF_POINTER
+			debugTypes->add4(functionType);
+			debugTypes->add4(0x1000c); // 64 bit normal pointer
+		};
+	}
+	else if (type->flavor == TypeFlavor::ENUM) {
+		auto enumeration = static_cast<TypeEnum *>(type);
+
+		u32 integerType = getCoffTypeIndex(debugTypes, enumeration->integerType);
+		
+		// Use a struct with bitfields to represent a flags enum
+		if (enumeration->flags & TYPE_ENUM_IS_FLAGS) {
+			u32 firstFlag = debugTypeId;
+
+			for (auto declaration : enumeration->values->declarations) {
+				assert(declaration->initialValue->flavor == ExprFlavor::INT_LITERAL);
+				assert(!(declaration->initialValue->type->flags & TYPE_INTEGER_IS_SIGNED));
+				
+				u64 value = static_cast<ExprLiteral *>(declaration->initialValue)->unsignedValue;
+
+				if (value && !(value & value - 1)) { // If exactly one bit is set
+					unsigned long bit;
+
+					_BitScanForward64(&bit, value);
+					
+					DEBUG_LEAF{
+						debugTypes->add2(0x1205); // LF_BITFIELD
+						debugTypes->add4(integerType);
+						debugTypes->add1(1); // 1 bit
+						debugTypes->add1(static_cast<u8>(bit));
+					};
+				}
+			}
+
+			u32 flagCount = 0;
+
+			u32 fieldList = DEBUG_LEAF{
+				debugTypes->add2(0x1203); // LF_FIELDLIST
+
+				for (auto declaration : enumeration->values->declarations) {
+
+					u64 value = static_cast<ExprLiteral *>(declaration->initialValue)->unsignedValue;
+
+					if (value && !(value & value - 1)) { // If exactly one bit is set
+						alignDebugTypes(debugTypes);
+
+						debugTypes->add2(0x150D); // LF_MEMBER
+						debugTypes->add2(0x3); // public
+						debugTypes->add4(firstFlag + flagCount++);
+						debugTypes->add2(0); // offset 0
+						debugTypes->addNullTerminatedString(declaration->name);
+					}
+				}
+			};
+
+			return DEBUG_LEAF{
+				debugTypes->add2(0x1505); // LF_STRUCTURE
+				debugTypes->add2(flagCount);
+				debugTypes->add2(0x200); // Has a unique name
+				debugTypes->add4(fieldList); // field list
+				debugTypes->add4(0); // super class
+				debugTypes->add4(0); // vtable
+				debugTypes->add2(enumeration->size);
+				debugTypes->addNullTerminatedString(enumeration->name);
+				addStructUniqueName(debugTypes);
+			};
+		}
+		else {
+			u32 fieldList = DEBUG_LEAF {
+				debugTypes->add4(0x1203); // LF_FIELDLIST
+
+				for (auto declaration : enumeration->values->declarations) {
+					assert(declaration->initialValue->flavor == ExprFlavor::INT_LITERAL);
+					assert(!(declaration->initialValue->type->flags & TYPE_INTEGER_IS_SIGNED));
+
+					alignDebugTypes(debugTypes);
+					debugTypes->add2(0x1502); // LF_ENUMERATE
+					debugTypes->add2(0x3); // Public
+					debugTypes->add2(0x800A); // LF_UQUADWORD
+					debugTypes->add8(static_cast<ExprLiteral *>(declaration->initialValue)->unsignedValue);
+					debugTypes->addNullTerminatedString(declaration->name);
+				}
+			};
+
+			return DEBUG_LEAF{
+				debugTypes->add2(0x1507); // LF_ENUM
+				debugTypes->add2(static_cast<u16>(enumeration->values->declarations.count));
+				debugTypes->add2(0x200); // Has a unique name
+				debugTypes->add4(integerType);
+				debugTypes->add4(fieldList);
+				debugTypes->addNullTerminatedString(enumeration->name);
+				addStructUniqueName(debugTypes);
+			};
+		}
+	}
+	else if (type->flavor == TypeFlavor::TYPE) {
+		u32 fieldList = DEBUG_LEAF{
+			debugTypes->add2(0x1203); // LF_FIELDLIST
+
+			debugTypes->add2(0x150D); // LF_MEMBER
+			debugTypes->add2(0x3); // public
+			debugTypes->add4(T_64PVOID);
+			debugTypes->add2(0); // offset 0
+			debugTypes->addNullTerminatedString("value");
+		};
+
+		return DEBUG_LEAF{
+			debugTypes->add2(0x1505); // LF_STRUCTURE
+			debugTypes->add2(1); // 1 member
+			debugTypes->add2(0x200); // Has a unique name
+			debugTypes->add4(fieldList); // field list
+			debugTypes->add4(0); // super class
+			debugTypes->add4(0); // vtable
+			debugTypes->add2(8);
+			debugTypes->addNullTerminatedString("type");
+			addStructUniqueName(debugTypes);
+		};
+	}
+	else if (type->flavor == TypeFlavor::STRUCT) {
+		auto structure = static_cast<TypeStruct *>(type);
+
+		u16 packed = structure->flags & TYPE_STRUCT_IS_PACKED ? 1 : 0;
+
+		structure->codeviewTypeIndex = DEBUG_LEAF{
+			debugTypes->add2(0x1505); // LF_STRUCTURE
+			debugTypes->add2(0); // 1 member
+			debugTypes->add2(0x280 | packed); // Has a unique name and is a forward declaration
+			debugTypes->add4(0); // field list
+			debugTypes->add4(0); // super class
+			debugTypes->add4(0); // vtable
+			debugTypes->add2(0); // size
+			debugTypes->addNullTerminatedString(structure->name);
+			addStructUniqueName(debugTypes);
+		};
+
+		for (auto member : structure->members.declarations) {
+			if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING)) continue;
+
+			auto type = static_cast<ExprLiteral *>(member->type)->typeValue;
+
+			getCoffTypeIndex(debugTypes, type);
+		}
+
+		u32 memberCount = 0;
+
+		u32 fieldList = DEBUG_LEAF{
+			debugTypes->add2(0x1203); // LF_FIELDLIST
+
+			auto struct_ = static_cast<TypeStruct *>(type);
+
+			for (auto member : struct_->members.declarations) {
+				if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING)) continue;
+
+				auto type = static_cast<ExprLiteral *>(member->type)->typeValue;
+
+				alignDebugTypes(debugTypes);
+				debugTypes->add2(0x150D); // LF_MEMBER
+				debugTypes->add2(0x3); // public
+				debugTypes->add4(type->codeviewTypeIndex);
+				debugTypes->add2(member->physicalStorage); // offset
+				debugTypes->addNullTerminatedString(member->name);
+
+				memberCount++;
+			}
+		};
+
+		bool isUnion = structure->flags & TYPE_STRUCT_IS_UNION ? true : false;
+
+		return DEBUG_LEAF{
+			debugTypes->add2(isUnion ? 0x1506 : 0x1505); //LF_UNION : LF_STRUCTURE
+			debugTypes->add2(memberCount);
+			debugTypes->add2(0x200 | packed); // Has a unique name
+			debugTypes->add4(fieldList); // field list
+			debugTypes->add4(0); // super class
+			debugTypes->add4(0); // vtable
+			debugTypes->add2(structure->size);
+			debugTypes->addNullTerminatedString(structure->name);
+			addStructUniqueName(debugTypes, structure->codeviewTypeIndex); // Use the same unique name as the forward declaration
+		};
+	}
+	
+	// Unhandled case
+	assert(false);
 
 	return 0;
+}
+
+u32 getCoffTypeIndex(BucketedArenaAllocator *debugTypes, Type *type) {
+	if (!type->codeviewTypeIndex)
+		type->codeviewTypeIndex = createCoffType(debugTypes, type);
+
+	return type->codeviewTypeIndex;
 }
 
 #pragma pack(push, 1)
@@ -890,6 +1317,14 @@ struct PROCSYM32 {
 	u32 off;
 	u16 seg;
 	u8  flags;      // Proc flags
+};
+
+struct DATASYM32 {
+	u16 reclen;
+	u16 rectyp;
+	u32 typind;
+	u32 off;
+	u16 seg;
 };
 
 struct FRAMEPROCSYM {
@@ -964,6 +1399,13 @@ void emitBasicTypeDebugInfo(BucketedArenaAllocator *debugSymbols) {
 }
 
 void runCoffWriter() {
+
+	{
+		PROFILE_ZONE("Wait for infer");
+		std::unique_lock<std::mutex> lock(startLlvmLock);
+
+		startLlvm.wait(lock);
+	}
 	PROFILE_FUNC();
 
 	BucketedArenaAllocator code(4096);
@@ -995,6 +1437,7 @@ void runCoffWriter() {
 
 	Array<LineInfo> lineInfo;
 	Array<ColumnInfo> columnInfo;
+	Array<u32 *> blockOffsetStack;
 
 	u32 textSectionSymbolIndex = symbols.count();
 
@@ -1011,29 +1454,13 @@ void runCoffWriter() {
 	debugSymbols.add4(4);
 	debugTypes.add4(4);
 
-	u64 debugTypeId = 0x1000;
-
-	debugTypes.add2(6);
-	debugTypes.add2(0x1201); // LF_ARGLIST
-	debugTypes.add4(0); // argcount = 0
-	debugTypeId++;
-
-	debugTypes.add2(14);
-	debugTypes.add2(0x1008); // LF_PROCEDURE
-	debugTypes.add4(T_VOID); // returns void
-	debugTypes.add1(0); // C near call
-	debugTypes.add1(0);
-	debugTypes.add2(0); // 0 parameters
-	debugTypes.add4(0x1000); // refers to previous arglist
-	debugTypeId++;
-
 	{
 		debugSymbols.add4(0xF1);
 		auto subsectionSizePatch = debugSymbols.add4(0);
 		u32 subsectionOffset = debugSymbols.totalSize;
 
 		COMPILESYM3 compileFlags;
-		compileFlags.flags.iLanguage = 20; // @Cleanup Check no other language uses this
+		compileFlags.flags.iLanguage = 1; // @Cleanup Check no other language uses this
 		compileFlags.flags.unused = 0;
 
 #if BUILD_WINDOWS
@@ -1125,6 +1552,56 @@ void runCoffWriter() {
 
 			u32 spaceToAllocate = (registerCount >> 1) * 16 + 8;
 
+			debugSymbols.add4(0xF1);
+			auto subsectionSizePatch = debugSymbols.add4(0);
+			u32 subsectionOffset = debugSymbols.totalSize;
+
+			auto name = function->valueOfDeclaration ? function->valueOfDeclaration->name : "__unnamed";
+
+			// @Volatile: This relies on the LF_PROCEDURE node being directly before the LF_POINTER node that defines the function pointer type
+			u32 funcType = getCoffTypeIndex(&debugTypes, function->type) - 1;
+
+			u32 funcId = DEBUG_LEAF{
+				debugTypes.add2(0x1601); // LF_FUNC_ID
+				debugTypes.add4(0);
+				debugTypes.add4(funcType);
+				debugTypes.addNullTerminatedString(name);
+			};
+
+			debugSymbols.add2(static_cast<u16>(sizeof(PROCSYM32) + name.length - 1));
+			debugSymbols.add2(0x1147); // S_GPROC32_ID
+			debugSymbols.add4(0);
+			debugSymbols.add4(0);
+			debugSymbols.add4(0);
+			u32 *functionLengthPatch = debugSymbols.add4(code.totalSize - functionStart);
+			u32 *functionPreambleEndPatch = debugSymbols.add4(0);
+			u32 *functionPostambleStartPatch = debugSymbols.add4(0);
+			debugSymbols.add4(funcId);
+
+			debugSymbolsRelocations.add4(debugSymbols.totalSize);
+			debugSymbolsRelocations.add4(function->physicalStorage);
+			debugSymbolsRelocations.add2(IMAGE_REL_AMD64_SECREL);
+
+			debugSymbols.add4(0);
+
+			debugSymbolsRelocations.add4(debugSymbols.totalSize);
+			debugSymbolsRelocations.add4(textSectionSymbolIndex);
+			debugSymbolsRelocations.add2(IMAGE_REL_AMD64_SECTION);
+
+			debugSymbols.add2(0);
+
+			debugSymbols.add1(0);
+			debugSymbols.addNullTerminatedString(name);
+
+			FRAMEPROCSYM frame;
+			frame.cbFrame = spaceToAllocate;
+			frame.flags.unused = 0;
+			frame.flags.encodedLocalBasePointer = 1; // RSP
+			frame.flags.encodedParamBasePointer = 1; // RSP
+			frame.flags.pad = 0;
+
+			debugSymbols.add(&frame, sizeof(frame));
+
 			u32 paramOffset;
 
 			if (!isStandardSize(static_cast<ExprLiteral *>(function->returns.declarations[0]->type)->typeValue->size)) {
@@ -1138,6 +1615,17 @@ void runCoffWriter() {
 			}
 			else {
 				paramOffset = 0;
+			}
+
+			for (u32 i = 0; i < function->arguments.declarations.count; i++) {
+				auto argument = function->arguments.declarations[i];
+				REGREL32 argumentInfo;
+				argumentInfo.off = getRegisterOffset(function, i + 1 + paramOffset);
+				argumentInfo.typind = getCoffTypeIndex(&debugTypes, static_cast<ExprLiteral *>(argument->type)->typeValue);
+
+				debugSymbols.add2(static_cast<u16>(sizeof(argumentInfo) + 1 + argument->name.length));
+				debugSymbols.add(&argumentInfo, sizeof(argumentInfo));
+				debugSymbols.addNullTerminatedString(argument->name);
 			}
 
 			constexpr u8 intRegisters[4] = { 0x4C, 0x54, 0x44, 0x4C };
@@ -1213,6 +1701,7 @@ void runCoffWriter() {
 			u32 subRspOffset = code.totalSize - functionStart;
 
 			u32 functionPreambleEnd = code.totalSize - functionStart;
+			*functionPreambleEndPatch = functionPreambleEnd;
 
 			for (u32 i = 0; i < function->arguments.declarations.count; i++) {
 				auto type = static_cast<ExprLiteral *>(function->arguments.declarations[i]->type)->typeValue;
@@ -2839,12 +3328,57 @@ void runCoffWriter() {
 				case IrOp::LINE_MARKER: {
 					addLineInfo(&lineInfo, &columnInfo, code.totalSize - functionStart, ir.location.start, ir.location.end);
 				} break;
+				case IrOp::BLOCK: {
+					if (ir.block) {
+
+						debugSymbols.add2(21);
+						debugSymbols.add2(0x1103); // S_BLOCK32
+
+						debugSymbols.add4(0);
+						debugSymbols.add4(0);
+
+						blockOffsetStack.add(debugSymbols.add4(0));
+						debugSymbolsRelocations.add4(debugSymbols.totalSize);
+						debugSymbolsRelocations.add4(function->physicalStorage);
+						debugSymbolsRelocations.add2(IMAGE_REL_AMD64_SECREL);
+
+						debugSymbols.add4(code.totalSize - functionStart);
+
+						debugSymbolsRelocations.add4(debugSymbols.totalSize);
+						debugSymbolsRelocations.add4(textSectionSymbolIndex);
+						debugSymbolsRelocations.add2(IMAGE_REL_AMD64_SECTION);
+
+						debugSymbols.add2(0);
+						debugSymbols.add1(0);
+
+						for (auto declaration : ir.block->declarations) {
+							if (declaration->flags & (DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_CONSTANT | DECLARATION_IS_IMPLICIT_IMPORT)) continue;
+
+							REGREL32 variableInfo;
+
+							variableInfo.off = getRegisterOffset(function, declaration->physicalStorage);
+							variableInfo.typind = getCoffTypeIndex(&debugTypes, static_cast<ExprLiteral *>(declaration->type)->typeValue);
+
+							debugSymbols.add2(static_cast<u16>(sizeof(variableInfo) + declaration->name.length + 1));
+							debugSymbols.add(&variableInfo, sizeof(variableInfo));
+							debugSymbols.addNullTerminatedString(declaration->name);
+						}
+					}
+					else {
+						u32 *length = blockOffsetStack.pop();
+						*length = code.totalSize - functionStart - length[1];
+
+						debugSymbols.add2(2);
+						debugSymbols.add2(6); // S_END
+					}
+				} break;
 				default: {
 					assert(false);
 				}
 				}
 			}
 			
+			*functionPostambleStartPatch = code.totalSize - functionStart;
 			u32 functionPostambleStart = code.totalSize;
 
 			// add rsp, spaceToAllocate
@@ -2866,6 +3400,8 @@ void runCoffWriter() {
 
 			code.add1(0xC3);
 
+			*functionLengthPatch = code.totalSize - functionStart;
+
 			instructionOffsets.add(functionPostambleStart);
 
 			for (auto patch : jumpPatches) {
@@ -2874,76 +3410,12 @@ void runCoffWriter() {
 
 			{
 				PROFILE_ZONE("Write Function Debug Symbols");
+				debugSymbols.add2(2); // S_PROC_ID_END
+				debugSymbols.add2(0x114f);
 
-				/*if (function->valueOfDeclaration && function->valueOfDeclaration->enclosingScope == &globalBlock)*/ {
-					debugSymbols.add4(0xF1);
-					auto subsectionSizePatch = debugSymbols.add4(0);
-					u32 subsectionOffset = debugSymbols.totalSize;
+				*subsectionSizePatch = debugSymbols.totalSize - subsectionOffset;
 
-					auto name = function->valueOfDeclaration ? function->valueOfDeclaration->name : "__unnamed";
-
-
-					debugSymbols.add2(static_cast<u16>(sizeof(PROCSYM32) + name.length - 1));
-					debugSymbols.add2(0x1147); // S_GPROC32_ID
-					debugSymbols.add4(0);
-					debugSymbols.add4(0);
-					debugSymbols.add4(0);
-					debugSymbols.add4(code.totalSize - functionStart);
-					debugSymbols.add4(functionPreambleEnd);
-					debugSymbols.add4(functionPostambleStart - functionStart);
-					debugSymbols.add4(debugTypeId);
-
-
-
-					debugTypes.add2(10 + name.length + 1);
-					debugTypes.add2(0x1601); // LF_FUNC_ID
-					debugTypes.add4(0);
-					debugTypes.add4(0x1001);
-					debugTypes.addNullTerminatedString(name);
-					debugTypeId++;
-
-
-					debugSymbolsRelocations.add4(debugSymbols.totalSize);
-					debugSymbolsRelocations.add4(function->physicalStorage);
-					debugSymbolsRelocations.add2(IMAGE_REL_AMD64_SECREL);
-
-					debugSymbols.add4(0);
-
-					debugSymbolsRelocations.add4(debugSymbols.totalSize);
-					debugSymbolsRelocations.add4(textSectionSymbolIndex);
-					debugSymbolsRelocations.add2(IMAGE_REL_AMD64_SECTION);
-
-					debugSymbols.add2(0);
-
-					debugSymbols.add1(0);
-					debugSymbols.addNullTerminatedString(name);
-
-					FRAMEPROCSYM frame;
-					frame.cbFrame = spaceToAllocate;
-					frame.flags.unused = 0;
-					frame.flags.encodedLocalBasePointer = 1; // RSP
-					frame.flags.encodedParamBasePointer = 1; // RSP
-					frame.flags.pad = 0;
-
-					debugSymbols.add(&frame, sizeof(frame));
-
-					for (auto argument : function->arguments.declarations) {
-						REGREL32 argumentInfo;
-						argumentInfo.off = getRegisterOffset(function, argument->physicalStorage);
-						argumentInfo.typind = getCoffTypeIndex(static_cast<ExprLiteral *>(argument->type)->typeValue);
-
-						debugSymbols.add2(static_cast<u16>(sizeof(argumentInfo) + 1 + argument->name.length));
-						debugSymbols.add(&argumentInfo, sizeof(argumentInfo));
-						debugSymbols.addNullTerminatedString(argument->name);
-					}
-
-					debugSymbols.add2(2); // S_PROC_ID_END
-					debugSymbols.add2(0x114f);
-
-					*subsectionSizePatch = debugSymbols.totalSize - subsectionOffset;
-
-					alignAllocator(&debugSymbols, 4);
-				}
+				alignAllocator(&debugSymbols, 4);
 
 
 				pdataRelocations.add4(pdata.totalSize);
@@ -3025,6 +3497,33 @@ void runCoffWriter() {
 			assert(!(declaration->flags & DECLARATION_IS_CONSTANT));
 
 			createSymbolForDeclaration(&symbols, declaration);
+
+			debugSymbols.add4(0xF1);
+			auto subsectionSizePatch = debugSymbols.add4(0);
+			u32 subsectionOffset = debugSymbols.totalSize;
+
+			debugSymbols.add2(static_cast<u16>(sizeof(DATASYM32) + declaration->name.length - 1));
+			debugSymbols.add2(0x110d); // S_GDATA32
+
+			debugSymbols.add4(getCoffTypeIndex(&debugTypes, static_cast<ExprLiteral *>(declaration->type)->typeValue));
+
+			debugSymbolsRelocations.add4(debugSymbols.totalSize);
+			debugSymbolsRelocations.add4(declaration->physicalStorage);
+			debugSymbolsRelocations.add2(IMAGE_REL_AMD64_SECREL);
+
+			debugSymbols.add4(0);
+
+			debugSymbolsRelocations.add4(debugSymbols.totalSize);
+			debugSymbolsRelocations.add4(declaration->flags & DECLARATION_IS_UNINITIALIZED ? BSS_SECTION_NUMBER : DATA_SECTION_NUMBER);
+			debugSymbolsRelocations.add2(IMAGE_REL_AMD64_SECTION);
+
+			debugSymbols.add2(0);
+
+			debugSymbols.addNullTerminatedString(declaration->name);
+
+			*subsectionSizePatch = debugSymbols.totalSize - subsectionOffset;
+
+			alignAllocator(&debugSymbols, 4);
 
 			auto symbol = declaration->symbol;
 			auto type = static_cast<ExprLiteral *>(declaration->type)->typeValue;
@@ -3433,6 +3932,8 @@ void runCoffWriter() {
 				}
 			}
 		}
+
+		alignAllocator(&debugSymbols, 4);
 	}
 
 	{
@@ -3500,6 +4001,8 @@ void runCoffWriter() {
 		SectionHeader debugSymbolSection = {};
 		setSectionName(debugSymbolSection.name, sizeof(debugSymbolSection.name), ".debug$S");
 		debugSymbolSection.characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_DISCARDABLE | IMAGE_SCN_ALIGN_1BYTES;
+
+		alignDebugTypes(&debugTypes);
 
 		SectionHeader debugTypeSection = {};
 		setSectionName(debugTypeSection.name, sizeof(debugTypeSection.name), ".debug$T");

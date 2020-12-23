@@ -1289,7 +1289,12 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 			break;
 		}
 		case ExprFlavor::BLOCK: {
+
 			auto block = static_cast<ExprBlock *>(expr);
+
+			auto &enter = state->ir.add();
+			enter.op = IrOp::BLOCK;
+			enter.block = &block->declarations;
 
 			for (auto declaration : block->declarations.declarations) {
 				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT))) {
@@ -1316,6 +1321,10 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 
 				deferStack.pop();
 			}
+
+			auto &exit = state->ir.add();
+			exit.op = IrOp::BLOCK;
+			exit.block = nullptr;
 
 			return DEST_NONE;
 		}
@@ -1495,6 +1504,11 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 
 			addLineMarker(state, expr);
 
+			auto &enter = state->ir.add();
+			enter.op = IrOp::BLOCK;
+			enter.block = &loop->iteratorBlock;
+
+
 			if ((loop->forBegin->type->flavor != TypeFlavor::INTEGER) && !(loop->flags & EXPR_FOR_BY_POINTER)) {
 				loop->irPointer = state->nextRegister++;
 			}
@@ -1627,6 +1641,11 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 			jump.branchTarget = loopStack[loopCount - 1].start;
 
 			state->ir[patch].branchTarget = state->ir.count;
+
+
+			auto &exit = state->ir.add();
+			exit.op = IrOp::BLOCK;
+			exit.block = nullptr;
 
 			if (loop->completedBody) {
 				generateIr(state, loop->completedBody, DEST_NONE);

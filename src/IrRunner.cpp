@@ -808,6 +808,7 @@ if (op.flags & IR_FLOAT_OP) {\
 #endif
 			break;
 		}
+		case IrOp::BLOCK:
 		case IrOp::NOOP: {
 			break;
 		}
