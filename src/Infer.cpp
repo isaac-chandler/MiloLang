@@ -1387,7 +1387,7 @@ bool tryUsingConversion(SubJob *job, Type *correct, Expr **exprPointer, bool *yi
 	identifier->resolveFrom = nullptr;
 	identifier->enclosingScope = nullptr;
 	identifier->structAccess = given;
-	identifier->indexInBlock = 0;
+	identifier->serial = 0;
 	identifier->declaration = found;
 
 	Expr *expr = identifier;
@@ -2508,7 +2508,7 @@ bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yi
 					identifier->resolveFrom = nullptr;
 					identifier->enclosingScope = nullptr;
 					identifier->structAccess = given;
-					identifier->indexInBlock = 0;
+					identifier->serial = 0;
 					identifier->declaration = TYPE_STRING.members.declarations[0];
 
 					given = identifier;
@@ -2625,7 +2625,7 @@ bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char 
 
 #if BUILD_DEBUG
 	for (u64 i = 0; i < block->declarations.count; i++) {
-		assert(block->declarations[i]->indexInBlock == i);
+		assert(block->declarations[i]->serial == i);
 	}
 #endif
 
@@ -2645,7 +2645,7 @@ bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char 
 				return false;
 			}
 
-			argIndex = argument->indexInBlock;
+			argIndex = argument->serial;
 			assert(!(argument->flags & DECLARATION_IMPORTED_BY_USING));
 
 			if (sortedArguments[argIndex]) {
@@ -4003,7 +4003,7 @@ bool inferFlattened(SubJob *job) {
 					for (; identifier->resolveFrom; identifier->resolveFrom = identifier->resolveFrom->parentBlock) {
 						bool yield;
 
-						if (Declaration *declaration = findDeclaration(identifier->resolveFrom, identifier->name, &yield, identifier->indexInBlock)) {
+						if (Declaration *declaration = findDeclaration(identifier->resolveFrom, identifier->name, &yield, identifier->serial)) {
 							if ((declaration->flags & DECLARATION_IS_CONSTANT) && !(declaration->flags & DECLARATION_IMPORTED_BY_USING)) {
 								identifier->declaration = declaration;
 								break;
@@ -4014,7 +4014,7 @@ bool inferFlattened(SubJob *job) {
 									return false;
 								}
 
-								if (declaration->indexInBlock < identifier->indexInBlock) {
+								if (declaration->serial < identifier->serial) {
 									identifier->declaration = declaration;
 									break;
 								}
@@ -4031,7 +4031,7 @@ bool inferFlattened(SubJob *job) {
 							return true;
 						}
 
-						identifier->indexInBlock = identifier->resolveFrom->indexInParent;
+						identifier->serial = identifier->resolveFrom->serial;
 
 						if (identifier->resolveFrom->flags & (BLOCK_IS_RETURNS | BLOCK_IS_STRUCT))
 							identifier->flags |= EXPR_IDENTIFIER_RESOLVING_ONLY_CONSTANTS;
@@ -5682,11 +5682,11 @@ bool addDeclaration(Declaration *declaration) {
 			return false;
 		}
 
-		if (declaration->start.fileUid == 0 && !checkBuiltinDeclaration(declaration)) {
-			return false;
-		}
-
 		wakeUpSleepers(&globalBlock.sleepingOnMe, false, declaration->name);
+	}
+
+	if (declaration->enclosingScope == &globalBlock && declaration->start.fileUid == 0 && !checkBuiltinDeclaration(declaration)) {
+		return false;
 	}
 
 	if ((declaration->flags & DECLARATION_TYPE_IS_READY) && (declaration->flags & DECLARATION_VALUE_IS_READY)) {
@@ -5866,8 +5866,9 @@ bool inferImporter(ImporterJob *job) {
 	auto importer = job->importer;
 
 	Block *block = nullptr;
-	bool onlyConstants = false;
 	Expr *structAccess = nullptr;
+
+	bool onlyConstants = false;
 
 	if (importer->import->flavor == ExprFlavor::STATIC_IF) {
 		auto staticIf = static_cast<ExprIf *>(importer->import);
@@ -5934,24 +5935,41 @@ bool inferImporter(ImporterJob *job) {
 				import->import = member->import;
 				import->structAccess = structAccess;
 
-				addImporterToBlock(importer->enclosingScope, import, importer->indexInBlock);
+				addImporterToBlock(importer->enclosingScope, import, importer->serial);
 
 				addImporter(import);
 			}
 		}
 
-		if (importer->import->flavor == ExprFlavor::STATIC_IF && importer->enclosingScope == &globalBlock) {
+		if (importer->import->flavor == ExprFlavor::STATIC_IF) {
+			assert(!onlyConstants);
+			assert(!structAccess);
+
 			for (auto member : block->declarations) {
 				if (!(member->flags & (DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING))) {
 					if (checkForRedeclaration(importer->enclosingScope, member, importer->import)) {
-						if (!onlyConstants || (member->flags & DECLARATION_IS_CONSTANT)) {
-							addDeclarationToBlockUnchecked(importer->enclosingScope, member, importer->indexInBlock);
+						addDeclarationToBlockUnchecked(importer->enclosingScope, member, member->serial);
 
-							wakeUpSleepers(&importer->enclosingScope->sleepingOnMe, false, member->name);
 
-							if (!addDeclaration(member)) {
-								return false;
+						if (importer->enclosingScope->flags & BLOCK_IS_STRUCT) {
+							if (!(member->flags & DECLARATION_IS_CONSTANT)) {
+								// Do an insertion sort by declaration serial since struct members must be ordered to preserve memory layout
+								u32 index = importer->enclosingScope->declarations.count - 1;
+
+								while (index > 0 && member->serial < importer->enclosingScope->declarations[index - 1]->serial) {
+									importer->enclosingScope->declarations[index] = importer->enclosingScope->declarations[index - 1];
+
+									index--;
+								}
+
+								importer->enclosingScope->declarations[index] = member;
 							}
+						}
+
+						wakeUpSleepers(&importer->enclosingScope->sleepingOnMe, true, member->name);
+
+						if (!addDeclaration(member)) {
+							return false;
 						}
 					}
 					else {
@@ -5959,6 +5977,8 @@ bool inferImporter(ImporterJob *job) {
 					}
 				}
 			}
+
+			block->declarations.clear();
 		}
 		else {
 			for (auto member : block->declarations) {
@@ -5982,7 +6002,7 @@ bool inferImporter(ImporterJob *job) {
 
 							import->flags |= DECLARATION_IMPORTED_BY_USING;
 
-							addDeclarationToBlockUnchecked(importer->enclosingScope, import, importer->indexInBlock);
+							addDeclarationToBlockUnchecked(importer->enclosingScope, import, importer->serial);
 
 							assert(import->name.length);
 							wakeUpSleepers(&importer->enclosingScope->sleepingOnMe, true, import->name);
@@ -6420,6 +6440,13 @@ bool inferSize(SizeJob *job) {
 		totalSizes++;
 
 		auto struct_ = static_cast<TypeStruct *>(type);
+
+		for (auto importer : struct_->members.importers) {
+			if (!(importer->flags & IMPORTER_IS_COMPLETE) && importer->import->flavor == ExprFlavor::STATIC_IF) {
+				goToSleep(job, &struct_->members.sleepingOnMe);
+				return true;
+			}
+		}
 
 		s64 sleeping = -1;
 		while (job->sizingIndexInMembers < struct_->members.declarations.count) {

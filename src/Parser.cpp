@@ -51,10 +51,10 @@ static u64 getTokenPrecedence(TokenT token) {
 
 static void insertBlock(Block *block) {
 	if (currentBlock) {
-		block->indexInParent = currentBlock->currentIndex++;
+		block->serial = globalSerial++;
 	}
 	else {
-		block->indexInParent = 0;
+		block->serial = 0;
 	}
 	block->parentBlock = currentBlock;
 }
@@ -109,7 +109,7 @@ ExprIdentifier *makeIdentifier(CodeLocation &start, EndLocation &end, Declaratio
 	identifier->name = declaration->name;
 	identifier->resolveFrom = currentBlock;
 	identifier->enclosingScope = currentBlock;
-	identifier->indexInBlock = 0;
+	identifier->serial = 0;
 	identifier->structAccess = nullptr;
 
 	return identifier;
@@ -146,7 +146,7 @@ Importer *createImporterForUsing(Declaration *oldDeclaration, Block *block) {
 	using_->end = oldDeclaration->end;
 	using_->resolveFrom = block;
 	using_->enclosingScope = block;
-	using_->indexInBlock = block->currentIndex;
+	using_->serial = globalSerial;
 	using_->name = oldDeclaration->name;
 	using_->declaration = oldDeclaration;
 	using_->structAccess = nullptr;
@@ -776,7 +776,7 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 			identifier->structAccess = nullptr;
 
 			if (currentBlock) {
-				identifier->indexInBlock = currentBlock->currentIndex;
+				identifier->serial = globalSerial;
 			}
 
 			continue_->label = identifier;
@@ -1807,6 +1807,37 @@ bool parseArguments(LexerFile *lexer, Arguments *args, const char *message) {
 	return true;
 }
 
+bool checkTopLevelStaticIf(ExprIf *staticIf, const char *message);
+
+bool checkTopLevelStaticIfBlock(Expr *expr, const char *message) {
+	if (!expr) return true;
+
+	assert(expr->flavor == ExprFlavor::BLOCK);
+
+	for (auto statement : static_cast<ExprBlock *>(expr)->exprs) {
+		if (statement->flavor != ExprFlavor::STATIC_IF && !(statement->flags & EXPR_ASSIGN_IS_IMPLICIT_INITIALIZER)) {
+			reportError(statement, "Error: #if can only contain declarations %s", message);
+			return false;
+		}
+		else if (statement->flavor == ExprFlavor::STATIC_IF) {
+			if (!checkTopLevelStaticIf(static_cast<ExprIf *>(statement), message))
+				return false;
+		}
+	}
+
+	return true;
+}
+
+bool checkTopLevelStaticIf(ExprIf *staticIf, const char *message) {
+	if (!checkTopLevelStaticIfBlock(staticIf->ifBody, message))
+		return false;
+
+	if (!checkTopLevelStaticIfBlock(staticIf->elseBody, message))
+		return false;
+
+	return true;
+}
+
 Expr *parsePrimaryExpr(LexerFile *lexer) {
 	CodeLocation start = lexer->token.start;
 	EndLocation end = lexer->token.end;
@@ -1838,7 +1869,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		identifier->structAccess = nullptr;
 		identifier->type = &TYPE_UNARY_DOT;
 
-		identifier->indexInBlock = 0;
+		identifier->serial = 0;
 
 		expr = identifier;
 
@@ -1856,10 +1887,10 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		identifier->structAccess = nullptr;
 
 		if (currentBlock) {
-			identifier->indexInBlock = currentBlock->currentIndex;
+			identifier->serial = globalSerial;
 		}
 		else {
-			identifier->indexInBlock = 0;
+			identifier->serial = 0;
 		}
 
 		lexer->advance();
@@ -2048,6 +2079,16 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 			}
 			else if (expectAndConsume(lexer, ';')) {
 
+			}
+			else if (lexer->token.type == TokenT::STATIC_IF) {
+				auto staticIf = parseStaticIf(lexer);
+
+				if (!staticIf)
+					break;
+
+				if (!checkTopLevelStaticIf(staticIf, tokenType == TokenT::UNION ? "in a union" : "in a struct")) {
+					return nullptr;
+				}
 			}
 			else if (expectAndConsume(lexer, '}')) {
 				break;
@@ -2346,7 +2387,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 			access->declaration = nullptr;
 			access->resolveFrom = nullptr;
 			access->enclosingScope = nullptr;
-			access->indexInBlock = 0;
+			access->serial = 0;
 
 			if (lexer->token.type != TokenT::IDENTIFIER) {
 				reportExpectedError(&lexer->token, "Error: Expected member name on right of struct access");
@@ -2832,31 +2873,6 @@ Declaration *parseDeclaration(LexerFile *lexer) {
 	return declaration;
 }
 
-bool checkTopLevelStaticIfBlock(Expr *expr) {
-	if (!expr) return true;
-	
-	assert(expr->flavor == ExprFlavor::BLOCK);
-
-	for (auto statement : static_cast<ExprBlock *>(expr)->exprs) {
-		if (statement->flavor != ExprFlavor::STATIC_IF && !(statement->flags & EXPR_ASSIGN_IS_IMPLICIT_INITIALIZER)) {
-			reportError(statement, "Error: #if can only contain declarations at the top level");
-			return false;
-		}
-	}
-
-	return true;
-}
-
-bool checkTopLevelStaticIf(ExprIf *staticIf) {
-	if (!checkTopLevelStaticIfBlock(staticIf->ifBody))
-		return false;
-
-	if (!checkTopLevelStaticIfBlock(staticIf->elseBody))
-		return false;
-	
-	return true;
-}
-
 void parseFile(FileInfo *file) {
 	PROFILE_FUNC();
 
@@ -2875,7 +2891,7 @@ void parseFile(FileInfo *file) {
 			}
 
 			declaration->enclosingScope = nullptr;
-			declaration->indexInBlock = 0;
+			declaration->serial = 0;
 
 			assert(currentBlock == nullptr);
 
@@ -2944,7 +2960,7 @@ void parseFile(FileInfo *file) {
 			if (!staticIf)
 				break;
 
-			if (!checkTopLevelStaticIf(staticIf)) {
+			if (!checkTopLevelStaticIf(staticIf, "at the top level")) {
 				break;
 			}
 

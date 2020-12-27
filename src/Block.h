@@ -66,7 +66,7 @@ struct Declaration {
 	struct Expr *initialValue;
 
 	struct Block *enclosingScope;
-	u32 indexInBlock;
+	u32 serial;
 
 	struct DeclarationJob *inferJob = nullptr;
 
@@ -98,7 +98,7 @@ struct Declaration {
 #define BLOCK_HASHTABLE_MIN_COUNT 32
 
 struct Importer {
-	u32 indexInBlock;
+	u32 serial;
 	u8 flags = 0;
 
 	Block *enclosingScope = nullptr;
@@ -113,10 +113,9 @@ struct Block {
 
 	struct BlockEntry *table = nullptr;
 	u32 tableCapacity;
-	u32 currentIndex = 0;
+	u32 serial;
 
 	Block *parentBlock = nullptr;
-	u32 indexInParent;
 	u8 flags = 0;
 
 	Array<struct SubJob *> sleepingOnMe;
@@ -203,10 +202,12 @@ inline bool checkForRedeclaration(Block *block, Declaration *declaration, struct
 void addToTable(Block *block, Declaration *declaration);
 void initTable(Block *block);
 
-inline void addImporterToBlock(Block *block, Importer *importer, s64 index = -1) {
+inline u32 globalSerial = 0;
 
+inline void addImporterToBlock(Block *block, Importer *importer, s64 serial = -1) {
+	assert(!(block->flags & (BLOCK_IS_ARGUMENTS | BLOCK_IS_RETURNS)));
 
-	importer->indexInBlock = index == -1 ? block->currentIndex++ : static_cast<u32>(index);
+	importer->serial = serial == -1 ? globalSerial++ : static_cast<u32>(serial);
 	importer->enclosingScope = block;
 
 	block->importers.add(importer);
@@ -224,8 +225,19 @@ inline void putDeclarationInBlock(Block *block, Declaration *declaration) {
 	}
 }
 
-inline void addDeclarationToBlockUnchecked(Block *block, Declaration *declaration, s64 index = -1) {
-	declaration->indexInBlock = index == -1 ? block->currentIndex++ : static_cast<u32>(index);
+inline void addDeclarationToBlockUnchecked(Block *block, Declaration *declaration, s64 serial = -1) {
+	if (serial == -1) {
+		if (block->flags & BLOCK_IS_ARGUMENTS | BLOCK_IS_RETURNS) {
+			declaration->serial = block->declarations.count;
+		}
+		else {
+			declaration->serial = globalSerial++;
+		}
+	}
+	else {
+		declaration->serial = serial;
+	}
+
 	declaration->enclosingScope = block;
 	
 	putDeclarationInBlock(block, declaration);
@@ -241,14 +253,11 @@ inline bool addDeclarationToBlock(Block *block, Declaration *declaration, s64 in
 	return true;
 }
 
-inline Declaration *findDeclaration(Block *block, String name, bool *yield, u64 usingYieldLimit = -1) {
+inline Declaration *findDeclaration(Block *block, String name, bool *yield, u64 usingYieldLimit = UINT64_MAX) {
 	PROFILE_FUNC();
-	if (usingYieldLimit == -1) {
-		usingYieldLimit = block->declarations.count;
-	}
 
 	for (auto importer : block->importers) {
-		if (importer->indexInBlock < usingYieldLimit && !(importer->flags & IMPORTER_IS_COMPLETE)) {
+		if (importer->serial < usingYieldLimit && !(importer->flags & IMPORTER_IS_COMPLETE)) {
 			*yield = true;
 			return nullptr;
 		}

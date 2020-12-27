@@ -331,7 +331,7 @@ struct ExprIdentifier : Expr {
 	Block *resolveFrom;
 	Block *enclosingScope;
 	Expr *structAccess;
-	u64 indexInBlock;
+	u64 serial;
 
 	Declaration *declaration;
 };

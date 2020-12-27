@@ -18,6 +18,8 @@ Give compile time execution new abilitiess
  - Receive information about program
  - Report errors and warnings
 
+Allow multiple arguments to be varargs
+Allow c varargs for external (and maybe c_call) functions
 
 Move sleepingOnMe onto SubJob
 
@@ -85,6 +87,8 @@ Should this be legal
 				return false
 		}
 	}
+	
+	- If this is legal than a program would be in an undefined state if an enum had an out of range value
 
 Function inlining
 
@@ -101,8 +105,6 @@ Make comma assignments work for things other than function calls
 string representation
  - is it worth having implict conversion to utf16 C-strings (windows wide strings) and utf32 C-strings  
  - utf16 and utf32 string types?
- 
-error if non-void functions don't have all control paths return
 
 function overloading
 
@@ -124,10 +126,6 @@ Memory usage
  - Where could memory be freed simply
  - Minimise wasted allocations if inference yields (i.e. function/return argument sorting)
  
- 
-
-Allow #if to insert members into structs
- - Best way to do this is probably to have #if move its declarations into the outer scope and replace them with imports instead of it placing imports in the outer scope
 Allow #if to conditionally execute #load
  
 debug info
