@@ -47,7 +47,7 @@ static llvm::Type *createLlvmType(llvm::LLVMContext &context, Type *type) {
 	else if (type == &TYPE_F64) {
 		return llvm::Type::getDoubleTy(context);
 	}
-	else if (type == TYPE_VOID_POINTER || type == &TYPE_TYPE || type == &TYPE_STRING) {
+	else if (type == TYPE_VOID_POINTER || type == &TYPE_TYPE) {
 		return llvm::Type::getInt8PtrTy(context);
 	}
 	else if (type == &TYPE_STRING) {
@@ -123,7 +123,7 @@ static llvm::Type *createLlvmType(llvm::LLVMContext &context, Type *type) {
 
 			type->llvmType = llvmType; // Put the empty struct on the type so that if we have a struct that points to itself we don't infinitely recurse
 
-			u64 count = 0;
+			u32 count = 0;
 			for (auto member : struct_->members.declarations) {
 				if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING))
 					continue;
@@ -361,7 +361,7 @@ static llvm::Constant *createConstant(State *state, Expr *expr) {
 
 			llvm::Constant **values = new llvm::Constant * [memberCount];
 
-			u64 memberIndex = 0;
+			u32 memberIndex = 0;
 
 
 			for (auto decl : struct_->members.declarations) {
@@ -436,7 +436,7 @@ static Array<Expr *> deferStack;
 static Block *currentBlock;
 
 static Array<Loop> loopStack;
-static u64 loopCount;
+static u32 loopCount;
 
 static llvm::Value *allocateType(State *state, Type *type, String name = "") {
 	auto old = state->builder.GetInsertBlock();
@@ -552,7 +552,7 @@ static void generateIncrement(State *state, ExprLoop *loop) {
 
 
 static void exitBlock(State *state, Block *block, bool isBreak) {
-	for (s64 i = deferStack.count - 1; i >= 0; --i) {
+	for (u32 i = deferStack.count; i-- != 0;) {
 		auto expr = deferStack[i];
 
 		if (expr->flavor == ExprFlavor::FOR) {
@@ -804,7 +804,7 @@ llvm::Value *loadAddressOf(State *state, Expr *expr) {
 			else {
 				auto struct_ = static_cast<TypeStruct *>(type);
 
-				u64 memberIndex = 0;
+				u32 memberIndex = 0;
 
 				// @Speed currently we do a linear search through struct members to find 
 				for (auto member : struct_->members.declarations) {
@@ -830,7 +830,7 @@ llvm::Value *loadAddressOf(State *state, Expr *expr) {
 		}
 	}
 	else {
-		assert(expr->type->flavor == TypeFlavor::ARRAY);
+		assert(expr->type->flavor == TypeFlavor::ARRAY || expr->type->flavor == TypeFlavor::STRING);
 
 		return generateLlvmIr(state, expr);
 	}
@@ -873,7 +873,7 @@ static llvm::Value *generateLlvmCall(State *state, ExprFunctionCall *call, ExprC
 		else if (argument->flavor == TypeFlavor::STRUCT || argument->flavor == TypeFlavor::ARRAY) {
 			arguments[i + paramOffset] = state->builder.CreateAlignedLoad(state->builder.CreateBitCast(generateLlvmIr(state, call->arguments.values[i]),
 				llvm::PointerType::getUnqual(llvm::IntegerType::get(state->context, argument->size * 8))), 
-				function->argumentTypes[i]->alignment);
+				llvm::MaybeAlign(function->argumentTypes[i]->alignment));
 		}
 		else {
 			arguments[i + paramOffset] = generateLlvmIr(state, call->arguments.values[i]);
@@ -884,7 +884,8 @@ static llvm::Value *generateLlvmCall(State *state, ExprFunctionCall *call, ExprC
 		arguments[0] = allocateType(state, return_);
 	}
 
-	auto ir = state->builder.CreateCall(static_cast<llvm::FunctionType *>(functionIr->getType()), functionIr, llvm::ArrayRef(arguments, count));
+	auto ir = state->builder.CreateCall(static_cast<llvm::FunctionType *>(functionIr->getType()->getPointerElementType()), 
+		functionIr, llvm::ArrayRef(arguments, count));
 	ir->setCallingConv(llvm::CallingConv::Win64);
 
 	if (paramOffset) {
@@ -966,7 +967,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 			else if (right->type == TYPE_ANY) {
 				auto any = generateLlvmIr(state, right);
 
-				auto pointer = state->builder.CreatePointerCast(state->builder.CreateStructGEP(any, 0), llvm::PointerType::getUnqual(getLlvmType(state->context, castTo)));
+				auto pointer = state->builder.CreatePointerCast(state->builder.CreateLoad(state->builder.CreateStructGEP(any, 0)), llvm::PointerType::getUnqual(getLlvmType(state->context, castTo)));
 
 				return storeIfPointerType(state, castTo, state->builder.CreateLoad(pointer));
 			}
@@ -1055,7 +1056,10 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 			case TypeFlavor::ARRAY: {
 				auto value = generateLlvmIr(state, right);
 
-				if (right->type->flags & TYPE_ARRAY_IS_DYNAMIC) {
+				if (right->type->flavor == TypeFlavor::STRING) {
+					return value;
+				}
+				else if (right->type->flags & TYPE_ARRAY_IS_DYNAMIC) {
 					assert(!(castTo->flags & TYPE_ARRAY_IS_FIXED));
 
 					auto load = state->builder.CreateLoad(state->builder.CreateBitCast(value, getLlvmType(state->context, castTo)));
@@ -1486,7 +1490,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 		auto break_ = static_cast<ExprBreakOrContinue *>(expr);
 
 
-		for (u64 i = loopCount; i-- != 0;) {
+		for (u32 i = loopCount; i-- != 0;) {
 
 			if (loopStack[i].loop == break_->refersTo) {
 				exitBlock(state, &loopStack[i].loop->iteratorBlock, true);
@@ -1502,10 +1506,8 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 	case ExprFlavor::CONTINUE: {
 		auto continue_ = static_cast<ExprBreakOrContinue *>(expr);
 
-		u64 begin;
 
-
-		for (u64 i = loopCount; i-- != 0;) {
+		for (u32 i = loopCount; i-- != 0;) {
 			if (loopStack[i].loop == continue_->refersTo) {
 				exitBlock(state, &loopStack[i].loop->iteratorBlock, false);
 				
@@ -1553,8 +1555,6 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 			it_index
 		);
 
-		// @Incomplete generate call to __remove
-
 		return nullptr;
 	}
 	case ExprFlavor::INT_LITERAL: {
@@ -1584,7 +1584,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 			loop->llvmPointer = it->llvmStorage;
 		}
 
-		if (loop->forBegin->type->flavor == TypeFlavor::ARRAY) {
+		if (loop->forBegin->type->flavor == TypeFlavor::ARRAY || loop->forBegin->type->flavor == TypeFlavor::STRING) {
 			auto begin = loop->forBegin;
 
 			loop->llvmArrayPointer = loadAddressOf(state, begin);
@@ -1711,7 +1711,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 			case_.llvmCaseBlock = llvm::BasicBlock::Create(state->context, "switch.case", state->function);
 		}
 
-		for (u64 i = 0; i < switch_->cases.count; i++) {
+		for (u32 i = 0; i < switch_->cases.count; i++) {
 			auto &case_ = switch_->cases[i];
 
 
@@ -1828,9 +1828,9 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 			auto result = generateLlvmIr(state, return_->returns.values[0]);
 
 			auto retType = return_->returns.values[0]->type;
-			u64 paramOffset = isStandardSize(retType->size) ? 0 : 1;
+			u32 paramOffset = isStandardSize(retType->size) ? 0 : 1;
 
-			for (u64 i = 1; i < return_->returns.count; i++) {
+			for (u32 i = 1; i < return_->returns.count; i++) {
 				auto store = generateIrAndLoadIfStoredByPointer(state, return_->returns.values[i]);
 
 				state->builder.CreateStore(store, state->function->getArg(return_->returnsFrom->arguments.declarations.count + paramOffset + i - 1));
@@ -1850,7 +1850,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 						result,
 						llvm::PointerType::getUnqual(llvm::IntegerType::get(state->context, retType->size * 8))
 					),
-					retType->alignment
+					llvm::MaybeAlign(retType->alignment)
 				));
 			}
 			else {
@@ -1984,7 +1984,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 			}
 		}
 
-		return nullptr;
+		return storage;
 	}
 	case ExprFlavor::STATIC_IF: {
 		return nullptr; // In the event that the static if returns false and there is no else block, we just leave the static if expression in the tree, 
@@ -2078,9 +2078,9 @@ void runLlvm() {
 					state.function = llvmFunction;
 					state.entryBlock = entry;
 
-					u64 paramOffset = isStandardSize(static_cast<ExprLiteral *>(function->returns.declarations[0]->type)->typeValue->size) ? 0 : 1;
+					u32 paramOffset = isStandardSize(static_cast<ExprLiteral *>(function->returns.declarations[0]->type)->typeValue->size) ? 0 : 1;
 
-					for (u64 i = 0; i < function->arguments.declarations.count; i++) {
+					for (u32 i = 0; i < function->arguments.declarations.count; i++) {
 						auto argument = function->arguments.declarations[i];
 						auto argType = static_cast<ExprLiteral *>(function->arguments.declarations[i]->type)->typeValue;
 
@@ -2112,7 +2112,6 @@ void runLlvm() {
 							builder.CreateRetVoid();
 						}
 						else {
-							// @Incomplete: Actually detect the case where not all control paths return and issue an error
 							builder.CreateRet(llvm::Constant::getNullValue(functionType->getReturnType()));
 						}
 					}
@@ -2294,7 +2293,10 @@ void runLlvm() {
 							llvm::ConstantExpr::getBitCast(returnsVariable, typeInfoPtrPtr),
 							llvm::ConstantInt::get(int64, function->returnCount));
 
-						variable->setInitializer(llvm::ConstantStruct::get(GET_STRUCT(TYPE_TYPE_INFO_FUNCTION), base, argumentsArray, returnsArray));
+						auto cCall = llvm::ConstantInt::get(llvm::IntegerType::getInt1Ty(context), function->flags & TYPE_FUNCTION_IS_C_CALL ? 1 : 0);
+						auto isVarargs = llvm::ConstantInt::get(llvm::IntegerType::getInt1Ty(context), function->isVarargs ? 1 : 0);
+
+						variable->setInitializer(llvm::ConstantStruct::get(GET_STRUCT(TYPE_TYPE_INFO_FUNCTION), base, argumentsArray, returnsArray, cCall, isVarargs));
 
 						break;
 					}
@@ -2394,7 +2396,7 @@ void runLlvm() {
 						auto valuesVariable = createUnnnamedConstant(&state, llvm::ArrayType::get(enumValue, count));
 						auto values = new llvm::Constant * [count];
 
-						for (u64 i = 0; i < count; i++) {
+						for (u32 i = 0; i < count; i++) {
 							auto value = enum_->values->declarations[i];
 
 							auto valueName = createLlvmString(&state, value->name);
@@ -2441,7 +2443,6 @@ void runLlvm() {
 
 			llvm::raw_fd_ostream irOut("out2.ir", err);
 
-			llvmModule.print(irOut, nullptr);
 
 			llvm::raw_fd_ostream output("out.obj", err);
 
@@ -2506,6 +2507,8 @@ void runLlvm() {
 			fpm.doFinalization();
 
 			pass.run(llvmModule);
+
+			llvmModule.print(irOut, nullptr);
 
 			output.flush();
 		}

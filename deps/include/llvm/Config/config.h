@@ -47,7 +47,7 @@
 #define HAVE_DECL_STRERROR_S 1
 
 /* Define to 1 if you have the DIA SDK installed, and to 0 if you don't. */
-#define LLVM_ENABLE_DIA_SDK 1
+#define LLVM_ENABLE_DIA_SDK 0
 
 /* Define to 1 if you have the <dlfcn.h> header file. */
 /* #undef HAVE_DLFCN_H */

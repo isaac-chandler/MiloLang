@@ -83,6 +83,8 @@ struct Declaration {
 	};
 
 	void *runtimeValue = nullptr;
+
+	Declaration() : llvmStorage(nullptr) {}
 };
 
 
@@ -235,7 +237,7 @@ inline void addDeclarationToBlockUnchecked(Block *block, Declaration *declaratio
 		}
 	}
 	else {
-		declaration->serial = serial;
+		declaration->serial = static_cast<u32>(serial);
 	}
 
 	declaration->enclosingScope = block;
