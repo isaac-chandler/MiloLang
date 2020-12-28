@@ -6,6 +6,9 @@ enums
  - largest_value
  - smallest_value 
  
+
+Detect if the crt is being linked and do not link llvm_support.lib (llvm_support provides crt functions that llvm expects to exist i.e. memset, __chkstk)
+
 array literals
 
 struct literals
@@ -125,19 +128,22 @@ performance
 Memory usage
  - Where could memory be freed simply
  - Minimise wasted allocations if inference yields (i.e. function/return argument sorting)
- 
+
 Allow #if to conditionally execute #load
  
 debug info
  - emit S_UDT for constant type declarations
  - emit constants
  - deal with the local function nightmare
- 
+ - emit debug info for llvm
+
+LLVM
+ - optimizations
+ - Allow control of LLVM options
+
+
 improve external function interface
  - parse C header files so we don't need to manually declare external functions
- 
-llvm
-
  
 predefined constant variables
  - BUILD_WINDOWS, BUILD_LINUX, etc...

@@ -729,7 +729,7 @@ llvm::Value *loadAddressOf(State *state, Expr *expr) {
 
 
 			return state->builder.CreateGEP(
-				generateLlvmIr(state, binary->left),
+				loadAddressOf(state, binary->left),
 				llvm::ArrayRef( values, 2));
 		}
 		else {
@@ -1996,6 +1996,10 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 	}
 }
 
+static void addDiscriminatorsPass(const llvm::PassManagerBuilder &Builder, llvm::legacy::PassManagerBase &PM) {
+	PM.add(llvm::createAddDiscriminatorsPass());
+}
+
 void runLlvm() {
 
 	{
@@ -2024,7 +2028,6 @@ void runLlvm() {
 	llvm::InitializeNativeTarget();
 	llvm::InitializeNativeTargetAsmPrinter();
 	llvm::InitializeNativeTargetAsmParser();
-
 
 	auto targetTriple = llvm::sys::getDefaultTargetTriple();
 
@@ -2446,19 +2449,28 @@ void runLlvm() {
 
 			llvm::raw_fd_ostream output("out.obj", err);
 
-
 			// Based on zig llvm pass manager https://github.com/ziglang/zig/blob/master/src/zig_llvm.cpp
-			targetMachine->setO0WantsFastISel(true);
+			bool optimize = true;
+			
+			if (optimize) {
+				targetMachine->setOptLevel(llvm::CodeGenOpt::Aggressive);
+			}
+			else {
+				targetMachine->setOptLevel(llvm::CodeGenOpt::None);
+				targetMachine->setO0WantsFastISel(true);
+			}
 
 			llvm::PassManagerBuilder *pmbuilder = new llvm::PassManagerBuilder;
 			pmbuilder->OptLevel = targetMachine->getOptLevel();
 			pmbuilder->SizeLevel = 0;
-			pmbuilder->DisableTailCalls = true;
-			pmbuilder->DisableUnrollLoops = true;
-			pmbuilder->SLPVectorize = false;
-			pmbuilder->LoopVectorize = false;
-			pmbuilder->RerollLoops = false;
-			pmbuilder->DisableGVNLoadPRE = true;
+			pmbuilder->DisableTailCalls = !optimize;
+			pmbuilder->DisableUnrollLoops = !optimize;
+			pmbuilder->SLPVectorize = optimize;
+			pmbuilder->LoopVectorize = optimize;
+			pmbuilder->LoopsInterleaved = !optimize;
+			pmbuilder->RerollLoops = optimize;
+			pmbuilder->DisableGVNLoadPRE = !optimize;
+			pmbuilder->MergeFunctions = optimize;
 			pmbuilder->PrepareForLTO = false;
 			pmbuilder->PrepareForLTO = false;
 			pmbuilder->PerformThinLTO = false;
@@ -2474,7 +2486,15 @@ void runLlvm() {
 
 			pmbuilder->LibraryInfo = &tlii;
 
-			pmbuilder->Inliner = llvm::createAlwaysInlinerLegacyPass(false);
+			if (optimize) {
+				pmbuilder->Inliner = llvm::createAlwaysInlinerLegacyPass(false);
+			}
+			else {
+				targetMachine->adjustPassManager(*pmbuilder);
+
+				pmbuilder->addExtension(llvm::PassManagerBuilder::EP_EarlyAsPossible, addDiscriminatorsPass);
+				pmbuilder->Inliner = llvm::createFunctionInliningPass(llvm::CodeGenOpt::Aggressive, 0, false);
+			}
 
 			llvm::legacy::FunctionPassManager fpm(&llvmModule);
 			fpm.add(new llvm::TargetLibraryInfoWrapperPass(tlii));
@@ -2483,7 +2503,7 @@ void runLlvm() {
 #if BUILD_DEBUG
 			fpm.add(llvm::createVerifierPass());
 #endif
-
+			
 			pmbuilder->populateFunctionPassManager(fpm);
 
 			llvm::legacy::PassManager pass;

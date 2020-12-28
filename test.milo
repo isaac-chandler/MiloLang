@@ -179,11 +179,6 @@ triangles_intersect :: (a: [3]Vector2, a_offset: Vector2, b: [3]Vector2, b_offse
 	v0 := sub_vector2(a[2], a[0])
 	v1 := sub_vector2(a[1], a[0])
 	
-	// print(a[0])
-	// print(a[1])
-	// print(a[2])
-	// print("\n")
-	
 	dot00 := dot_vector2(v0, v0)
 	dot01 := dot_vector2(v0, v1)
 	dot11 := dot_vector2(v1, v1)
