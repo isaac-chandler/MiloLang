@@ -13,21 +13,24 @@ inline u64 totalSizes;
 enum class InferJobType : u8 {
 	GLOBAL_DECLARATION,
 	IMPORTER, 
-	FUNCTION_IR
+	FUNCTION_IR, 
+	LOAD_COMPLETE
 };
 
 struct InferQueueJob {
 	InferJobType type;
 
 	union {
-		ExprFunction *function;
 		Declaration *declaration;
 		Importer *importer;
+		ExprFunction *function;
+		s64 fileUid;
 	};
 
-	InferQueueJob(Importer *importer) : type(InferJobType::IMPORTER), importer(importer) {}
 	InferQueueJob(Declaration *declaration) : type(InferJobType::GLOBAL_DECLARATION), declaration(declaration) {}
+	InferQueueJob(Importer *importer) : type(InferJobType::IMPORTER), importer(importer) {}
 	InferQueueJob(ExprFunction *function) : type(InferJobType::FUNCTION_IR), function(function) {}
+	explicit InferQueueJob(s64 fileUid) : type(InferJobType::LOAD_COMPLETE), fileUid(fileUid) {}
 };
 
 inline MPMCWorkQueue<InferQueueJob> inferQueue;

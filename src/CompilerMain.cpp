@@ -22,25 +22,25 @@ std::mutex filesMutex;
 
 static ArraySet<FileInfo> files;
 
-bool loadNewFile(String file) {
+FileInfo *loadNewFile(String file) {
 	// Open the file here and keep it open until we parse it to avoid race condition
 	HANDLE handle = createFileUtf8(file, GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN); // @Platform
 
 	if (handle == INVALID_HANDLE_VALUE) {
 		reportError("Error: failed to open file: %.*s", STRING_PRINTF(file));
-		return false;
+		return nullptr;
 	}
 
 	BY_HANDLE_FILE_INFORMATION fileInfo;
 
 	if (!GetFileInformationByHandle(handle, &fileInfo)) {
 		reportError("Error: failed to read file information for file: %.*s", STRING_PRINTF(file));
-		return false;
+		return nullptr;
 	}
 
 	if (fileInfo.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) { // Are there any other attributes we should check for?
 		reportError("Error: %.*s is a directory, you can only compile files", STRING_PRINTF(file));
-		return false;
+		return nullptr;
 	}
 
 	FileInfo info;
@@ -56,10 +56,11 @@ bool loadNewFile(String file) {
 
 		if (!files.add(info)) {
 			CloseHandle(handle);
+			return nullptr;
 		}
 	}
 
-	return true;
+	return &files.array[files.array.count - 1];
 }
 
 FileInfo *getFileInfoByUid(u32 fileUid) {
@@ -390,22 +391,47 @@ int main(int argc, char *argv[]) {
 		SetThreadDescription(backend.native_handle(), useLlvm ? L"LLVM" : L"Coff Writer");
 
 		irGenerator.detach();
-		{
-			u32 i;
-			for (i = 0; i < files.size(); i++) {
-				parseFile(getFileInfoByUid(static_cast<u32>(i)));
+
+		parseFile(getFileInfoByUid(0)); // @Robustness Hardcoded parsing of runtime.milo and file loaded from command line
+		if (hadError) {
+			goto error;
+		}
+		inferQueue.add(InferQueueJob((s64) 0));
+		parseFile(getFileInfoByUid(1)); // @Robustness Hardcoded parsing of runtime.milo and file loaded from command line
+		if (hadError) {
+			goto error;
+		}
+		inferQueue.add(InferQueueJob((s64) 1));
+
+		while (true) {
+			auto load = filesToLoadQueue.take();
+
+			if (load.length == 0)
+				break;
+
+			auto file = loadNewFile(load);
+
+			if (hadError) {
+				break;
+			}
+
+			if (!file) {
+				inferQueue.add(InferQueueJob(-1));
+			}
+			else {
+				parseFile(file);
 
 				if (hadError) {
 					break;
 				}
-			}
 
-			inferQueue.add(static_cast<Declaration *>(nullptr));
-
-			for (++i; i < files.size(); i++) { // In the event we had an error so stopped parsing files mid way through
-				CloseHandle(files[i].handle);
+				inferQueue.add(InferQueueJob(file->fileUid));
 			}
 		}
+
+		error:
+		inferQueue.add(static_cast<Declaration *>(nullptr));
+
 
 		infer.join();
 		backend.join();
@@ -580,7 +606,10 @@ int main(int argc, char *argv[]) {
 
 				*libOffset = 0;
 			}
-			_snwprintf(buffer, 1024, L"\"%s\" out.obj llvm_support.obj __milo_chkstk.obj /debug /entry:main%S \"/libpath:%s\" \"/libpath:%s\" /incremental:no /nologo /natvis:milo.natvis", linkerPath, libBuffer, windowsLibPath, crtLibPath);
+			
+
+			_snwprintf(buffer, 1024, L"\"%s\" out.obj%s __milo_chkstk.obj /debug /entry:main%S \"/libpath:%s\" \"/libpath:%s\" /incremental:no /nologo /natvis:milo.natvis", 
+				linkerPath, useLlvm ? " llvm_support.lib" : "", libBuffer, windowsLibPath, crtLibPath);
 		}
 
 

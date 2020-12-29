@@ -3,6 +3,7 @@
 #include "String.h"
 #include "Basic.h"
 #include "ArraySet.h"
+#include "WorkQueue.h"
 
 inline volatile bool hadError = false;
 inline std::thread::id inferThread;
@@ -26,7 +27,8 @@ struct FileInfo { // @Platform
 	}
 };
 
-bool loadNewFile(String file);
+inline MPMCWorkQueue<String> filesToLoadQueue;
+
 FileInfo *getFileInfoByUid(u32 fileUid);
 
 Array<FileInfo> getAllFilesNoLock();

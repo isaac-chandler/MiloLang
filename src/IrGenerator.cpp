@@ -2276,6 +2276,5 @@ void runIrGenerator() {
 			break;
 	}
 
-	inferQueue.add(static_cast<Declaration *>(nullptr));
 	coffWriterQueue.add({ nullptr, CoffJobFlavor::FUNCTION });
 }

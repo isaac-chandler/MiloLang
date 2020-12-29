@@ -86,7 +86,7 @@ static bool expectAndConsume(LexerFile *lexer, char c) {
 
 Declaration *parseDeclaration(LexerFile *lexer);
 Expr *parseExpr(LexerFile *lexer);
-ExprBlock *parseBlock(LexerFile *lexer, ExprBlock *block = nullptr);
+ExprBlock *parseBlock(LexerFile *lexer, bool allowLoads, ExprBlock *block = nullptr);
 
 ExprLiteral *parserMakeTypeLiteral(CodeLocation &start, EndLocation &end, Type *type) {
 	ExprLiteral *literal = PARSER_NEW(ExprLiteral);
@@ -161,7 +161,7 @@ bool parseArguments(LexerFile *lexer, Arguments *args, const char *message);
 
 ExprBlock *parseCase(LexerFile *lexer);
 
-ExprIf *parseStaticIf(LexerFile *lexer) {
+ExprIf *parseStaticIf(LexerFile *lexer, bool allowLoads) {
 	auto staticIf = PARSER_NEW(ExprIf);
 	staticIf->flavor = ExprFlavor::STATIC_IF;
 	staticIf->start = lexer->token.start;
@@ -179,7 +179,7 @@ ExprIf *parseStaticIf(LexerFile *lexer) {
 		staticIf->ifBody = nullptr;
 	}
 	else {
-		staticIf->ifBody = parseBlock(lexer);
+		staticIf->ifBody = parseBlock(lexer, allowLoads);
 
 		if (!staticIf->ifBody)
 			return nullptr;
@@ -189,7 +189,7 @@ ExprIf *parseStaticIf(LexerFile *lexer) {
 
 	if (expectAndConsume(lexer, TokenT::ELSE)) {
 		if (!expectAndConsume(lexer, ';')) {
-			staticIf->elseBody = parseBlock(lexer);
+			staticIf->elseBody = parseBlock(lexer, allowLoads);
 
 			if (!staticIf->elseBody)
 				return nullptr;
@@ -357,6 +357,30 @@ Expr *parseExprStatemenet(LexerFile *lexer, bool allowDeclarations) {
 	}
 }
 
+Importer *parseLoad(LexerFile *lexer) {
+	auto load = PARSER_NEW(ExprLoad);
+	load->flavor = ExprFlavor::LOAD;
+	load->start = lexer->token.start;
+
+	lexer->advance();
+
+	load->file = parseExpr(lexer);
+	if (!load->file)
+		return nullptr;
+
+	load->end = lexer->previousTokenEnd;
+
+	auto importer = PARSER_NEW(Importer);
+
+	importer->import = load;
+
+	if (currentBlock) {
+		addImporterToBlock(currentBlock, importer);
+	}
+
+	return importer;
+}
+
 Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 	if (lexer->token.type == TokenT::FOR) {
 		ExprLoop *loop = PARSER_NEW(ExprLoop);
@@ -502,7 +526,7 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 		return loop;
 	}
 	else if (lexer->token.type == TOKEN('{')) {
-		return parseBlock(lexer);
+		return parseBlock(lexer, allowDeclarations);
 	}
 	else if (lexer->token.type == TokenT::WHILE) {
 		ExprLoop *loop = PARSER_NEW(ExprLoop);
@@ -749,9 +773,6 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 			return ifElse;
 		}
 	}
-	else if (lexer->token.type == TokenT::STATIC_IF) {
-		return parseStaticIf(lexer);
-	}
 	else if (lexer->token.type == TokenT::CONTINUE || lexer->token.type == TokenT::BREAK || lexer->token.type == TokenT::REMOVE) {
 		ExprBreakOrContinue *continue_ = PARSER_NEW(ExprBreakOrContinue);
 		continue_->flavor =
@@ -964,7 +985,7 @@ ExprBlock *parseCase(LexerFile *lexer) {
 	return block;
 }
 
-ExprBlock *parseBlock(LexerFile *lexer, ExprBlock *block) {
+ExprBlock *parseBlock(LexerFile *lexer, bool allowLoads, ExprBlock *block) {
 	if (!block) { // A function may preallocate the block to fill in the 'using's
 		block = PARSER_NEW(ExprBlock);
 	}
@@ -1064,6 +1085,28 @@ ExprBlock *parseBlock(LexerFile *lexer, ExprBlock *block) {
 				importer->import = using_;
 				
 				addImporterToBlock(currentBlock, importer);
+			}
+
+			continue;
+		}
+		else if (lexer->token.type == TokenT::STATIC_IF) {
+			auto staticIf = parseStaticIf(lexer, allowLoads);
+
+			if (!staticIf)
+				return nullptr;
+
+			block->exprs.add(staticIf);
+
+			continue;
+		}
+		else if (lexer->token.type == TokenT::LOAD) {
+			if (allowLoads) {
+				parseLoad(lexer);
+			}
+			else {
+				reportError(&lexer->token, "Error: Can only have #load at the top level");
+
+				return nullptr;
 			}
 
 			continue;
@@ -1311,7 +1354,7 @@ bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *u
 		function->end = lexer->previousTokenEnd;
 		pushBlock(&function->arguments);
 
-		function->body = parseBlock(lexer, usingBlock);
+		function->body = parseBlock(lexer, false, usingBlock);
 		if (!function->body) {
 			return false;
 		}
@@ -2081,7 +2124,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 			}
 			else if (lexer->token.type == TokenT::STATIC_IF) {
-				auto staticIf = parseStaticIf(lexer);
+				auto staticIf = parseStaticIf(lexer, false);
 
 				if (!staticIf)
 					break;
@@ -2469,7 +2512,7 @@ Expr *parseUnaryExpr(LexerFile *lexer, CodeLocation plusStart) {
 		Expr *returnValue = nullptr;
 
 		if (lexer->token.type == TOKEN('{')) {
-			auto block = parseBlock(lexer);
+			auto block = parseBlock(lexer, false);
 			if (!block)
 				return nullptr;
 			run->end = lexer->previousTokenEnd;
@@ -2938,24 +2981,18 @@ void parseFile(FileInfo *file) {
 			}
 		}
 		else if (lexer.token.type == TokenT::LOAD) {
-			lexer.advance();
+			auto load = parseLoad(&lexer);
 
-			if (lexer.token.type != TokenT::STRING_LITERAL) {
-				reportExpectedError(&lexer.token, "Error: Expected file name after #load");
+			if (!load)
 				break;
-			}
 
-			if (!loadNewFile(lexer.token.text)) {
-				break;
-			}
-
-			lexer.advance();
+			inferQueue.add(load);
 		}
 		else if (lexer.token.type == TokenT::END_OF_FILE) {
 			break;
 		}
 		else if (lexer.token.type == TokenT::STATIC_IF) {
-			auto staticIf = parseStaticIf(&lexer);
+			auto staticIf = parseStaticIf(&lexer, true);
 
 			if (!staticIf)
 				break;

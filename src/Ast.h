@@ -173,7 +173,9 @@ enum class ExprFlavor : u8 {
 	DEFER, 
 
 	SLICE, 
-	RUN
+	RUN, 
+
+	LOAD
 };
 
 struct Declaration;
@@ -273,6 +275,10 @@ struct ExprDefer : Expr {
 #define EXPR_FUNCTION_RUN_CHECKED 0x10'0000
 
 #define EXPR_IS_SPREAD 0x20'000
+
+struct ExprLoad : Expr {
+	Expr *file;
+};
 
 struct ExprLiteral : Expr {
 	union {

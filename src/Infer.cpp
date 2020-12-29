@@ -395,6 +395,15 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 		flattenTo.add(expr);
 		break;
 	}
+	case ExprFlavor::LOAD: {
+		auto load = static_cast<ExprLoad *>(*expr);
+
+		flatten(flattenTo, &load->file);
+
+		flattenTo.add(expr);
+
+		break;
+	}
 	case ExprFlavor::RUN: {
 		auto run = static_cast<ExprRun *>(*expr);
 
@@ -3949,6 +3958,9 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 
 	return true;
 }
+
+u32 loadsPending = 2; // @Robustness: For now this is hardcoded for runtime.milo and the file loaded via the command 
+
 bool inferFlattened(SubJob *job) {
 	PROFILE_FUNC();
 	++totalInfers;
@@ -4164,6 +4176,29 @@ bool inferFlattened(SubJob *job) {
 
 
 			return true;
+		}
+		case ExprFlavor::LOAD: {
+			auto load = static_cast<ExprLoad *>(expr);
+
+			if (load->file->type != &TYPE_STRING) {
+				reportError(load->file, "Error: File to load must be a string");
+				return false;
+			}
+			else if (load->file->flavor != ExprFlavor::STRING_LITERAL) {
+				reportError(load->file, "Error: File to load must be a constant");
+				return false;
+			}
+			
+			auto name = static_cast<ExprStringLiteral *>(load->file)->string;
+
+			if (name.length == 0) {
+				reportError(load->file, "Error: File to load cannot be an empty string");
+				return false;
+			}
+
+			loadsPending++;
+			filesToLoadQueue.add(name);
+			break;
 		}
 		case ExprFlavor::FUNCTION_PROTOTYPE: {
 			auto function = static_cast<ExprFunction *>(expr);
@@ -5894,7 +5929,7 @@ bool inferImporter(ImporterJob *job) {
 			}
 		}
 	}
-	else {
+	else if (importer->import->flavor != ExprFlavor::LOAD) {
 		block = &getExpressionNamespace(importer->import, &onlyConstants, importer->import)->members;
 
 		onlyConstants |= (importer->flags & IMPORTER_IS_CONSTANT) != 0;
@@ -5980,7 +6015,7 @@ bool inferImporter(ImporterJob *job) {
 
 			block->declarations.clear();
 		}
-		else {
+		else if (importer->import->flavor != ExprFlavor::LOAD) {
 			for (auto member : block->declarations) {
 				if (!(member->flags & (DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING))) {
 					if (checkForRedeclaration(importer->enclosingScope, member, importer->import)) {
@@ -7193,16 +7228,13 @@ void runInfer() {
 
 	u64 irGenerationPending = 0;
 
-	u64 doneCount = 0;
-
 	createBasicDeclarations();
 
 	while (true) {
 		auto job = inferQueue.take();
 
-		if (!job.declaration) {
-			if (++doneCount == 2)
-				break;
+		if (job.type == InferJobType::GLOBAL_DECLARATION && !job.declaration) {
+			break;
 		}
 
 		if (job.type == InferJobType::IMPORTER) {
@@ -7212,6 +7244,9 @@ void runInfer() {
 			if (job.declaration)
 				if (!addDeclaration(job.declaration))
 					goto error;
+		}
+		else if (job.type == InferJobType::LOAD_COMPLETE) {
+			loadsPending--;
 		}
 		else {
 			assert(job.type == InferJobType::FUNCTION_IR);
@@ -7280,12 +7315,13 @@ void runInfer() {
 			}
 		}
 
-		if (doneCount == 1 && irGenerationPending == 0) {
+		if (loadsPending == 0 && irGenerationPending == 0) {
 			irGeneratorQueue.add(nullptr);
+			filesToLoadQueue.add("");
 		}
 	}
 
-	if ((sizeJobs || functionJobs || declarationJobs || runJobs) && !hadError) { // We didn't complete type inference, check for undeclared identifiers or circular dependencies! If we already had an error don't spam more
+	if ((sizeJobs || functionJobs || declarationJobs || runJobs || importerJobs) && !hadError) { // We didn't complete type inference, check for undeclared identifiers or circular dependencies! If we already had an error don't spam more
 		// Check for undeclared identifiers
 
 		for (auto job = functionJobs; job; job = job->next) {
@@ -7506,4 +7542,5 @@ error:;
 	startLlvm.notify_one();
 
 	irGeneratorQueue.add(nullptr);
+	filesToLoadQueue.add("");
 }

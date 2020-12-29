@@ -1406,7 +1406,10 @@ void runCoffWriter() {
 
 		startLlvm.wait(lock);
 	}
+
 	PROFILE_FUNC();
+	if (hadError)
+		return;
 
 	BucketedArenaAllocator code(4096);
 	BucketedArenaAllocator codeRelocations(4096);
