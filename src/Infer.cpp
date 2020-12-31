@@ -407,8 +407,6 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 	case ExprFlavor::RUN: {
 		auto run = static_cast<ExprRun *>(*expr);
 
-		flatten(flattenTo, &run->function);
-
 		flattenTo.add(expr);
 		break;
 	}
@@ -2521,7 +2519,7 @@ bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yi
 					identifier->declaration = TYPE_STRING.members.declarations[0];
 
 					given = identifier;
-
+					
 					if (!inferIdentifier(job, &given, identifier, yield)) {
 						assert(false); // This shouldn't fail
 					}
@@ -3961,6 +3959,21 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 
 u32 loadsPending = 2; // @Robustness: For now this is hardcoded for runtime.milo and the file loaded via the command 
 
+void addRunJob(ExprRun *run) {
+	run->runJob = allocateRunJob();
+	run->runJob->run = run;
+
+	beginFlatten(run->runJob, &run->function);
+
+	auto function = static_cast<ExprFunction *>(run->function);
+	if (!(function->flags & EXPR_FUNCTION_RUN_CHECKED)) {
+		run->runJob->checkingFunctions.add(function);
+		run->runJob->checkingFunctionIndices.add(0);
+	}
+	addJob(&runJobs, run->runJob);
+	subJobs.add(run->runJob);
+}
+
 bool inferFlattened(SubJob *job) {
 	PROFILE_FUNC();
 	++totalInfers;
@@ -4106,23 +4119,6 @@ bool inferFlattened(SubJob *job) {
 
 			auto function = static_cast<ExprFunction *>(run->function);
 
-			if (run->flags & EXPR_FUNCTION_CALL_IS_STATEMENT_LEVEL) {
-				run->type = &TYPE_VOID;
-
-				if (!run->runJob) {
-					run->runJob = allocateRunJob();
-					run->runJob->run = run;
-
-					if (!(function->flags & EXPR_FUNCTION_RUN_CHECKED)) {
-						run->runJob->checkingFunctions.add(function);
-						run->runJob->checkingFunctionIndices.add(0);
-					}
-					addJob(&runJobs, run->runJob);
-					subJobs.add(run->runJob);
-				}
-				break;
-			}
-
 			if (run->returnValue) {
 				*exprPointer = run->returnValue;
 				break;
@@ -4163,15 +4159,7 @@ bool inferFlattened(SubJob *job) {
 				}
 			}
 
-			run->runJob = allocateRunJob();
-			run->runJob->run = run;
-
-			if (!(function->flags & EXPR_FUNCTION_RUN_CHECKED)) {
-				run->runJob->checkingFunctions.add(function);
-				run->runJob->checkingFunctionIndices.add(0);
-			}
-			addJob(&runJobs, run->runJob);
-			subJobs.add(run->runJob);
+			addRunJob(run);
 			goToSleep(job, &run->sleepingOnMe);
 
 
@@ -5989,6 +5977,7 @@ bool inferImporter(ImporterJob *job) {
 						if (importer->enclosingScope->flags & BLOCK_IS_STRUCT) {
 							if (!(member->flags & DECLARATION_IS_CONSTANT)) {
 								// Do an insertion sort by declaration serial since struct members must be ordered to preserve memory layout
+								// @Speed create space big enough for all the inserted members then just sort the inserted members
 								u32 index = importer->enclosingScope->declarations.count - 1;
 
 								while (index > 0 && member->serial < importer->enclosingScope->declarations[index - 1]->serial) {
@@ -6014,6 +6003,16 @@ bool inferImporter(ImporterJob *job) {
 			}
 
 			block->declarations.clear();
+
+			if (importer->enclosingScope == &globalBlock) {
+				auto exprBlock = CAST_FROM_SUBSTRUCT(ExprBlock, declarations, block);
+
+				for (auto expr : exprBlock->exprs) {
+					if (expr->flavor == ExprFlavor::RUN) {
+						addRunJob(static_cast<ExprRun *>(expr));
+					}
+				}
+			}
 		}
 		else if (importer->import->flavor != ExprFlavor::LOAD) {
 			for (auto member : block->declarations) {
@@ -6422,6 +6421,13 @@ bool inferFunctionValue(FunctionJob *job) {
 	}
 	else {
 		assert(job->function->body);
+
+		if (function->flags & EXPR_FUNCTION_IS_COMPILER) {
+			if (!function->valueOfDeclaration) {
+				reportError(function, "Error: Compiler functions must be named");
+				return false;
+			}
+		}
 
 		if (!checkGuaranteedReturn(function->body)) {
 			bool needsReturn = false;
@@ -7044,6 +7050,7 @@ bool ensureTypeInfos(RunJob *job, Expr *expr) {
 	return true;
 }
 
+
 bool inferRun(RunJob *job) {
 	PROFILE_FUNC();
 	auto run = job->run;
@@ -7151,6 +7158,9 @@ bool inferRun(RunJob *job) {
 	run->returnValue = runFunctionRoot(&state, static_cast<ExprFunction *>(run->function));
 	deinitVMState(&state);
 
+	if (hadError)
+		return false;
+
 	if (static_cast<ExprLiteral *>(static_cast<ExprFunction *>(run->function)->returns.declarations[0]->type)->typeValue == &TYPE_VOID) {
 		assert(!run->returnValue);
 		run->returnValue = run;
@@ -7231,86 +7241,93 @@ void runInfer() {
 	createBasicDeclarations();
 
 	while (true) {
-		auto job = inferQueue.take();
+		inferInput.add(inferQueue.take());
 
-		if (job.type == InferJobType::GLOBAL_DECLARATION && !job.declaration) {
-			break;
-		}
+		while (inferInput.count) {
+			auto job = inferInput.pop();
 
-		if (job.type == InferJobType::IMPORTER) {
-			addImporter(job.importer);
-		}
-		else if (job.type == InferJobType::GLOBAL_DECLARATION) {
-			if (job.declaration)
-				if (!addDeclaration(job.declaration))
+			if (job.type == InferJobType::GLOBAL_DECLARATION && !job.declaration) {
+				goto outer;
+			}
+
+			if (job.type == InferJobType::IMPORTER) {
+				addImporter(job.importer);
+			}
+			else if (job.type == InferJobType::GLOBAL_DECLARATION) {
+				if (job.declaration)
+					if (!addDeclaration(job.declaration))
+						goto error;
+			}
+			else if (job.type == InferJobType::LOAD_COMPLETE) {
+				loadsPending--;
+			}
+			else if (job.type == InferJobType::RUN) {
+				addRunJob(job.run);
+			}
+			else {
+				assert(job.type == InferJobType::FUNCTION_IR);
+
+				assert(irGenerationPending > 0);
+				irGenerationPending--;
+
+				auto function = job.function;
+
+				wakeUpSleepers(&function->sleepingOnIr);
+			}
+
+			while (subJobs.count || priorityJobs.count) {
+				auto job = priorityJobs.count ? priorityJobs.pop() : subJobs.pop();
+
+				if (!doJob(job)) {
 					goto error;
-		}
-		else if (job.type == InferJobType::LOAD_COMPLETE) {
-			loadsPending--;
-		}
-		else {
-			assert(job.type == InferJobType::FUNCTION_IR);
-
-			assert(irGenerationPending > 0);
-			irGenerationPending--;
-
-			auto function = job.function;
-
-			wakeUpSleepers(&function->sleepingOnIr);
-		}
-
-		while (subJobs.count || priorityJobs.count) {
-			auto job = priorityJobs.count ? priorityJobs.pop() : subJobs.pop();
-
-			if (!doJob(job)) {
-				goto error;
-			}
-		}
-
-		{
-			PROFILE_ZONE("Check size dependencies");
-
-			for (u32 i = 0; i < functionWaitingOnSize.count; i++) {
-				auto job = functionWaitingOnSize[i];
-
-				for (u32 j = 0; j < job->sizeDependencies.count; j++) {
-					auto depend = job->sizeDependencies[j];
-
-					if (depend->size) {
-						job->sizeDependencies.unordered_remove(j--);
-					}
-				}
-
-				if (job->sizeDependencies.count == 0) {
-					functionWaitingOnSize.unordered_remove(i--);
-
-					irGeneratorQueue.add(job->function);
-					irGenerationPending++;
-
-					freeJob(job);
 				}
 			}
 
-			for (u32 i = 0; i < declarationWaitingOnSize.count; i++) {
-				auto job = declarationWaitingOnSize[i];
+			{
+				PROFILE_ZONE("Check size dependencies");
 
-				for (u32 j = 0; j < job->sizeDependencies.count; j++) {
-					auto depend = job->sizeDependencies[j];
+				for (u32 i = 0; i < functionWaitingOnSize.count; i++) {
+					auto job = functionWaitingOnSize[i];
 
-					if (depend->size) {
-						job->sizeDependencies.unordered_remove(j--);
+					for (u32 j = 0; j < job->sizeDependencies.count; j++) {
+						auto depend = job->sizeDependencies[j];
+
+						if (depend->size) {
+							job->sizeDependencies.unordered_remove(j--);
+						}
+					}
+
+					if (job->sizeDependencies.count == 0) {
+						functionWaitingOnSize.unordered_remove(i--);
+
+						irGeneratorQueue.add(job->function);
+						irGenerationPending++;
+
+						freeJob(job);
 					}
 				}
 
-				if (job->sizeDependencies.count == 0) {
-					declarationWaitingOnSize.unordered_remove(i--);
+				for (u32 i = 0; i < declarationWaitingOnSize.count; i++) {
+					auto job = declarationWaitingOnSize[i];
 
-					CoffJob coffJob;
-					coffJob.declaration = job->declaration;
-					coffJob.flavor = CoffJobFlavor::GLOBAL_DECLARATION;
-					coffWriterQueue.add(coffJob);
+					for (u32 j = 0; j < job->sizeDependencies.count; j++) {
+						auto depend = job->sizeDependencies[j];
 
-					freeJob(job);
+						if (depend->size) {
+							job->sizeDependencies.unordered_remove(j--);
+						}
+					}
+
+					if (job->sizeDependencies.count == 0) {
+						declarationWaitingOnSize.unordered_remove(i--);
+
+						CoffJob coffJob;
+						coffJob.declaration = job->declaration;
+						coffJob.flavor = CoffJobFlavor::GLOBAL_DECLARATION;
+						coffWriterQueue.add(coffJob);
+
+						freeJob(job);
+					}
 				}
 			}
 		}
@@ -7320,6 +7337,7 @@ void runInfer() {
 			filesToLoadQueue.add("");
 		}
 	}
+	outer:
 
 	if ((sizeJobs || functionJobs || declarationJobs || runJobs || importerJobs) && !hadError) { // We didn't complete type inference, check for undeclared identifiers or circular dependencies! If we already had an error don't spam more
 		// Check for undeclared identifiers

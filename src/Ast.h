@@ -274,7 +274,9 @@ struct ExprDefer : Expr {
 #define EXPR_FUNCTION_RUN_READY 0x8'0000
 #define EXPR_FUNCTION_RUN_CHECKED 0x10'0000
 
-#define EXPR_IS_SPREAD 0x20'000
+#define EXPR_IS_SPREAD 0x20'0000
+
+#define EXPR_FUNCTION_IS_COMPILER 0x40'0000
 
 struct ExprLoad : Expr {
 	Expr *file;

@@ -325,7 +325,7 @@ Expr *parseExprStatemenet(LexerFile *lexer, bool allowDeclarations) {
 		MODIFY_ASSIGN(TokenT::AND_EQUALS)
 		MODIFY_ASSIGN(TokenT::OR_EQUALS)
 	else {
-		if (expr->flavor != ExprFlavor::FUNCTION_CALL && expr->flavor != ExprFlavor::RUN) {
+		if (expr->flavor != ExprFlavor::FUNCTION_CALL) {
 			auto unary = static_cast<ExprUnaryOperator *>(expr);
 			auto binary = static_cast<ExprBinaryOperator *>(expr);
 
@@ -345,7 +345,7 @@ Expr *parseExprStatemenet(LexerFile *lexer, bool allowDeclarations) {
 				reportError(&lexer->token, "Error: '--' is not supported as an operator");
 			}
 			else {
-				reportError(expr, "Error: Can only have an function call or #run expression at statement level");
+				reportError(expr, "Error: Can only have a function call at statement level");
 			}
 			return nullptr;
 		}
@@ -1111,6 +1111,22 @@ ExprBlock *parseBlock(LexerFile *lexer, bool allowLoads, ExprBlock *block) {
 
 			continue;
 		}
+		else if (lexer->token.type == TokenT::RUN) {
+			if (allowLoads) {
+				auto run = parseExpr(lexer);
+
+				assert(run->flavor == ExprFlavor::RUN);
+
+				block->exprs.add(run);
+			}
+			else {
+				reportError(&lexer->token, "Error: Can only have #run statements at the top level");
+
+				return nullptr;
+			}
+
+			continue;
+		}
 		else if (lexer->token.type == TokenT::IDENTIFIER) { // This could be an expression or a declaration
 			TokenT peek;
 			lexer->peekTokenTypes(1, &peek);
@@ -1348,6 +1364,9 @@ bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *u
 	if (expectAndConsume(lexer, TokenT::C_CALL)) {
 		function->flags |= EXPR_FUNCTION_IS_C_CALL;
 	}
+	else if (expectAndConsume(lexer, TokenT::COMPILER)) { // The body of a #compiler function is what is called if the function is used at runtime
+		function->flags |= EXPR_FUNCTION_IS_COMPILER;
+	}
 
 	if (lexer->token.type == TOKEN('{')) {
 		function->flavor = ExprFlavor::FUNCTION;
@@ -1367,6 +1386,11 @@ bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *u
 
 		function->flavor = ExprFlavor::FUNCTION;
 		function->end = lexer->previousTokenEnd;
+
+		if (function->flags & EXPR_FUNCTION_IS_EXTERNAL) {
+			reportError(function, "Error: Compiler functions cannot be external");
+			return false;
+		}
 
 		if (usingBlock) {
 			reportError(function, "Error: External functions cannot 'using' their parameters");
@@ -1858,7 +1882,7 @@ bool checkTopLevelStaticIfBlock(Expr *expr, const char *message) {
 	assert(expr->flavor == ExprFlavor::BLOCK);
 
 	for (auto statement : static_cast<ExprBlock *>(expr)->exprs) {
-		if (statement->flavor != ExprFlavor::STATIC_IF && !(statement->flags & EXPR_ASSIGN_IS_IMPLICIT_INITIALIZER)) {
+		if (statement->flavor != ExprFlavor::STATIC_IF && !(statement->flags & EXPR_ASSIGN_IS_IMPLICIT_INITIALIZER) && statement->flavor != ExprFlavor::RUN) {
 			reportError(statement, "Error: #if can only contain declarations %s", message);
 			return false;
 		}
@@ -2997,7 +3021,7 @@ void parseFile(FileInfo *file) {
 			if (!staticIf)
 				break;
 
-			if (!checkTopLevelStaticIf(staticIf, "at the top level")) {
+			if (!checkTopLevelStaticIf(staticIf, ", #loads or #runs at the top level")) {
 				break;
 			}
 
@@ -3006,6 +3030,16 @@ void parseFile(FileInfo *file) {
 			importer->import = staticIf;
 
 			inferQueue.add(importer);
+		}
+		else if (lexer.token.type == TokenT::RUN) {
+			auto run = parseExpr(&lexer);
+
+			if (!run)
+				break;
+
+			assert(run->flavor == ExprFlavor::RUN);
+
+			inferQueue.add(static_cast<ExprRun *>(run));
 		}
 		else if (expectAndConsume(&lexer, ';')) {
 			// We have consumed the semicolon we are done

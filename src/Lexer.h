@@ -114,7 +114,8 @@ enum class TokenT : u8 {
 	STATIC_IF, 
 	DEFER, 
 	RUN, 
-	C_CALL
+	C_CALL, 
+	COMPILER
 };
 
 struct Token {

@@ -18,6 +18,7 @@ BucketedArenaAllocator typeArena(1024 * 1024);
 #define FUNCTION_RETURN_HASH_PRIME 5347
 #define C_CALL_HASH_PRIME 6073
 #define VARARGS_HASH_PRIME 6221
+#define COMPILER_HASH_PRIME 6247
 
 static u32 nextStructHash = STRUCT_HASH_PRIME;
 
@@ -426,6 +427,10 @@ TypeFunction *getFunctionType(ExprFunction *expr) {
 		hash *= C_CALL_HASH_PRIME;
 	}
 
+	if (expr->flags & EXPR_FUNCTION_IS_COMPILER) {
+		hash *= COMPILER_HASH_PRIME;
+	}
+
 	if (varags) {
 		hash *= VARARGS_HASH_PRIME;
 	}
@@ -443,6 +448,10 @@ TypeFunction *getFunctionType(ExprFunction *expr) {
 			}
 
 			if (((function->flags & TYPE_FUNCTION_IS_C_CALL) != 0) != ((expr->flags & EXPR_FUNCTION_IS_C_CALL) != 0)) {
+				goto cont;
+			}
+
+			if (((function->flags & TYPE_FUNCTION_IS_COMPILER) != 0) != ((expr->flags & EXPR_FUNCTION_IS_COMPILER) != 0)) {
 				goto cont;
 			}
 
@@ -479,6 +488,10 @@ TypeFunction *getFunctionType(ExprFunction *expr) {
 
 	if (expr->flags & EXPR_FUNCTION_IS_C_CALL) {
 		result->flags |= TYPE_FUNCTION_IS_C_CALL;
+	}
+
+	if (expr->flags & EXPR_FUNCTION_IS_COMPILER) {
+		result->flags |= TYPE_FUNCTION_IS_COMPILER;
 	}
 
 	for (u32 i = 0; i < returns.count; i++) {

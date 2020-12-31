@@ -3,6 +3,7 @@
 #include <dyncall.h>
 #include <dyncall_signature.h>
 #include <dyncall_callback.h>
+#include "Infer.h"
 
 struct StackNode {
 	StackNode *next;
@@ -217,6 +218,42 @@ void deinitVMState(VMState *state) {
 }
 
 void runFunction(VMState *state, ExprFunction *expr, const Ir *caller, DCArgs *dcArgs, u64 *callerStack) {
+	if (expr->flags & EXPR_FUNCTION_IS_COMPILER) {
+		assert(expr->valueOfDeclaration);
+
+		if (std::this_thread::get_id() != inferThread) {
+			// @Incomplete: Display error location
+			reportError("Error: Compiler functions can only be called from the initial thread", STRING_PRINTF(expr->valueOfDeclaration->name));
+		}
+
+		if (expr->valueOfDeclaration->name == "add_build_file") {
+			
+			auto name = new ExprStringLiteral;
+			name->flavor = ExprFlavor::STRING_LITERAL;
+			name->start = {};
+			name->end = {};
+			name->string = *reinterpret_cast<String *>(callerStack + caller->arguments->args[0].number);
+			name->type = &TYPE_STRING;
+
+			auto load = new ExprLoad;
+			load->flavor = ExprFlavor::LOAD;
+			load->start = {};
+			load->end = {};
+			load->file = name;
+
+			auto import = new Importer;
+			import->import = load;
+
+
+			inferInput.add(import);
+		}
+		else {
+			// @Incomplete: Display error location
+			reportError("Error: Unknown compiler function: %.*s", STRING_PRINTF(expr->valueOfDeclaration->name));
+		}
+		return;
+	}
+
 	u32 dummyStorage = 0;
 	u32 outParameters = expr->returns.declarations.count - 1;
 
