@@ -12,8 +12,6 @@ better syntax for multiple return values
 
 Make constexpr slices work
 
-Detect if the crt is being linked and do not link llvm_support.lib (llvm_support provides crt functions that llvm expects to exist i.e. memset, __chkstk)
-
 array literals
 
 struct literals

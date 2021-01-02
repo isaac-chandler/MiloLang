@@ -608,10 +608,10 @@ int main(int argc, char *argv[]) {
 			}
 			
 
-			_snwprintf(buffer, 1024, L"\"%s\" out.obj%s __milo_chkstk.obj /debug /entry:main%S \"/libpath:%s\" \"/libpath:%s\" /incremental:no /nologo /natvis:milo.natvis", 
-				linkerPath, useLlvm ? " llvm_support.lib" : "", libBuffer, windowsLibPath, crtLibPath);
+			_snwprintf(buffer, 1024, L"\"%s\" out.obj __milo_chkstk.obj /debug /entry:main%S \"/libpath:%s\" \"/libpath:%s\" /incremental:no /nologo /natvis:milo.natvis", 
+				linkerPath, libBuffer, windowsLibPath, crtLibPath);
 		}
-
+		
 
 		fwprintf(stdout, L"Linker command: %s\n", buffer);
 

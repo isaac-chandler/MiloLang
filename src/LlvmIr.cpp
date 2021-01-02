@@ -2481,8 +2481,18 @@ void runLlvm() {
 			pmbuilder->VerifyInput = false;
 			pmbuilder->VerifyOutput = false;
 #endif
+			
 
 			llvm::TargetLibraryInfoImpl tlii(llvm::Triple(llvmModule.getTargetTriple()));
+			tlii.disableAllFunctions();
+
+			llvm::LibFunc chkstk;
+			
+			//if (!tlii.getLibFunc(llvm::LibFunc, chkstk)) {
+			//	reportError("LLVM Error: __chkstk function does not exist");
+			//}
+
+			//tlii.setAvailable(chkstk);
 
 			pmbuilder->LibraryInfo = &tlii;
 
