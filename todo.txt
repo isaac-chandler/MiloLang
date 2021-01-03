@@ -74,6 +74,7 @@ Compile option for runtime checking
  - Cast bounds checking
  - Check casts from any to a type
  - Slice bounds checking
+ - Integer overflow
  - Check that if == #complete { never hits an else case (i.e. only valid enums are given)
  
  
@@ -109,7 +110,7 @@ Make comma assignments work for things other than function calls
  - Do we really need this, I can't think of any other use cases than a swap, if we really want this functionality, maybe just add a swap primitive i.e. #swap a, b
 
 string representation
- - is it worth having implict conversion to utf16 C-strings (windows wide strings) and utf32 C-strings  
+ - is it worth having implict conversion to utf16 C-strings (windows wide strings) and utf32 C-strings
  - utf16 and utf32 string types?
 
 function overloading
@@ -143,6 +144,7 @@ debug info
 LLVM
  - optimizations
  - Allow control of LLVM options
+ - Change llvm backend to use IR instead of the ast
 
 
 improve external function interface

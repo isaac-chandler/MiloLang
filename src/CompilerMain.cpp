@@ -11,6 +11,43 @@
 #include "TypeTable.h"
 #include "Find.h"
 
+#if BUILD_PROFILE
+
+void NTAPI tls_callback(PVOID DllHandle, DWORD dwReason, PVOID) {
+	if (dwReason == DLL_THREAD_ATTACH) {
+		s32 thread = perThreadIndex.fetch_add(1, std::memory_order_relaxed);
+
+		profileIndices[thread] = &profileIndex;
+		*profileIndices[thread] = static_cast<Profile *>(VirtualAlloc(nullptr, sizeof(Profile) * 1 << 23, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+		profiles[thread] = *profileIndices[thread];
+	}
+}
+
+#ifdef _WIN64
+#pragma comment (linker, "/INCLUDE:_tls_used")  // See p. 1 below
+#pragma comment (linker, "/INCLUDE:tls_callback_func")  // See p. 3 below
+#else
+#pragma comment (linker, "/INCLUDE:__tls_used")  // See p. 1 below
+#pragma comment (linker, "/INCLUDE:_tls_callback_func")  // See p. 3 below
+#endif
+
+// Explained in p. 3 below
+#ifdef _WIN64
+#pragma const_seg(".CRT$XLF")
+EXTERN_C const
+#else
+#pragma data_seg(".CRT$XLF")
+EXTERN_C
+#endif
+PIMAGE_TLS_CALLBACK tls_callback_func = tls_callback;
+#ifdef _WIN64
+#pragma const_seg()
+#else
+#pragma data_seg()
+#endif //_WIN64
+
+#endif
+
 #if BUILD_WINDOWS
 bool doColorPrint = false; // False by default, set at startup if color can be enabled
 #else
@@ -343,7 +380,9 @@ int main(int argc, char *argv[]) {
 	using namespace std::chrono;
 
 #if BUILD_PROFILE
+	tls_callback(nullptr, DLL_THREAD_ATTACH, nullptr);
 	u64 startTime;
+	u64 startTsc = __rdtsc();
 	QueryPerformanceCounter(reinterpret_cast<LARGE_INTEGER *>(&startTime));
 #endif
 
@@ -381,14 +420,12 @@ int main(int argc, char *argv[]) {
 
 		std::thread infer(runInfer);
 		std::thread irGenerator(runIrGenerator);
-		std::thread backend = std::thread(useLlvm ? runLlvm : runCoffWriter);
 
 		mainThread = std::this_thread::get_id();
 		inferThread = infer.get_id();
 
 		SetThreadDescription(infer.native_handle(), L"Infer");
 		SetThreadDescription(irGenerator.native_handle(), L"Ir Generator");
-		SetThreadDescription(backend.native_handle(), useLlvm ? L"LLVM" : L"Coff Writer");
 
 		irGenerator.detach();
 
@@ -434,12 +471,14 @@ int main(int argc, char *argv[]) {
 
 
 		infer.join();
-		backend.join();
+
 	}
 
-#if BUILD_WINDOWS
 
 	if (!hadError) {
+		auto backendStart = high_resolution_clock::now();
+		std::thread backend = std::thread(useLlvm ? runLlvm : runCoffWriter);
+		SetThreadDescription(backend.native_handle(), useLlvm ? L"LLVM" : L"Coff Writer");
 		u64 totalQueued = totalDeclarations + totalFunctions + totalTypesSized + totalImporters;
 
 		printf(
@@ -452,9 +491,20 @@ int main(int argc, char *argv[]) {
 			"Total sizes: %llu, %.1f sizes/type\n",
 			totalQueued, totalDeclarations, totalFunctions, totalTypesSized, totalImporters, totalInfers, static_cast<float>(totalInfers) / totalQueued, totalSizes, static_cast<float>(totalSizes) / totalTypesSized);
 
-		std::cout << "Compiler Time: " << (duration_cast<microseconds>(duration<double>(
+		std::cout << "Frontend Time: " << (duration_cast<microseconds>(duration<double>(
 			high_resolution_clock::now() - start)).count() / 1000.0) << "ms\n";
 
+		backend.join();
+
+		std::cout << (useLlvm ? "LLVM" : "Coff Writer") << " Time: " << (duration_cast<microseconds>(duration<double>(
+			high_resolution_clock::now() - backendStart)).count() / 1000.0) << "ms\n";
+
+		std::cout << "Compiler Time: " << (duration_cast<microseconds>(duration<double>(
+			high_resolution_clock::now() - start)).count() / 1000.0) << "ms\n";
+	}
+
+#if BUILD_WINDOWS
+	if (!hadError) {
 		auto linkerStart = high_resolution_clock::now();
 
 		wchar_t buffer[1024];
@@ -590,7 +640,7 @@ int main(int argc, char *argv[]) {
 			}
 
 			char libBuffer[1024]; // @Robustness
-			
+
 			{
 				char *libOffset = libBuffer;
 
@@ -606,12 +656,12 @@ int main(int argc, char *argv[]) {
 
 				*libOffset = 0;
 			}
-			
 
-			_snwprintf(buffer, 1024, L"\"%s\" out.obj __milo_chkstk.obj /debug /entry:main%S \"/libpath:%s\" \"/libpath:%s\" /incremental:no /nologo /natvis:milo.natvis", 
+
+			_snwprintf(buffer, 1024, L"\"%s\" out.obj __milo_chkstk.obj /debug /entry:main%S \"/libpath:%s\" \"/libpath:%s\" /incremental:no /nologo /natvis:milo.natvis",
 				linkerPath, libBuffer, windowsLibPath, crtLibPath);
 		}
-		
+
 
 		fwprintf(stdout, L"Linker command: %s\n", buffer);
 
@@ -633,6 +683,9 @@ int main(int argc, char *argv[]) {
 
 		std::cout << "Linker Time: " << (duration_cast<microseconds>(duration<double>(
 			high_resolution_clock::now() - linkerStart)).count() / 1000.0) << "ms\n";
+
+		std::cout << "Total Time: " << (duration_cast<microseconds>(duration<double>(
+			high_resolution_clock::now() - start)).count() / 1000.0) << "ms\n";
 	}
 #else
 	// @Platform
@@ -646,29 +699,41 @@ int main(int argc, char *argv[]) {
 		u64 pcf;
 		QueryPerformanceFrequency(reinterpret_cast<LARGE_INTEGER *>(&pcf));
 
+		u64 endTime;
+		u64 endTsc = __rdtsc();
+
+		QueryPerformanceCounter(reinterpret_cast<LARGE_INTEGER *>(&endTime));
+
+		double tscFactor = 1.0e9 * (double) (endTime - startTime) / (double) (endTsc - startTsc) / (double) pcf;
+
 		out << '[';
-		for (u32 i = 0; i < static_cast<u32>(profileIndex); i++) {
-			Profile p = profiles[i];
+		bool first = true;
 
-			out << "{\"cat\":\"function\",\"pid\":0,\"tid\":" << p.threadId << ",\"ts\":" << ((p.time - startTime) * 1.0e9 / (double) pcf);
+		for (u32 j = 0; j < PROFILER_THREADS; j++) {
 
-			if (p.name) {
-				out << ",\"ph\":\"B\",\"name\":\"" << p.name;
-
-				if (p.color) {
-					out << "\",\"cname\":\"" << p.color;
+			for (Profile *i = profiles[j]; profileIndices[j] && i < *profileIndices[j]; i++) {
+				if (!first) {
+					out << ",\n";
 				}
+				first = false;
 
-				out << "\"}";
-			}
-			else {
-				out << ",\"ph\":\"E\"}";
-			}
+				Profile p = *i;
 
-			if (i != static_cast<u32>(profileIndex) - 1) {
-				out << ",\n";
-			}
+				out << "{\"cat\":\"function\",\"pid\":0,\"tid\":" << j << ",\"ts\":" << ((p.time - startTsc) * tscFactor);
 
+				if (p.name) {
+					out << ",\"ph\":\"B\",\"name\":\"" << p.name;
+
+					if (p.color) {
+						out << "\",\"cname\":\"" << p.color;
+					}
+
+					out << "\"}";
+				}
+				else {
+					out << ",\"ph\":\"E\"}";
+				}
+			}
 		}
 
 		out << ']';

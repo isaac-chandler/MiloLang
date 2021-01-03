@@ -2001,13 +2001,6 @@ static void addDiscriminatorsPass(const llvm::PassManagerBuilder &Builder, llvm:
 }
 
 void runLlvm() {
-
-	{
-		std::unique_lock<std::mutex> lock = std::unique_lock(startLlvmLock);
-
-		startLlvm.wait(lock);
-	}
-
 	//Sleep(1000);
 
 	llvm::LLVMContext context;
@@ -2434,11 +2427,6 @@ void runLlvm() {
 			auto int32 = llvm::Type::getInt32Ty(context);
 			auto fltused = new llvm::GlobalVariable(llvmModule, int32, true, llvm::GlobalValue::ExternalLinkage, llvm::ConstantInt::get(int32, 0), "_fltused");
 
-
-			
-
-			std::cout << verifyOutput << "\n";
-
 			//llvmModule.dump();
 
 			// llvmModule.print(llvm::errs(), nullptr);
@@ -2486,14 +2474,6 @@ void runLlvm() {
 			llvm::TargetLibraryInfoImpl tlii(llvm::Triple(llvmModule.getTargetTriple()));
 			tlii.disableAllFunctions();
 
-			llvm::LibFunc chkstk;
-			
-			//if (!tlii.getLibFunc(llvm::LibFunc, chkstk)) {
-			//	reportError("LLVM Error: __chkstk function does not exist");
-			//}
-
-			//tlii.setAvailable(chkstk);
-
 			pmbuilder->LibraryInfo = &tlii;
 
 			if (optimize) {
@@ -2538,7 +2518,7 @@ void runLlvm() {
 
 			pass.run(llvmModule);
 
-			llvmModule.print(irOut, nullptr);
+			//llvmModule.print(irOut, nullptr);
 
 			output.flush();
 		}

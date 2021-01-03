@@ -10,7 +10,4 @@ inline MPMCWorkQueue<ExprFunction *> irGeneratorQueue;
 
 void runIrGenerator();
 
-inline std::mutex startLlvmLock;
-inline std::condition_variable startLlvm;
-
 void runLlvm();

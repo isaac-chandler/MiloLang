@@ -121,40 +121,38 @@ struct Profile {
 	const char *name;
 	const char *color;
 	u64 time;
-	s32 threadId;
 };
 
-inline Profile profiles[10000000];
-inline std::atomic_uint32_t profileIndex = 0;
+#define PROFILER_THREADS 5
+
+
+inline Profile *volatile profiles[PROFILER_THREADS];
+inline Profile **volatile profileIndices[PROFILER_THREADS];
+inline std::atomic_int32_t perThreadIndex(0);
+inline thread_local Profile *profileIndex;
 
 struct Timer {
-	Timer(const char *name) {
-		u32 write = profileIndex++;
+	__forceinline Timer(const char *name) {
+		Profile *write = profileIndex++;
 
-		profiles[write].name = name;
+		write->name = name;
 
-		QueryPerformanceCounter(reinterpret_cast<LARGE_INTEGER *>(&profiles[write].time));
-
-		profiles[write].threadId = *reinterpret_cast<s32 *>(reinterpret_cast<u8 *>(__readgsqword(0x30)) + 0x48);
+		write->time = __rdtsc();
 	}
 
-	Timer(const char *name, const char *color) {
-		u32 write = profileIndex++;
+	__forceinline Timer(const char *name, const char *color) {
+		Profile *write = profileIndex++;
 
-		profiles[write].name = name;
-		profiles[write].color = color;
+		write->name = name;
+		write->color = color;
 
-		QueryPerformanceCounter(reinterpret_cast<LARGE_INTEGER *>(&profiles[write].time));
-
-		profiles[write].threadId = *reinterpret_cast<s32 *>(reinterpret_cast<u8 *>(__readgsqword(0x30)) + 0x48);
+		write->time = __rdtsc();
 	}
 
-	__declspec(noinline) ~Timer() {
-		u32 write = profileIndex++;
+	__forceinline ~Timer() {
+		Profile *write = profileIndex++;
 
-		QueryPerformanceCounter(reinterpret_cast<LARGE_INTEGER *>(&profiles[write].time));
-
-		profiles[write].threadId = *reinterpret_cast<s32 *>(reinterpret_cast<u8 *>(__readgsqword(0x30)) + 0x48);
+		write->time = __rdtsc();
 	}
 };
 

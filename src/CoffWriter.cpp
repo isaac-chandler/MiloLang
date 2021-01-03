@@ -182,18 +182,18 @@ u32 getRegisterOffset(ExprFunction *function, u32 regNo) {
 
 void writeRSPOffsetByte(BucketedArenaAllocator *code, u8 physicalRegister, u64 offset) {
 	if (offset >= 0x80) {
-		code->add1(0x84 | (physicalRegister << 3));
-		code->add1(0x24);
-		code->add4(static_cast<u32>(offset));
+		code->add1Unchecked(0x84 | (physicalRegister << 3));
+		code->add1Unchecked(0x24);
+		code->add4Unchecked(static_cast<u32>(offset));
 	}
 	else if (offset != 0) {
-		code->add1(0x44 | (physicalRegister << 3));
-		code->add1(0x24);
-		code->add1(static_cast<u8>(offset));
+		code->add1Unchecked(0x44 | (physicalRegister << 3));
+		code->add1Unchecked(0x24);
+		code->add1Unchecked(static_cast<u8>(offset));
 	}
 	else {
-		code->add1(0x04 | (physicalRegister << 3));
-		code->add1(0x24);
+		code->add1Unchecked(0x04 | (physicalRegister << 3));
+		code->add1Unchecked(0x24);
 	}
 }
 
@@ -204,12 +204,12 @@ void writeRSPRegisterByte(BucketedArenaAllocator *code, ExprFunction *function, 
 void loadIntoIntRegister(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u8 loadInto, u32 regNo) {
 	if (regNo == 0) {
 		if (loadInto >= 8) {
-			code->add1(0x45);
+			code->add1Unchecked(0x45);
 			loadInto -= 8;
 		}
 
-		code->add1(0x31);
-		code->add1(0xC0 | loadInto | (loadInto << 3));
+		code->add1Unchecked(0x31);
+		code->add1Unchecked(0xC0 | loadInto | (loadInto << 3));
 		return;
 	}
 
@@ -225,18 +225,18 @@ void loadIntoIntRegister(BucketedArenaAllocator *code, ExprFunction *function, u
 	}
 
 	if (size == 2) {
-		code->add1(0x66);
+		code->add1Unchecked(0x66);
 	}
 
 	if (rex != 0x40) {
-		code->add1(rex);
+		code->add1Unchecked(rex);
 	}
 
 	if (size == 1) {
-		code->add1(0x8a);
+		code->add1Unchecked(0x8a);
 	}
 	else {
-		code->add1(0x8b);
+		code->add1Unchecked(0x8b);
 	}
 
 	writeRSPRegisterByte(code, function, loadInto, regNo);
@@ -255,18 +255,18 @@ void storeFromIntRegister(BucketedArenaAllocator *code, ExprFunction *function, 
 	}
 
 	if (size == 2) {
-		code->add1(0x66);
+		code->add1Unchecked(0x66);
 	}
 
 	if (rex != 0x40) {
-		code->add1(rex);
+		code->add1Unchecked(rex);
 	}
 
 	if (size == 1) {
-		code->add1(0x88);
+		code->add1Unchecked(0x88);
 	}
 	else {
-		code->add1(0x89);
+		code->add1Unchecked(0x89);
 	}
 
 	writeRSPRegisterByte(code, function, storeFrom, regNo);
@@ -275,49 +275,49 @@ void storeFromIntRegister(BucketedArenaAllocator *code, ExprFunction *function, 
 void loadIntoFloatRegister(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u8 loadInto, u32 regNo) {
 	if (regNo == 0) {
 		if (regNo >= 8) {
-			code->add1(0x45);
+			code->add1Unchecked(0x45);
 			regNo -= 8;
 		}
 
-		code->add1(0x0F);
-		code->add1(0x57);
-		code->add1(0xC0 | loadInto | (loadInto << 3));
+		code->add1Unchecked(0x0F);
+		code->add1Unchecked(0x57);
+		code->add1Unchecked(0xC0 | loadInto | (loadInto << 3));
 		return;
 	}
 
 	if (size == 8) {
-		code->add1(0xF2);
+		code->add1Unchecked(0xF2);
 	}
 	else {
-		code->add1(0xF3);
+		code->add1Unchecked(0xF3);
 	}
 
 	if (loadInto >= 8) {
-		code->add1(0x44);
+		code->add1Unchecked(0x44);
 		loadInto -= 8;
 	}
 
-	code->add1(0x0F);
-	code->add1(0x10);
+	code->add1Unchecked(0x0F);
+	code->add1Unchecked(0x10);
 
 	writeRSPRegisterByte(code, function, loadInto, regNo);
 }
 
 void storeFromFloatRegister(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u32 regNo, u8 storeFrom) {
 	if (size == 8) {
-		code->add1(0xF2);
+		code->add1Unchecked(0xF2);
 	}
 	else {
-		code->add1(0xF3);
+		code->add1Unchecked(0xF3);
 	}
 
 	if (storeFrom >= 8) {
-		code->add1(0x44);
+		code->add1Unchecked(0x44);
 		storeFrom -= 8;
 	}
 
-	code->add1(0x0F);
-	code->add1(0x11);
+	code->add1Unchecked(0x0F);
+	code->add1Unchecked(0x11);
 
 	writeRSPRegisterByte(code, function, storeFrom, regNo);
 }
@@ -326,44 +326,44 @@ void storeImmediate(BucketedArenaAllocator *code, ExprFunction *function, u64 si
 	assert(isStandardSize(size));
 
 	if (size == 8 && static_cast<s64>(immediate) != static_cast<s64>(static_cast<s32>(immediate))) {
-		code->add1(0x48); // mov rax, ir.a
-		code->add1(0xB8);
-		code->add8(immediate);
+		code->add1Unchecked(0x48); // mov rax, ir.a
+		code->add1Unchecked(0xB8);
+		code->add8Unchecked(immediate);
 
 		storeFromIntRegister(code, function, 8, regNo, RAX);
 	}
 	else {
 		if (size == 2) {
-			code->add1(0x66);
+			code->add1Unchecked(0x66);
 		}
 		else if (size == 8) {
-			code->add1(0x48);
+			code->add1Unchecked(0x48);
 		}
 
 		if (size == 1) {
-			code->add1(0xC6);
+			code->add1Unchecked(0xC6);
 		}
 		else {
-			code->add1(0xC7);
+			code->add1Unchecked(0xC7);
 		}
 
 		writeRSPRegisterByte(code, function, 0, regNo);
 
 		if (size == 1) {
-			code->add1(static_cast<u8>(immediate));
+			code->add1Unchecked(static_cast<u8>(immediate));
 		}
 		else if (size == 2) {
-			code->add2(static_cast<u16>(immediate));
+			code->add2Unchecked(static_cast<u16>(immediate));
 		}
 		else if (size == 4 || size == 8) {
-			code->add4(static_cast<u32>(immediate));
+			code->add4Unchecked(static_cast<u32>(immediate));
 		}
 	}
 }
 
 void setCondition(BucketedArenaAllocator *code, ExprFunction *function, u32 dest, u8 condition) {
-	code->add1(0x0F);
-	code->add1(0x90 | condition);
+	code->add1Unchecked(0x0F);
+	code->add1Unchecked(0x90 | condition);
 	writeRSPRegisterByte(code, function, 0, dest);
 }
 
@@ -372,20 +372,20 @@ void setConditionInt(BucketedArenaAllocator *code, ExprFunction *function, u64 s
 	loadIntoIntRegister(code, function, size, RCX, b);
 
 	if (size == 8) {
-		code->add1(0x48);
+		code->add1Unchecked(0x48);
 	}
 	else if (size == 2) {
-		code->add1(0x66);
+		code->add1Unchecked(0x66);
 	}
 
 	if (size == 1) {
-		code->add1(0x38);
+		code->add1Unchecked(0x38);
 	}
 	else {
-		code->add1(0x39);
+		code->add1Unchecked(0x39);
 	}
 
-	code->add1(0xC8);
+	code->add1Unchecked(0xC8);
 
 	setCondition(code, function, dest, condition);
 }
@@ -395,27 +395,27 @@ void setConditionFloat(BucketedArenaAllocator *code, ExprFunction *function, u64
 	loadIntoFloatRegister(code, function, size, 1, b);
 
 	if (size == 8) {
-		code->add1(0x66);
+		code->add1Unchecked(0x66);
 	}
 
-	code->add1(0x0F);
-	code->add1(0x2F);
-	code->add1(0xC1);
+	code->add1Unchecked(0x0F);
+	code->add1Unchecked(0x2F);
+	code->add1Unchecked(0xC1);
 
 	setCondition(code, function, dest, condition);
 }
 
 void loadImmediateIntoRAX(BucketedArenaAllocator *code, u64 immediate) {
 	if (static_cast<s64>(immediate) != static_cast<s64>(static_cast<s32>(immediate))) {
-		code->add1(0x48);
-		code->add1(0xB8);
-		code->add8(immediate);
+		code->add1Unchecked(0x48);
+		code->add1Unchecked(0xB8);
+		code->add8Unchecked(immediate);
 	}
 	else {
-		code->add1(0x48);
-		code->add1(0xC7);
-		code->add1(0xC0);
-		code->add4(static_cast<u32>(immediate));
+		code->add1Unchecked(0x48);
+		code->add1Unchecked(0xC7);
+		code->add1Unchecked(0xC0);
+		code->add4Unchecked(static_cast<u32>(immediate));
 	}
 }
 
@@ -427,26 +427,26 @@ void loadImmediateIntoIntRegister(BucketedArenaAllocator *code, u8 loadInto, u64
 	else {
 		if (immediate <= 0x7FFF'FFFF) {
 			if (loadInto >= 8) {
-				code->add1(0x41);
+				code->add1Unchecked(0x41);
 				loadInto -= 8;
 			}
 
-			code->add1(0xB8 | loadInto);
-			code->add4(static_cast<u32>(immediate));
+			code->add1Unchecked(0xB8 | loadInto);
+			code->add4Unchecked(static_cast<u32>(immediate));
 		}
 		else {
 			loadImmediateIntoRAX(code, immediate);
 
 			if (loadInto >= 8) {
-				code->add1(0x49);
+				code->add1Unchecked(0x49);
 				loadInto -= 8;
 			}
 			else {
-				code->add1(0x48);
+				code->add1Unchecked(0x48);
 			}
 
-			code->add1(0x89);
-			code->add1(0xC0 | loadInto);
+			code->add1Unchecked(0x89);
+			code->add1Unchecked(0xC0 | loadInto);
 		}
 	}
 }
@@ -457,8 +457,8 @@ void writeSet(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u3
 			storeImmediate(code, function, size, dest, 0);
 		}
 		else {
-			code->add1(0x48);
-			code->add1(0x8D);
+			code->add1Unchecked(0x48);
+			code->add1Unchecked(0x8D);
 			writeRSPRegisterByte(code, function, RDI, dest);
 
 			u64 count = size;
@@ -469,17 +469,17 @@ void writeSet(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u3
 
 			loadImmediateIntoIntRegister(code, RCX, count);
 
-			code->add1(0x31); // xor eax, eax
-			code->add1(0xC0);
+			code->add1Unchecked(0x31); // xor eax, eax
+			code->add1Unchecked(0xC0);
 
-			code->add1(0xF3);
-			code->add1(0x48);
+			code->add1Unchecked(0xF3);
+			code->add1Unchecked(0x48);
 
 			if (size % 8 == 0) {
-				code->add1(0xAB);
+				code->add1Unchecked(0xAB);
 			}
 			else {
-				code->add1(0xAA);
+				code->add1Unchecked(0xAA);
 			}
 		}
 	}
@@ -489,12 +489,12 @@ void writeSet(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u3
 			storeFromIntRegister(code, function, size, dest, RAX);
 		}
 		else {
-			code->add1(0x48);
-			code->add1(0x8D);
+			code->add1Unchecked(0x48);
+			code->add1Unchecked(0x8D);
 			writeRSPRegisterByte(code, function, RSI, src);
 
-			code->add1(0x48);
-			code->add1(0x8D);
+			code->add1Unchecked(0x48);
+			code->add1Unchecked(0x8D);
 			writeRSPRegisterByte(code, function, RDI, dest);
 
 			u64 count = size;
@@ -502,16 +502,16 @@ void writeSet(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u3
 			if (size % 8 == 0) {
 				loadImmediateIntoIntRegister(code, RCX, size / 8);
 
-				code->add1(0xF3); // rep movsq
-				code->add1(0x48);
-				code->add1(0xA5);
+				code->add1Unchecked(0xF3); // rep movsq
+				code->add1Unchecked(0x48);
+				code->add1Unchecked(0xA5);
 			}
 			else {
 				loadImmediateIntoIntRegister(code, RCX, size);
 
-				code->add1(0xF3); // rep movsb
-				code->add1(0x48);
-				code->add1(0xA4);
+				code->add1Unchecked(0xF3); // rep movsb
+				code->add1Unchecked(0x48);
+				code->add1Unchecked(0xA4);
 			}
 		}
 	}
@@ -527,9 +527,10 @@ void writeSet(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u3
 #define XDATA_SECTION_NUMBER 8
 
 u32 *addRelocationToUnkownSymbol(BucketedArenaAllocator *allocator, u32 virtualAddress, u16 type) {
-	allocator->add4(virtualAddress);
-	u32 *value = allocator->add4(0);
-	allocator->add2(type);
+	allocator->ensure(10);
+	allocator->add4Unchecked(virtualAddress);
+	u32 *value = allocator->add4Unchecked(0);
+	allocator->add2Unchecked(type);
 
 	return value;
 }
@@ -550,9 +551,10 @@ u32 createRdataPointer(BucketedArenaAllocator *stringTable, BucketArray<Symbol> 
 }
 
 void addPointerRelocation(BucketedArenaAllocator *relocations, u32 address, u32 symbol) {
-	relocations->add4(address);
-	relocations->add4(symbol);
-	relocations->add2(IMAGE_REL_AMD64_ADDR64);
+	relocations->ensure(10);
+	relocations->add4Unchecked(address);
+	relocations->add4Unchecked(symbol);
+	relocations->add2Unchecked(IMAGE_REL_AMD64_ADDR64);
 }
 
 u32 createSymbolForFunction(BucketArray<Symbol> *symbols, ExprFunction *function) {
@@ -664,11 +666,11 @@ void writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataRelocations,
 
 	if (value->flavor == ExprFlavor::FUNCTION) {
 		assert(type->size == 8);
-		dataRelocations->add4(dataSize);
 
-		dataRelocations->add4(createSymbolForFunction(symbols, static_cast<ExprFunction *>(value)));
-
-		dataRelocations->add2(IMAGE_REL_AMD64_ADDR64);
+		dataRelocations->ensure(10);
+		dataRelocations->add4Unchecked(dataSize);
+		dataRelocations->add4Unchecked(createSymbolForFunction(symbols, static_cast<ExprFunction *>(value)));
+		dataRelocations->add2Unchecked(IMAGE_REL_AMD64_ADDR64);
 
 		*reinterpret_cast<u64 *>(data) = 0;
 	}
@@ -678,9 +680,10 @@ void writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataRelocations,
 
 
 		assert(type->size == 8);
-		dataRelocations->add4(dataSize);
-		dataRelocations->add4(string);
-		dataRelocations->add2(IMAGE_REL_AMD64_ADDR64);
+		dataRelocations->ensure(10);
+		dataRelocations->add4Unchecked(dataSize);
+		dataRelocations->add4Unchecked(string);
+		dataRelocations->add2Unchecked(IMAGE_REL_AMD64_ADDR64);
 
 		reinterpret_cast<u64 *>(data)[0] = 0;
 		reinterpret_cast<u64 *>(data)[1] = static_cast<ExprStringLiteral *>(value)->string.length;
@@ -737,9 +740,10 @@ void writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataRelocations,
 		}
 	}
 	else if (value->flavor == ExprFlavor::TYPE_LITERAL) {
-		dataRelocations->add4(dataSize);
-		dataRelocations->add4(createSymbolForType(symbols, static_cast<ExprLiteral *>(value)->typeValue));
-		dataRelocations->add2(IMAGE_REL_AMD64_ADDR64);
+		dataRelocations->ensure(10);
+		dataRelocations->add4Unchecked(dataSize);
+		dataRelocations->add4Unchecked(createSymbolForType(symbols, static_cast<ExprLiteral *>(value)->typeValue));
+		dataRelocations->add2Unchecked(IMAGE_REL_AMD64_ADDR64);
 
 		*reinterpret_cast<u64 *>(data) = 0;
 	}
@@ -830,8 +834,9 @@ u32 debugTypeId = 0x1000;
 void alignDebugTypes(BucketedArenaAllocator *debugTypes) {
 	u32 padding = AlignPO2(debugTypes->totalSize, 4) - debugTypes->totalSize;
 
+	debugTypes->ensure(3);
 	for (u32 i = 0; i < padding; i++) {
-		debugTypes->add1(0xF0 + padding - i);
+		debugTypes->add1Unchecked(0xF0 + padding - i);
 	}
 
 	assert(!(debugTypes->totalSize & 3));
@@ -869,10 +874,7 @@ void addStructUniqueName(BucketedArenaAllocator *debugTypes, u32 name = debugTyp
 
 
 bool appendCoffName(BucketedArenaAllocator *debugSymbols, Type *type) {
-	if (type->flavor == TypeFlavor::POINTER) {
-
-	}
-	else if (type->flavor == TypeFlavor::ARRAY) {
+	if (type->flavor == TypeFlavor::ARRAY) {
 		auto array = static_cast<TypeArray *>(type);
 
 		if (array->flags & TYPE_ARRAY_IS_FIXED) {
@@ -913,10 +915,11 @@ bool appendCoffName(BucketedArenaAllocator *debugSymbols, Type *type) {
 
 
 void emitUDT(BucketedArenaAllocator *debugSymbols, Type *type) {
-	u16 *size = debugSymbols->add2(0);
+	debugSymbols->ensure(8);
+	u16 *size = debugSymbols->add2Unchecked(0);
 	u32 start = debugSymbols->totalSize;
-	debugSymbols->add2(S_UDT);
-	debugSymbols->add4(type->codeviewTypeIndex);
+	debugSymbols->add2Unchecked(S_UDT);
+	debugSymbols->add4Unchecked(type->codeviewTypeIndex);
 	appendCoffName(debugSymbols, type);
 	debugSymbols->add1(0);
 	*size = static_cast<u16>(debugSymbols->totalSize - start);
@@ -970,38 +973,42 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 			return indexOfType | 0x600;
 		}
 
-		return DEBUG_LEAF {
-			debugTypes->add2(0x1002); // LF_POINTER
-			debugTypes->add4(indexOfType);
-			debugTypes->add4(0x1000c); // 64 bit normal pointer
+		return DEBUG_LEAF{
+			debugTypes->ensure(2);
+			debugTypes->add2Unchecked(0x1002); // LF_POINTER
+			debugTypes->add4Unchecked(indexOfType);
+			debugTypes->add4Unchecked(0x1000c); // 64 bit normal pointer
 		};
 	}
 	else if (type->flavor == TypeFlavor::STRING) {
 		auto fieldList = DEBUG_LEAF{
-			debugTypes->add2(0x1203); // LF_FIELDLIST
+			debugTypes->ensure(12);
+			debugTypes->add2Unchecked(0x1203); // LF_FIELDLIST
 
-			debugTypes->add2(0x150D); // LF_MEMBER
-			debugTypes->add2(0x3); // public
-			debugTypes->add4(T_64PUCHAR);
-			debugTypes->add2(0); // offset 0
+			debugTypes->add2Unchecked(0x150D); // LF_MEMBER
+			debugTypes->add2Unchecked(0x3); // public
+			debugTypes->add4Unchecked(T_64PUCHAR);
+			debugTypes->add2Unchecked(0); // offset 0
 			debugTypes->addNullTerminatedString("data");
 			alignDebugTypes(debugTypes);
 
-			debugTypes->add2(0x150D); // LF_MEMBER
-			debugTypes->add2(0x3); // public
-			debugTypes->add4(T_UINT8);
-			debugTypes->add2(8); // offset 8
+			debugTypes->ensure(10);
+			debugTypes->add2Unchecked(0x150D); // LF_MEMBER
+			debugTypes->add2Unchecked(0x3); // public
+			debugTypes->add4Unchecked(T_UINT8);
+			debugTypes->add2Unchecked(8); // offset 8
 			debugTypes->addNullTerminatedString("count");
 		};
 
 		return DEBUG_LEAF{
-			debugTypes->add2(0x1505); // LF_STRUCTURE
-			debugTypes->add2(2); // 2 members
-			debugTypes->add2(0x200); // Has a unique name
-			debugTypes->add4(fieldList); // field list
-			debugTypes->add4(0); // super class
-			debugTypes->add4(0); // vtable
-			debugTypes->add2(16);
+			debugTypes->ensure(20);
+			debugTypes->add2Unchecked(0x1505); // LF_STRUCTURE
+			debugTypes->add2Unchecked(2); // 2 members
+			debugTypes->add2Unchecked(0x200); // Has a unique name
+			debugTypes->add4Unchecked(fieldList); // field list
+			debugTypes->add4Unchecked(0); // super class
+			debugTypes->add4Unchecked(0); // vtable
+			debugTypes->add2Unchecked(16);
 			debugTypes->addNullTerminatedString("string");
 			addStructUniqueName(debugTypes);
 		};
@@ -1013,52 +1020,57 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 			u32 arrayOf = getCoffTypeIndex(debugTypes, array->arrayOf);
 
 			return DEBUG_LEAF{
-				debugTypes->add2(0x1503); // LF_ARRAY
-				debugTypes->add4(arrayOf);
-				debugTypes->add4(T_INT8);
-				debugTypes->add2(0x8004); // LF_ULONG
-				debugTypes->add4(array->size);
-				debugTypes->add1(0); // No name
+				debugTypes->ensure(17);
+				debugTypes->add2Unchecked(0x1503); // LF_ARRAY
+				debugTypes->add4Unchecked(arrayOf);
+				debugTypes->add4Unchecked(T_INT8);
+				debugTypes->add2Unchecked(0x8004); // LF_ULONG
+				debugTypes->add4Unchecked(array->size);
+				debugTypes->add1Unchecked(0); // No name
 			};
 		}
 		else {
 			u32 dataType = getCoffTypeIndex(debugTypes, static_cast<ExprLiteral *>(array->members.declarations[0]->type)->typeValue);
 
 			u32 fieldList = DEBUG_LEAF{
-				debugTypes->add2(0x1203); // LF_FIELDLIST
+				debugTypes->ensure(12);
+				debugTypes->add2Unchecked(0x1203); // LF_FIELDLIST
 
-				debugTypes->add2(0x150D); // LF_MEMBER
-				debugTypes->add2(0x3); // public
-				debugTypes->add4(dataType);
-				debugTypes->add2(0); // offset 0
+				debugTypes->add2Unchecked(0x150D); // LF_MEMBER
+				debugTypes->add2Unchecked(0x3); // public
+				debugTypes->add4Unchecked(dataType);
+				debugTypes->add2Unchecked(0); // offset 0
 				debugTypes->addNullTerminatedString("data");
 				alignDebugTypes(debugTypes);
 
-				debugTypes->add2(0x150D); // LF_MEMBER
-				debugTypes->add2(0x3); // public
-				debugTypes->add4(T_UINT8);
-				debugTypes->add2(8); // offset 8
+				debugTypes->ensure(10);
+				debugTypes->add2Unchecked(0x150D); // LF_MEMBER
+				debugTypes->add2Unchecked(0x3); // public
+				debugTypes->add4Unchecked(T_UINT8);
+				debugTypes->add2Unchecked(8); // offset 8
 				debugTypes->addNullTerminatedString("count");
 
 				if (array->flags & TYPE_ARRAY_IS_DYNAMIC) {
 					alignDebugTypes(debugTypes);
 
-					debugTypes->add2(0x150D); // LF_MEMBER
-					debugTypes->add2(0x3); // public
-					debugTypes->add4(T_UINT8);
-					debugTypes->add2(16); // offset 8
+					debugTypes->ensure(10);
+					debugTypes->add2Unchecked(0x150D); // LF_MEMBER
+					debugTypes->add2Unchecked(0x3); // public
+					debugTypes->add4Unchecked(T_UINT8);
+					debugTypes->add2Unchecked(16); // offset 8
 					debugTypes->addNullTerminatedString("capacity");
 				}
 			};
 
 			return DEBUG_LEAF{
-				debugTypes->add2(0x1505); // LF_STRUCTURE
-				debugTypes->add2(array->flags & TYPE_ARRAY_IS_DYNAMIC ? 3 : 2); // 2 members
-				debugTypes->add2(0x200); // Has a unique name
-				debugTypes->add4(fieldList); // field list
-				debugTypes->add4(0); // super class
-				debugTypes->add4(0); // vtable
-				debugTypes->add2(array->size);
+				debugTypes->ensure(20);
+				debugTypes->add2Unchecked(0x1505); // LF_STRUCTURE
+				debugTypes->add2Unchecked(array->flags & TYPE_ARRAY_IS_DYNAMIC ? 3 : 2); // 2 members
+				debugTypes->add2Unchecked(0x200); // Has a unique name
+				debugTypes->add4Unchecked(fieldList); // field list
+				debugTypes->add4Unchecked(0); // super class
+				debugTypes->add4Unchecked(0); // vtable
+				debugTypes->add2Unchecked(array->size);
 				appendCoffName(debugTypes, array);
 				debugTypes->add1(0);
 				addStructUniqueName(debugTypes);
@@ -1079,39 +1091,43 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 		u32 firstReturn = debugTypeId;
 
 		for (u32 i = 1; i < function->returnCount; i++) {
-			DEBUG_LEAF {
-				debugTypes->add2(0x1002); // LF_POINTER
-				debugTypes->add4(function->returnTypes[i]->codeviewTypeIndex);
-				debugTypes->add4(0x1000c); // 64 bit normal pointer
+			DEBUG_LEAF{
+				debugTypes->ensure(10);
+				debugTypes->add2Unchecked(0x1002); // LF_POINTER
+				debugTypes->add4Unchecked(function->returnTypes[i]->codeviewTypeIndex);
+				debugTypes->add4Unchecked(0x1000c); // 64 bit normal pointer
 			};
 		}
 
-		u32 argList = DEBUG_LEAF {
-			debugTypes->add2(0x1201); // LF_ARGLIST
-			debugTypes->add4(function->argumentCount + function->returnCount - 1);
+		u32 argList = DEBUG_LEAF{
+			debugTypes->ensure(6 + (function->argumentCount + function->returnCount - 1) * 4);
+			debugTypes->add2Unchecked(0x1201); // LF_ARGLIST
+			debugTypes->add4Unchecked(function->argumentCount + function->returnCount - 1);
 
 			for (u32 i = 0; i < function->argumentCount; i++) {
-				debugTypes->add4(function->argumentTypes[i]->codeviewTypeIndex);
+				debugTypes->add4Unchecked(function->argumentTypes[i]->codeviewTypeIndex);
 			}
 
 			for (u32 i = 1;	i < function->returnCount; i++) {
-				debugTypes->add4(firstReturn + i - 1);
+				debugTypes->add4Unchecked(firstReturn + i - 1);
 			}
 		};
 
-		u32 functionType = DEBUG_LEAF {
-			debugTypes->add2(0x1008); // LF_PROCEDURE
-			debugTypes->add4(function->returnTypes[0]->codeviewTypeIndex);
-			debugTypes->add1(0); // C near call
-			debugTypes->add1(0);
-			debugTypes->add2(function->argumentCount + function->returnCount - 1); // 0 parameters
-			debugTypes->add4(argList);
+		u32 functionType = DEBUG_LEAF{
+			debugTypes->ensure(14);
+			debugTypes->add2Unchecked(0x1008); // LF_PROCEDURE
+			debugTypes->add4Unchecked(function->returnTypes[0]->codeviewTypeIndex);
+			debugTypes->add1Unchecked(0); // C near call
+			debugTypes->add1Unchecked(0);
+			debugTypes->add2Unchecked(function->argumentCount + function->returnCount - 1); // 0 parameters
+			debugTypes->add4Unchecked(argList);
 		};
 
 		return DEBUG_LEAF {
-			debugTypes->add2(0x1002); // LF_POINTER
-			debugTypes->add4(functionType);
-			debugTypes->add4(0x1000c); // 64 bit normal pointer
+			debugTypes->ensure(10);
+			debugTypes->add2Unchecked(0x1002); // LF_POINTER
+			debugTypes->add4Unchecked(functionType);
+			debugTypes->add4Unchecked(0x1000c); // 64 bit normal pointer
 		};
 	}
 	else if (type->flavor == TypeFlavor::ENUM) {
@@ -1135,10 +1151,11 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 					_BitScanForward64(&bit, value);
 					
 					DEBUG_LEAF{
-						debugTypes->add2(0x1205); // LF_BITFIELD
-						debugTypes->add4(integerType);
-						debugTypes->add1(1); // 1 bit
-						debugTypes->add1(static_cast<u8>(bit));
+						debugTypes->ensure(8);
+						debugTypes->add2Unchecked(0x1205); // LF_BITFIELD
+						debugTypes->add4Unchecked(integerType);
+						debugTypes->add1Unchecked(1); // 1 bit
+						debugTypes->add1Unchecked(static_cast<u8>(bit));
 					};
 				}
 			}
@@ -1155,23 +1172,25 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 					if (value && !(value & value - 1)) { // If exactly one bit is set
 						alignDebugTypes(debugTypes);
 
-						debugTypes->add2(0x150D); // LF_MEMBER
-						debugTypes->add2(0x3); // public
-						debugTypes->add4(firstFlag + flagCount++);
-						debugTypes->add2(0); // offset 0
+						debugTypes->ensure(10);
+						debugTypes->add2Unchecked(0x150D); // LF_MEMBER
+						debugTypes->add2Unchecked(0x3); // public
+						debugTypes->add4Unchecked(firstFlag + flagCount++);
+						debugTypes->add2Unchecked(0); // offset 0
 						debugTypes->addNullTerminatedString(declaration->name);
 					}
 				}
 			};
 
 			return DEBUG_LEAF{
-				debugTypes->add2(0x1505); // LF_STRUCTURE
-				debugTypes->add2(flagCount);
-				debugTypes->add2(0x200); // Has a unique name
-				debugTypes->add4(fieldList); // field list
-				debugTypes->add4(0); // super class
-				debugTypes->add4(0); // vtable
-				debugTypes->add2(enumeration->size);
+				debugTypes->ensure(20);
+				debugTypes->add2Unchecked(0x1505); // LF_STRUCTURE
+				debugTypes->add2Unchecked(flagCount);
+				debugTypes->add2Unchecked(0x200); // Has a unique name
+				debugTypes->add4Unchecked(fieldList); // field list
+				debugTypes->add4Unchecked(0); // super class
+				debugTypes->add4Unchecked(0); // vtable
+				debugTypes->add2Unchecked(enumeration->size);
 				debugTypes->addNullTerminatedString(enumeration->name);
 				addStructUniqueName(debugTypes);
 			};
@@ -1185,20 +1204,22 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 					assert(!(declaration->initialValue->type->flags & TYPE_INTEGER_IS_SIGNED));
 
 					alignDebugTypes(debugTypes);
-					debugTypes->add2(0x1502); // LF_ENUMERATE
-					debugTypes->add2(0x3); // Public
-					debugTypes->add2(0x800A); // LF_UQUADWORD
-					debugTypes->add8(static_cast<ExprLiteral *>(declaration->initialValue)->unsignedValue);
+					debugTypes->ensure(14);
+					debugTypes->add2Unchecked(0x1502); // LF_ENUMERATE
+					debugTypes->add2Unchecked(0x3); // Public
+					debugTypes->add2Unchecked(0x800A); // LF_UQUADWORD
+					debugTypes->add8Unchecked(static_cast<ExprLiteral *>(declaration->initialValue)->unsignedValue);
 					debugTypes->addNullTerminatedString(declaration->name);
 				}
 			};
 
 			return DEBUG_LEAF{
-				debugTypes->add2(0x1507); // LF_ENUM
-				debugTypes->add2(static_cast<u16>(enumeration->values->declarations.count));
-				debugTypes->add2(0x200); // Has a unique name
-				debugTypes->add4(integerType);
-				debugTypes->add4(fieldList);
+				debugTypes->ensure(14);
+				debugTypes->add2Unchecked(0x1507); // LF_ENUM
+				debugTypes->add2Unchecked(static_cast<u16>(enumeration->values->declarations.count));
+				debugTypes->add2Unchecked(0x200); // Has a unique name
+				debugTypes->add4Unchecked(integerType);
+				debugTypes->add4Unchecked(fieldList);
 				debugTypes->addNullTerminatedString(enumeration->name);
 				addStructUniqueName(debugTypes);
 			};
@@ -1206,23 +1227,25 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 	}
 	else if (type->flavor == TypeFlavor::TYPE) {
 		u32 fieldList = DEBUG_LEAF{
-			debugTypes->add2(0x1203); // LF_FIELDLIST
+			debugTypes->ensure(12);
+			debugTypes->add2Unchecked(0x1203); // LF_FIELDLIST
 
-			debugTypes->add2(0x150D); // LF_MEMBER
-			debugTypes->add2(0x3); // public
-			debugTypes->add4(T_64PVOID);
-			debugTypes->add2(0); // offset 0
+			debugTypes->add2Unchecked(0x150D); // LF_MEMBER
+			debugTypes->add2Unchecked(0x3); // public
+			debugTypes->add4Unchecked(T_64PVOID);
+			debugTypes->add2Unchecked(0); // offset 0
 			debugTypes->addNullTerminatedString("value");
 		};
 
 		return DEBUG_LEAF{
-			debugTypes->add2(0x1505); // LF_STRUCTURE
-			debugTypes->add2(1); // 1 member
-			debugTypes->add2(0x200); // Has a unique name
-			debugTypes->add4(fieldList); // field list
-			debugTypes->add4(0); // super class
-			debugTypes->add4(0); // vtable
-			debugTypes->add2(8);
+			debugTypes->ensure(20);
+			debugTypes->add2Unchecked(0x1505); // LF_STRUCTURE
+			debugTypes->add2Unchecked(1); // 1 member
+			debugTypes->add2Unchecked(0x200); // Has a unique name
+			debugTypes->add4Unchecked(fieldList); // field list
+			debugTypes->add4Unchecked(0); // super class
+			debugTypes->add4Unchecked(0); // vtable
+			debugTypes->add2Unchecked(8);
 			debugTypes->addNullTerminatedString("type");
 			addStructUniqueName(debugTypes);
 		};
@@ -1233,13 +1256,14 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 		u16 packed = structure->flags & TYPE_STRUCT_IS_PACKED ? 1 : 0;
 
 		structure->codeviewTypeIndex = DEBUG_LEAF{
-			debugTypes->add2(0x1505); // LF_STRUCTURE
-			debugTypes->add2(0); // 1 member
-			debugTypes->add2(0x280 | packed); // Has a unique name and is a forward declaration
-			debugTypes->add4(0); // field list
-			debugTypes->add4(0); // super class
-			debugTypes->add4(0); // vtable
-			debugTypes->add2(0); // size
+			debugTypes->ensure(20);
+			debugTypes->add2Unchecked(0x1505); // LF_STRUCTURE
+			debugTypes->add2Unchecked(0); // 1 member
+			debugTypes->add2Unchecked(0x280 | packed); // Has a unique name and is a forward declaration
+			debugTypes->add4Unchecked(0); // field list
+			debugTypes->add4Unchecked(0); // super class
+			debugTypes->add4Unchecked(0); // vtable
+			debugTypes->add2Unchecked(0); // size
 			debugTypes->addNullTerminatedString(structure->name);
 			addStructUniqueName(debugTypes);
 		};
@@ -1265,10 +1289,11 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 				auto type = static_cast<ExprLiteral *>(member->type)->typeValue;
 
 				alignDebugTypes(debugTypes);
-				debugTypes->add2(0x150D); // LF_MEMBER
-				debugTypes->add2(0x3); // public
-				debugTypes->add4(type->codeviewTypeIndex);
-				debugTypes->add2(member->physicalStorage); // offset
+				debugTypes->ensure(10);
+				debugTypes->add2Unchecked(0x150D); // LF_MEMBER
+				debugTypes->add2Unchecked(0x3); // public
+				debugTypes->add4Unchecked(type->codeviewTypeIndex);
+				debugTypes->add2Unchecked(member->physicalStorage); // offset
 				debugTypes->addNullTerminatedString(member->name);
 
 				memberCount++;
@@ -1278,13 +1303,14 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 		bool isUnion = structure->flags & TYPE_STRUCT_IS_UNION ? true : false;
 
 		return DEBUG_LEAF{
-			debugTypes->add2(isUnion ? 0x1506 : 0x1505); //LF_UNION : LF_STRUCTURE
-			debugTypes->add2(memberCount);
-			debugTypes->add2(0x200 | packed); // Has a unique name
-			debugTypes->add4(fieldList); // field list
-			debugTypes->add4(0); // super class
-			debugTypes->add4(0); // vtable
-			debugTypes->add2(structure->size);
+			debugTypes->ensure(20);
+			debugTypes->add2Unchecked(isUnion ? 0x1506 : 0x1505); //LF_UNION : LF_STRUCTURE
+			debugTypes->add2Unchecked(memberCount);
+			debugTypes->add2Unchecked(0x200 | packed); // Has a unique name
+			debugTypes->add4Unchecked(fieldList); // field list
+			debugTypes->add4Unchecked(0); // super class
+			debugTypes->add4Unchecked(0); // vtable
+			debugTypes->add2Unchecked(structure->size);
 			debugTypes->addNullTerminatedString(structure->name);
 			addStructUniqueName(debugTypes, structure->codeviewTypeIndex); // Use the same unique name as the forward declaration
 		};
@@ -1371,9 +1397,10 @@ struct REGREL32 {
 #pragma pack(pop)
 
 void emitBasicType(BucketedArenaAllocator *debugSymbols, u32 type, const char *name) {
-	debugSymbols->add2(static_cast<u16>(7 + strlen(name)));
-	debugSymbols->add2(S_UDT);
-	debugSymbols->add4(type);
+	debugSymbols->ensure(8);
+	debugSymbols->add2Unchecked(static_cast<u16>(7 + strlen(name)));
+	debugSymbols->add2Unchecked(S_UDT);
+	debugSymbols->add4Unchecked(type);
 	debugSymbols->addNullTerminatedString(name);
 }
 
@@ -1399,31 +1426,23 @@ void emitBasicTypeDebugInfo(BucketedArenaAllocator *debugSymbols) {
 }
 
 void runCoffWriter() {
-
-	{
-		PROFILE_ZONE("Wait for infer");
-		std::unique_lock<std::mutex> lock(startLlvmLock);
-
-		startLlvm.wait(lock);
-	}
-
 	PROFILE_FUNC();
 	if (hadError)
 		return;
 
-	BucketedArenaAllocator code(4096);
-	BucketedArenaAllocator codeRelocations(4096);
-	BucketedArenaAllocator data(4096);
-	BucketedArenaAllocator dataRelocations(4096);
-	BucketedArenaAllocator rdata(4096);
-	BucketedArenaAllocator rdataRelocations(4096);
-	BucketedArenaAllocator stringTable(4096);
-	BucketedArenaAllocator debugSymbols(4096);
-	BucketedArenaAllocator debugSymbolsRelocations(4096);
-	BucketedArenaAllocator debugTypes(4096);
-	BucketedArenaAllocator pdata(4096);
-	BucketedArenaAllocator pdataRelocations(4096);
-	BucketedArenaAllocator xdata(4096);
+	BucketedArenaAllocator code(65536);
+	BucketedArenaAllocator codeRelocations(65536);
+	BucketedArenaAllocator data(65536);
+	BucketedArenaAllocator dataRelocations(65536);
+	BucketedArenaAllocator rdata(65536);
+	BucketedArenaAllocator rdataRelocations(65536);
+	BucketedArenaAllocator stringTable(65536);
+	BucketedArenaAllocator debugSymbols(65536);
+	BucketedArenaAllocator debugSymbolsRelocations(65536);
+	BucketedArenaAllocator debugTypes(65536);
+	BucketedArenaAllocator pdata(65536);
+	BucketedArenaAllocator pdataRelocations(65536);
+	BucketedArenaAllocator xdata(65536);
 
 	SectionHeader bssSection = {};
 	bssSection.virtualSize = 0;
@@ -1555,8 +1574,9 @@ void runCoffWriter() {
 
 			u32 spaceToAllocate = (registerCount >> 1) * 16 + 8;
 
-			debugSymbols.add4(0xF1);
-			auto subsectionSizePatch = debugSymbols.add4(0);
+			debugSymbols.ensure(8);
+			debugSymbols.add4Unchecked(0xF1);
+			auto subsectionSizePatch = debugSymbols.add4Unchecked(0);
 			u32 subsectionOffset = debugSymbols.totalSize;
 
 			auto name = function->valueOfDeclaration ? function->valueOfDeclaration->name : "__unnamed";
@@ -1565,35 +1585,38 @@ void runCoffWriter() {
 			u32 funcType = getCoffTypeIndex(&debugTypes, function->type) - 1;
 
 			u32 funcId = DEBUG_LEAF{
-				debugTypes.add2(0x1601); // LF_FUNC_ID
-				debugTypes.add4(0);
-				debugTypes.add4(funcType);
+				debugTypes.ensure(10);
+				debugTypes.add2Unchecked(0x1601); // LF_FUNC_ID
+				debugTypes.add4Unchecked(0);
+				debugTypes.add4Unchecked(funcType);
 				debugTypes.addNullTerminatedString(name);
 			};
 
-			debugSymbols.add2(static_cast<u16>(sizeof(PROCSYM32) + name.length - 1));
-			debugSymbols.add2(0x1147); // S_GPROC32_ID
-			debugSymbols.add4(0);
-			debugSymbols.add4(0);
-			debugSymbols.add4(0);
-			u32 *functionLengthPatch = debugSymbols.add4(code.totalSize - functionStart);
-			u32 *functionPreambleEndPatch = debugSymbols.add4(0);
-			u32 *functionPostambleStartPatch = debugSymbols.add4(0);
-			debugSymbols.add4(funcId);
+			debugSymbols.ensure(39);
+			debugSymbolsRelocations.ensure(20);
+			debugSymbols.add2Unchecked(static_cast<u16>(sizeof(PROCSYM32) + name.length - 1));
+			debugSymbols.add2Unchecked(0x1147); // S_GPROC32_ID
+			debugSymbols.add4Unchecked(0);
+			debugSymbols.add4Unchecked(0);
+			debugSymbols.add4Unchecked(0);
+			u32 *functionLengthPatch = debugSymbols.add4Unchecked(code.totalSize - functionStart);
+			u32 *functionPreambleEndPatch = debugSymbols.add4Unchecked(0);
+			u32 *functionPostambleStartPatch = debugSymbols.add4Unchecked(0);
+			debugSymbols.add4Unchecked(funcId);
 
-			debugSymbolsRelocations.add4(debugSymbols.totalSize);
-			debugSymbolsRelocations.add4(function->physicalStorage);
-			debugSymbolsRelocations.add2(IMAGE_REL_AMD64_SECREL);
+			debugSymbolsRelocations.add4Unchecked(debugSymbols.totalSize);
+			debugSymbolsRelocations.add4Unchecked(function->physicalStorage);
+			debugSymbolsRelocations.add2Unchecked(IMAGE_REL_AMD64_SECREL);
 
-			debugSymbols.add4(0);
+			debugSymbols.add4Unchecked(0);
 
-			debugSymbolsRelocations.add4(debugSymbols.totalSize);
-			debugSymbolsRelocations.add4(textSectionSymbolIndex);
-			debugSymbolsRelocations.add2(IMAGE_REL_AMD64_SECTION);
+			debugSymbolsRelocations.add4Unchecked(debugSymbols.totalSize);
+			debugSymbolsRelocations.add4Unchecked(textSectionSymbolIndex);
+			debugSymbolsRelocations.add2Unchecked(IMAGE_REL_AMD64_SECTION);
 
-			debugSymbols.add2(0);
+			debugSymbols.add2Unchecked(0);
 
-			debugSymbols.add1(0);
+			debugSymbols.add1Unchecked(0);
 			debugSymbols.addNullTerminatedString(name);
 
 			FRAMEPROCSYM frame;
@@ -1607,14 +1630,16 @@ void runCoffWriter() {
 
 			u32 paramOffset;
 
+			code.ensure(256);
+
 			if (!isStandardSize(static_cast<ExprLiteral *>(function->returns.declarations[0]->type)->typeValue->size)) {
 				paramOffset = 1;
 
-				code.add1(0x48); // mov qword ptr[rsp + 8], rcx
-				code.add1(0x89);
-				code.add1(0x4C);
-				code.add1(0x24);
-				code.add1(0x08);
+				code.add1Unchecked(0x48); // mov qword ptr[rsp + 8], rcx
+				code.add1Unchecked(0x89);
+				code.add1Unchecked(0x4C);
+				code.add1Unchecked(0x24);
+				code.add1Unchecked(0x08);
 			}
 			else {
 				paramOffset = 0;
@@ -1626,8 +1651,9 @@ void runCoffWriter() {
 				argumentInfo.off = getRegisterOffset(function, i + 1 + paramOffset);
 				argumentInfo.typind = getCoffTypeIndex(&debugTypes, static_cast<ExprLiteral *>(argument->type)->typeValue);
 
-				debugSymbols.add2(static_cast<u16>(sizeof(argumentInfo) + 1 + argument->name.length));
-				debugSymbols.add(&argumentInfo, sizeof(argumentInfo));
+				debugSymbols.ensure(2 + sizeof(argumentInfo));
+				debugSymbols.add2Unchecked(static_cast<u16>(sizeof(argumentInfo) + 1 + argument->name.length));
+				debugSymbols.addUnchecked(&argumentInfo, sizeof(argumentInfo));
 				debugSymbols.addNullTerminatedString(argument->name);
 			}
 
@@ -1645,19 +1671,19 @@ void runCoffWriter() {
 
 				if (type->flavor == TypeFlavor::FLOAT) {
 					if (type->size == 4) {
-						code.add1(0xF3);
+						code.add1Unchecked(0xF3);
 					}
 					else if (type->size == 8) {
-						code.add1(0xF2);
+						code.add1Unchecked(0xF2);
 					}
 
-					code.add1(0x0F);
-					code.add1(0x11);
-					code.add1(0x44 | (static_cast<u8>(i + paramOffset) << 3));
+					code.add1Unchecked(0x0F);
+					code.add1Unchecked(0x11);
+					code.add1Unchecked(0x44 | (static_cast<u8>(i + paramOffset) << 3));
 				}
 				else {
 					if (type->size == 2) {
-						code.add1(0x66);
+						code.add1Unchecked(0x66);
 					}
 
 					u8 rex = 0x40;
@@ -1666,40 +1692,40 @@ void runCoffWriter() {
 					if (type->size == 8 || !isStandardSize(type->size)) rex |= 0x08;
 
 					if (rex != 0x40) {
-						code.add1(rex);
+						code.add1Unchecked(rex);
 					}
 
 					if (type->size == 1) {
-						code.add1(0x88);
+						code.add1Unchecked(0x88);
 					}
 					else {
-						code.add1(0x89);
+						code.add1Unchecked(0x89);
 					}
 
-					code.add1(intRegisters[i + paramOffset]);
+					code.add1Unchecked(intRegisters[i + paramOffset]);
 				}
 
-				code.add1(0x24);
-				code.add1((static_cast<u8>(i + paramOffset) + 1) * 8);
+				code.add1Unchecked(0x24);
+				code.add1Unchecked((static_cast<u8>(i + paramOffset) + 1) * 8);
 			}
 
-			code.add1(0x56); // push rsi
+			code.add1Unchecked(0x56); // push rsi
 			u32 pushRsiOffset = code.totalSize - functionStart;
-			code.add1(0x57); // push rdi
+			code.add1Unchecked(0x57); // push rdi
 			u32 pushRdiOffset = code.totalSize - functionStart;
 
 			// sub rsp, spaceToAllocate
 			if (spaceToAllocate < 0x80) {
-				code.add1(0x48);
-				code.add1(0x83);
-				code.add1(0xEC);
-				code.add1(static_cast<u8>(spaceToAllocate));
+				code.add1Unchecked(0x48);
+				code.add1Unchecked(0x83);
+				code.add1Unchecked(0xEC);
+				code.add1Unchecked(static_cast<u8>(spaceToAllocate));
 			}
 			else {
-				code.add1(0x48);
-				code.add1(0x81);
-				code.add1(0xEC);
-				code.add4(static_cast<u32>(spaceToAllocate));
+				code.add1Unchecked(0x48);
+				code.add1Unchecked(0x81);
+				code.add1Unchecked(0xEC);
+				code.add4Unchecked(static_cast<u32>(spaceToAllocate));
 			}
 			u32 subRspOffset = code.totalSize - functionStart;
 
@@ -1712,25 +1738,27 @@ void runCoffWriter() {
 				if (!isStandardSize(type->size)) {
 					loadIntoIntRegister(&code, function, 8, RSI, i + 1 + paramOffset);
 
-					code.add1(0x48);
-					code.add1(0x8D);
+					code.add1Unchecked(0x48);
+					code.add1Unchecked(0x8D);
 					writeRSPRegisterByte(&code, function, RDI, function->arguments.declarations[i]->physicalStorage);
 
 					if (type->size % 8 == 0) {
 						loadImmediateIntoIntRegister(&code, RCX, type->size / 8);
 
-						code.add1(0xF3); //  rep movsq
-						code.add1(0x48);
-						code.add1(0xA5);
+						code.add1Unchecked(0xF3); //  rep movsq
+						code.add1Unchecked(0x48);
+						code.add1Unchecked(0xA5);
 					}
 					else {
 						loadImmediateIntoIntRegister(&code, RCX, type->size);
 
-						code.add1(0xF3); //  rep movsb
-						code.add1(0x48);
-						code.add1(0xA4);
+						code.add1Unchecked(0xF3); //  rep movsb
+						code.add1Unchecked(0x48);
+						code.add1Unchecked(0xA4);
 					}
 				}
+
+				code.ensure(64);
 			}
 
 			for (u32 index = 0; index < function->state.ir.count; index++) {
@@ -1738,16 +1766,19 @@ void runCoffWriter() {
 
 				instructionOffsets.add(code.totalSize);
 
+				code.ensure(128);
+
 				switch (ir.op) {
 				case IrOp::TYPE: {
-					code.add1(0x48);
-					code.add1(0xB8);
+					code.add1Unchecked(0x48);
+					code.add1Unchecked(0xB8);
 
-					codeRelocations.add4(code.totalSize);
-					codeRelocations.add4(createSymbolForType(&symbols, ir.type));
-					codeRelocations.add2(IMAGE_REL_AMD64_ADDR64);
+					codeRelocations.ensure(10);
+					codeRelocations.add4Unchecked(code.totalSize);
+					codeRelocations.add4Unchecked(createSymbolForType(&symbols, ir.type));
+					codeRelocations.add2Unchecked(IMAGE_REL_AMD64_ADDR64);
 
-					code.add8(0);
+					code.add8Unchecked(0);
 
 					storeFromIntRegister(&code, function, 8, ir.dest, RAX);
 
@@ -1755,8 +1786,8 @@ void runCoffWriter() {
 				}
 				case IrOp::ADD: {
 					if (ir.a == 0 && ir.b == 0) {
-						code.add1(0x31); // xor eax, eax
-						code.add1(0xC0);
+						code.add1Unchecked(0x31); // xor eax, eax
+						code.add1Unchecked(0xC0);
 
 						storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
 					}
@@ -1771,14 +1802,14 @@ void runCoffWriter() {
 							loadIntoFloatRegister(&code, function, ir.opSize, 0, ir.a);
 
 							if (ir.opSize == 8) {
-								code.add1(0xF2);
+								code.add1Unchecked(0xF2);
 							}
 							else {
-								code.add1(0xF3);
+								code.add1Unchecked(0xF3);
 							}
 
-							code.add1(0x0F);
-							code.add1(0x58);
+							code.add1Unchecked(0x0F);
+							code.add1Unchecked(0x58);
 							writeRSPRegisterByte(&code, function, 0, ir.b);
 
 							storeFromFloatRegister(&code, function, ir.opSize, ir.dest, 0);
@@ -1787,17 +1818,17 @@ void runCoffWriter() {
 							loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
 
 							if (ir.opSize == 8) {
-								code.add1(0x48);
+								code.add1Unchecked(0x48);
 							}
 							else if (ir.opSize == 2) {
-								code.add1(0x66);
+								code.add1Unchecked(0x66);
 							}
 
 							if (ir.opSize == 1) {
-								code.add1(0x02);
+								code.add1Unchecked(0x02);
 							}
 							else {
-								code.add1(0x03);
+								code.add1Unchecked(0x03);
 							}
 
 							writeRSPRegisterByte(&code, function, RAX, ir.b);
@@ -1817,17 +1848,17 @@ void runCoffWriter() {
 						loadImmediateIntoRAX(&code, ir.immediate);
 
 						if (ir.opSize == 8) {
-							code.add1(0x48);
+							code.add1Unchecked(0x48);
 						}
 						else if (ir.opSize == 2) {
-							code.add1(0x48);
+							code.add1Unchecked(0x48);
 						}
 
 						if (ir.opSize == 1) {
-							code.add1(0x02);
+							code.add1Unchecked(0x02);
 						}
 						else {
-							code.add1(0x03);
+							code.add1Unchecked(0x03);
 						}
 
 						writeRSPRegisterByte(&code, function, RAX, ir.a);
@@ -1844,14 +1875,14 @@ void runCoffWriter() {
 							loadIntoFloatRegister(&code, function, ir.opSize, 0, ir.a);
 
 							if (ir.opSize == 8) {
-								code.add1(0xF2);
+								code.add1Unchecked(0xF2);
 							}
 							else {
-								code.add1(0xF3);
+								code.add1Unchecked(0xF3);
 							}
 
-							code.add1(0x0F);
-							code.add1(0x5C);
+							code.add1Unchecked(0x0F);
+							code.add1Unchecked(0x5C);
 
 							writeRSPRegisterByte(&code, function, 0, ir.b);
 
@@ -1861,17 +1892,17 @@ void runCoffWriter() {
 							loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
 
 							if (ir.opSize == 8) {
-								code.add1(0x48);
+								code.add1Unchecked(0x48);
 							}
 							else if (ir.opSize == 2) {
-								code.add1(0x66);
+								code.add1Unchecked(0x66);
 							}
 
 							if (ir.opSize == 1) {
-								code.add1(0x2A);
+								code.add1Unchecked(0x2A);
 							}
 							else {
-								code.add1(0x2B);
+								code.add1Unchecked(0x2B);
 							}
 
 							writeRSPRegisterByte(&code, function, RAX, ir.b);
@@ -1889,14 +1920,14 @@ void runCoffWriter() {
 							loadIntoFloatRegister(&code, function, ir.opSize, 0, ir.a);
 
 							if (ir.opSize == 8) {
-								code.add1(0xF2);
+								code.add1Unchecked(0xF2);
 							}
 							else {
-								code.add1(0xF3);
+								code.add1Unchecked(0xF3);
 							}
 
-							code.add1(0x0F);
-							code.add1(0x59);
+							code.add1Unchecked(0x0F);
+							code.add1Unchecked(0x59);
 
 							writeRSPRegisterByte(&code, function, 0, ir.b);
 
@@ -1906,7 +1937,7 @@ void runCoffWriter() {
 							if (ir.opSize == 1) {
 								loadIntoIntRegister(&code, function, 1, RAX, ir.a);
 
-								code.add1(0xF6);
+								code.add1Unchecked(0xF6);
 								writeRSPRegisterByte(&code, function, 5, ir.b);
 
 								storeFromIntRegister(&code, function, 1, ir.dest, RAX);
@@ -1915,14 +1946,14 @@ void runCoffWriter() {
 								loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
 
 								if (ir.opSize == 8) {
-									code.add1(0x48);
+									code.add1Unchecked(0x48);
 								}
 								else if (ir.opSize == 2) {
-									code.add1(0x66);
+									code.add1Unchecked(0x66);
 								}
 
-								code.add1(0x0F);
-								code.add1(0xAF);
+								code.add1Unchecked(0x0F);
+								code.add1Unchecked(0xAF);
 								writeRSPRegisterByte(&code, function, RAX, ir.b);
 
 								storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
@@ -1939,9 +1970,9 @@ void runCoffWriter() {
 					else {
 						loadImmediateIntoRAX(&code, ir.immediate);
 
-						code.add1(0x48);
-						code.add1(0x0F);
-						code.add1(0xAF);
+						code.add1Unchecked(0x48);
+						code.add1Unchecked(0x0F);
+						code.add1Unchecked(0xAF);
 						writeRSPRegisterByte(&code, function, RAX, ir.a);
 
 						storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
@@ -1953,14 +1984,14 @@ void runCoffWriter() {
 						loadIntoFloatRegister(&code, function, ir.opSize, 1, ir.b);
 
 						if (ir.opSize == 8) {
-							code.add1(0xF2);
+							code.add1Unchecked(0xF2);
 						}
 						else {
-							code.add1(0xF3);
+							code.add1Unchecked(0xF3);
 						}
-						code.add1(0x0F);
-						code.add1(0x5E);
-						code.add1(0xC1);
+						code.add1Unchecked(0x0F);
+						code.add1Unchecked(0x5E);
+						code.add1Unchecked(0xC1);
 
 						storeFromFloatRegister(&code, function, ir.opSize, ir.dest, 0);
 					}
@@ -1970,63 +2001,63 @@ void runCoffWriter() {
 
 						if (ir.flags & IR_SIGNED_OP) {
 							if (ir.opSize == 1) {
-								code.add1(0x66); // cbw
-								code.add1(0x98);
+								code.add1Unchecked(0x66); // cbw
+								code.add1Unchecked(0x98);
 
-								code.add1(0xF6); // idiv cl
-								code.add1(0xF9);
+								code.add1Unchecked(0xF6); // idiv cl
+								code.add1Unchecked(0xF9);
 
 							}
 							else {
 								if (ir.opSize == 2) {
-									code.add1(0x66);
+									code.add1Unchecked(0x66);
 								}
 								else if (ir.opSize == 8) {
-									code.add1(0x48);
+									code.add1Unchecked(0x48);
 								}
 
-								code.add1(0x99);
+								code.add1Unchecked(0x99);
 
 								if (ir.opSize == 2) {
-									code.add1(0x66);
+									code.add1Unchecked(0x66);
 								}
 								else if (ir.opSize == 8) {
-									code.add1(0x48);
+									code.add1Unchecked(0x48);
 								}
-								code.add1(0xF7);
-								code.add1(0xF9);
+								code.add1Unchecked(0xF7);
+								code.add1Unchecked(0xF9);
 							}
 						}
 						else {
 							if (ir.opSize == 1) {
-								code.add1(0x66); // movzx ax, al
-								code.add1(0x0F);
-								code.add1(0xB6);
-								code.add1(0xC0);
+								code.add1Unchecked(0x66); // movzx ax, al
+								code.add1Unchecked(0x0F);
+								code.add1Unchecked(0xB6);
+								code.add1Unchecked(0xC0);
 
-								code.add1(0xF6); // div cl
-								code.add1(0xF1);
+								code.add1Unchecked(0xF6); // div cl
+								code.add1Unchecked(0xF1);
 
 							}
 							else {
 								if (ir.opSize == 2) {
-									code.add1(0x66);
+									code.add1Unchecked(0x66);
 								}
 								else if (ir.opSize == 8) {
-									code.add1(0x48);
+									code.add1Unchecked(0x48);
 								}
 
-								code.add1(0x31);
-								code.add1(0xD2);
+								code.add1Unchecked(0x31);
+								code.add1Unchecked(0xD2);
 
 								if (ir.opSize == 2) {
-									code.add1(0x66);
+									code.add1Unchecked(0x66);
 								}
 								else if (ir.opSize == 8) {
-									code.add1(0x48);
+									code.add1Unchecked(0x48);
 								}
-								code.add1(0xF7);
-								code.add1(0xF1);
+								code.add1Unchecked(0xF7);
+								code.add1Unchecked(0xF1);
 							}
 						}
 
@@ -2036,18 +2067,18 @@ void runCoffWriter() {
 				case IrOp::DIVIDE_BY_CONSTANT: {
 					loadImmediateIntoRAX(&code, ir.immediate);
 
-					code.add1(0x48); // mov rcx, rax
-					code.add1(0x89);
-					code.add1(0xC1);
+					code.add1Unchecked(0x48); // mov rcx, rax
+					code.add1Unchecked(0x89);
+					code.add1Unchecked(0xC1);
 
 					loadIntoIntRegister(&code, function, 8, RAX, ir.a);
 
-					code.add1(0x48); // cqo
-					code.add1(0x99);
+					code.add1Unchecked(0x48); // cqo
+					code.add1Unchecked(0x99);
 
-					code.add1(0x48); // div rcx
-					code.add1(0xF7);
-					code.add1(0xF1);
+					code.add1Unchecked(0x48); // div rcx
+					code.add1Unchecked(0xF7);
+					code.add1Unchecked(0xF1);
 
 					storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
 				} break;
@@ -2062,63 +2093,63 @@ void runCoffWriter() {
 
 						if (ir.flags & IR_SIGNED_OP) {
 							if (ir.opSize == 1) {
-								code.add1(0x66); // cbw
-								code.add1(0x98);
+								code.add1Unchecked(0x66); // cbw
+								code.add1Unchecked(0x98);
 
-								code.add1(0xF6); // idiv cl
-								code.add1(0xF9);
+								code.add1Unchecked(0xF6); // idiv cl
+								code.add1Unchecked(0xF9);
 
 							}
 							else {
 								if (ir.opSize == 2) {
-									code.add1(0x66);
+									code.add1Unchecked(0x66);
 								}
 								else if (ir.opSize == 8) {
-									code.add1(0x48);
+									code.add1Unchecked(0x48);
 								}
 
-								code.add1(0x99);
+								code.add1Unchecked(0x99);
 
 								if (ir.opSize == 2) {
-									code.add1(0x66);
+									code.add1Unchecked(0x66);
 								}
 								else if (ir.opSize == 8) {
-									code.add1(0x48);
+									code.add1Unchecked(0x48);
 								}
-								code.add1(0xF7);
-								code.add1(0xF9);
+								code.add1Unchecked(0xF7);
+								code.add1Unchecked(0xF9);
 							}
 						}
 						else {
 							if (ir.opSize == 1) {
-								code.add1(0x66); // movzx ax, al
-								code.add1(0x0F);
-								code.add1(0xB6);
-								code.add1(0xC0);
+								code.add1Unchecked(0x66); // movzx ax, al
+								code.add1Unchecked(0x0F);
+								code.add1Unchecked(0xB6);
+								code.add1Unchecked(0xC0);
 
-								code.add1(0xF6); // div cl
-								code.add1(0xF1);
+								code.add1Unchecked(0xF6); // div cl
+								code.add1Unchecked(0xF1);
 
 							}
 							else {
 								if (ir.opSize == 2) {
-									code.add1(0x66);
+									code.add1Unchecked(0x66);
 								}
 								else if (ir.opSize == 8) {
-									code.add1(0x48);
+									code.add1Unchecked(0x48);
 								}
 
-								code.add1(0x31);
-								code.add1(0xD2);
+								code.add1Unchecked(0x31);
+								code.add1Unchecked(0xD2);
 
 								if (ir.opSize == 2) {
-									code.add1(0x66);
+									code.add1Unchecked(0x66);
 								}
 								else if (ir.opSize == 8) {
-									code.add1(0x48);
+									code.add1Unchecked(0x48);
 								}
-								code.add1(0xF7);
-								code.add1(0xF1);
+								code.add1Unchecked(0xF7);
+								code.add1Unchecked(0xF1);
 							}
 						}
 
@@ -2133,17 +2164,17 @@ void runCoffWriter() {
 						loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
 
 						if (ir.opSize == 8) {
-							code.add1(0x48);
+							code.add1Unchecked(0x48);
 						}
 						else if (ir.opSize == 2) {
-							code.add1(0x66);
+							code.add1Unchecked(0x66);
 						}
 
 						if (ir.opSize == 1) {
-							code.add1(0x22);
+							code.add1Unchecked(0x22);
 						}
 						else {
-							code.add1(0x23);
+							code.add1Unchecked(0x23);
 						}
 						writeRSPRegisterByte(&code, function, RAX, ir.b);
 
@@ -2161,17 +2192,17 @@ void runCoffWriter() {
 						loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
 
 						if (ir.opSize == 8) {
-							code.add1(0x48);
+							code.add1Unchecked(0x48);
 						}
 						else if (ir.opSize == 2) {
-							code.add1(0x66);
+							code.add1Unchecked(0x66);
 						}
 
 						if (ir.opSize == 1) {
-							code.add1(0x0A);
+							code.add1Unchecked(0x0A);
 						}
 						else {
-							code.add1(0x0B);
+							code.add1Unchecked(0x0B);
 						}
 						writeRSPRegisterByte(&code, function, RAX, ir.b);
 
@@ -2189,17 +2220,17 @@ void runCoffWriter() {
 						loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
 
 						if (ir.opSize == 8) {
-							code.add1(0x48);
+							code.add1Unchecked(0x48);
 						}
 						else if (ir.opSize == 2) {
-							code.add1(0x66);
+							code.add1Unchecked(0x66);
 						}
 
 						if (ir.opSize == 1) {
-							code.add1(0x32);
+							code.add1Unchecked(0x32);
 						}
 						else {
-							code.add1(0x33);
+							code.add1Unchecked(0x33);
 						}
 						writeRSPRegisterByte(&code, function, RAX, ir.b);
 
@@ -2209,20 +2240,20 @@ void runCoffWriter() {
 				case IrOp::NOT: {
 					loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
 					if (ir.opSize == 8) {
-						code.add1(0x48);
+						code.add1Unchecked(0x48);
 					}
 					else if (ir.opSize == 2) {
-						code.add1(0x66);
+						code.add1Unchecked(0x66);
 					}
 
 					if (ir.opSize == 1) {
-						code.add1(0xF6);
+						code.add1Unchecked(0xF6);
 					}
 					else {
-						code.add1(0xF7);
+						code.add1Unchecked(0xF7);
 					}
 
-					code.add1(0xD0);
+					code.add1Unchecked(0xD0);
 
 					storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
 				} break;
@@ -2231,20 +2262,20 @@ void runCoffWriter() {
 					loadIntoIntRegister(&code, function, ir.opSize, RCX, ir.b);
 
 					if (ir.opSize == 8) {
-						code.add1(0x48);
+						code.add1Unchecked(0x48);
 					}
 					else if (ir.opSize == 2) {
-						code.add1(0x66);
+						code.add1Unchecked(0x66);
 					}
 
 					if (ir.opSize == 1) {
-						code.add1(0xD2);
+						code.add1Unchecked(0xD2);
 					}
 					else {
-						code.add1(0xD3);
+						code.add1Unchecked(0xD3);
 					}
 
-					code.add1(0xE0);
+					code.add1Unchecked(0xE0);
 
 					storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
 				} break;
@@ -2254,24 +2285,24 @@ void runCoffWriter() {
 					loadIntoIntRegister(&code, function, ir.opSize, RCX, ir.b);
 
 					if (ir.opSize == 8) {
-						code.add1(0x48);
+						code.add1Unchecked(0x48);
 					}
 					else if (ir.opSize == 2) {
-						code.add1(0x66);
+						code.add1Unchecked(0x66);
 					}
 
 					if (ir.opSize == 1) {
-						code.add1(0xD2);
+						code.add1Unchecked(0xD2);
 					}
 					else {
-						code.add1(0xD3);
+						code.add1Unchecked(0xD3);
 					}
 
 					if (ir.flags & IR_SIGNED_OP) {
-						code.add1(0xF8);
+						code.add1Unchecked(0xF8);
 					}
 					else {
-						code.add1(0xE8);
+						code.add1Unchecked(0xE8);
 					}
 
 					storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
@@ -2283,20 +2314,20 @@ void runCoffWriter() {
 						loadIntoIntRegister(&code, function, 8, RAX, ir.a);
 
 						if (ir.destSize == 8) {
-							code.add1(0x48);
+							code.add1Unchecked(0x48);
 						}
 						else if (ir.destSize == 2) {
-							code.add1(0x66);
+							code.add1Unchecked(0x66);
 						}
 
 						if (ir.destSize == 1) {
-							code.add1(0x8A);
+							code.add1Unchecked(0x8A);
 						}
 						else {
-							code.add1(0x8B);
+							code.add1Unchecked(0x8B);
 						}
 
-						code.add1(0x00);
+						code.add1Unchecked(0x00);
 
 						storeFromIntRegister(&code, function, ir.destSize, ir.dest, RAX);
 					}
@@ -2304,23 +2335,23 @@ void runCoffWriter() {
 
 						loadIntoIntRegister(&code, function, 8, RSI, ir.a);
 
-						code.add1(0x48);
-						code.add1(0x8D);
+						code.add1Unchecked(0x48);
+						code.add1Unchecked(0x8D);
 						writeRSPRegisterByte(&code, function, RDI, ir.dest);
 
 						if (ir.destSize % 8 == 0) {
 							loadImmediateIntoIntRegister(&code, RCX, ir.destSize / 8);
 
-							code.add1(0xF3); // rep movsq
-							code.add1(0x48);
-							code.add1(0xA5);
+							code.add1Unchecked(0xF3); // rep movsq
+							code.add1Unchecked(0x48);
+							code.add1Unchecked(0xA5);
 						}
 						else {
 							loadImmediateIntoIntRegister(&code, RCX, ir.destSize);
 
-							code.add1(0xF3); // rep movsb
-							code.add1(0x48);
-							code.add1(0xA4);
+							code.add1Unchecked(0xF3); // rep movsb
+							code.add1Unchecked(0x48);
+							code.add1Unchecked(0xA4);
 						}
 					}
 				} break;
@@ -2330,20 +2361,20 @@ void runCoffWriter() {
 						loadIntoIntRegister(&code, function, ir.opSize, RCX, ir.b);
 
 						if (ir.opSize == 2) {
-							code.add1(0x66);
+							code.add1Unchecked(0x66);
 						}
 						else if (ir.opSize == 8) {
-							code.add1(0x48);
+							code.add1Unchecked(0x48);
 						}
 
 						if (ir.opSize == 1) {
-							code.add1(0x88);
+							code.add1Unchecked(0x88);
 						}
 						else {
-							code.add1(0x89);
+							code.add1Unchecked(0x89);
 						}
 
-						code.add1(0x08);
+						code.add1Unchecked(0x08);
 					}
 					else {
 						if (ir.b == 0) {
@@ -2352,27 +2383,27 @@ void runCoffWriter() {
 							if (ir.opSize % 8 == 0) {
 								loadImmediateIntoIntRegister(&code, RCX, ir.opSize / 8);
 
-								code.add1(0x31); // xor eax, eax
-								code.add1(0xC0);
+								code.add1Unchecked(0x31); // xor eax, eax
+								code.add1Unchecked(0xC0);
 
-								code.add1(0xF3); // rep stosq
-								code.add1(0x48);
-								code.add1(0xAB);
+								code.add1Unchecked(0xF3); // rep stosq
+								code.add1Unchecked(0x48);
+								code.add1Unchecked(0xAB);
 							}
 							else {
 								loadImmediateIntoIntRegister(&code, RCX, ir.opSize);
 
-								code.add1(0x30); // xor al, al
-								code.add1(0xC0);
+								code.add1Unchecked(0x30); // xor al, al
+								code.add1Unchecked(0xC0);
 
-								code.add1(0xF3); // rep stosb
-								code.add1(0x48);
-								code.add1(0xAA);
+								code.add1Unchecked(0xF3); // rep stosb
+								code.add1Unchecked(0x48);
+								code.add1Unchecked(0xAA);
 							}
 						}
 						else {
-							code.add1(0x48);
-							code.add1(0x8D);
+							code.add1Unchecked(0x48);
+							code.add1Unchecked(0x8D);
 							writeRSPRegisterByte(&code, function, RSI, ir.b);
 
 							loadIntoIntRegister(&code, function, 8, RDI, ir.a);
@@ -2380,16 +2411,16 @@ void runCoffWriter() {
 							if (ir.opSize % 8 == 0) {
 								loadImmediateIntoIntRegister(&code, RCX, ir.opSize / 8);
 
-								code.add1(0xF3); // rep movsq
-								code.add1(0x48);
-								code.add1(0xA5);
+								code.add1Unchecked(0xF3); // rep movsq
+								code.add1Unchecked(0x48);
+								code.add1Unchecked(0xA5);
 							}
 							else {
 								loadImmediateIntoIntRegister(&code, RCX, ir.opSize);
 
-								code.add1(0xF3); // rep movsb
-								code.add1(0x48);
-								code.add1(0xA4);
+								code.add1Unchecked(0xF3); // rep movsb
+								code.add1Unchecked(0x48);
+								code.add1Unchecked(0xA4);
 							}
 						}
 					}
@@ -2404,17 +2435,17 @@ void runCoffWriter() {
 							if (ir.opSize == 8) {
 								assert(ir.destSize == 4);
 
-								code.add1(0xF2);
+								code.add1Unchecked(0xF2);
 							}
 							else {
 								assert(ir.opSize == 4);
 								assert(ir.destSize == 8);
 
-								code.add1(0xF3);
+								code.add1Unchecked(0xF3);
 							}
 
-							code.add1(0x0F);
-							code.add1(0x5A);
+							code.add1Unchecked(0x0F);
+							code.add1Unchecked(0x5A);
 
 							writeRSPRegisterByte(&code, function, 0, ir.a);
 							storeFromFloatRegister(&code, function, ir.destSize, ir.dest, 0);
@@ -2427,46 +2458,46 @@ void runCoffWriter() {
 								if (ir.flags & IR_SIGNED_OP) {
 									if (ir.opSize == 1) {
 										if (ir.destSize == 2) {
-											code.add1(0x66);
+											code.add1Unchecked(0x66);
 										}
 										else if (ir.destSize == 8) {
-											code.add1(0x48);
+											code.add1Unchecked(0x48);
 										}
 
-										code.add1(0x0F);
-										code.add1(0xBE);
+										code.add1Unchecked(0x0F);
+										code.add1Unchecked(0xBE);
 										writeRSPRegisterByte(&code, function, RAX, ir.a);
 									}
 									else if (ir.opSize == 2) {
 										if (ir.destSize == 8) {
-											code.add1(0x48);
+											code.add1Unchecked(0x48);
 										}
 
-										code.add1(0x0F);
-										code.add1(0xBF);
+										code.add1Unchecked(0x0F);
+										code.add1Unchecked(0xBF);
 										writeRSPRegisterByte(&code, function, RAX, ir.a);
 									}
 									else if (ir.opSize == 4) {
-										code.add1(0x48);
-										code.add1(0x63);
+										code.add1Unchecked(0x48);
+										code.add1Unchecked(0x63);
 										writeRSPRegisterByte(&code, function, RAX, ir.a);
 									}
 								}
 								else {
 									if (ir.opSize == 1) {
 										if (ir.destSize == 2) {
-											code.add1(0x66);
+											code.add1Unchecked(0x66);
 										}
 
-										code.add1(0x0F);
-										code.add1(0xB6);
+										code.add1Unchecked(0x0F);
+										code.add1Unchecked(0xB6);
 										writeRSPRegisterByte(&code, function, RAX, ir.a);
 
 
 									}
 									else if (ir.opSize == 2) {
-										code.add1(0x0F);
-										code.add1(0xB7);
+										code.add1Unchecked(0x0F);
+										code.add1Unchecked(0xB7);
 										writeRSPRegisterByte(&code, function, RAX, ir.a);
 									}
 									else if (ir.opSize == 4) {
@@ -2480,11 +2511,11 @@ void runCoffWriter() {
 					}
 				} break;
 				case IrOp::GOTO: {
-					code.add1(0xE9);
+					code.add1Unchecked(0xE9);
 
 					JumpPatch patch;
 					patch.opToPatch = ir.branchTarget;
-					patch.location = reinterpret_cast<s32 *>(code.add4(0));
+					patch.location = reinterpret_cast<s32 *>(code.add4Unchecked(0));
 					patch.rip = code.totalSize;
 
 					jumpPatches.add(patch);
@@ -2493,26 +2524,26 @@ void runCoffWriter() {
 					loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
 
 					if (ir.opSize == 8) {
-						code.add1(0x48);
+						code.add1Unchecked(0x48);
 					}
 					else if (ir.opSize == 2) {
-						code.add1(0x66);
+						code.add1Unchecked(0x66);
 					}
 
 					if (ir.opSize == 1) {
-						code.add1(0x84);
+						code.add1Unchecked(0x84);
 					}
 					else {
-						code.add1(0x85);
+						code.add1Unchecked(0x85);
 					}
-					code.add1(0xC0);
+					code.add1Unchecked(0xC0);
 
-					code.add1(0x0F);
-					code.add1(0x80 | C_Z);
+					code.add1Unchecked(0x0F);
+					code.add1Unchecked(0x80 | C_Z);
 
 					JumpPatch patch;
 					patch.opToPatch = ir.branchTarget;
-					patch.location = reinterpret_cast<s32 *>(code.add4(0));
+					patch.location = reinterpret_cast<s32 *>(code.add4Unchecked(0));
 					patch.rip = code.totalSize;
 
 					jumpPatches.add(patch);
@@ -2521,26 +2552,26 @@ void runCoffWriter() {
 					loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
 
 					if (ir.opSize == 8) {
-						code.add1(0x48);
+						code.add1Unchecked(0x48);
 					}
 					else if (ir.opSize == 2) {
-						code.add1(0x66);
+						code.add1Unchecked(0x66);
 					}
 
 					if (ir.opSize == 1) {
-						code.add1(0x84);
+						code.add1Unchecked(0x84);
 					}
 					else {
-						code.add1(0x85);
+						code.add1Unchecked(0x85);
 					}
-					code.add1(0xC0);
+					code.add1Unchecked(0xC0);
 
-					code.add1(0x0F);
-					code.add1(0x80 | C_NZ);
+					code.add1Unchecked(0x0F);
+					code.add1Unchecked(0x80 | C_NZ);
 
 					JumpPatch patch;
 					patch.opToPatch = ir.branchTarget;
-					patch.location = reinterpret_cast<s32 *>(code.add4(0));
+					patch.location = reinterpret_cast<s32 *>(code.add4Unchecked(0));
 					patch.rip = code.totalSize;
 
 					jumpPatches.add(patch);
@@ -2617,21 +2648,22 @@ void runCoffWriter() {
 					assert(ir.declaration->enclosingScope == &globalBlock);
 					assert(!(ir.declaration->flags & DECLARATION_IS_CONSTANT));
 
-					code.add1(0x48);
-					code.add1(0x8D);
-					code.add1(0x05);
+					code.add1Unchecked(0x48);
+					code.add1Unchecked(0x8D);
+					code.add1Unchecked(0x05);
 
-					codeRelocations.add4(static_cast<u32>(code.totalSize));
-					codeRelocations.add4(createSymbolForDeclaration(&symbols, ir.declaration));
-					codeRelocations.add2(IMAGE_REL_AMD64_REL32);
+					codeRelocations.ensure(10);
+					codeRelocations.add4Unchecked(static_cast<u32>(code.totalSize));
+					codeRelocations.add4Unchecked(createSymbolForDeclaration(&symbols, ir.declaration));
+					codeRelocations.add2Unchecked(IMAGE_REL_AMD64_REL32);
 
-					code.add4(0);
+					code.add4Unchecked(0);
 
 					storeFromIntRegister(&code, function, 8, ir.dest, RAX);
 				} break;
 				case IrOp::ADDRESS_OF_LOCAL: {
-					code.add1(0x48);
-					code.add1(0x8D);
+					code.add1Unchecked(0x48);
+					code.add1Unchecked(0x8D);
 
 					writeRSPRegisterByte(&code, function, RAX, ir.a, ir.immediate);
 					storeFromIntRegister(&code, function, 8, ir.dest, RAX);
@@ -2647,18 +2679,18 @@ void runCoffWriter() {
 
 					if (ir.flags & IR_SIGNED_OP) {
 						if (ir.opSize == 8) {
-							code.add1(0xF2);
+							code.add1Unchecked(0xF2);
 						}
 						else {
-							code.add1(0xF3);
+							code.add1Unchecked(0xF3);
 						}
 
 						if (ir.destSize == 8) {
-							code.add1(0x48);
+							code.add1Unchecked(0x48);
 						}
 
-						code.add1(0x0F);
-						code.add1(0x2C);
+						code.add1Unchecked(0x0F);
+						code.add1Unchecked(0x2C);
 						writeRSPRegisterByte(&code, function, RAX, ir.a);
 						storeFromIntRegister(&code, function, ir.destSize, ir.dest, RAX);
 					}
@@ -2685,60 +2717,61 @@ void runCoffWriter() {
 									rdata.add8(0x43E0000000000000);
 								}
 
-								code.add1(0xF2); // movsd xmm1, f32ToU64Constant
-								code.add1(0x0F);
-								code.add1(0x10);
-								code.add1(0x0D);
+								code.add1Unchecked(0xF2); // movsd xmm1, f32ToU64Constant
+								code.add1Unchecked(0x0F);
+								code.add1Unchecked(0x10);
+								code.add1Unchecked(0x0D);
 
-								codeRelocations.add4(static_cast<u32>(code.totalSize));
-								codeRelocations.add4(static_cast<u32>(f64ToU64ConstantSymbolIndex));
-								codeRelocations.add2(IMAGE_REL_AMD64_REL32);
+								codeRelocations.ensure(10);
+								codeRelocations.add4Unchecked(static_cast<u32>(code.totalSize));
+								codeRelocations.add4Unchecked(static_cast<u32>(f64ToU64ConstantSymbolIndex));
+								codeRelocations.add2Unchecked(IMAGE_REL_AMD64_REL32);
 
-								code.add4(0);
+								code.add4Unchecked(0);
 
-								code.add1(0x31); // xor eax, eax
-								code.add1(0xC0);
+								code.add1Unchecked(0x31); // xor eax, eax
+								code.add1Unchecked(0xC0);
 
-								code.add1(0x66); // comisd xmm0, xmm1
-								code.add1(0x0F);
-								code.add1(0x2F);
-								code.add1(0xC1);
+								code.add1Unchecked(0x66); // comisd xmm0, xmm1
+								code.add1Unchecked(0x0F);
+								code.add1Unchecked(0x2F);
+								code.add1Unchecked(0xC1);
 
-								code.add1(0x70 | C_B); // jb .cvt
-								u8 *firstJumpPatch = code.add1(0);
+								code.add1Unchecked(0x70 | C_B); // jb .cvt
+								u8 *firstJumpPatch = code.add1Unchecked(0);
 								u64 firstJumpRel = code.totalSize;
 
-								code.add1(0xF2); // subsd xmm0, xmm1
-								code.add1(0x0F);
-								code.add1(0x5C);
-								code.add1(0xC1);
+								code.add1Unchecked(0xF2); // subsd xmm0, xmm1
+								code.add1Unchecked(0x0F);
+								code.add1Unchecked(0x5C);
+								code.add1Unchecked(0xC1);
 
-								code.add1(0x66); // comisd xmm0, xmm1
-								code.add1(0x0F);
-								code.add1(0x2F);
-								code.add1(0xC1);
+								code.add1Unchecked(0x66); // comisd xmm0, xmm1
+								code.add1Unchecked(0x0F);
+								code.add1Unchecked(0x2F);
+								code.add1Unchecked(0xC1);
 
-								code.add1(0x70 | C_AE); // jae .cvt
-								u8 *secondJumpPatch = code.add1(0);
+								code.add1Unchecked(0x70 | C_AE); // jae .cvt
+								u8 *secondJumpPatch = code.add1Unchecked(0);
 								u64 secondJumpRel = code.totalSize;
 
-								code.add1(0x48); // mov rax, 0x8000'0000'0000'0000
-								code.add1(0xB8);
-								code.add8(0x8000'0000'0000'0000);
+								code.add1Unchecked(0x48); // mov rax, 0x8000'0000'0000'0000
+								code.add1Unchecked(0xB8);
+								code.add8Unchecked(0x8000'0000'0000'0000);
 
 								*firstJumpPatch = static_cast<u8>(code.totalSize - firstJumpRel);
 								*secondJumpPatch = static_cast<u8>(code.totalSize - secondJumpRel);
 
 								// .cvt
-								code.add1(0xF2); // cvttsd2si rcx, xmm0
-								code.add1(0x48);
-								code.add1(0x0F);
-								code.add1(0x2C);
-								code.add1(0xC8);
+								code.add1Unchecked(0xF2); // cvttsd2si rcx, xmm0
+								code.add1Unchecked(0x48);
+								code.add1Unchecked(0x0F);
+								code.add1Unchecked(0x2C);
+								code.add1Unchecked(0xC8);
 
-								code.add1(0x48); // add rax, rcx
-								code.add1(0x01);
-								code.add1(0xC8);
+								code.add1Unchecked(0x48); // add rax, rcx
+								code.add1Unchecked(0x01);
+								code.add1Unchecked(0xC8);
 							}
 							else {
 								if (f32ToU64ConstantSymbolIndex == -1) {
@@ -2759,58 +2792,59 @@ void runCoffWriter() {
 									rdata.add4(0x5F000000);
 								}
 
-								code.add1(0xF3); // movss xmm1, f32ToU64Constant
-								code.add1(0x0F);
-								code.add1(0x10);
-								code.add1(0x0D);
+								code.add1Unchecked(0xF3); // movss xmm1, f32ToU64Constant
+								code.add1Unchecked(0x0F);
+								code.add1Unchecked(0x10);
+								code.add1Unchecked(0x0D);
 
-								codeRelocations.add4(code.totalSize);
-								codeRelocations.add4(static_cast<u32>(f32ToU64ConstantSymbolIndex));
-								codeRelocations.add2(IMAGE_REL_AMD64_REL32);
+								codeRelocations.ensure(10);
+								codeRelocations.add4Unchecked(code.totalSize);
+								codeRelocations.add4Unchecked(static_cast<u32>(f32ToU64ConstantSymbolIndex));
+								codeRelocations.add2Unchecked(IMAGE_REL_AMD64_REL32);
 
-								code.add4(0);
+								code.add4Unchecked(0);
 
-								code.add1(0x31); // xor eax, eax
-								code.add1(0xC0);
+								code.add1Unchecked(0x31); // xor eax, eax
+								code.add1Unchecked(0xC0);
 
-								code.add1(0x0F); // comiss xmm0, xmm1
-								code.add1(0x2F);
-								code.add1(0xC1);
+								code.add1Unchecked(0x0F); // comiss xmm0, xmm1
+								code.add1Unchecked(0x2F);
+								code.add1Unchecked(0xC1);
 
-								code.add1(0x70 | C_B); // jb .cvt
-								u8 *firstJumpPatch = code.add1(0);
+								code.add1Unchecked(0x70 | C_B); // jb .cvt
+								u8 *firstJumpPatch = code.add1Unchecked(0);
 								u64 firstJumpRel = code.totalSize;
 
-								code.add1(0xF3); // subss xmm0, xmm1
-								code.add1(0x0F);
-								code.add1(0x5C);
-								code.add1(0xC1);
+								code.add1Unchecked(0xF3); // subss xmm0, xmm1
+								code.add1Unchecked(0x0F);
+								code.add1Unchecked(0x5C);
+								code.add1Unchecked(0xC1);
 
-								code.add1(0x0F); // comiss xmm0, xmm1
-								code.add1(0x2F);
-								code.add1(0xC1);
+								code.add1Unchecked(0x0F); // comiss xmm0, xmm1
+								code.add1Unchecked(0x2F);
+								code.add1Unchecked(0xC1);
 
-								code.add1(0x70 | C_AE); // jae .cvt
-								u8 *secondJumpPatch = code.add1(0);
+								code.add1Unchecked(0x70 | C_AE); // jae .cvt
+								u8 *secondJumpPatch = code.add1Unchecked(0);
 								u64 secondJumpRel = code.totalSize;
 
-								code.add1(0x48); // mov rax, 0x8000'0000'0000'0000
-								code.add1(0xB8);
-								code.add8(0x8000'0000'0000'0000);
+								code.add1Unchecked(0x48); // mov rax, 0x8000'0000'0000'0000
+								code.add1Unchecked(0xB8);
+								code.add8Unchecked(0x8000'0000'0000'0000);
 
 								*firstJumpPatch = static_cast<u8>(code.totalSize - firstJumpRel);
 								*secondJumpPatch = static_cast<u8>(code.totalSize - secondJumpRel);
 
 								// .cvt
-								code.add1(0xF3); // cvttss2si rcx, xmm0
-								code.add1(0x48);
-								code.add1(0x0F);
-								code.add1(0x2C);
-								code.add1(0xC8);
+								code.add1Unchecked(0xF3); // cvttss2si rcx, xmm0
+								code.add1Unchecked(0x48);
+								code.add1Unchecked(0x0F);
+								code.add1Unchecked(0x2C);
+								code.add1Unchecked(0xC8);
 
-								code.add1(0x48); // add rax, rcx
-								code.add1(0x01);
-								code.add1(0xC8);
+								code.add1Unchecked(0x48); // add rax, rcx
+								code.add1Unchecked(0x01);
+								code.add1Unchecked(0xC8);
 							}
 
 							storeFromIntRegister(&code, function, ir.destSize, ir.dest, RAX);
@@ -2818,18 +2852,18 @@ void runCoffWriter() {
 
 						else {
 							if (ir.opSize == 8) {
-								code.add1(0xF2);
+								code.add1Unchecked(0xF2);
 							}
 							else {
-								code.add1(0xF3);
+								code.add1Unchecked(0xF3);
 							}
 
 							if (ir.destSize == 4) {
-								code.add1(0x48);
+								code.add1Unchecked(0x48);
 							}
 
-							code.add1(0x0F);
-							code.add1(0x2C);
+							code.add1Unchecked(0x0F);
+							code.add1Unchecked(0x2C);
 
 
 							writeRSPRegisterByte(&code, function, RAX, ir.a);
@@ -2846,41 +2880,41 @@ void runCoffWriter() {
 					if (ir.flags & IR_SIGNED_OP) {
 						if (ir.opSize >= 4) {
 							if (ir.destSize == 8) {
-								code.add1(0xF2);
+								code.add1Unchecked(0xF2);
 							}
 							else {
-								code.add1(0xF3);
+								code.add1Unchecked(0xF3);
 							}
 
 							if (ir.opSize == 8) {
-								code.add1(0x48);
+								code.add1Unchecked(0x48);
 							}
 
-							code.add1(0x0F);
-							code.add1(0x2A);
+							code.add1Unchecked(0x0F);
+							code.add1Unchecked(0x2A);
 							writeRSPRegisterByte(&code, function, 0, ir.a);
 							storeFromFloatRegister(&code, function, ir.destSize, ir.dest, 0);
 						}
 						else {
-							code.add1(0x0F);
+							code.add1Unchecked(0x0F);
 							if (ir.opSize == 2) {
-								code.add1(0xBF);
+								code.add1Unchecked(0xBF);
 							}
 							else {
-								code.add1(0xBE);
+								code.add1Unchecked(0xBE);
 							}
 							writeRSPRegisterByte(&code, function, RAX, ir.a);
 
 							if (ir.destSize == 8) {
-								code.add1(0xF2);
+								code.add1Unchecked(0xF2);
 							}
 							else {
-								code.add1(0xF3);
+								code.add1Unchecked(0xF3);
 							}
 
-							code.add1(0x0F);
-							code.add1(0x2A);
-							code.add1(0xC0);
+							code.add1Unchecked(0x0F);
+							code.add1Unchecked(0x2A);
+							code.add1Unchecked(0xC0);
 
 							storeFromFloatRegister(&code, function, ir.destSize, ir.dest, 0);
 						}
@@ -2889,79 +2923,79 @@ void runCoffWriter() {
 						if (ir.opSize == 8) {
 							loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
 
-							code.add1(0x0F); // xorps xmm0, xmm0
-							code.add1(0x57);
-							code.add1(0xC0);
+							code.add1Unchecked(0x0F); // xorps xmm0, xmm0
+							code.add1Unchecked(0x57);
+							code.add1Unchecked(0xC0);
 
-							code.add1(0x48); // test rax, rax
-							code.add1(0x85);
-							code.add1(0xC0);
+							code.add1Unchecked(0x48); // test rax, rax
+							code.add1Unchecked(0x85);
+							code.add1Unchecked(0xC0);
 
-							code.add1(0x70 | C_S); // js .large
+							code.add1Unchecked(0x70 | C_S); // js .large
 
-							u8 *firstJumpPatch = code.add1(0);
+							u8 *firstJumpPatch = code.add1Unchecked(0);
 							u32 firstJumpRel = code.totalSize;
 
 
 							if (ir.destSize == 8) {
-								code.add1(0xF2);
+								code.add1Unchecked(0xF2);
 							}
 							else {
-								code.add1(0xF3);
+								code.add1Unchecked(0xF3);
 							}
 
-							code.add1(0x48);
-							code.add1(0x0F);
-							code.add1(0x2a);
-							code.add1(0xC0);
+							code.add1Unchecked(0x48);
+							code.add1Unchecked(0x0F);
+							code.add1Unchecked(0x2a);
+							code.add1Unchecked(0xC0);
 
-							code.add1(0xEB); // jmp .done
+							code.add1Unchecked(0xEB); // jmp .done
 
-							u8 *secondJumpPatch = code.add1(0);
+							u8 *secondJumpPatch = code.add1Unchecked(0);
 							u32 secondJumpRel = code.totalSize;
 
 
 							*firstJumpPatch = code.totalSize - firstJumpRel;
 
 							// .large
-							code.add1(0x48); // mov rcx, rax
-							code.add1(0x89);
-							code.add1(0xC1);
+							code.add1Unchecked(0x48); // mov rcx, rax
+							code.add1Unchecked(0x89);
+							code.add1Unchecked(0xC1);
 
-							code.add1(0x83); // and ecx, 1
-							code.add1(0xE1);
-							code.add1(0x01);
+							code.add1Unchecked(0x83); // and ecx, 1
+							code.add1Unchecked(0xE1);
+							code.add1Unchecked(0x01);
 
-							code.add1(0x48); // shr rax, 1
-							code.add1(0xD1);
-							code.add1(0xE8);
+							code.add1Unchecked(0x48); // shr rax, 1
+							code.add1Unchecked(0xD1);
+							code.add1Unchecked(0xE8);
 
-							code.add1(0x48); // or rax, rcx
-							code.add1(0x09);
-							code.add1(0xC8);
-
-							if (ir.destSize == 8) {
-								code.add1(0xF2);
-							}
-							else {
-								code.add1(0xF3);
-							}
-
-							code.add1(0x48);
-							code.add1(0x0F);
-							code.add1(0x2A);
-							code.add1(0xC0);
+							code.add1Unchecked(0x48); // or rax, rcx
+							code.add1Unchecked(0x09);
+							code.add1Unchecked(0xC8);
 
 							if (ir.destSize == 8) {
-								code.add1(0xF2);
+								code.add1Unchecked(0xF2);
 							}
 							else {
-								code.add1(0xF3);
+								code.add1Unchecked(0xF3);
 							}
 
-							code.add1(0x0F);
-							code.add1(0x58);
-							code.add1(0xC0);
+							code.add1Unchecked(0x48);
+							code.add1Unchecked(0x0F);
+							code.add1Unchecked(0x2A);
+							code.add1Unchecked(0xC0);
+
+							if (ir.destSize == 8) {
+								code.add1Unchecked(0xF2);
+							}
+							else {
+								code.add1Unchecked(0xF3);
+							}
+
+							code.add1Unchecked(0x0F);
+							code.add1Unchecked(0x58);
+							code.add1Unchecked(0xC0);
 
 							*secondJumpPatch = code.totalSize - secondJumpRel;
 
@@ -2972,39 +3006,39 @@ void runCoffWriter() {
 							loadIntoIntRegister(&code, function, 4, RAX, ir.a);
 
 							if (ir.destSize == 8) {
-								code.add1(0xF2);
+								code.add1Unchecked(0xF2);
 							}
 							else {
-								code.add1(0xF3);
+								code.add1Unchecked(0xF3);
 							}
 
-							code.add1(0x48);
+							code.add1Unchecked(0x48);
 
-							code.add1(0x0F);
-							code.add1(0x2A);
-							code.add1(0xC0);
+							code.add1Unchecked(0x0F);
+							code.add1Unchecked(0x2A);
+							code.add1Unchecked(0xC0);
 							storeFromFloatRegister(&code, function, ir.destSize, ir.dest, 0);
 						}
 						else {
-							code.add1(0x0F);
+							code.add1Unchecked(0x0F);
 							if (ir.opSize == 2) {
-								code.add1(0xB7);
+								code.add1Unchecked(0xB7);
 							}
 							else {
-								code.add1(0xB6);
+								code.add1Unchecked(0xB6);
 							}
 							writeRSPRegisterByte(&code, function, RAX, ir.a);
 
 							if (ir.destSize == 8) {
-								code.add1(0xF2);
+								code.add1Unchecked(0xF2);
 							}
 							else {
-								code.add1(0xF3);
+								code.add1Unchecked(0xF3);
 							}
 
-							code.add1(0x0F);
-							code.add1(0x2A);
-							code.add1(0xC0);
+							code.add1Unchecked(0x0F);
+							code.add1Unchecked(0x2A);
+							code.add1Unchecked(0xC0);
 
 							storeFromFloatRegister(&code, function, ir.destSize, ir.dest, 0);
 						}
@@ -3027,42 +3061,42 @@ void runCoffWriter() {
 								if (ir.opSize % 8 == 0) {
 									loadImmediateIntoIntRegister(&code, RCX, ir.opSize / 8);
 
-									code.add1(0x31); // xor eax, eax
-									code.add1(0xC0);
+									code.add1Unchecked(0x31); // xor eax, eax
+									code.add1Unchecked(0xC0);
 
-									code.add1(0xF3); // rep stosq
-									code.add1(0x48);
-									code.add1(0xAB);
+									code.add1Unchecked(0xF3); // rep stosq
+									code.add1Unchecked(0x48);
+									code.add1Unchecked(0xAB);
 								}
 								else {
 									loadImmediateIntoIntRegister(&code, RCX, ir.opSize);
 
-									code.add1(0x30); // xor al, al
-									code.add1(0xC0);
+									code.add1Unchecked(0x30); // xor al, al
+									code.add1Unchecked(0xC0);
 
-									code.add1(0xF3); // rep stosb
-									code.add1(0x48);
-									code.add1(0xAA);
+									code.add1Unchecked(0xF3); // rep stosb
+									code.add1Unchecked(0x48);
+									code.add1Unchecked(0xAA);
 								}
 							}
 							else {
-								code.add1(0x48);
-								code.add1(0x8D);
+								code.add1Unchecked(0x48);
+								code.add1Unchecked(0x8D);
 								writeRSPRegisterByte(&code, function, RSI, ir.a);
 
 								if (ir.opSize % 8 == 0) {
 									loadImmediateIntoIntRegister(&code, RCX, ir.opSize / 8);
 
-									code.add1(0xF3); // rep movsq
-									code.add1(0x48);
-									code.add1(0xA5);
+									code.add1Unchecked(0xF3); // rep movsq
+									code.add1Unchecked(0x48);
+									code.add1Unchecked(0xA5);
 								}
 								else {
 									loadImmediateIntoIntRegister(&code, RCX, ir.opSize);
 
-									code.add1(0xF3); // rep movsb
-									code.add1(0x48);
-									code.add1(0xA4);
+									code.add1Unchecked(0xF3); // rep movsb
+									code.add1Unchecked(0x48);
+									code.add1Unchecked(0xA4);
 								}
 							}
 
@@ -3070,11 +3104,11 @@ void runCoffWriter() {
 						}
 					}
 
-					code.add1(0xE9);
+					code.add1Unchecked(0xE9);
 
 					JumpPatch patch;
 					patch.opToPatch = function->state.ir.count;
-					patch.location = reinterpret_cast<s32 *>(code.add4(0));
+					patch.location = reinterpret_cast<s32 *>(code.add4Unchecked(0));
 					patch.rip = code.totalSize;
 
 					jumpPatches.add(patch);
@@ -3106,54 +3140,55 @@ void runCoffWriter() {
 								++largeStorage; // Align to 16 bytes
 							}
 
-							code.add1(0x48);
-							code.add1(0x8D);
+							code.add1Unchecked(0x48);
+							code.add1Unchecked(0x8D);
 							writeRSPOffsetByte(&code, RDI, largeStorage * 8);
 
 							if (reg == 0) {
 								if (size % 8 == 0) {
 									loadImmediateIntoIntRegister(&code, RCX, size / 8);
 
-									code.add1(0x31); // xor eax, eax
-									code.add1(0xC0);
+									code.add1Unchecked(0x31); // xor eax, eax
+									code.add1Unchecked(0xC0);
 
-									code.add1(0xF3); // rep stosq
-									code.add1(0x48);
-									code.add1(0xAB);
+									code.add1Unchecked(0xF3); // rep stosq
+									code.add1Unchecked(0x48);
+									code.add1Unchecked(0xAB);
 								}
 								else {
 									loadImmediateIntoIntRegister(&code, RCX, size);
 
-									code.add1(0x30); // xor al, al
-									code.add1(0xC0);
+									code.add1Unchecked(0x30); // xor al, al
+									code.add1Unchecked(0xC0);
 
-									code.add1(0xF3); // rep stosb
-									code.add1(0x48);
-									code.add1(0xAA);
+									code.add1Unchecked(0xF3); // rep stosb
+									code.add1Unchecked(0x48);
+									code.add1Unchecked(0xAA);
 								}
 							}
 							else {
-								code.add1(0x48);
-								code.add1(0x8D);
+								code.add1Unchecked(0x48);
+								code.add1Unchecked(0x8D);
 								writeRSPRegisterByte(&code, function, RSI, reg);
 
 								if (size % 8 == 0) {
 									loadImmediateIntoIntRegister(&code, RCX, size / 8);
 
-									code.add1(0xF3); // rep movsq
-									code.add1(0x48);
-									code.add1(0xA5);
+									code.add1Unchecked(0xF3); // rep movsq
+									code.add1Unchecked(0x48);
+									code.add1Unchecked(0xA5);
 								}
 								else {
 									loadImmediateIntoIntRegister(&code, RCX, size);
 
-									code.add1(0xF3); // rep movsb
-									code.add1(0x48);
-									code.add1(0xA4);
+									code.add1Unchecked(0xF3); // rep movsb
+									code.add1Unchecked(0x48);
+									code.add1Unchecked(0xA4);
 								}
 							}
 
 							largeStorage += (size + 7) / 8;
+							code.ensure(128);
 						}
 					}
 
@@ -3170,8 +3205,8 @@ void runCoffWriter() {
 
 						if (ir.arguments->args[i].number == static_cast<u64>(-1LL)) {
 
-							code.add1(intRegisters[i + parameterOffset] >= 8 ? 0x4C : 0x48);
-							code.add1(0x8D);
+							code.add1Unchecked(intRegisters[i + parameterOffset] >= 8 ? 0x4C : 0x48);
+							code.add1Unchecked(0x8D);
 							writeRSPOffsetByte(&code, intRegisters[i + parameterOffset] & 7, dumpSpace * 8);
 						}
 						else if (type->flavor == TypeFlavor::FLOAT) {
@@ -3186,8 +3221,8 @@ void runCoffWriter() {
 									++largeStorage; // Align to 16 bytes
 								}
 
-								code.add1(intRegisters[i + parameterOffset] >= 8 ? 0x4C : 0x48);
-								code.add1(0x8D);
+								code.add1Unchecked(intRegisters[i + parameterOffset] >= 8 ? 0x4C : 0x48);
+								code.add1Unchecked(0x8D);
 								writeRSPOffsetByte(&code, intRegisters[i + parameterOffset] & 7, largeStorage * 8);
 
 								u32 size = type->size;
@@ -3201,8 +3236,8 @@ void runCoffWriter() {
 
 						if (ir.arguments->args[i].number == static_cast<u64>(-1LL)) {
 
-							code.add1(0x48);
-							code.add1(0x8D);
+							code.add1Unchecked(0x48);
+							code.add1Unchecked(0x8D);
 							writeRSPOffsetByte(&code, RAX, dumpSpace * 8);
 						}
 						else if (isStandardSize(size)) {
@@ -3213,21 +3248,23 @@ void runCoffWriter() {
 								++largeStorage; // Align to 16 bytes
 							}
 
-							code.add1(0x48);
-							code.add1(0x8D);
+							code.add1Unchecked(0x48);
+							code.add1Unchecked(0x8D);
 							writeRSPOffsetByte(&code, RAX, largeStorage * 8);
 
 							largeStorage += (largeStorage + 7) / 8;
 						}
 
-						code.add1(0x48);
-						code.add1(0x89);
+						code.add1Unchecked(0x48);
+						code.add1Unchecked(0x89);
 						writeRSPOffsetByte(&code, RAX, (i + parameterOffset) * 8);
+
+						code.ensure(128);
 					}
 
 					if (!isStandardSize(ir.arguments->returnType->size)) {
-						code.add1(0x48);
-						code.add1(0x8D);
+						code.add1Unchecked(0x48);
+						code.add1Unchecked(0x8D);
 
 						if (ir.dest) {
 							writeRSPRegisterByte(&code, function, RCX, ir.dest);
@@ -3237,7 +3274,7 @@ void runCoffWriter() {
 						}
 					}
 
-					code.add1(0xFF);
+					code.add1Unchecked(0xFF);
 					writeRSPRegisterByte(&code, function, 2, ir.a);
 
 					if (ir.dest != 0) {
@@ -3256,19 +3293,19 @@ void runCoffWriter() {
 						storeImmediate(&code, function, ir.opSize, ir.dest, 0);
 					}
 					else if (ir.flags & IR_FLOAT_OP) {
-						code.add1(0x0F); // xorps xmm0, xmm0
-						code.add1(0x57);
-						code.add1(0xC0);
+						code.add1Unchecked(0x0F); // xorps xmm0, xmm0
+						code.add1Unchecked(0x57);
+						code.add1Unchecked(0xC0);
 
 						if (ir.opSize == 8) {
-							code.add1(0xF2);
+							code.add1Unchecked(0xF2);
 						}
 						else {
-							code.add1(0xF3);
+							code.add1Unchecked(0xF3);
 						}
 
-						code.add1(0x0F);
-						code.add1(0x5C);
+						code.add1Unchecked(0x0F);
+						code.add1Unchecked(0x5C);
 						writeRSPRegisterByte(&code, function, 0, ir.a);
 
 						storeFromFloatRegister(&code, function, ir.opSize, ir.dest, 0);
@@ -3276,20 +3313,20 @@ void runCoffWriter() {
 					else {
 						loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
 						if (ir.opSize == 8) {
-							code.add1(0x48);
+							code.add1Unchecked(0x48);
 						}
 						else if (ir.opSize == 2) {
-							code.add1(0x66);
+							code.add1Unchecked(0x66);
 						}
 
 						if (ir.opSize == 1) {
-							code.add1(0xF6);
+							code.add1Unchecked(0xF6);
 						}
 						else {
-							code.add1(0xF7);
+							code.add1Unchecked(0xF7);
 						}
 
-						code.add1(0xD8);
+						code.add1Unchecked(0xD8);
 
 						storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
 					}
@@ -3298,30 +3335,30 @@ void runCoffWriter() {
 					// we are done
 				} break;
 				case IrOp::FUNCTION: {
-					code.add1(0x48);
-					code.add1(0x8D);
-					code.add1(0x05);
+					code.add1Unchecked(0x48);
+					code.add1Unchecked(0x8D);
+					code.add1Unchecked(0x05);
 
-					codeRelocations.add4(code.totalSize);
+					codeRelocations.ensure(10);
+					codeRelocations.add4Unchecked(code.totalSize);
+					codeRelocations.add4Unchecked(createSymbolForFunction(&symbols, ir.function));
+					codeRelocations.add2Unchecked(IMAGE_REL_AMD64_REL32);
 
-					codeRelocations.add4(createSymbolForFunction(&symbols, ir.function));
-
-					codeRelocations.add2(IMAGE_REL_AMD64_REL32);
-
-					code.add4(0);
+					code.add4Unchecked(0);
 
 					storeFromIntRegister(&code, function, 8, ir.dest, RAX);
 				} break;
 				case IrOp::STRING: {
-					code.add1(0x48);
-					code.add1(0x8D);
-					code.add1(0x05);
+					code.add1Unchecked(0x48);
+					code.add1Unchecked(0x8D);
+					code.add1Unchecked(0x05);
 
-					codeRelocations.add4(code.totalSize);
-					codeRelocations.add4(createSymbolForString(&emptyStringSymbolIndex, &symbols, &stringTable, &rdata, ir.string));
-					codeRelocations.add2(IMAGE_REL_AMD64_REL32);
+					codeRelocations.ensure(10);
+					codeRelocations.add4Unchecked(code.totalSize);
+					codeRelocations.add4Unchecked(createSymbolForString(&emptyStringSymbolIndex, &symbols, &stringTable, &rdata, ir.string));
+					codeRelocations.add2Unchecked(IMAGE_REL_AMD64_REL32);
 
-					code.add4(0);
+					code.add4Unchecked(0);
 
 					storeFromIntRegister(&code, function, 8, ir.dest, RAX);
 
@@ -3333,26 +3370,28 @@ void runCoffWriter() {
 				} break;
 				case IrOp::BLOCK: {
 					if (ir.block) {
+						debugSymbols.ensure(19);
+						debugSymbolsRelocations.ensure(20);
 
-						debugSymbols.add2(21);
-						debugSymbols.add2(0x1103); // S_BLOCK32
+						debugSymbols.add2Unchecked(21);
+						debugSymbols.add2Unchecked(0x1103); // S_BLOCK32
 
-						debugSymbols.add4(0);
-						debugSymbols.add4(0);
+						debugSymbols.add4Unchecked(0);
+						debugSymbols.add4Unchecked(0);
 
 						blockOffsetStack.add(debugSymbols.add4(0));
-						debugSymbolsRelocations.add4(debugSymbols.totalSize);
-						debugSymbolsRelocations.add4(function->physicalStorage);
-						debugSymbolsRelocations.add2(IMAGE_REL_AMD64_SECREL);
+						debugSymbolsRelocations.add4Unchecked(debugSymbols.totalSize);
+						debugSymbolsRelocations.add4Unchecked(function->physicalStorage);
+						debugSymbolsRelocations.add2Unchecked(IMAGE_REL_AMD64_SECREL);
 
-						debugSymbols.add4(code.totalSize - functionStart);
+						debugSymbols.add4Unchecked(code.totalSize - functionStart);
 
-						debugSymbolsRelocations.add4(debugSymbols.totalSize);
-						debugSymbolsRelocations.add4(textSectionSymbolIndex);
-						debugSymbolsRelocations.add2(IMAGE_REL_AMD64_SECTION);
+						debugSymbolsRelocations.add4Unchecked(debugSymbols.totalSize);
+						debugSymbolsRelocations.add4Unchecked(textSectionSymbolIndex);
+						debugSymbolsRelocations.add2Unchecked(IMAGE_REL_AMD64_SECTION);
 
-						debugSymbols.add2(0);
-						debugSymbols.add1(0);
+						debugSymbols.add2Unchecked(0);
+						debugSymbols.add1Unchecked(0);
 
 						for (auto declaration : ir.block->declarations) {
 							if (declaration->flags & (DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_CONSTANT | DECLARATION_IS_IMPLICIT_IMPORT)) continue;
@@ -3362,8 +3401,9 @@ void runCoffWriter() {
 							variableInfo.off = getRegisterOffset(function, declaration->physicalStorage);
 							variableInfo.typind = getCoffTypeIndex(&debugTypes, static_cast<ExprLiteral *>(declaration->type)->typeValue);
 
-							debugSymbols.add2(static_cast<u16>(sizeof(variableInfo) + declaration->name.length + 1));
-							debugSymbols.add(&variableInfo, sizeof(variableInfo));
+							debugSymbols.ensure(2 + sizeof(variableInfo));
+							debugSymbols.add2Unchecked(static_cast<u16>(sizeof(variableInfo) + declaration->name.length + 1));
+							debugSymbols.addUnchecked(&variableInfo, sizeof(variableInfo));
 							debugSymbols.addNullTerminatedString(declaration->name);
 						}
 					}
@@ -3371,8 +3411,9 @@ void runCoffWriter() {
 						u32 *length = blockOffsetStack.pop();
 						*length = code.totalSize - functionStart - length[1];
 
-						debugSymbols.add2(2);
-						debugSymbols.add2(6); // S_END
+						debugSymbols.ensure(4);
+						debugSymbols.add2Unchecked(2);
+						debugSymbols.add2Unchecked(6); // S_END
 					}
 				} break;
 				default: {
@@ -3384,24 +3425,26 @@ void runCoffWriter() {
 			*functionPostambleStartPatch = code.totalSize - functionStart;
 			u32 functionPostambleStart = code.totalSize;
 
+			code.ensure(64);
+
 			// add rsp, spaceToAllocate
 			if (spaceToAllocate < 0x80) {
-				code.add1(0x48);
-				code.add1(0x83);
-				code.add1(0xC4);
-				code.add1(static_cast<u8>(spaceToAllocate));
+				code.add1Unchecked(0x48);
+				code.add1Unchecked(0x83);
+				code.add1Unchecked(0xC4);
+				code.add1Unchecked(static_cast<u8>(spaceToAllocate));
 			}
 			else {
-				code.add1(0x48);
-				code.add1(0x81);
-				code.add1(0xC4);
-				code.add4(static_cast<u32>(spaceToAllocate));
+				code.add1Unchecked(0x48);
+				code.add1Unchecked(0x81);
+				code.add1Unchecked(0xC4);
+				code.add4Unchecked(static_cast<u32>(spaceToAllocate));
 			}
 
-			code.add1(0x5F); // pop rdi
-			code.add1(0x5E); // pop rsi
+			code.add1Unchecked(0x5F); // pop rdi
+			code.add1Unchecked(0x5E); // pop rsi
 
-			code.add1(0xC3);
+			code.add1Unchecked(0xC3);
 
 			*functionLengthPatch = code.totalSize - functionStart;
 
@@ -3413,29 +3456,32 @@ void runCoffWriter() {
 
 			{
 				PROFILE_ZONE("Write Function Debug Symbols");
-				debugSymbols.add2(2); // S_PROC_ID_END
-				debugSymbols.add2(0x114f);
+				debugSymbols.ensure(4);
+				debugSymbols.add2Unchecked(2); // S_PROC_ID_END
+				debugSymbols.add2Unchecked(0x114f);
 
 				*subsectionSizePatch = debugSymbols.totalSize - subsectionOffset;
 
 				alignAllocator(&debugSymbols, 4);
 
+				pdata.ensure(12);
 
-				pdataRelocations.add4(pdata.totalSize);
-				pdataRelocations.add4(function->physicalStorage);
-				pdataRelocations.add2(IMAGE_REL_AMD64_ADDR32NB);
+				pdataRelocations.ensure(30);
+				pdataRelocations.add4Unchecked(pdata.totalSize);
+				pdataRelocations.add4Unchecked(function->physicalStorage);
+				pdataRelocations.add2Unchecked(IMAGE_REL_AMD64_ADDR32NB);
 
-				pdata.add4(0);
+				pdata.add4Unchecked(0);
 
-				pdataRelocations.add4(pdata.totalSize);
-				pdataRelocations.add4(function->physicalStorage);
-				pdataRelocations.add2(IMAGE_REL_AMD64_ADDR32NB);
+				pdataRelocations.add4Unchecked(pdata.totalSize);
+				pdataRelocations.add4Unchecked(function->physicalStorage);
+				pdataRelocations.add2Unchecked(IMAGE_REL_AMD64_ADDR32NB);
 
-				pdata.add4(code.totalSize - functionStart);
+				pdata.add4Unchecked(code.totalSize - functionStart);
 
-				pdataRelocations.add4(pdata.totalSize);
-				pdataRelocations.add4(symbols.count());
-				pdataRelocations.add2(IMAGE_REL_AMD64_ADDR32NB);
+				pdataRelocations.add4Unchecked(pdata.totalSize);
+				pdataRelocations.add4Unchecked(symbols.count());
+				pdataRelocations.add2Unchecked(IMAGE_REL_AMD64_ADDR32NB);
 
 				Symbol xdataSymbol;
 				setSymbolName(&stringTable, &xdataSymbol.name, symbols.count());
@@ -3447,48 +3493,52 @@ void runCoffWriter() {
 
 				symbols.add(xdataSymbol);
 
-				pdata.add4(0);
+				pdata.add4Unchecked(0);
 
-				xdata.add1(1);
-				xdata.add1(functionPreambleEnd);
-				xdata.add1(4);
-				xdata.add1(0);
+				xdata.ensure(11);
+				xdata.add1Unchecked(1);
+				xdata.add1Unchecked(functionPreambleEnd);
+				xdata.add1Unchecked(4);
+				xdata.add1Unchecked(0);
 
-				xdata.add1(subRspOffset);
-				xdata.add1(0x01);
-				xdata.add2(spaceToAllocate / 8);
-				xdata.add1(pushRdiOffset);
-				xdata.add1(0x70);
-				xdata.add1(pushRsiOffset);
-				xdata.add1(0x60);
+				xdata.add1Unchecked(subRspOffset);
+				xdata.add1Unchecked(0x01);
+				xdata.add2Unchecked(spaceToAllocate / 8);
+				xdata.add1Unchecked(pushRdiOffset);
+				xdata.add1Unchecked(0x70);
+				xdata.add1Unchecked(pushRsiOffset);
+				xdata.add1Unchecked(0x60);
 			}
 
 			{
 				PROFILE_ZONE("Write Function Debug Lines");
-				debugSymbols.add4(0xF2);
-				debugSymbols.add4(24 + lineInfo.count * 12);
+				debugSymbols.ensure(32 + lineInfo.count * 12);
+				debugSymbolsRelocations.ensure(20);
+				
+				debugSymbols.add4Unchecked(0xF2);
+				debugSymbols.add4Unchecked(24 + lineInfo.count * 12);
 
 
-				debugSymbolsRelocations.add4(debugSymbols.totalSize);
-				debugSymbolsRelocations.add4(function->physicalStorage);
-				debugSymbolsRelocations.add2(IMAGE_REL_AMD64_SECREL);
+				debugSymbolsRelocations.add4Unchecked(debugSymbols.totalSize);
+				debugSymbolsRelocations.add4Unchecked(function->physicalStorage);
+				debugSymbolsRelocations.add2Unchecked(IMAGE_REL_AMD64_SECREL);
 
-				debugSymbols.add4(0);
+				debugSymbols.add4Unchecked(0);
 
-				debugSymbolsRelocations.add4(debugSymbols.totalSize);
-				debugSymbolsRelocations.add4(textSectionSymbolIndex);
-				debugSymbolsRelocations.add2(IMAGE_REL_AMD64_SECTION);
+				debugSymbolsRelocations.add4Unchecked(debugSymbols.totalSize);
+				debugSymbolsRelocations.add4Unchecked(textSectionSymbolIndex);
+				debugSymbolsRelocations.add2Unchecked(IMAGE_REL_AMD64_SECTION);
 
-				debugSymbols.add2(0);
+				debugSymbols.add2Unchecked(0);
 
-				debugSymbols.add2(1); // fHasColumns
-				debugSymbols.add4(code.totalSize - functionStart);
+				debugSymbols.add2Unchecked(1); // fHasColumns
+				debugSymbols.add4Unchecked(code.totalSize - functionStart);
 
-				debugSymbols.add4(function->start.fileUid * 8);
-				debugSymbols.add4(lineInfo.count);
-				debugSymbols.add4(12 + lineInfo.count * 12);
-				debugSymbols.add(lineInfo.storage, lineInfo.count * sizeof(LineInfo));
-				debugSymbols.add(columnInfo.storage, columnInfo.count * sizeof(ColumnInfo));
+				debugSymbols.add4Unchecked(function->start.fileUid * 8);
+				debugSymbols.add4Unchecked(lineInfo.count);
+				debugSymbols.add4Unchecked(12 + lineInfo.count * 12);
+				debugSymbols.addUnchecked(lineInfo.storage, lineInfo.count * sizeof(LineInfo));
+				debugSymbols.addUnchecked(columnInfo.storage, columnInfo.count * sizeof(ColumnInfo));
 			}
 
 		}
@@ -3501,26 +3551,29 @@ void runCoffWriter() {
 
 			createSymbolForDeclaration(&symbols, declaration);
 
-			debugSymbols.add4(0xF1);
-			auto subsectionSizePatch = debugSymbols.add4(0);
+			debugSymbols.ensure(22);
+			debugSymbolsRelocations.ensure(20);
+
+			debugSymbols.add4Unchecked(0xF1);
+			auto subsectionSizePatch = debugSymbols.add4Unchecked(0);
 			u32 subsectionOffset = debugSymbols.totalSize;
 
-			debugSymbols.add2(static_cast<u16>(sizeof(DATASYM32) + declaration->name.length - 1));
-			debugSymbols.add2(0x110d); // S_GDATA32
+			debugSymbols.add2Unchecked(static_cast<u16>(sizeof(DATASYM32) + declaration->name.length - 1));
+			debugSymbols.add2Unchecked(0x110d); // S_GDATA32
 
-			debugSymbols.add4(getCoffTypeIndex(&debugTypes, static_cast<ExprLiteral *>(declaration->type)->typeValue));
+			debugSymbols.add4Unchecked(getCoffTypeIndex(&debugTypes, static_cast<ExprLiteral *>(declaration->type)->typeValue));
 
-			debugSymbolsRelocations.add4(debugSymbols.totalSize);
-			debugSymbolsRelocations.add4(declaration->physicalStorage);
-			debugSymbolsRelocations.add2(IMAGE_REL_AMD64_SECREL);
+			debugSymbolsRelocations.add4Unchecked(debugSymbols.totalSize);
+			debugSymbolsRelocations.add4Unchecked(declaration->physicalStorage);
+			debugSymbolsRelocations.add2Unchecked(IMAGE_REL_AMD64_SECREL);
 
-			debugSymbols.add4(0);
+			debugSymbols.add4Unchecked(0);
 
-			debugSymbolsRelocations.add4(debugSymbols.totalSize);
-			debugSymbolsRelocations.add4(declaration->flags & DECLARATION_IS_UNINITIALIZED ? BSS_SECTION_NUMBER : DATA_SECTION_NUMBER);
-			debugSymbolsRelocations.add2(IMAGE_REL_AMD64_SECTION);
+			debugSymbolsRelocations.add4Unchecked(debugSymbols.totalSize);
+			debugSymbolsRelocations.add4Unchecked(declaration->flags & DECLARATION_IS_UNINITIALIZED ? BSS_SECTION_NUMBER : DATA_SECTION_NUMBER);
+			debugSymbolsRelocations.add2Unchecked(IMAGE_REL_AMD64_SECTION);
 
-			debugSymbols.add2(0);
+			debugSymbols.add2Unchecked(0);
 
 			debugSymbols.addNullTerminatedString(declaration->name);
 
@@ -4088,7 +4141,7 @@ void runCoffWriter() {
 		}
 
 		if (!hadError) {
-			HANDLE out = CreateFileA("out.obj", GENERIC_WRITE, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, 0);
+			HANDLE out = CreateFileA("out.obj", GENERIC_WRITE, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
 
 			if (out == INVALID_HANDLE_VALUE) {
 				reportError("Error: Could not open out.obj intermediate for writing");

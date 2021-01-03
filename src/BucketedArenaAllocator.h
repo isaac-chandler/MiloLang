@@ -36,11 +36,16 @@ struct BucketedArenaAllocator {
 		}
 	}
 
-	u8 *add1(u8 value);
+	u8  *add1(u8 value);
 	u16 *add2(u16 value);
 	u32 *add4(u32 value);
 	u64 *add8(u64 value);
+	u8  *add1Unchecked(u8 value);
+	u16 *add2Unchecked(u16 value);
+	u32 *add4Unchecked(u32 value);
+	u64 *add8Unchecked(u64 value);
 	void add(const void *value, u32 size);
+	void addUnchecked(const void *value, u32 size);
 	void addNullTerminatedString(String string);
 	void addNullTerminatedString(const char *string);
 	void addString(String string);

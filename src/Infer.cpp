@@ -126,7 +126,15 @@ Expr **getHalt(SubJob *job) {
 void goToSleep(SubJob *job, Array<SubJob *> *sleepingOnMe, String name = String(nullptr, 0u)) {
 	_ReadWriteBarrier();
 
+	if (job->sleepCount && job->sleepingOnName != name) {
+		job->sleepingOnName = "";
+	}
+	else {
+		job->sleepingOnName = name;
+	}
+
 	job->sleepCount++;
+	
 	sleepingOnMe->add(job);
 }
 
@@ -259,7 +267,9 @@ inline void addSubJob(SubJob *job, bool highPriority = false) {
 bool addDeclaration(Declaration *declaration);
 
 void wakeUpSleepers(Array<SubJob *> *sleepers, bool priority = false, String name = String(nullptr, 0u)) {
+
 	if (name.length == 0) {
+		PROFILE_ZONE("Unnamed wakeUpSleepers");
 		for (auto sleeper : *sleepers) {
 			if (--sleeper->sleepCount == 0)
 				addSubJob(sleeper);
@@ -268,6 +278,7 @@ void wakeUpSleepers(Array<SubJob *> *sleepers, bool priority = false, String nam
 		sleepers->clear();
 	}
 	else {
+		PROFILE_ZONE("Named wakeUpSleepers");
 		for (u32 i = 0; i < sleepers->count; i++) {
 			auto sleeper = (*sleepers)[i];
 
@@ -7551,13 +7562,9 @@ void runInfer() {
 	printf("Infer memory used: %ukb\n", inferArena.totalSize / 1024);
 	printf("Type table memory used: %ukb\n", typeArena.totalSize / 1024);
 
-	startLlvm.notify_one();
-
 	return;
 error:;
 	assert(hadError);
-
-	startLlvm.notify_one();
 
 	irGeneratorQueue.add(nullptr);
 	filesToLoadQueue.add("");

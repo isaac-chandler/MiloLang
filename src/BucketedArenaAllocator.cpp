@@ -28,9 +28,7 @@ void *BucketedArenaAllocator::allocate(u32 size) {
 	current->memory = aligned;
 
 
-	if (current->remaining < size) {
-		expand(this);
-	}
+	ensure(size);
 
 
 	char *result = current->memory;
@@ -49,9 +47,7 @@ void *BucketedArenaAllocator::allocateUnaligned(u32 size) {
 	totalSize += size;
 
 
-	if (current->remaining < size) {
-		expand(this);
-	}
+	ensure(size);
 
 	char *result = current->memory;
 	current->remaining -= size;
@@ -96,11 +92,17 @@ void BucketedArenaAllocator::add(const void *value, u32 size) {
 	current->remaining -= size;
 }
 
+void BucketedArenaAllocator::addUnchecked(const void *value, u32 size) {
+	assert(size <= current->remaining);
+	memcpy(current->memory, value, size);
+	current->memory += size;
+	current->remaining -= size;
+	totalSize += size;
+}
+
 #define addN(name, type)											\
 type *BucketedArenaAllocator::name(type value) {					\
-	if (current->remaining < sizeof(type)) {						\
-		expand(this);												\
-	}																\
+	ensure(sizeof(type));											\
 	totalSize += sizeof(type);										\
 	type *location = reinterpret_cast<type *>(current->memory);		\
 	current->memory += sizeof(type);								\
@@ -114,6 +116,23 @@ addN(add1, u8)
 addN(add2, u16)
 addN(add4, u32)
 addN(add8, u64)
+
+#define addNUnchecked(name, type)									\
+type *BucketedArenaAllocator::name(type value) {					\
+	assert(sizeof(type) <= current->remaining);						\
+	totalSize += sizeof(type);										\
+	type *location = reinterpret_cast<type *>(current->memory);		\
+	current->memory += sizeof(type);								\
+	current->remaining -= sizeof(type);								\
+																	\
+	*location = value;												\
+	return location;												\
+}
+
+addNUnchecked(add1Unchecked, u8)
+addNUnchecked(add2Unchecked, u16)
+addNUnchecked(add4Unchecked, u32)
+addNUnchecked(add8Unchecked, u64)
 
 ArenaAllocatorBucket *makeBucket(u32 size) {
 	char *block = static_cast<char *>(malloc(size + sizeof(ArenaAllocatorBucket)));
