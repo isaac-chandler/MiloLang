@@ -204,12 +204,10 @@ inline bool checkForRedeclaration(Block *block, Declaration *declaration, struct
 void addToTable(Block *block, Declaration *declaration);
 void initTable(Block *block);
 
-inline u32 globalSerial = 0;
-
-inline void addImporterToBlock(Block *block, Importer *importer, s64 serial = -1) {
+inline void addImporterToBlock(Block *block, Importer *importer, u32 serial) {
 	assert(!(block->flags & (BLOCK_IS_ARGUMENTS | BLOCK_IS_RETURNS)));
 
-	importer->serial = serial == -1 ? globalSerial++ : static_cast<u32>(serial);
+	importer->serial = serial;
 	importer->enclosingScope = block;
 
 	block->importers.add(importer);
@@ -227,30 +225,22 @@ inline void putDeclarationInBlock(Block *block, Declaration *declaration) {
 	}
 }
 
-inline void addDeclarationToBlockUnchecked(Block *block, Declaration *declaration, s64 serial = -1) {
-	if (serial == -1) {
-		if (block->flags & BLOCK_IS_ARGUMENTS | BLOCK_IS_RETURNS) {
-			declaration->serial = block->declarations.count;
-		}
-		else {
-			declaration->serial = globalSerial++;
-		}
-	}
-	else {
-		declaration->serial = static_cast<u32>(serial);
-	}
+inline void addDeclarationToBlockUnchecked(Block *block, Declaration *declaration, u32 serial) {
+	assert(checkForRedeclaration(block, declaration, nullptr));
+
+	declaration->serial = serial;
 
 	declaration->enclosingScope = block;
 	
 	putDeclarationInBlock(block, declaration);
 }
 
-inline bool addDeclarationToBlock(Block *block, Declaration *declaration, s64 index = -1) {
+inline bool addDeclarationToBlock(Block *block, Declaration *declaration, u32 serial) {
 	if (!checkForRedeclaration(block, declaration, nullptr)) {
 		return false;
 	}
 
-	addDeclarationToBlockUnchecked(block, declaration, index);
+	addDeclarationToBlockUnchecked(block, declaration, serial);
 
 	return true;
 }
@@ -294,7 +284,7 @@ inline bool addImplicitImport(Block *block, Declaration *old, CodeLocation *star
 		import->end = *end;
 		import->import = old;
 		import->flags |= DECLARATION_IS_IMPLICIT_IMPORT;
-		addDeclarationToBlockUnchecked(block, import);
+		addDeclarationToBlockUnchecked(block, import, 0);
 
 		return true;
 	}

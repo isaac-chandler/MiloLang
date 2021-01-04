@@ -2642,7 +2642,7 @@ bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char 
 	}
 
 #if BUILD_DEBUG
-	for (u64 i = 0; i < block->declarations.count; i++) {
+	for (u32 i = 0; i < block->declarations.count; i++) {
 		assert(block->declarations[i]->serial == i);
 	}
 #endif
@@ -4050,7 +4050,7 @@ bool inferFlattened(SubJob *job) {
 									return false;
 								}
 
-								if (declaration->serial < identifier->serial) {
+								if ((declaration->enclosingScope->flags & (BLOCK_IS_ARGUMENTS | BLOCK_IS_RETURNS)) || declaration->serial < identifier->serial) {
 									identifier->declaration = declaration;
 									break;
 								}
@@ -5686,7 +5686,7 @@ void addImporter(Importer *importer) {
 	PROFILE_FUNC();
 
 	if (!importer->enclosingScope)
-		addImporterToBlock(&globalBlock, importer);
+		addImporterToBlock(&globalBlock, importer, 0);
 
 	++totalImporters;
 
@@ -5712,7 +5712,7 @@ bool addDeclaration(Declaration *declaration) {
 	if (!declaration->enclosingScope) {
 		PROFILE_ZONE("Add declaration to global block");
 
-		if (!addDeclarationToBlock(&globalBlock, declaration)) {
+		if (!addDeclarationToBlock(&globalBlock, declaration, 0)) {
 			return false;
 		}
 
@@ -7201,7 +7201,7 @@ void createBasicDeclarations() {
 	targetWindows->initialValue = literal;
 	targetWindows->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY | DECLARATION_IS_CONSTANT;
 
-	addDeclarationToBlock(&globalBlock, targetWindows);
+	addDeclarationToBlock(&globalBlock, targetWindows, 0);
 }
 
 bool doJob(SubJob *job) {

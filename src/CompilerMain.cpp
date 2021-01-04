@@ -17,9 +17,7 @@ void NTAPI tls_callback(PVOID DllHandle, DWORD dwReason, PVOID) {
 	if (dwReason == DLL_THREAD_ATTACH) {
 		s32 thread = perThreadIndex.fetch_add(1, std::memory_order_relaxed);
 
-		profileIndices[thread] = &profileIndex;
-		*profileIndices[thread] = static_cast<Profile *>(VirtualAlloc(nullptr, sizeof(Profile) * 1 << 23, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
-		profiles[thread] = *profileIndices[thread];
+		profileIndex = profiles[thread];
 	}
 }
 
@@ -380,11 +378,19 @@ int main(int argc, char *argv[]) {
 	using namespace std::chrono;
 
 #if BUILD_PROFILE
+	for (u32 i = 0; i < PROFILER_THREADS; i++) {
+		profiles[i] = static_cast<Profile *>(VirtualAlloc(nullptr, sizeof(Profile) * 1 << 23, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+	}
+
 	tls_callback(nullptr, DLL_THREAD_ATTACH, nullptr);
 	u64 startTime;
 	u64 startTsc = __rdtsc();
 	QueryPerformanceCounter(reinterpret_cast<LARGE_INTEGER *>(&startTime));
 #endif
+
+	for (u64 i = 0; i < 10'000; i++) {
+		PROFILE_ZONE("Overhead");
+	}
 
 	char *input = nullptr;
 	bool useLlvm = false;
@@ -711,12 +717,15 @@ int main(int argc, char *argv[]) {
 
 		for (u32 j = 0; j < PROFILER_THREADS; j++) {
 
-			for (Profile *i = profiles[j]; profileIndices[j] && i < *profileIndices[j]; i++) {
+			if (!profiles[j])
+				continue;
+
+			for (Profile *i = profiles[j]; i->time; i++) {
 				if (!first) {
 					out << ",\n";
 				}
 				first = false;
-
+			
 				Profile p = *i;
 
 				out << "{\"cat\":\"function\",\"pid\":0,\"tid\":" << j << ",\"ts\":" << ((p.time - startTsc) * tscFactor);

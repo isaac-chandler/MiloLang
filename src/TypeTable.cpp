@@ -181,8 +181,8 @@ TypeArray *getArray(Type *type) {
 	result->count = 0;
 	result->flavor = TypeFlavor::ARRAY;
 	insertIntoTable(result, slot);
-	addDeclarationToBlock(&result->members, createDataDeclaration(type));
-	addDeclarationToBlock(&result->members, countDeclaration);
+	addDeclarationToBlockUnchecked(&result->members, createDataDeclaration(type), 0);
+	addDeclarationToBlockUnchecked(&result->members, countDeclaration, 0);
 
 	result->members.flags |= BLOCK_IS_QUEUED | BLOCK_IS_STRUCT;
 
@@ -225,9 +225,9 @@ TypeArray *getDynamicArray(Type *type) {
 	result->flavor = TypeFlavor::ARRAY;
 	result->flags |= TYPE_ARRAY_IS_DYNAMIC;
 	insertIntoTable(result, slot);
-	addDeclarationToBlock(&result->members, createDataDeclaration(type));
-	addDeclarationToBlock(&result->members, countDeclaration);
-	addDeclarationToBlock(&result->members, capacityDeclaration);
+	addDeclarationToBlockUnchecked(&result->members, createDataDeclaration(type), 0);
+	addDeclarationToBlockUnchecked(&result->members, countDeclaration, 0);
+	addDeclarationToBlockUnchecked(&result->members, capacityDeclaration, 0);
 
 	result->members.flags |= BLOCK_IS_QUEUED | BLOCK_IS_STRUCT;
 
@@ -274,7 +274,7 @@ TypeArray *getStaticArray(Type *type, u32 count) {
 
 	insertIntoTable(result, slot);
 
-	addDeclarationToBlock(&result->members, createDataDeclaration(type));
+	addDeclarationToBlockUnchecked(&result->members, createDataDeclaration(type), 0);
 
 	ExprLiteral *countLiteral = TYPE_NEW(ExprLiteral);
 	countLiteral->flavor = ExprFlavor::INT_LITERAL;
@@ -290,7 +290,7 @@ TypeArray *getStaticArray(Type *type, u32 count) {
 	countDeclaration->type = unsignedLiteralType;
 	countDeclaration->initialValue = countLiteral;
 	countDeclaration->flags |= DECLARATION_IS_CONSTANT | DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
-	addDeclarationToBlock(&result->members, countDeclaration);
+	addDeclarationToBlockUnchecked(&result->members, countDeclaration, 0);
 
 	result->members.flags |= BLOCK_IS_QUEUED | BLOCK_IS_STRUCT;
 
@@ -567,8 +567,8 @@ void setupTypeTable() {
 	capacityDeclaration->physicalStorage = 16;
 	capacityDeclaration->flags |= DECLARATION_TYPE_IS_READY;
 
-	addDeclarationToBlock(&TYPE_STRING.members, createDataDeclaration(&TYPE_U8));
-	addDeclarationToBlock(&TYPE_STRING.members, countDeclaration);
+	addDeclarationToBlockUnchecked(&TYPE_STRING.members, createDataDeclaration(&TYPE_U8), 0);
+	addDeclarationToBlockUnchecked(&TYPE_STRING.members, countDeclaration, 0);
 
 	TYPE_VOID_POINTER = getPointer(&TYPE_VOID);
 	TYPE_U8_POINTER = getPointer(&TYPE_U8);

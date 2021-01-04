@@ -3,6 +3,8 @@
 #include "Basic.h"
 #include "String.h"
 #include "CompilerMain.h"
+#include "Block.h"
+#include "BucketedArenaAllocator.h"
 
 #define LITERAL_IS_DECIMAL 0x1
 #define LITERAL_IS_HEX 0x2
@@ -146,6 +148,10 @@ struct BigInt {
 };
 
 struct LexerFile {
+	BucketedArenaAllocator parserArena;
+	Block *currentBlock;
+	u32 identifierSerial;
+
 	char *text;
 
 	u64 bytesRemaining;
@@ -158,6 +164,8 @@ struct LexerFile {
 
 	CodeLocation undoLocation;
 	EndLocation previousTokenEnd;
+
+	LexerFile() : parserArena(65536) {}
 
 	void peekTokenTypes(u64 count, TokenT *buffer);
 	void advance();

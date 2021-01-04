@@ -5,29 +5,21 @@
 #include "Infer.h"
 #include "TypeTable.h"
 
-BucketedArenaAllocator parserArena(1024 * 1024);
-
 #if 1
-#define PARSER_NEW(T) new (static_cast<T *>(assert(std::this_thread::get_id() == mainThread), parserArena.allocate(sizeof(T)))) T
-#define PARSER_NEW_ARRAY(T, C) new (static_cast<T *>(assert(std::this_thread::get_id() == mainThread), parserArena.allocate((C) * sizeof(T)))) T[C]
+#define PARSER_NEW(T) new (static_cast<T *>(lexer->parserArena.allocate(sizeof(T)))) T
+#define PARSER_NEW_ARRAY(T, C) new (static_cast<T *>(lexer->parserArena.allocate((C) * sizeof(T)))) T[C]
 
 #else
 #define PARSER_NEW(T) new T
 #define PARSER_NEW_ARRAY(T, C) new T[C]
 #endif
 
-static Block *currentBlock = nullptr;
-
-static bool addDeclarationToCurrentBlock(Declaration *declaration) {
-	return addDeclarationToBlock(currentBlock, declaration);
-}
-
 struct BinaryOperator {
 	TokenT tokens[5];
 	bool rightAssociative;
 };
 
-static BinaryOperator binaryOpPrecedences[] = {
+static const BinaryOperator binaryOpPrecedences[] = {
 	{{TokenT::LOGIC_OR, TokenT::LOGIC_AND}},
 	{{TokenT::EQUAL, TokenT::NOT_EQUAL}},
 	{{TOKEN('|'), TOKEN('^'), TOKEN('&')}},
@@ -49,26 +41,26 @@ static u64 getTokenPrecedence(TokenT token) {
 	return 0;
 }
 
-static void insertBlock(Block *block) {
-	if (currentBlock) {
-		block->serial = globalSerial++;
+static void insertBlock(LexerFile *lexer, Block *block) {
+	if (lexer->currentBlock) {
+		block->serial = lexer->identifierSerial++;
 	}
 	else {
 		block->serial = 0;
 	}
-	block->parentBlock = currentBlock;
+	block->parentBlock = lexer->currentBlock;
 }
 
-static void pushBlock(Block *block) {
-	insertBlock(block);
+static void pushBlock(LexerFile *lexer, Block *block) {
+	insertBlock(lexer, block);
 
-	currentBlock = block;
+	lexer->currentBlock = block;
 }
 
-static void popBlock(Block *block) { // This only takes the parameter to make sure we are always popping the block we think we are in debug
-	assert(currentBlock == block);
+static void popBlock(LexerFile *lexer, Block *block) { // This only takes the parameter to make sure we are always popping the block we think we are in debug
+	assert(lexer->currentBlock == block);
 
-	currentBlock = currentBlock->parentBlock;
+	lexer->currentBlock = lexer->currentBlock->parentBlock;
 }
 
 static bool expectAndConsume(LexerFile *lexer, TokenT type) {
@@ -88,7 +80,7 @@ Declaration *parseDeclaration(LexerFile *lexer);
 Expr *parseExpr(LexerFile *lexer);
 ExprBlock *parseBlock(LexerFile *lexer, bool allowLoads, ExprBlock *block = nullptr);
 
-ExprLiteral *parserMakeTypeLiteral(CodeLocation &start, EndLocation &end, Type *type) {
+ExprLiteral *parserMakeTypeLiteral(LexerFile *lexer, CodeLocation &start, EndLocation &end, Type *type) {
 	ExprLiteral *literal = PARSER_NEW(ExprLiteral);
 	literal->flavor = ExprFlavor::TYPE_LITERAL;
 	literal->start = start;
@@ -100,15 +92,15 @@ ExprLiteral *parserMakeTypeLiteral(CodeLocation &start, EndLocation &end, Type *
 }
 
 
-ExprIdentifier *makeIdentifier(CodeLocation &start, EndLocation &end, Declaration *declaration) {
+ExprIdentifier *makeIdentifier(LexerFile *lexer, Declaration *declaration) {
 	ExprIdentifier *identifier = PARSER_NEW(ExprIdentifier);
 	identifier->flavor = ExprFlavor::IDENTIFIER;
-	identifier->start = start;
-	identifier->end = end;
+	identifier->start = declaration->start;
+	identifier->end = declaration->end;
 	identifier->declaration = declaration;
 	identifier->name = declaration->name;
-	identifier->resolveFrom = currentBlock;
-	identifier->enclosingScope = currentBlock;
+	identifier->resolveFrom = lexer->currentBlock;
+	identifier->enclosingScope = lexer->currentBlock;
 	identifier->serial = 0;
 	identifier->structAccess = nullptr;
 
@@ -116,7 +108,7 @@ ExprIdentifier *makeIdentifier(CodeLocation &start, EndLocation &end, Declaratio
 }
 
 
-ExprBinaryOperator *makeBinaryOperator(CodeLocation &start, EndLocation &end, TokenT op, Expr *left) {
+ExprBinaryOperator *makeBinaryOperator(LexerFile *lexer, CodeLocation &start, EndLocation &end, TokenT op, Expr *left) {
 	ExprBinaryOperator *expr = PARSER_NEW(ExprBinaryOperator);
 	expr->start = start;
 	expr->end = end;
@@ -127,7 +119,7 @@ ExprBinaryOperator *makeBinaryOperator(CodeLocation &start, EndLocation &end, To
 	return expr;
 }
 
-Declaration *makeIterator(CodeLocation &start, EndLocation &end, String name) {
+Declaration *makeIterator(LexerFile *lexer, CodeLocation &start, EndLocation &end, String name) {
 	Declaration *declaration = PARSER_NEW(Declaration);
 	declaration->start = start;
 	declaration->end = end;
@@ -139,20 +131,9 @@ Declaration *makeIterator(CodeLocation &start, EndLocation &end, String name) {
 	return declaration;
 }
 
-Importer *createImporterForUsing(Declaration *oldDeclaration, Block *block) {
-	auto using_ = PARSER_NEW(ExprIdentifier);
-	using_->flavor = ExprFlavor::IDENTIFIER;
-	using_->start = oldDeclaration->start;
-	using_->end = oldDeclaration->end;
-	using_->resolveFrom = block;
-	using_->enclosingScope = block;
-	using_->serial = globalSerial;
-	using_->name = oldDeclaration->name;
-	using_->declaration = oldDeclaration;
-	using_->structAccess = nullptr;
-
+Importer *createImporterForUsing(LexerFile *lexer, Declaration *declaration) {
 	auto import = PARSER_NEW(Importer);
-	import->import = using_;
+	import->import = makeIdentifier(lexer, declaration);
 
 	return import;
 }
@@ -196,12 +177,12 @@ ExprIf *parseStaticIf(LexerFile *lexer, bool allowLoads) {
 		}
 	}
 
-	if (currentBlock) {
+	if (lexer->currentBlock) {
 		auto importer = PARSER_NEW(Importer);
 
 		importer->import = staticIf;
 
-		addImporterToBlock(currentBlock, importer);
+		addImporterToBlock(lexer->currentBlock, importer, lexer->identifierSerial++);
 	}
 
 	return staticIf;
@@ -267,7 +248,7 @@ Expr *parseExprStatemenet(LexerFile *lexer, bool allowDeclarations) {
 					declaration->initialValue = nullptr;
 					declaration->physicalStorage = 0;
 
-					if (!addDeclarationToCurrentBlock(declaration)) {
+					if (!addDeclarationToBlock(lexer->currentBlock, declaration, identifier->serial++)) {
 						return nullptr;
 					}
 
@@ -300,16 +281,16 @@ Expr *parseExprStatemenet(LexerFile *lexer, bool allowDeclarations) {
 		return comma;
 	}
 
-#define MODIFY_ASSIGN(type)                                                      \
-		else if (expectAndConsume(lexer, type)) {                                \
-			ExprBinaryOperator *op = makeBinaryOperator(start, end, type, expr); \
-																				 \
-			op->right = parseExpr(lexer);										 \
-																				 \
-			if (!op->right)														 \
-				return nullptr;												     \
-																				 \
-			return op;															 \
+#define MODIFY_ASSIGN(type)																\
+		else if (expectAndConsume(lexer, type)) {										\
+			ExprBinaryOperator *op = makeBinaryOperator(lexer, start, end, type, expr); \
+																						\
+			op->right = parseExpr(lexer);												\
+																						\
+			if (!op->right)																\
+				return nullptr;															\
+																						\
+			return op;																	\
 		}
 
 	if (false);
@@ -374,8 +355,8 @@ Importer *parseLoad(LexerFile *lexer) {
 
 	importer->import = load;
 
-	if (currentBlock) {
-		addImporterToBlock(currentBlock, importer);
+	if (lexer->currentBlock) {
+		addImporterToBlock(lexer->currentBlock, importer, lexer->identifierSerial++);
 	}
 
 	return importer;
@@ -401,32 +382,28 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 
 			lexer->peekTokenTypes(1, &peek); // Check if this identifier is an it declaration, an it, it_index declaration or an identifier
 			if (peek == TOKEN(':')) {
-				Declaration *it = makeIterator(lexer->token.start, lexer->token.end, lexer->token.text);
+				Declaration *it = makeIterator(lexer, lexer->token.start, lexer->token.end, lexer->token.text);
 				it->flags |= DECLARATION_IS_ITERATOR;
 
-				if (!addDeclarationToBlock(&loop->iteratorBlock, it)) {
-					assert(false); // Invalid code path, we should never fail to add something to an empty block
-				}
+				addDeclarationToBlockUnchecked(&loop->iteratorBlock, it, lexer->identifierSerial++);
 				lexer->advance();
 
 				assert(lexer->token.type == TOKEN(':'));
 
-				Declaration *it_index = makeIterator(lexer->token.start, lexer->token.end, "it_index");
+				Declaration *it_index = makeIterator(lexer, lexer->token.start, lexer->token.end, "it_index");
 				it_index->flags |= DECLARATION_IS_ITERATOR_INDEX;
 
-				if (!addDeclarationToBlock(&loop->iteratorBlock, it_index)) {
+				if (!addDeclarationToBlock(&loop->iteratorBlock, it_index, lexer->identifierSerial++)) {
 					return nullptr;
 				}
 
 				lexer->advance();
 			}
 			else if (peek == TOKEN(',')) {
-				Declaration *it = makeIterator(lexer->token.start, lexer->token.end, lexer->token.text);
+				Declaration *it = makeIterator(lexer, lexer->token.start, lexer->token.end, lexer->token.text);
 				it->flags |= DECLARATION_IS_ITERATOR;
 
-				if (!addDeclarationToBlock(&loop->iteratorBlock, it)) {
-					assert(false); // Invalid code path, we should never fail to add something to an empty block
-				}
+				addDeclarationToBlockUnchecked(&loop->iteratorBlock, it, lexer->identifierSerial++);
 				lexer->advance();
 
 				assert(lexer->token.type == TOKEN(','));
@@ -438,10 +415,10 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 					return nullptr;
 				}
 
-				Declaration *it_index = makeIterator(lexer->token.start, lexer->token.end, lexer->token.text);
+				Declaration *it_index = makeIterator(lexer, lexer->token.start, lexer->token.end, lexer->token.text);
 				it_index->flags |= DECLARATION_IS_ITERATOR_INDEX;
 
-				if (!addDeclarationToBlock(&loop->iteratorBlock, it_index)) {
+				if (!addDeclarationToBlock(&loop->iteratorBlock, it_index, lexer->identifierSerial++)) {
 					return nullptr;
 				}
 
@@ -458,18 +435,14 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 		}
 		else {
 		notDeclaration:
-			Declaration *it = makeIterator(loop->start, end, "it");
+			Declaration *it = makeIterator(lexer, loop->start, end, "it");
 			it->flags |= DECLARATION_IS_ITERATOR;
-			if (!addDeclarationToBlock(&loop->iteratorBlock, it)) {
-				assert(false); // Invalid code path, we should never fail to add something to an empty block
-			}
+			addDeclarationToBlockUnchecked(&loop->iteratorBlock, it, lexer->identifierSerial++);
 
 
-			Declaration *it_index = makeIterator(loop->start, end, "it_index");
+			Declaration *it_index = makeIterator(lexer, loop->start, end, "it_index");
 			it_index->flags |= DECLARATION_IS_ITERATOR_INDEX;
-			if (!addDeclarationToBlock(&loop->iteratorBlock, it_index)) {
-				assert(false); // Invalid code path, we should never fail to add this
-			}
+			addDeclarationToBlockUnchecked(&loop->iteratorBlock, it_index, lexer->identifierSerial++);
 		}
 
 		loop->forBegin = parseExpr(lexer);
@@ -489,19 +462,19 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 		if (expectAndConsume(lexer, ';')) {
 			loop->body = nullptr;
 
-			loop->iteratorBlock.parentBlock = currentBlock; // Since we never push the block we need to manually set the parent
+			loop->iteratorBlock.parentBlock = lexer->currentBlock; // Since we never push the block we need to manually set the parent
 			loop->end = lexer->previousTokenEnd;
 		}
 		else {
 			loop->end = lexer->previousTokenEnd;
 
-			pushBlock(&loop->iteratorBlock);
+			pushBlock(lexer, &loop->iteratorBlock);
 			loop->body = parseStatement(lexer, false);
 
 			if (!loop->body)
 				return nullptr;
 
-			popBlock(&loop->iteratorBlock);
+			popBlock(lexer, &loop->iteratorBlock);
 
 		}
 
@@ -543,10 +516,10 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 
 			lexer->peekTokenTypes(1, &peek); // Check if this identifier is an it declaration, an it, it_index declaration or an identifier
 			if (peek == TOKEN(':')) {
-				Declaration *it = makeIterator(lexer->token.start, lexer->token.end, lexer->token.text);
+				Declaration *it = makeIterator(lexer, lexer->token.start, lexer->token.end, lexer->token.text);
 				it->flags |= DECLARATION_IS_ITERATOR;
 
-				if (!addDeclarationToBlock(&loop->iteratorBlock, it)) {
+				if (!addDeclarationToBlock(&loop->iteratorBlock, it, lexer->identifierSerial++)) {
 					assert(false); // Invalid code path, we should never fail to add something to an empty block
 				}
 				lexer->advance();
@@ -564,19 +537,19 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 		if (expectAndConsume(lexer, ';')) {
 			loop->body = nullptr;
 
-			loop->iteratorBlock.parentBlock = currentBlock; // Since we never push the block we need to manually set the parent
+			loop->iteratorBlock.parentBlock = lexer->currentBlock; // Since we never push the block we need to manually set the parent
 			loop->end = lexer->previousTokenEnd;
 		}
 		else {
 			loop->end = lexer->previousTokenEnd;
 
-			pushBlock(&loop->iteratorBlock);
+			pushBlock(lexer, &loop->iteratorBlock);
 			loop->body = parseStatement(lexer, false);
 
 			if (!loop->body)
 				return nullptr;
 
-			popBlock(&loop->iteratorBlock);
+			popBlock(lexer, &loop->iteratorBlock);
 
 		}
 
@@ -631,7 +604,7 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 
 			Block *block = PARSER_NEW(Block);
 
-			pushBlock(block);
+			pushBlock(lexer, block);
 
 			Expr *else_ = nullptr;
 
@@ -649,7 +622,7 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 					if (!condition)
 						return nullptr;
 
-					auto equal = makeBinaryOperator(start, condition->end, TokenT::EQUAL, switch_->condition);
+					auto equal = makeBinaryOperator(lexer, start, condition->end, TokenT::EQUAL, switch_->condition);
 					equal->right = condition;
 
 					case_.condition = equal;
@@ -731,7 +704,7 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 			}
 
 
-			popBlock(block);
+			popBlock(lexer, block);
 
 			return switch_;
 		}
@@ -790,14 +763,14 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 			identifier->end = lexer->token.end;
 			identifier->name = lexer->token.text;
 			identifier->flavor = ExprFlavor::IDENTIFIER;
-			identifier->resolveFrom = currentBlock;
-			identifier->enclosingScope = currentBlock;
+			identifier->resolveFrom = lexer->currentBlock;
+			identifier->enclosingScope = lexer->currentBlock;
 			identifier->declaration = nullptr;
 			identifier->flags |= EXPR_IDENTIFIER_IS_BREAK_OR_CONTINUE_LABEL;
 			identifier->structAccess = nullptr;
 
-			if (currentBlock) {
-				identifier->serial = globalSerial;
+			if (lexer->currentBlock) {
+				identifier->serial = lexer->identifierSerial++;
 			}
 
 			continue_->label = identifier;
@@ -813,7 +786,7 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 			continue_->end = lexer->previousTokenEnd;
 
 			// Don't pass through arguments blocks since we can't break from an inner function to an outer one
-			for (Block *block = currentBlock; block && !(block->flags & BLOCK_IS_ARGUMENTS); block = block->parentBlock) {
+			for (Block *block = lexer->currentBlock; block && !(block->flags & BLOCK_IS_ARGUMENTS); block = block->parentBlock) {
 				if (block->flags & BLOCK_IS_LOOP) {
 					continue_->refersTo = CAST_FROM_SUBSTRUCT(ExprLoop, iteratorBlock, block);
 					return continue_;
@@ -843,7 +816,7 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 
 		return_->end = lexer->previousTokenEnd;
 
-		for (Block *block = currentBlock; block; block = block->parentBlock) {
+		for (Block *block = lexer->currentBlock; block; block = block->parentBlock) {
 			if (block->flags & BLOCK_IS_ARGUMENTS) {
 				return_->returnsFrom = CAST_FROM_SUBSTRUCT(ExprFunction, arguments, block);
 				return return_;
@@ -863,7 +836,7 @@ ExprBlock *parseCase(LexerFile *lexer) {
 
 	block->flavor = ExprFlavor::BLOCK;
 
-	pushBlock(&block->declarations);
+	pushBlock(lexer, &block->declarations);
 
 	Expr *exitingStatement = nullptr;
 
@@ -874,9 +847,6 @@ ExprBlock *parseCase(LexerFile *lexer) {
 		else if (lexer->token.type == TOKEN('}') || lexer->token.type == TokenT::CASE || lexer->token.type == TokenT::ELSE) {
 			break;
 		}
-
-
-
 
 		if (exitingStatement) {
 			const char *label = exitingStatement->flavor == ExprFlavor::RETURN ? "return" : exitingStatement->flavor == ExprFlavor::BREAK ? "break" : "continue";
@@ -899,12 +869,12 @@ ExprBlock *parseCase(LexerFile *lexer) {
 				if (!declaration)
 					return nullptr;
 
-				if (!addDeclarationToCurrentBlock(declaration)) {
+				if (!addDeclarationToBlock(lexer->currentBlock, declaration, lexer->identifierSerial++)) {
 					return nullptr;
 				}
 
 				assert(declaration->flags & DECLARATION_MARKED_AS_USING);
-				currentBlock->importers.add(createImporterForUsing(declaration, currentBlock));
+				lexer->currentBlock->importers.add(createImporterForUsing(lexer, declaration));
 
 				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_UNINITIALIZED))) { // If this declaration is constant or uninitialized don't add an initialization expression
 					ExprBinaryOperator *assign = PARSER_NEW(ExprBinaryOperator);
@@ -912,7 +882,7 @@ ExprBlock *parseCase(LexerFile *lexer) {
 					assign->end = declaration->end;
 					assign->flavor = ExprFlavor::BINARY_OPERATOR;
 					assign->op = TOKEN('=');
-					assign->left = makeIdentifier(declaration->start, declaration->end, declaration);
+					assign->left = makeIdentifier(lexer, declaration);
 					assign->right = nullptr;
 					assign->flags |= EXPR_ASSIGN_IS_IMPLICIT_INITIALIZER;
 
@@ -932,7 +902,7 @@ ExprBlock *parseCase(LexerFile *lexer) {
 
 				auto importer = PARSER_NEW(Importer);
 				importer->import = using_;
-				addImporterToBlock(currentBlock, importer);
+				addImporterToBlock(lexer->currentBlock, importer, lexer->identifierSerial++);
 			}
 
 			continue;
@@ -947,7 +917,7 @@ ExprBlock *parseCase(LexerFile *lexer) {
 				if (!declaration)
 					return nullptr;
 
-				if (!addDeclarationToCurrentBlock(declaration)) {
+				if (!addDeclarationToBlock(lexer->currentBlock, declaration, lexer->identifierSerial++)) {
 					return nullptr;
 				}
 
@@ -959,7 +929,7 @@ ExprBlock *parseCase(LexerFile *lexer) {
 					assign->end = declaration->end;
 					assign->flavor = ExprFlavor::BINARY_OPERATOR;
 					assign->op = TOKEN('=');
-					assign->left = makeIdentifier(declaration->start, declaration->end, declaration);
+					assign->left = makeIdentifier(lexer, declaration);
 					assign->right = nullptr;
 					assign->flags |= EXPR_ASSIGN_IS_IMPLICIT_INITIALIZER;
 
@@ -980,7 +950,7 @@ ExprBlock *parseCase(LexerFile *lexer) {
 
 	block->end = lexer->previousTokenEnd;
 
-	popBlock(&block->declarations);
+	popBlock(lexer, &block->declarations);
 
 	return block;
 }
@@ -993,7 +963,7 @@ ExprBlock *parseBlock(LexerFile *lexer, bool allowLoads, ExprBlock *block) {
 	block->start = lexer->token.start;
 	block->flavor = ExprFlavor::BLOCK;
 
-	pushBlock(&block->declarations);
+	pushBlock(lexer, &block->declarations);
 
 	if (!expectAndConsume(lexer, '{')) {
 		reportError(&lexer->token, "Error: Expected '{' at the start of a block");
@@ -1023,7 +993,7 @@ ExprBlock *parseBlock(LexerFile *lexer, bool allowLoads, ExprBlock *block) {
 			auto defer = PARSER_NEW(ExprDefer);
 			defer->flavor = ExprFlavor::DEFER;
 			defer->start = lexer->token.start;
-			defer->enclosingScope = currentBlock;
+			defer->enclosingScope = lexer->currentBlock;
 
 			lexer->advance();
 			
@@ -1049,12 +1019,12 @@ ExprBlock *parseBlock(LexerFile *lexer, bool allowLoads, ExprBlock *block) {
 				if (!declaration)
 					return nullptr;
 
-				if (!addDeclarationToCurrentBlock(declaration)) {
+				if (!addDeclarationToBlock(lexer->currentBlock, declaration, lexer->identifierSerial++)) {
 					return nullptr;
 				}
 
 				assert(declaration->flags & DECLARATION_MARKED_AS_USING);
-				addImporterToBlock(currentBlock, createImporterForUsing(declaration, currentBlock));
+				addImporterToBlock(lexer->currentBlock, createImporterForUsing(lexer, declaration), lexer->identifierSerial++);
 
 				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_UNINITIALIZED))) { // If this declaration is constant or uninitialized don't add an initialization expression
 					ExprBinaryOperator *assign = PARSER_NEW(ExprBinaryOperator);
@@ -1062,7 +1032,7 @@ ExprBlock *parseBlock(LexerFile *lexer, bool allowLoads, ExprBlock *block) {
 					assign->end = declaration->end;
 					assign->flavor = ExprFlavor::BINARY_OPERATOR;
 					assign->op = TOKEN('=');
-					assign->left = makeIdentifier(declaration->start, declaration->end, declaration);
+					assign->left = makeIdentifier(lexer, declaration);
 					assign->right = nullptr;
 					assign->flags |= EXPR_ASSIGN_IS_IMPLICIT_INITIALIZER;
 
@@ -1084,7 +1054,7 @@ ExprBlock *parseBlock(LexerFile *lexer, bool allowLoads, ExprBlock *block) {
 
 				importer->import = using_;
 				
-				addImporterToBlock(currentBlock, importer);
+				addImporterToBlock(lexer->currentBlock, importer, lexer->identifierSerial++);
 			}
 
 			continue;
@@ -1137,7 +1107,7 @@ ExprBlock *parseBlock(LexerFile *lexer, bool allowLoads, ExprBlock *block) {
 				if (!declaration)
 					return nullptr;
 
-				if (!addDeclarationToCurrentBlock(declaration)) {
+				if (!addDeclarationToBlock(lexer->currentBlock, declaration, lexer->identifierSerial++)) {
 					return nullptr;
 				}
 
@@ -1149,7 +1119,7 @@ ExprBlock *parseBlock(LexerFile *lexer, bool allowLoads, ExprBlock *block) {
 					assign->end = declaration->end;
 					assign->flavor = ExprFlavor::BINARY_OPERATOR;
 					assign->op = TOKEN('=');
-					assign->left = makeIdentifier(declaration->start, declaration->end, declaration);
+					assign->left = makeIdentifier(lexer, declaration);
 					assign->right = nullptr;
 					assign->flags |= EXPR_ASSIGN_IS_IMPLICIT_INITIALIZER;
 
@@ -1174,12 +1144,12 @@ ExprBlock *parseBlock(LexerFile *lexer, bool allowLoads, ExprBlock *block) {
 
 	block->end = lexer->previousTokenEnd;
 
-	popBlock(&block->declarations);
+	popBlock(lexer, &block->declarations);
 
 	return block;
 }
 
-ExprLiteral *makeIntegerLiteral(CodeLocation &start, EndLocation &end, u64 value, Type *type) {
+ExprLiteral *makeIntegerLiteral(LexerFile *lexer, CodeLocation &start, EndLocation &end, u64 value, Type *type) {
 	ExprLiteral *literal = PARSER_NEW(ExprLiteral);
 	literal->start = start;
 	literal->end = end;
@@ -1189,7 +1159,7 @@ ExprLiteral *makeIntegerLiteral(CodeLocation &start, EndLocation &end, u64 value
 	return literal;
 }
 
-ExprStringLiteral *makeStringLiteral(CodeLocation &start, EndLocation &end, String text) {
+ExprStringLiteral *makeStringLiteral(LexerFile *lexer, CodeLocation &start, EndLocation &end, String text) {
 	ExprStringLiteral *literal = PARSER_NEW(ExprStringLiteral);
 	literal->start = start;
 	literal->end = end;
@@ -1199,21 +1169,21 @@ ExprStringLiteral *makeStringLiteral(CodeLocation &start, EndLocation &end, Stri
 	return literal;
 }
 
-void addVoidReturn(CodeLocation &start, EndLocation &end, ExprFunction *function) {
+void addVoidReturn(LexerFile *lexer, CodeLocation &start, EndLocation &end, ExprFunction *function) {
 	auto returnType = PARSER_NEW(Declaration);
 
-	returnType->type = parserMakeTypeLiteral(start, end, &TYPE_VOID);
+	returnType->type = parserMakeTypeLiteral(lexer, start, end, &TYPE_VOID);
 	returnType->start = start;
 	returnType->end = end;
 	returnType->name = String(nullptr, 0u);
 	returnType->initialValue = nullptr;
 	returnType->flags |= DECLARATION_IS_RETURN;
 
-	addDeclarationToBlock(&function->returns, returnType);
+	addDeclarationToBlock(&function->returns, returnType, function->returns.declarations.count);
 }
 
 bool parseFunctionReturnTypes(LexerFile *lexer, ExprFunction *function, bool *hadReturns) {
-	pushBlock(&function->returns);
+	pushBlock(lexer, &function->returns);
 
 	*hadReturns = true;
 
@@ -1235,7 +1205,7 @@ bool parseFunctionReturnTypes(LexerFile *lexer, ExprFunction *function, bool *ha
 		returnType->initialValue = nullptr;
 		returnType->flags |= DECLARATION_IS_RETURN;
 
-		addDeclarationToBlock(&function->returns, returnType);
+		addDeclarationToBlock(&function->returns, returnType, function->returns.declarations.count);
 	}
 	else if (lexer->token.type == TOKEN('(')) {
 		TokenT peek;
@@ -1254,7 +1224,7 @@ bool parseFunctionReturnTypes(LexerFile *lexer, ExprFunction *function, bool *ha
 					return false;
 				}
 				else {
-					addVoidReturn(lexer->token.start, lexer->token.end, function);
+					addVoidReturn(lexer, lexer->token.start, lexer->token.end, function);
 
 					lexer->advance();
 
@@ -1297,7 +1267,7 @@ bool parseFunctionReturnTypes(LexerFile *lexer, ExprFunction *function, bool *ha
 							returnType->flags |= DECLARATION_IS_MUST;
 							must = false;
 						}
-						addDeclarationToBlock(&function->returns, returnType);
+						addDeclarationToBlock(&function->returns, returnType, function->returns.declarations.count);
 					} while (expectAndConsume(lexer, ','));
 
 					if (!expectAndConsume(lexer, ')')) {
@@ -1305,7 +1275,7 @@ bool parseFunctionReturnTypes(LexerFile *lexer, ExprFunction *function, bool *ha
 						return false;
 					}
 
-					popBlock(&function->returns);
+					popBlock(lexer, &function->returns);
 					return true;
 				}
 			}
@@ -1334,7 +1304,7 @@ bool parseFunctionReturnTypes(LexerFile *lexer, ExprFunction *function, bool *ha
 				returnType->initialValue = nullptr;
 				returnType->flags |= DECLARATION_IS_RETURN;
 
-				addDeclarationToBlock(&function->returns, returnType);
+				addDeclarationToBlock(&function->returns, returnType, function->returns.declarations.count);
 			} while (expectAndConsume(lexer, ','));
 
 			if (!expectAndConsume(lexer, ')')) {
@@ -1346,10 +1316,10 @@ bool parseFunctionReturnTypes(LexerFile *lexer, ExprFunction *function, bool *ha
 	else {
 		*hadReturns = false;
 
-		addVoidReturn(lexer->token.start, lexer->token.end, function);
+		addVoidReturn(lexer, lexer->token.start, lexer->token.end, function);
 	}
 
-	popBlock(&function->returns);
+	popBlock(lexer, &function->returns);
 
 	return true;
 }
@@ -1371,14 +1341,14 @@ bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *u
 	if (lexer->token.type == TOKEN('{')) {
 		function->flavor = ExprFlavor::FUNCTION;
 		function->end = lexer->previousTokenEnd;
-		pushBlock(&function->arguments);
+		pushBlock(lexer, &function->arguments);
 
 		function->body = parseBlock(lexer, false, usingBlock);
 		if (!function->body) {
 			return false;
 		}
 
-		popBlock(&function->arguments);
+		popBlock(lexer, &function->arguments);
 	}
 	else if (lexer->token.type == TokenT::EXTERNAL) {
 		function->flags |= EXPR_FUNCTION_IS_C_CALL;
@@ -1402,7 +1372,7 @@ bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *u
 
 		function->flags |= EXPR_FUNCTION_IS_EXTERNAL;
 
-		insertBlock(&function->arguments);
+		insertBlock(lexer, &function->arguments);
 
 	}
 	else { // This is a function type
@@ -1416,7 +1386,7 @@ bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *u
 		function->flavor = ExprFlavor::FUNCTION_PROTOTYPE;
 		function->type = &TYPE_TYPE;
 
-		insertBlock(&function->arguments);
+		insertBlock(lexer, &function->arguments);
 		
 		for (auto return_ : function->returns.declarations) {
 			if (return_->flags & DECLARATION_IS_MUST) {
@@ -1541,7 +1511,7 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 				return nullptr;
 			}
 
-			if (!addDeclarationToBlock(&function->arguments, declaration)) {
+			if (!addDeclarationToBlock(&function->arguments, declaration, function->arguments.declarations.count)) {
 				return nullptr;
 			}
 
@@ -1550,7 +1520,7 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 					usingBlock = PARSER_NEW(ExprBlock);
 				}
 
-				addImporterToBlock(&usingBlock->declarations, createImporterForUsing(declaration, &function->arguments));
+				addImporterToBlock(&usingBlock->declarations, createImporterForUsing(lexer, declaration), lexer->identifierSerial++);
 			}
 		} while (expectAndConsume(lexer, ','));
 
@@ -1608,7 +1578,7 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 				type->end = lexer->previousTokenEnd;
 				type->type = &TYPE_TYPE;
 
-				pushBlock(&type->arguments);
+				pushBlock(lexer, &type->arguments);
 
 				auto argument = PARSER_NEW(Declaration);
 
@@ -1636,9 +1606,9 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 				argument->initialValue = nullptr;
 				argument->flags |= DECLARATION_IS_ARGUMENT;
 
-				addDeclarationToBlock(&type->arguments, argument);
+				addDeclarationToBlock(&type->arguments, argument, type->arguments.declarations.count);
 
-				popBlock(&type->arguments);
+				popBlock(lexer, &type->arguments);
 
 				for (auto return_ : type->returns.declarations) {
 					if (return_->flags & DECLARATION_IS_MUST) {
@@ -1672,12 +1642,12 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 			}
 		}
 		else if (expectAndConsume(lexer, ',')) { // This is a function type since there are multiple comma separated values in parentheses
-			auto *type = PARSER_NEW(ExprFunction);
+			auto type = PARSER_NEW(ExprFunction);
 
 			type->arguments.flags |= BLOCK_IS_ARGUMENTS;
 			type->returns.flags |= BLOCK_IS_RETURNS;
 
-			pushBlock(&type->arguments);
+			pushBlock(lexer, &type->arguments);
 
 			Declaration *hadVarargs = nullptr;
 
@@ -1708,7 +1678,7 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 			argument->initialValue = nullptr;
 			argument->flags |= DECLARATION_IS_ARGUMENT;
 
-			addDeclarationToBlock(&type->arguments, argument);
+			addDeclarationToBlock(&type->arguments, argument, type->arguments.declarations.count);
 
 			do {
 				if (hadVarargs) {
@@ -1748,10 +1718,10 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 				argument->initialValue = nullptr;
 				argument->flags |= DECLARATION_IS_ARGUMENT;
 
-				addDeclarationToBlock(&type->arguments, argument);
+				addDeclarationToBlock(&type->arguments, argument, type->arguments.declarations.count);
 			} while (expectAndConsume(lexer, ','));
 
-			popBlock(&type->arguments);
+			popBlock(lexer, &type->arguments);
 
 			if (!expectAndConsume(lexer, ')')) {
 				reportExpectedError(&lexer->token, "Error: Expected a ')' after function arguments");
@@ -1948,13 +1918,13 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		identifier->end = end;
 		identifier->name = lexer->token.text;
 		identifier->flavor = ExprFlavor::IDENTIFIER;
-		identifier->resolveFrom = currentBlock;
-		identifier->enclosingScope = currentBlock;
+		identifier->resolveFrom = lexer->currentBlock;
+		identifier->enclosingScope = lexer->currentBlock;
 		identifier->declaration = nullptr;
 		identifier->structAccess = nullptr;
 
-		if (currentBlock) {
-			identifier->serial = globalSerial;
+		if (lexer->currentBlock) {
+			identifier->serial = lexer->identifierSerial++;
 		}
 		else {
 			identifier->serial = 0;
@@ -1976,21 +1946,21 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		lexer->advance();
 	}
 	else if (lexer->token.type == TokenT::INT_LITERAL) {
-		expr = makeIntegerLiteral(start, end, lexer->token.unsignedValue, &TYPE_UNSIGNED_INT_LITERAL);
+		expr = makeIntegerLiteral(lexer, start, end, lexer->token.unsignedValue, &TYPE_UNSIGNED_INT_LITERAL);
 
 		lexer->advance();
 	}
 	else if (expectAndConsume(lexer, TokenT::FALSE)) {
-		expr = makeIntegerLiteral(start, end, 0, &TYPE_BOOL);
+		expr = makeIntegerLiteral(lexer, start, end, 0, &TYPE_BOOL);
 	}
 	else if (expectAndConsume(lexer, TokenT::TRUE)) {
-		expr = makeIntegerLiteral(start, end, 1, &TYPE_BOOL);
+		expr = makeIntegerLiteral(lexer, start, end, 1, &TYPE_BOOL);
 	}
 	else if (expectAndConsume(lexer, TokenT::NULL_)) {
-		expr = makeIntegerLiteral(start, end, 0, TYPE_VOID_POINTER);
+		expr = makeIntegerLiteral(lexer, start, end, 0, TYPE_VOID_POINTER);
 	}
 	else if (lexer->token.type == TokenT::STRING_LITERAL) {
-		expr = makeStringLiteral(start, end, lexer->token.text);
+		expr = makeStringLiteral(lexer, start, end, lexer->token.text);
 
 		lexer->advance();
 	}
@@ -2047,46 +2017,46 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		expr = unary;
 	}
 	else if (expectAndConsume(lexer, TokenT::U8)) {
-		expr = parserMakeTypeLiteral(start, end, &TYPE_U8);
+		expr = parserMakeTypeLiteral(lexer, start, end, &TYPE_U8);
 	}
 	else if (expectAndConsume(lexer, TokenT::U16)) {
-		expr = parserMakeTypeLiteral(start, end, &TYPE_U16);
+		expr = parserMakeTypeLiteral(lexer, start, end, &TYPE_U16);
 	}
 	else if (expectAndConsume(lexer, TokenT::U32)) {
-		expr = parserMakeTypeLiteral(start, end, &TYPE_U32);
+		expr = parserMakeTypeLiteral(lexer, start, end, &TYPE_U32);
 	}
 	else if (expectAndConsume(lexer, TokenT::U64)) {
-		expr = parserMakeTypeLiteral(start, end, &TYPE_U64);
+		expr = parserMakeTypeLiteral(lexer, start, end, &TYPE_U64);
 	}
 	else if (expectAndConsume(lexer, TokenT::S8)) {
-		expr = parserMakeTypeLiteral(start, end, &TYPE_S8);
+		expr = parserMakeTypeLiteral(lexer, start, end, &TYPE_S8);
 	}
 	else if (expectAndConsume(lexer, TokenT::S16)) {
-		expr = parserMakeTypeLiteral(start, end, &TYPE_S16);
+		expr = parserMakeTypeLiteral(lexer, start, end, &TYPE_S16);
 	}
 	else if (expectAndConsume(lexer, TokenT::S32)) {
-		expr = parserMakeTypeLiteral(start, end, &TYPE_S32);
+		expr = parserMakeTypeLiteral(lexer, start, end, &TYPE_S32);
 	}
 	else if (expectAndConsume(lexer, TokenT::S64)) {
-		expr = parserMakeTypeLiteral(start, end, &TYPE_S64);
+		expr = parserMakeTypeLiteral(lexer, start, end, &TYPE_S64);
 	}
 	else if (expectAndConsume(lexer, TokenT::BOOL)) {
-		expr = parserMakeTypeLiteral(start, end, &TYPE_BOOL);
+		expr = parserMakeTypeLiteral(lexer, start, end, &TYPE_BOOL);
 	}
 	else if (expectAndConsume(lexer, TokenT::TYPE)) {
-		expr = parserMakeTypeLiteral(start, end, &TYPE_TYPE);
+		expr = parserMakeTypeLiteral(lexer, start, end, &TYPE_TYPE);
 	}
 	else if (expectAndConsume(lexer, TokenT::VOID)) {
-		expr = parserMakeTypeLiteral(start, end, &TYPE_VOID);
+		expr = parserMakeTypeLiteral(lexer, start, end, &TYPE_VOID);
 	}
 	else if (expectAndConsume(lexer, TokenT::F32)) {
-		expr = parserMakeTypeLiteral(start, end, &TYPE_F32);
+		expr = parserMakeTypeLiteral(lexer, start, end, &TYPE_F32);
 	}
 	else if (expectAndConsume(lexer, TokenT::F64)) {
-		expr = parserMakeTypeLiteral(start, end, &TYPE_F64);
+		expr = parserMakeTypeLiteral(lexer, start, end, &TYPE_F64);
 	}
 	else if (expectAndConsume(lexer, TokenT::STRING)) {
-		expr = parserMakeTypeLiteral(start, end, &TYPE_STRING);
+		expr = parserMakeTypeLiteral(lexer, start, end, &TYPE_STRING);
 	}
 	else if (lexer->token.type == TokenT::STRUCT || lexer->token.type == TokenT::UNION) {
 		TokenT tokenType = lexer->token.type;
@@ -2100,7 +2070,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 			type->flags |= TYPE_STRUCT_IS_UNION;
 		}
 
-		pushBlock(&type->members);
+		pushBlock(lexer, &type->members);
 
 		type->size = 0;
 		type->alignment = 1;
@@ -2124,7 +2094,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 				if (!declaration)
 					return nullptr;
 
-				if (!addDeclarationToCurrentBlock(declaration)) {
+				if (!addDeclarationToBlock(lexer->currentBlock, declaration, lexer->identifierSerial++)) {
 					return nullptr;
 				}
 
@@ -2141,7 +2111,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 				}
 
 				if (declaration->flags & DECLARATION_MARKED_AS_USING) {
-					addImporterToBlock(currentBlock, createImporterForUsing(declaration, currentBlock));
+					addImporterToBlock(lexer->currentBlock, createImporterForUsing(lexer, declaration), lexer->identifierSerial++);
 				}
 			}
 			else if (expectAndConsume(lexer, ';')) {
@@ -2165,8 +2135,8 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 			}
 		}
 
-		popBlock(&type->members);
-		expr = parserMakeTypeLiteral(start, lexer->previousTokenEnd, type);
+		popBlock(lexer, &type->members);
+		expr = parserMakeTypeLiteral(lexer, start, lexer->previousTokenEnd, type);
 	}
 	else if (lexer->token.type == TokenT::ENUM || lexer->token.type == TokenT::ENUM_FLAGS) {
 		auto enum_ = PARSER_NEW(ExprEnum);
@@ -2194,10 +2164,10 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 			}
 		}
 		else {
-			enum_->integerType = parserMakeTypeLiteral(start, end, &TYPE_U64); // @Incomplete is u64 the correct default
+			enum_->integerType = parserMakeTypeLiteral(lexer, start, end, &TYPE_U64); // @Incomplete is u64 the correct default
 		}
 
-		pushBlock(&enum_->struct_.members);
+		pushBlock(lexer, &enum_->struct_.members);
 
 		auto members = PARSER_NEW(TypeStruct);
 		members->flavor = TypeFlavor::NAMESPACE;
@@ -2213,29 +2183,29 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		membersDeclaration->start = lexer->token.start;
 		membersDeclaration->end = lexer->token.end;
 		membersDeclaration->name = "members";
-		membersDeclaration->type = parserMakeTypeLiteral(lexer->token.start, lexer->token.end, &TYPE_TYPE);
-		membersDeclaration->initialValue = parserMakeTypeLiteral(lexer->token.start, lexer->token.end, members);
+		membersDeclaration->type = parserMakeTypeLiteral(lexer, lexer->token.start, lexer->token.end, &TYPE_TYPE);
+		membersDeclaration->initialValue = parserMakeTypeLiteral(lexer, lexer->token.start, lexer->token.end, members);
 		membersDeclaration->flags |= DECLARATION_IS_CONSTANT | DECLARATION_MARKED_AS_USING;
 		membersDeclaration->inferJob = nullptr;
 
-		addDeclarationToCurrentBlock(membersDeclaration);
-		addImporterToBlock(currentBlock, createImporterForUsing(membersDeclaration, currentBlock));
+		addDeclarationToBlock(lexer->currentBlock, membersDeclaration, lexer->identifierSerial++);
+		addImporterToBlock(lexer->currentBlock, createImporterForUsing(lexer, membersDeclaration), lexer->identifierSerial++);
 
 
 		auto integer = PARSER_NEW(Declaration);
 		integer->name = "integer";
 		integer->start = lexer->token.start;
 		integer->end = lexer->token.end;
-		integer->type = parserMakeTypeLiteral(lexer->token.start, lexer->token.end, &TYPE_TYPE);
+		integer->type = parserMakeTypeLiteral(lexer, lexer->token.start, lexer->token.end, &TYPE_TYPE);
 		integer->initialValue = enum_->integerType;
 		integer->flags |= DECLARATION_IS_CONSTANT;
 		integer->inferJob = nullptr;
 
-		addDeclarationToCurrentBlock(integer);
+		addDeclarationToBlock(lexer->currentBlock, integer, lexer->identifierSerial++);
 
-		auto typeLiteral = parserMakeTypeLiteral(enum_->start, enum_->end, &enum_->struct_);
+		auto typeLiteral = parserMakeTypeLiteral(lexer, enum_->start, enum_->end, &enum_->struct_);
 
-		pushBlock(&members->members);
+		pushBlock(lexer, &members->members);
 
 
 		if (!expectAndConsume(lexer, TOKEN('{'))) {
@@ -2283,15 +2253,15 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 				else {
 					declaration->end = lexer->previousTokenEnd;
 
-					if (currentBlock->declarations.count == 0) {
-						declaration->initialValue = makeIntegerLiteral(declaration->start, declaration->end, enum_->struct_.flags & TYPE_ENUM_IS_FLAGS ? 1 : 0, &TYPE_UNSIGNED_INT_LITERAL);
+					if (lexer->currentBlock->declarations.count == 0) {
+						declaration->initialValue = makeIntegerLiteral(lexer, declaration->start, declaration->end, enum_->struct_.flags & TYPE_ENUM_IS_FLAGS ? 1 : 0, &TYPE_UNSIGNED_INT_LITERAL);
 					}
 					else {
 						auto increment = PARSER_NEW(ExprEnumIncrement);
 						increment->start = declaration->start;
 						increment->end = declaration->end;
 						increment->flavor = ExprFlavor::ENUM_INCREMENT;
-						increment->previous = currentBlock->declarations[currentBlock->declarations.count - 1];
+						increment->previous = lexer->currentBlock->declarations[lexer->currentBlock->declarations.count - 1];
 
 						declaration->initialValue = increment;
 					}
@@ -2300,7 +2270,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 				declaration->initialValue->valueOfDeclaration = declaration;
 
-				if (!addDeclarationToCurrentBlock(declaration)) {
+				if (!addDeclarationToBlock(lexer->currentBlock, declaration, lexer->identifierSerial++)) {
 					return nullptr;
 				}
 			}
@@ -2309,12 +2279,12 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 				return nullptr;
 			}
 		}
-		popBlock(&members->members);
+		popBlock(lexer, &members->members);
 
 
 		enum_->end = lexer->previousTokenEnd;
 
-		popBlock(&enum_->struct_.members);
+		popBlock(lexer, &enum_->struct_.members);
 
 
 		if (members->members.declarations.count == 0) {
@@ -2447,7 +2417,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 			}
 		}
 		else if (expectAndConsume(lexer, '.')) {
-			auto *access = PARSER_NEW(ExprIdentifier);
+			auto access = PARSER_NEW(ExprIdentifier);
 			access->start = start;
 			access->structAccess = expr;
 			access->flavor = ExprFlavor::IDENTIFIER;
@@ -2527,10 +2497,10 @@ Expr *parseUnaryExpr(LexerFile *lexer, CodeLocation plusStart) {
 		function->start = lexer->token.start;
 		function->flavor = ExprFlavor::FUNCTION;
 		function->arguments.flags |= BLOCK_IS_ARGUMENTS;
-		pushBlock(&function->arguments);
+		pushBlock(lexer, &function->arguments);
 
 		function->returns.flags |= BLOCK_IS_RETURNS;
-		insertBlock(&function->returns);
+		insertBlock(lexer, &function->returns);
 
 		Expr *type = nullptr;
 		Expr *returnValue = nullptr;
@@ -2541,14 +2511,14 @@ Expr *parseUnaryExpr(LexerFile *lexer, CodeLocation plusStart) {
 				return nullptr;
 			run->end = lexer->previousTokenEnd;
 
-			type = parserMakeTypeLiteral(run->start, run->end, &TYPE_VOID);
+			type = parserMakeTypeLiteral(lexer, run->start, run->end, &TYPE_VOID);
 
 			function->body = block;
 		}
 		else {
 			auto block = PARSER_NEW(ExprBlock);
 			block->flavor = ExprFlavor::BLOCK;
-			pushBlock(&block->declarations);
+			pushBlock(lexer, &block->declarations);
 
 			returnValue = parseExpr(lexer);
 			if (!returnValue)
@@ -2558,12 +2528,12 @@ Expr *parseUnaryExpr(LexerFile *lexer, CodeLocation plusStart) {
 			block->end = returnValue->end;
 			run->end = lexer->previousTokenEnd;
 
-			popBlock(&block->declarations);
+			popBlock(lexer, &block->declarations);
 
 			function->body = block;
 		}
 
-		popBlock(&function->arguments);
+		popBlock(lexer, &function->arguments);
 
 		function->end = lexer->previousTokenEnd;
 		run->function = function;
@@ -2577,7 +2547,7 @@ Expr *parseUnaryExpr(LexerFile *lexer, CodeLocation plusStart) {
 		returnType->initialValue = returnValue;
 		returnType->name = "";
 
-		addDeclarationToBlock(&function->returns, returnType);
+		addDeclarationToBlock(&function->returns, returnType, function->returns.declarations.count);
 
 		return run;
 	}
@@ -2943,16 +2913,17 @@ Declaration *parseDeclaration(LexerFile *lexer) {
 void parseFile(FileInfo *file) {
 	PROFILE_FUNC();
 
-	LexerFile lexer;
+	LexerFile lexer_;
+	LexerFile *lexer = &lexer_;
 
-	if (!lexer.open(file))
+	if (!lexer->open(file))
 		return;
 
-	lexer.advance();
+	lexer->advance();
 
 	while (!hadError) {
-		if (lexer.token.type == TokenT::IDENTIFIER) {
-			Declaration *declaration = parseDeclaration(&lexer);
+		if (lexer->token.type == TokenT::IDENTIFIER) {
+			Declaration *declaration = parseDeclaration(lexer);
 			if (!declaration) {
 				break;
 			}
@@ -2960,7 +2931,7 @@ void parseFile(FileInfo *file) {
 			declaration->enclosingScope = nullptr;
 			declaration->serial = 0;
 
-			assert(currentBlock == nullptr);
+			assert(lexer->currentBlock == nullptr);
 
 			_ReadWriteBarrier();
 
@@ -2968,12 +2939,12 @@ void parseFile(FileInfo *file) {
 
 			inferQueue.add(declaration);
 		}
-		else if (lexer.token.type == TokenT::USING) {
+		else if (lexer->token.type == TokenT::USING) {
 			TokenT peek[2];
-			lexer.peekTokenTypes(2, peek);
+			lexer->peekTokenTypes(2, peek);
 
 			if (peek[1] == TOKEN(':')) { // It is a declaration
-				Declaration *declaration = parseDeclaration(&lexer);
+				Declaration *declaration = parseDeclaration(lexer);
 
 				if (!declaration)
 					break;
@@ -2984,16 +2955,16 @@ void parseFile(FileInfo *file) {
 
 				assert(declaration->flags & DECLARATION_MARKED_AS_USING);
 
-				inferQueue.add(createImporterForUsing(declaration, currentBlock));
+				inferQueue.add(createImporterForUsing(lexer, declaration));
 
 
 			}
 			else {
-				auto start = lexer.token.start;
+				auto start = lexer->token.start;
 
-				lexer.advance();
+				lexer->advance();
 
-				auto using_ = parseExpr(&lexer);
+				auto using_ = parseExpr(lexer);
 
 				if (!using_)
 					break;
@@ -3004,19 +2975,19 @@ void parseFile(FileInfo *file) {
 				inferQueue.add(importer);
 			}
 		}
-		else if (lexer.token.type == TokenT::LOAD) {
-			auto load = parseLoad(&lexer);
+		else if (lexer->token.type == TokenT::LOAD) {
+			auto load = parseLoad(lexer);
 
 			if (!load)
 				break;
 
 			inferQueue.add(load);
 		}
-		else if (lexer.token.type == TokenT::END_OF_FILE) {
+		else if (lexer->token.type == TokenT::END_OF_FILE) {
 			break;
 		}
-		else if (lexer.token.type == TokenT::STATIC_IF) {
-			auto staticIf = parseStaticIf(&lexer, true);
+		else if (lexer->token.type == TokenT::STATIC_IF) {
+			auto staticIf = parseStaticIf(lexer, true);
 
 			if (!staticIf)
 				break;
@@ -3031,8 +3002,8 @@ void parseFile(FileInfo *file) {
 
 			inferQueue.add(importer);
 		}
-		else if (lexer.token.type == TokenT::RUN) {
-			auto run = parseExpr(&lexer);
+		else if (lexer->token.type == TokenT::RUN) {
+			auto run = parseExpr(lexer);
 
 			if (!run)
 				break;
@@ -3041,14 +3012,14 @@ void parseFile(FileInfo *file) {
 
 			inferQueue.add(static_cast<ExprRun *>(run));
 		}
-		else if (expectAndConsume(&lexer, ';')) {
+		else if (expectAndConsume(lexer, ';')) {
 			// We have consumed the semicolon we are done
 		}
 		else {
-			reportExpectedError(&lexer.token, "Error: Expected a declaration at top level");
+			reportExpectedError(&lexer->token, "Error: Expected a declaration at top level");
 			break;
 		}
 	}
 
-	printf("Parser memory used %ukb\n", parserArena.totalSize / 1024);
+	printf("Parser memory used %ukb\n", lexer->parserArena.totalSize / 1024);
 }

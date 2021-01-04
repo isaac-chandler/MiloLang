@@ -127,7 +127,6 @@ struct Profile {
 
 
 inline Profile *volatile profiles[PROFILER_THREADS];
-inline Profile **volatile profileIndices[PROFILER_THREADS];
 inline std::atomic_int32_t perThreadIndex(0);
 inline thread_local Profile *profileIndex;
 

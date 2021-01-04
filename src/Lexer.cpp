@@ -872,7 +872,6 @@ void LexerFile::peekTokenTypes(u64 count, TokenT *buffer) {
 }
 
 void LexerFile::advance() {
-	PROFILE_FUNC();
 	bool endOfFile;
 	u32 c;
 
@@ -1947,6 +1946,9 @@ bool LexerFile::open(FileInfo *file) {
 	bytesRemaining = size.QuadPart;
 
 	file->size = size.QuadPart;
+
+	identifierSerial = 0;
+	currentBlock = nullptr;
 
 
 	return true;
