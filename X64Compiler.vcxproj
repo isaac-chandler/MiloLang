@@ -137,7 +137,7 @@
       <PrecompiledHeaderFile>Basic.h</PrecompiledHeaderFile>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <PreprocessorDefinitions>BUILD_WINDOWS=1;_CRT_SECURE_NO_WARNINGS;_MBCS;%(PreprocessorDefinitions);LITTLE_ENDIAN=1;BIG_ENDIAN=0;BUILD_DEBUG=1</PreprocessorDefinitions>
-      <LanguageStandard>stdcpp17</LanguageStandard>
+      <LanguageStandard>stdcpplatest</LanguageStandard>
       <ExceptionHandling>false</ExceptionHandling>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DisableSpecificWarnings>
@@ -158,7 +158,7 @@
       <PrecompiledHeaderFile>Basic.h</PrecompiledHeaderFile>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <PreprocessorDefinitions>BUILD_NO_LLVM;BUILD_WINDOWS=1;_CRT_SECURE_NO_WARNINGS;_MBCS;%(PreprocessorDefinitions);LITTLE_ENDIAN=1;BIG_ENDIAN=0;BUILD_DEBUG=1</PreprocessorDefinitions>
-      <LanguageStandard>stdcpp17</LanguageStandard>
+      <LanguageStandard>stdcpplatest</LanguageStandard>
       <ExceptionHandling>false</ExceptionHandling>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DisableSpecificWarnings>
@@ -187,7 +187,7 @@
       <BufferSecurityCheck>false</BufferSecurityCheck>
       <RuntimeTypeInfo>false</RuntimeTypeInfo>
       <PreprocessorDefinitions>BUILD_WINDOWS=1;_CRT_SECURE_NO_WARNINGS;_MBCS;%(PreprocessorDefinitions);LITTLE_ENDIAN=1;NDEBUG</PreprocessorDefinitions>
-      <LanguageStandard>stdcpp17</LanguageStandard>
+      <LanguageStandard>stdcpplatest</LanguageStandard>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
@@ -214,7 +214,7 @@
       <BufferSecurityCheck>false</BufferSecurityCheck>
       <RuntimeTypeInfo>false</RuntimeTypeInfo>
       <PreprocessorDefinitions>BUILD_NO_LLVM;BUILD_WINDOWS=1;_CRT_SECURE_NO_WARNINGS;_MBCS;%(PreprocessorDefinitions);LITTLE_ENDIAN=1;NDEBUG</PreprocessorDefinitions>
-      <LanguageStandard>stdcpp17</LanguageStandard>
+      <LanguageStandard>stdcpplatest</LanguageStandard>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
@@ -241,7 +241,7 @@
       <BufferSecurityCheck>false</BufferSecurityCheck>
       <RuntimeTypeInfo>false</RuntimeTypeInfo>
       <PreprocessorDefinitions>BUILD_PROFILE=1;BUILD_WINDOWS=1;_CRT_SECURE_NO_WARNINGS;_MBCS;%(PreprocessorDefinitions);LITTLE_ENDIAN=1;NDEBUG</PreprocessorDefinitions>
-      <LanguageStandard>stdcpp17</LanguageStandard>
+      <LanguageStandard>stdcpplatest</LanguageStandard>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
@@ -268,7 +268,7 @@
       <BufferSecurityCheck>false</BufferSecurityCheck>
       <RuntimeTypeInfo>false</RuntimeTypeInfo>
       <PreprocessorDefinitions>BUILD_NO_LLVM;BUILD_PROFILE=1;BUILD_WINDOWS=1;_CRT_SECURE_NO_WARNINGS;_MBCS;%(PreprocessorDefinitions);LITTLE_ENDIAN=1;NDEBUG</PreprocessorDefinitions>
-      <LanguageStandard>stdcpp17</LanguageStandard>
+      <LanguageStandard>stdcpplatest</LanguageStandard>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>

@@ -86,7 +86,7 @@ static llvm::Type *createLlvmType(llvm::LLVMContext &context, Type *type) {
 			Type *mainMember = nullptr;
 
 			for (auto member : struct_->members.declarations) {
-				if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING))
+				if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING))
 					continue;
 
 				auto memberType = static_cast<ExprLiteral *>(member->type)->typeValue;
@@ -125,7 +125,7 @@ static llvm::Type *createLlvmType(llvm::LLVMContext &context, Type *type) {
 
 			u32 count = 0;
 			for (auto member : struct_->members.declarations) {
-				if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING))
+				if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING))
 					continue;
 
 				++count;
@@ -134,7 +134,7 @@ static llvm::Type *createLlvmType(llvm::LLVMContext &context, Type *type) {
 			Array<llvm::Type *> body(count);
 
 			for (auto member : struct_->members.declarations) {
-				if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING))
+				if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING))
 					continue;
 
 				body.add(getLlvmType(context, static_cast<ExprLiteral *>(member->type)->typeValue));
@@ -320,7 +320,7 @@ static llvm::Constant *createConstant(State *state, Expr *expr) {
 			Expr *default_ = nullptr;
 
 			for (auto decl : struct_->members.declarations) {
-				if (decl->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT)) continue;
+				if (decl->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING)) continue;
 
 				if (decl->initialValue) {
 					default_ = decl->initialValue;
@@ -354,7 +354,7 @@ static llvm::Constant *createConstant(State *state, Expr *expr) {
 			u64 memberCount = 0;
 
 			for (auto decl : struct_->members.declarations) {
-				if (decl->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT)) continue;
+				if (decl->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING)) continue;
 
 				++memberCount;
 			}
@@ -365,7 +365,7 @@ static llvm::Constant *createConstant(State *state, Expr *expr) {
 
 
 			for (auto decl : struct_->members.declarations) {
-				if (decl->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT)) continue;
+				if (decl->flags & DECLARATION_IS_CONSTANT) continue;
 
 				assert(memberIndex < memberCount);
 
@@ -808,7 +808,7 @@ llvm::Value *loadAddressOf(State *state, Expr *expr) {
 
 				// @Speed currently we do a linear search through struct members to find 
 				for (auto member : struct_->members.declarations) {
-					if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING))
+					if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING))
 						continue;
 
 					if (member == identifier->declaration) {
@@ -1454,7 +1454,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 		auto block = static_cast<ExprBlock *>(expr);
 
 		for (auto declaration : block->declarations.declarations) {
-			if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT))) {				
+			if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING))) {				
 				declaration->llvmStorage = allocateType(state, static_cast<ExprLiteral *>(declaration->type)->typeValue, declaration->name);
 			}
 		}
@@ -2315,7 +2315,7 @@ void runLlvm() {
 						u64 count = 0;
 
 						for (auto member : struct_->members.declarations) {
-							if (member->flags & (DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING)) continue;
+							if (member->flags & DECLARATION_IMPORTED_BY_USING) continue;
 
 							++count;
 						}
@@ -2330,7 +2330,7 @@ void runLlvm() {
 						count = 0;
 
 						for (auto member : struct_->members.declarations) {
-							if (member->flags & (DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING)) continue;
+							if (member->flags & DECLARATION_IMPORTED_BY_USING) continue;
 
 							llvm::Constant *initial_value;
 

@@ -101,15 +101,6 @@ struct Relocation {
 };
 #pragma pack(pop)
 
-void writeAllocator(HANDLE out, BucketedArenaAllocator allocator) {
-	for (auto bucket = allocator.first; bucket; bucket = bucket->next) {
-		u32 count = (allocator.bucketSize - bucket->remaining);
-
-		DWORD written;
-		WriteFile(out, bucket->memory - count, count, &written, 0);
-	}
-}
-
 u32 getRegisterOffset(ExprFunction *function, u32 regNo) {
 	assert(regNo != 0);
 
@@ -534,7 +525,6 @@ u32 *addRelocationToUnkownSymbol(BucketedArenaAllocator *allocator, u32 virtualA
 
 	return value;
 }
-static Block externalsBlock;
 
 u32 createRdataPointer(BucketedArenaAllocator *stringTable, BucketArray<Symbol> *symbols, BucketedArenaAllocator *rdata) {
 	Symbol symbol;
@@ -560,18 +550,6 @@ void addPointerRelocation(BucketedArenaAllocator *relocations, u32 address, u32 
 u32 createSymbolForFunction(BucketArray<Symbol> *symbols, ExprFunction *function) {
 	if (!(function->flags & EXPR_HAS_STORAGE)) {
 		function->flags |= EXPR_HAS_STORAGE;
-
-		if (function->flags & EXPR_FUNCTION_IS_EXTERNAL) {
-			if (Declaration *declaration = findDeclarationNoYield(&externalsBlock, function->valueOfDeclaration->name)) {
-				function->symbol = static_cast<ExprFunction *>(declaration->initialValue)->symbol;
-				function->physicalStorage = static_cast<ExprFunction *>(declaration->initialValue)->physicalStorage;
-
-				return function->physicalStorage;
-			}
-			else {
-				putDeclarationInBlock(&externalsBlock, function->valueOfDeclaration);
-			}
-		}
 
 		function->physicalStorage = static_cast<u32>(symbols->count());
 		function->symbol = reinterpret_cast<Symbol *>(symbols->allocator.allocateUnaligned(sizeof(Symbol)));
@@ -3394,7 +3372,7 @@ void runCoffWriter() {
 						debugSymbols.add1Unchecked(0);
 
 						for (auto declaration : ir.block->declarations) {
-							if (declaration->flags & (DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_CONSTANT | DECLARATION_IS_IMPLICIT_IMPORT)) continue;
+							if (declaration->flags & (DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_CONSTANT)) continue;
 
 							REGREL32 variableInfo;
 
@@ -3832,7 +3810,7 @@ void runCoffWriter() {
 					u32 names = symbols.count();
 
 					for (auto member : struct_->members.declarations) {
-						if (member->flags & (DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING)) continue;
+						if (member->flags & DECLARATION_IMPORTED_BY_USING) continue;
 
 
 						createRdataPointer(&stringTable, &symbols, &rdata);
@@ -3842,7 +3820,7 @@ void runCoffWriter() {
 					u32 values = symbols.count();
 
 					for (auto member : struct_->members.declarations) {
-						if (member->flags & (DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING)) continue;
+						if (member->flags & DECLARATION_IMPORTED_BY_USING) continue;
 
 						if (!member->initialValue) continue;
 
@@ -3868,7 +3846,7 @@ void runCoffWriter() {
 					u32 valueCount = 0;
 
 					for (auto member : struct_->members.declarations) {
-						if (member->flags & (DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING)) continue;
+						if (member->flags & DECLARATION_IMPORTED_BY_USING) continue;
 
 
 						Type_Info_Struct::Member data;
@@ -4002,12 +3980,12 @@ void runCoffWriter() {
 
 		u32 totalSize = 0;
 
-		for (auto &file : files) {
+		for (auto file : files) {
 			char buffer[1024]; // @Robustness
 
-			file.offsetInStringTable = totalSize;
+			file->offsetInStringTable = totalSize;
 
-			GetFullPathNameA(toCString(file.path) /* @Leak */, sizeof(buffer), buffer, 0);
+			GetFullPathNameA(toCString(file->path) /* @Leak */, sizeof(buffer), buffer, 0);
 
 			u32 len = static_cast<u32>(strlen(buffer));
 			totalSize += len + 1;
@@ -4023,7 +4001,7 @@ void runCoffWriter() {
 		debugSymbols.add4(8 * files.count);
 
 		for (auto &file : files) {
-			debugSymbols.add4(file.offsetInStringTable);
+			debugSymbols.add4(file->offsetInStringTable);
 			debugSymbols.add4(0);
 		}
 
@@ -4094,75 +4072,100 @@ void runCoffWriter() {
 
 		u32 prefixSize = header.pointerToSymbolTable + sizeof(Symbol) * symbols.count() + stringTableSize;
 
+		u32 sectionPointer = AlignPO2(prefixSize, 4);
 
-		{
-			u32 sectionPointer = AlignPO2(prefixSize, 4);
+		for (auto section : sections) {
+			section.header->virtualAddress = 0;
 
-			for (auto section : sections) {
-				section.header->virtualAddress = 0;
+			if (section.data) {
+				alignAllocator(section.data, 4);
+				section.header->sizeOfRawData = section.data->totalSize;
+				section.header->virtualSize = 0;
+			}
+			else {
+				section.header->sizeOfRawData = AlignPO2(section.header->virtualSize, 4);
+				section.header->virtualSize = 0;
+			}
 
-				if (section.data) {
-					section.header->sizeOfRawData = section.data->totalSize;
-					section.header->virtualSize = 0;
+			if (section.header->sizeOfRawData) {
+				section.header->pointerToRawData = sectionPointer;
+
+				sectionPointer += section.header->sizeOfRawData;
+
+				if (section.relocations) {
+					section.header->pointerToRelocations = sectionPointer;
+					assert(section.relocations->totalSize / sizeof(Relocation) < UINT16_MAX);
+
+					// @Incomplete @Robustness, we need to do something else if there are more than 65535 relocations
+					section.header->numberOfRelocations = static_cast<u16>(section.relocations->totalSize / sizeof(Relocation));
+
+					alignAllocator(section.relocations, 4);
+					sectionPointer += section.relocations->totalSize;
 				}
 				else {
-					section.header->sizeOfRawData = section.header->virtualSize;
-					section.header->virtualSize = 0;
-				}
-
-				if (section.header->sizeOfRawData) {
-					section.header->pointerToRawData = sectionPointer;
-
-					sectionPointer += AlignPO2(section.header->sizeOfRawData, 4);
-
-					if (section.relocations) {
-						section.header->pointerToRelocations = AlignPO2(sectionPointer, 4);
-						assert(section.relocations->totalSize / sizeof(Relocation) < UINT16_MAX);
-
-						// @Incomplete @Robustness, we need to do something else if there are more than 65535 relocations
-						section.header->numberOfRelocations = static_cast<u16>(section.relocations->totalSize / sizeof(Relocation));
-						sectionPointer += AlignPO2(section.relocations->totalSize, 4);
-					}
-					else {
-						section.header->pointerToRelocations = 0;
-						section.header->numberOfRelocations = 0;
-					}
-				}
-				else {
-					section.header->pointerToRawData = 0;
 					section.header->pointerToRelocations = 0;
 					section.header->numberOfRelocations = 0;
 				}
-
-
-				section.header->pointerToLinenumbers = 0;
-				section.header->numberOfLinenumbers = 0;
 			}
+			else {
+				section.header->pointerToRawData = 0;
+				section.header->pointerToRelocations = 0;
+				section.header->numberOfRelocations = 0;
+			}
+
+
+			section.header->pointerToLinenumbers = 0;
+			section.header->numberOfLinenumbers = 0;
 		}
 
 		if (!hadError) {
-			HANDLE out = CreateFileA("out.obj", GENERIC_WRITE, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
+			HANDLE out = CreateFileA("out.obj", GENERIC_WRITE | GENERIC_READ, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
+
+
+			HANDLE mapping = CreateFileMappingA(out, 0, PAGE_READWRITE, 0, sectionPointer, 0);
+
+			u8 *view = (u8 *) MapViewOfFile(mapping, FILE_MAP_WRITE, 0, 0, 0);
+
+			const auto syncWriteFile = [&](void *data, u32 size) {
+				DWORD written;
+
+				WriteFile(out, data, size, &written, 0);
+			};
+
+			const auto mappedWriteFile = [&](void *data, u32 size) {
+				memcpy(view, data, size);
+				view += size;
+			};
+
+			const auto doWrite = mappedWriteFile;
+
+			const auto writeAllocator = [&](HANDLE out, BucketedArenaAllocator allocator) {
+				for (auto bucket = allocator.first; bucket; bucket = bucket->next) {
+					u32 count = (allocator.bucketSize - bucket->remaining);
+
+					doWrite(bucket->memory - count, count);
+				}
+			};
 
 			if (out == INVALID_HANDLE_VALUE) {
 				reportError("Error: Could not open out.obj intermediate for writing");
 				goto error;
 			}
-
-			DWORD written;
-			WriteFile(out, &header, sizeof(header), &written, 0);
+			
+			doWrite(&header, sizeof(header));
 
 			for (auto section : sections) {
-				WriteFile(out, section.header, sizeof(*section.header), &written, 0);
+				doWrite(section.header, sizeof(*section.header));
 			}
-
+			
 
 			//assert(ftell(out) == header.pointerToSymbolTable);
 			writeAllocator(out, symbols.allocator);
 
-			WriteFile(out, &stringTableSize, sizeof(stringTableSize), &written, 0);
+			doWrite(&stringTableSize, sizeof(stringTableSize));
 			writeAllocator(out, stringTable);
 
-			WriteFile(out, &alignmentPadding, AlignPO2(prefixSize, 4) - prefixSize, &written, 0);
+			doWrite(&alignmentPadding, AlignPO2(prefixSize, 4) - prefixSize);
 
 			for (u32 i = 0; i < sections.count; i++) {
 				auto section = sections[i];
@@ -4170,31 +4173,27 @@ void runCoffWriter() {
 				if (section.data) {
 					//assert(section.header->pointerToRawData == ftell(out));
 					writeAllocator(out, *section.data);
-
-					WriteFile(out, &alignmentPadding, AlignPO2(section.data->totalSize, 4) - section.data->totalSize, &written, 0);
 				}
 				else if (section.header->sizeOfRawData) {
-					u64 zero = 0;
+					char zero[1024] = {};
 
 					for (s64 write = section.header->sizeOfRawData; write > 0; write -= sizeof(zero)) {
-						WriteFile(out, &zero, static_cast<u32>(my_min(sizeof(zero), write)), &written, 0);
+						doWrite(zero, static_cast<u32>(my_min(sizeof(zero), write)));
 					}
-
-					WriteFile(out, &alignmentPadding, AlignPO2(section.header->sizeOfRawData, 4) - section.header->sizeOfRawData, &written, 0);
 				}
 
 				if (section.relocations) {
 					//assert(section.header->pointerToRelocations == ftell(out));
 
 					writeAllocator(out, *section.relocations);
-
-					WriteFile(out, &alignmentPadding, AlignPO2(section.relocations->totalSize, 4) - section.relocations->totalSize, &written, 0);
 				}
 			}
 
 			{
 				PROFILE_ZONE("fclose");
 
+				UnmapViewOfFile(view);
+				CloseHandle(mapping);
 				CloseHandle(out);
 			}
 		}

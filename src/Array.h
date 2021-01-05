@@ -2,218 +2,122 @@
 
 #include "Basic.h"
 
-template <typename T, u32 smallSize>
-class SmallArray {
-public:
-	T *storage = 0;
-	u32 count = 0;
-	u32 capacity = smallSize;
+inline u32 findHigherPowerOf2(u32 value) {
+	if (value == 0) return 1;
 
-	T small[smallSize];
+	u32 index;
 
+	_BitScanForward((unsigned long *)&index, value);
 
-	void trim() {
-		resize(count);
+	if ((value & value - 1) == 0) [[likely]] {
+		return index;
 	}
-
-	void resizeAndMaybeTrim(u32 newCapacity) {
-		count = my_min(count, newCapacity);
-
-		if (newCapacity <= smallSize) {
-			if (count && storage) {
-				memcpy(small, storage, count * sizeof(T));
-				std::free(storage);
-
-				storage = nullptr;
-			}
-
-			capacity = smallSize;
-
-		}
-		else {
-			if (storage) {
-				storage = static_cast<T *>(realloc(storage, newCapacity * sizeof(T)));
-			}
-			else {
-				storage = static_cast<T *>(malloc(newCapacity * sizeof(T)));
-				memcpy(storage, small, count * sizeof(T));
-			}
-		}
-		capacity = newCapacity;
+	else {
+		return index + 1;
 	}
-
-	void resize(u32 newCapacity) {
-		assert(count <= newCapacity);
-
-		resizeAndMaybeTrim(newCapacity);
-	}
-
-	SmallArray() {
-		resizeAndMaybeTrim(smallSize);
-	}
-
-	SmallArray(u32 capacity) {
-		resizeAndMaybeTrim(capacity);
-	}
-
-	SmallArray(std::initializer_list<T> values) {
-		count = static_cast<u32>(values.size());
-		resizeAndMaybeTrim(count);
-
-		memcpy(begin(), values.begin(), sizeof(T) * count);
-	}
-
-	
-
-	template<typename Range, typename = std::enable_if_t<!std::is_integral<Range>::value>>
-	explicit SmallArray(const Range& values) {
-		count = static_cast<u32>(values.end() - values.begin());
-		resizeAndMaybeTrim(count);
-
-		memcpy(begin(), values.begin(), sizeof(T) * count);
-	}
-
-	void add(const T &value) {
-		if (count >= capacity) {
-			resize(capacity * 2);
-		}
-
-		begin()[count++] = value;
-	}
-
-	const T &operator[] (u32 index) const {
-		assert(index < count);
-		return begin()[index];
-	}
-
-	T &operator[] (u32 index) {
-		assert(index < count);
-		return begin()[index];
-	}
-
-	T *begin() {
-		if (storage) {
-			return storage;
-		}
-		else {
-			return small;
-		}
-	}
-
-	T *end() {
-		return begin() + count;
-	}
-
-	const T *begin() const {
-		if (storage) {
-			return storage;
-		}
-		else {
-			return small;
-		}
-	}
-
-	const T *end() const {
-		return begin() + count;
-	}
-
-	void free() {
-		std::free(storage);
-
-		storage = nullptr;
-		capacity = smallSize;
-		count = 0;
-	}
-
-	bool unordered_remove(const T &value) {
-		for (u32 i = 0; i < count; i++) {
-			if (begin()[i] == value) {
-				unordered_remove(i);
-
-				return true;
-			}
-		}
-
-		return false;
-	}
+}
 
 
-	void unordered_remove(u32 index) {
-		if (index != count - 1) {
-			begin()[index] = begin()[count - 1];
-		}
-
-		--count;
-	}
-
-	void unordered_remove(T *location) {
-		assert(location >= begin() && location < end());
-
-		if (location != end() - 1) {
-			*location = *(end() - 1);
-		}
-
-		--count;
-	}
-
-	void clear() {
-		count = 0;
-	}
-
-	void reserve(u32 capacity) {
-		if (this->capacity < capacity) {
-			resizeAndMaybeTrim(capacity);
-		}
-	}
-
-	void pop() {
-		assert(count);
-		unordered_remove(count - 1);
-		// @Volatile: only works because we never automatically shrink
-		return *end();
-	}
+struct ArrayAllocatorBlock {
+	ArrayAllocatorBlock *next;
+	u64 data[1];
 };
+
+template<u32 itemSize>
+struct ArrayAllocator {
+
+	static constexpr u32 blocksToAllocate = 64;
+
+	ArrayAllocatorBlock *freeBlocks[32] = {};
+
+
+	void createBlocks(u32 powerOf2) {
+		u32 blockSize = 8 + itemSize * (1 << powerOf2);
+
+		u8 *blocks = (u8 *) malloc(blockSize * blocksToAllocate);
+
+		for (u32 i = 0; i < blocksToAllocate; i++) {
+			ArrayAllocatorBlock *block = (ArrayAllocatorBlock *) blocks;
+
+			block->next = freeBlocks[powerOf2];
+			freeBlocks[powerOf2] = block;
+
+			blocks += blockSize;
+		}
+	}
+
+	void *allocate(u32 powerOf2) {
+		if (!freeBlocks[powerOf2]) {
+			createBlocks(powerOf2);
+		}
+
+		auto block = freeBlocks[powerOf2];
+		freeBlocks[powerOf2] = block->next;
+
+		return block->data;
+	}
+
+	void free(u32 powerOf2, u8 *data) {
+		ArrayAllocatorBlock *block = (ArrayAllocatorBlock *) (data - 8);
+
+		block->next = freeBlocks[powerOf2];
+		freeBlocks[powerOf2] = block;
+	}
+
+	static thread_local ArrayAllocator instance;
+};
+
+template<u32 itemSize>
+inline thread_local ArrayAllocator<itemSize> ArrayAllocator<itemSize>::instance;
 
 template <typename T>
 class Array {
+	using Allocator = ArrayAllocator<sizeof(T)>;
+
 public:
 	T *storage = 0;
 	u32 count = 0;
 	u32 capacity = 0;
 
+	void resize(u32 newCapacity) {
+		assert(newCapacity >= count);
 
-	void resizeAndMaybeTrim(u32 newCapacity) {
-		storage = static_cast<T *>(realloc(storage, newCapacity * sizeof(T)));
-
-		if (newCapacity < count) {
-			count = newCapacity;
+		if (newCapacity < 4) {
+			newCapacity = 2;
 		}
+		else {
+
+			newCapacity = findHigherPowerOf2(newCapacity);
+		}
+
+		T *newStorage = (T *) Allocator::instance.allocate(newCapacity);
+		memcpy(newStorage, storage, sizeof(T) * count);
+
+		if (storage) {
+			Allocator::instance.free(capacity, (u8 *) storage);
+		}
+
+		storage = newStorage;
 
 		capacity = newCapacity;
 	}
 
-	void resize(u32 newCapacity) {
-		assert(count <= newCapacity);
-
-		resizeAndMaybeTrim(newCapacity);
-	}
-
 	void reserve(u32 capacity) {
-		if (this->capacity < capacity) {
-			resizeAndMaybeTrim(capacity);
+		if (1U << this->capacity < capacity) {
+			resize(capacity);
 		}
 	}
 
 	Array() {}
 
 	Array(u32 capacity) {
-		resizeAndMaybeTrim(capacity);
+		resize(capacity);
 	}
 
 
 	Array(std::initializer_list<T> values) {
 		count = static_cast<u32>(values.size());
-		resizeAndMaybeTrim(count);
+		resize(count);
 
 		memcpy(storage, values.begin(), sizeof(T) * count);
 	}
@@ -221,7 +125,7 @@ public:
 	template<typename Range, typename = std::enable_if_t<!std::is_integral<Range>::value>>
 	explicit Array(const Range& values) {
 		count = static_cast<u32>(values.end() - values.begin());
-		resizeAndMaybeTrim(count);
+		resize(count);
 
 		memcpy(begin(), values.begin(), sizeof(T) * count);
 	}
@@ -233,8 +137,8 @@ public:
 	}
 
 	T &add(const T &value) {
-		if (count >= capacity) {
-			resize(my_max(count + 1, capacity * 2));
+		if (!capacity || count >= 1U << capacity) {
+			resize(my_max(count + 1, 1U << (capacity + 1)));
 		}
 
 		storage[count] = value;
@@ -262,9 +166,11 @@ public:
 	}
 
 	void free() {
-		std::free(storage);
+		if (storage) {
+			Allocator::instance.free(capacity, (u8 *) storage);
+			storage = nullptr;
+		}
 
-		storage = nullptr;
 		capacity = 0;
 		count = 0;
 	}

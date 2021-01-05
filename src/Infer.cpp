@@ -295,10 +295,10 @@ void wakeUpSleepers(Array<SubJob *> *sleepers, bool priority = false, String nam
 void addImporter(Importer *importer);
 
 void addBlock(Block *block) {
-	if (block->flags & BLOCK_IS_QUEUED)
+	if (block->queued)
 		return;
 
-	block->flags |= BLOCK_IS_QUEUED;
+	block->queued = true;
 
 	for (auto &declaration : block->declarations) {
 		auto success = addDeclaration(declaration);
@@ -320,7 +320,7 @@ FunctionJob *allocateFunctionJob();
 void beginFlatten(SubJob *job, Expr **expr);
 
 void addFunction(ExprFunction *function) {
-	if (function->arguments.flags & BLOCK_IS_QUEUED)
+	if (function->arguments.queued)
 		return;
 
 	FunctionJob *job = allocateFunctionJob();
@@ -2183,7 +2183,7 @@ bool defaultValueIsZero(SubJob *job, Type *type, bool *yield) {
 		auto struct_ = static_cast<TypeStruct *>(type);
 
 		for (auto member : struct_->members.declarations) {
-			if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT)) continue;
+			if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING)) continue;
 
 			if (member->flags & DECLARATION_IS_UNINITIALIZED) return false;
 
@@ -4045,12 +4045,12 @@ bool inferFlattened(SubJob *job) {
 								break;
 							}
 							else {
-								if ((identifier->flags & EXPR_IDENTIFIER_RESOLVING_ONLY_CONSTANTS) && !(identifier->flags & EXPR_VALUE_NOT_REQUIRED)) {
+								if (identifier->flags & EXPR_IDENTIFIER_RESOLVING_ONLY_CONSTANTS) {
 									reportError(identifier, "Error: Cannot refer to %s from outside, capture is not supported", (declaration->flags & DECLARATION_IS_ARGUMENT) ? "argument" : "variable");
 									return false;
 								}
 
-								if ((declaration->enclosingScope->flags & (BLOCK_IS_ARGUMENTS | BLOCK_IS_RETURNS)) || declaration->serial < identifier->serial) {
+								if (declaration->enclosingScope->flavor != BlockFlavor::IMPERATIVE || declaration->serial < identifier->serial) {
 									identifier->declaration = declaration;
 									break;
 								}
@@ -4069,7 +4069,7 @@ bool inferFlattened(SubJob *job) {
 
 						identifier->serial = identifier->resolveFrom->serial;
 
-						if (identifier->resolveFrom->flags & (BLOCK_IS_RETURNS | BLOCK_IS_STRUCT))
+						if (identifier->resolveFrom->flavor != BlockFlavor::IMPERATIVE)
 							identifier->flags |= EXPR_IDENTIFIER_RESOLVING_ONLY_CONSTANTS;
 					}
 
@@ -4085,14 +4085,8 @@ bool inferFlattened(SubJob *job) {
 						}
 					}
 
-					if (identifier->declaration) {
-						if (identifier->enclosingScope && identifier->declaration->enclosingScope != identifier->enclosingScope) {
-							assert(identifier->enclosingScope != &globalBlock);
-
-							if (!addImplicitImport(identifier->enclosingScope, identifier->declaration, &identifier->start, &identifier->end)) {
-								return false;
-							}
-						}
+					if (identifier->enclosingScope && identifier->declaration && identifier->declaration->enclosingScope != identifier->enclosingScope) {
+						addImplicitImport(identifier->enclosingScope, identifier);
 					}
 				}
 			}
@@ -4247,7 +4241,7 @@ bool inferFlattened(SubJob *job) {
 			bool sleep = false;
 
 			for (auto declaration : block->declarations.declarations) {
-				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT))) {
+				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING))) {
 					if (!(declaration->flags & DECLARATION_TYPE_IS_READY)) {
 						goToSleep(job, &declaration->sleepingOnMyType);
 
@@ -4261,7 +4255,7 @@ bool inferFlattened(SubJob *job) {
 
 			// Do two passes over the array because if the first pass added dependencies on some declarations then yielded, it would add them again next time round
 			for (auto declaration : block->declarations.declarations) {
-				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_IMPLICIT_IMPORT))) {
+				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING))) {
 					addSizeDependency(job->sizeDependencies, static_cast<ExprLiteral *>(declaration->type)->typeValue);
 				}
 			}
@@ -5980,12 +5974,12 @@ bool inferImporter(ImporterJob *job) {
 			assert(!structAccess);
 
 			for (auto member : block->declarations) {
-				if (!(member->flags & (DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING))) {
+				if (!(member->flags & DECLARATION_IMPORTED_BY_USING)) {
 					if (checkForRedeclaration(importer->enclosingScope, member, importer->import)) {
 						addDeclarationToBlockUnchecked(importer->enclosingScope, member, member->serial);
 
 
-						if (importer->enclosingScope->flags & BLOCK_IS_STRUCT) {
+						if (importer->enclosingScope->flavor == BlockFlavor::STRUCT) {
 							if (!(member->flags & DECLARATION_IS_CONSTANT)) {
 								// Do an insertion sort by declaration serial since struct members must be ordered to preserve memory layout
 								// @Speed create space big enough for all the inserted members then just sort the inserted members
@@ -6027,7 +6021,7 @@ bool inferImporter(ImporterJob *job) {
 		}
 		else if (importer->import->flavor != ExprFlavor::LOAD) {
 			for (auto member : block->declarations) {
-				if (!(member->flags & (DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING))) {
+				if (!(member->flags & DECLARATION_IMPORTED_BY_USING)) {
 					if (checkForRedeclaration(importer->enclosingScope, member, importer->import)) {
 						if (!onlyConstants || (member->flags & DECLARATION_IS_CONSTANT)) {
 							auto import = INFER_NEW(Declaration);
@@ -6209,8 +6203,7 @@ bool inferDeclarationValue(DeclarationJob *job) {
 			return yield;
 		}
 
-		if ((declaration->flags & DECLARATION_IS_CONSTANT) || declaration->enclosingScope == &globalBlock ||
-			(declaration->enclosingScope->flags & (BLOCK_IS_STRUCT | BLOCK_IS_ARGUMENTS | BLOCK_IS_RETURNS))) {
+		if ((declaration->flags & DECLARATION_IS_CONSTANT) || declaration->enclosingScope->flavor != BlockFlavor::IMPERATIVE) {
 			if (!isLiteral(declaration->initialValue)) {
 				reportError(declaration->type, "Error: Declaration value must be a constant");
 				return false;
@@ -6253,8 +6246,7 @@ bool inferDeclarationValue(DeclarationJob *job) {
 
 			declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, declaration->initialValue->type);
 
-			if ((declaration->flags & DECLARATION_IS_CONSTANT) || declaration->enclosingScope == &globalBlock ||
-				(declaration->enclosingScope->flags & (BLOCK_IS_STRUCT | BLOCK_IS_ARGUMENTS | BLOCK_IS_RETURNS))) {
+			if ((declaration->flags & DECLARATION_IS_CONSTANT) || declaration->enclosingScope->flavor != BlockFlavor::IMPERATIVE) {
 				if (!(declaration->flags & DECLARATION_IS_RUN_RETURN) && !isLiteral(declaration->initialValue)) {
 					reportError(declaration->type, "Error: Declaration value must be a constant");
 					return false;
@@ -6720,7 +6712,7 @@ bool findTypeInfoInExprRecurse(RunJob *job, ArraySet<Type *> *types, Expr *expr)
 		auto struct_ = static_cast<TypeStruct *>(expr->type);
 
 		for (auto member : struct_->members.declarations) {
-			if (member->flags & (DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_CONSTANT | DECLARATION_IS_UNINITIALIZED)) continue;
+			if (member->flags & (DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_CONSTANT | DECLARATION_IS_UNINITIALIZED)) continue;
 
 			if (!(member->flags & DECLARATION_TYPE_IS_READY)) {
 				goToSleep(job, &member->sleepingOnMyValue);
@@ -6804,7 +6796,7 @@ bool findTypeInfoRecurse(RunJob *job, ArraySet<Type *> *types, Type *type) {
 		auto struct_ = static_cast<TypeStruct *>(type);
 
 		for (auto member : struct_->members.declarations) {
-			if (member->flags & (DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING)) continue;
+			if (member->flags & (DECLARATION_IMPORTED_BY_USING)) continue;
 
 			if (!(member->flags & DECLARATION_TYPE_IS_READY)) {
 				goToSleep(job, &member->sleepingOnMyType);
@@ -6975,7 +6967,7 @@ void fillTypeInfo(Type *type) {
 		u32 count = 0;
 
 		for (auto member : struct_->members.declarations) {
-			if (member->flags & (DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING)) continue;
+			if (member->flags & DECLARATION_IMPORTED_BY_USING) continue;
 
 			++count;
 		}
@@ -6986,7 +6978,7 @@ void fillTypeInfo(Type *type) {
 		count = 0;
 
 		for (auto member : struct_->members.declarations) {
-			if (member->flags & (DECLARATION_IS_IMPLICIT_IMPORT | DECLARATION_IMPORTED_BY_USING)) continue;
+			if (member->flags & DECLARATION_IMPORTED_BY_USING) continue;
 
 			auto &memberInfo = structInfo->members.data[count++];
 
@@ -7246,6 +7238,8 @@ bool doJob(SubJob *job) {
 
 void runInfer() {
 	PROFILE_FUNC();
+
+	globalBlock.flavor = BlockFlavor::GLOBAL;
 
 	u64 irGenerationPending = 0;
 

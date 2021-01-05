@@ -184,7 +184,8 @@ TypeArray *getArray(Type *type) {
 	addDeclarationToBlockUnchecked(&result->members, createDataDeclaration(type), 0);
 	addDeclarationToBlockUnchecked(&result->members, countDeclaration, 0);
 
-	result->members.flags |= BLOCK_IS_QUEUED | BLOCK_IS_STRUCT;
+	result->members.queued = true;
+	result->members.flavor = BlockFlavor::STRUCT;
 
 
 	result->name.length = type->name.length + 2;
@@ -229,7 +230,8 @@ TypeArray *getDynamicArray(Type *type) {
 	addDeclarationToBlockUnchecked(&result->members, countDeclaration, 0);
 	addDeclarationToBlockUnchecked(&result->members, capacityDeclaration, 0);
 
-	result->members.flags |= BLOCK_IS_QUEUED | BLOCK_IS_STRUCT;
+	result->members.queued = true;
+	result->members.flavor = BlockFlavor::STRUCT;
 
 	result->name.length = type->name.length + 4;
 	result->name.characters = TYPE_NEW_ARRAY(char, result->name.length);
@@ -292,7 +294,8 @@ TypeArray *getStaticArray(Type *type, u32 count) {
 	countDeclaration->flags |= DECLARATION_IS_CONSTANT | DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
 	addDeclarationToBlockUnchecked(&result->members, countDeclaration, 0);
 
-	result->members.flags |= BLOCK_IS_QUEUED | BLOCK_IS_STRUCT;
+	result->members.queued = true;
+	result->members.flavor = BlockFlavor::STRUCT;
 
 	constexpr u64 maxCount = getDigitCount(UINT64_MAX);
 

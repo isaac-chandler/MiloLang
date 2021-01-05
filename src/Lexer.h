@@ -138,7 +138,7 @@ struct Token {
 };
 
 struct BigInt {
-	SmallArray<u32, 8> numbers;
+	Array<u32> numbers;
 
 	void zero();
 	void multiplyAdd(u32 multiplyBy, u32 add);

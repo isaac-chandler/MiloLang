@@ -160,5 +160,7 @@ predefined constant variables
  
 utf8 identifiers?
 
+Investigate LINK : fatal error LNK1285: corrupt PDB file
+
 function polymorhpism
 struct polymorhpism

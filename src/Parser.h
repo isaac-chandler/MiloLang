@@ -1,5 +1,8 @@
 #pragma once
 
 #include "CompilerMain.h"
+#include "WorkQueue.h"
 
-void parseFile(struct FileInfo *filename);
+inline MPMCWorkQueue<struct FileInfo *> parserQueue;
+
+void runParser();

@@ -1,6 +1,7 @@
 #include "Basic.h"
 
 #include "Block.h"
+#include "Ast.h"
 
 // Modified from original
 __forceinline u64 MurmurHash64A(const void *key, u64 len, u64 seed) {
@@ -138,4 +139,61 @@ void initTable(Block *block) {
 			insert(block, { declaration, doHash(declaration->name) });
 		}
 	}
+}
+
+
+void addImplicitImport(Block *block, ExprIdentifier *identifier) {
+	for (auto import : block->implicitImports) {
+		assert((import->declaration == identifier->declaration) == (import->name == identifier->name));
+
+		if (import->declaration == identifier->declaration) {
+			return;
+		}
+	}
+
+	block->implicitImports.add(identifier);
+}
+
+bool checkForRedeclaration(Block *block, Declaration *declaration, Expr *using_) {
+	PROFILE_FUNC();
+	assert(block);
+	assert(declaration);
+
+	if (declaration->name.length) { // Multiple zero length names are used in the arguments block for function prototypes with unnamed 
+		auto previous = findDeclarationNoYield(block, declaration->name);
+
+		if (previous) {
+			if (using_) {
+				reportError(using_, "Error: Cannot import variable '%.*s' into scope, it already exists there", STRING_PRINTF(declaration->name));
+				reportError(previous, "   ..: Here is the location it was declared");
+				reportError(declaration, "   ..: Here is the location it was imported from");
+			}
+			else {
+				reportError(declaration, "Error: Cannot redeclare variable '%.*s' within the same scope", STRING_PRINTF(declaration->name));
+				reportError(previous, "   ..: Here is the location it was declared");
+			}
+			return false;
+		}
+
+		for (auto import : block->implicitImports) {
+			if (import->name == declaration->name) {
+				if (using_) {
+					reportError(using_, "Error: Cannot import variable '%.*s' into a scope, where a variable of the same name was previously used", 
+						STRING_PRINTF(declaration->name));
+					reportError(import, "   ..: Here is the location it was used");
+					reportError(import->declaration, "   ..: Here is the location it was declared");
+					reportError(declaration, "   ..: Here is the location it was imported from");
+				}
+				else {
+					reportError(declaration, "Error: Cannot declare variable '%.*s' in a scope where a variable of the same name was previously used", 
+						STRING_PRINTF(declaration->name));
+					reportError(import, "   ..: Here is the location it was used");
+					reportError(previous, "   ..: Here is the location it was declared");
+				}
+				return false;
+			}
+		}
+	}
+
+	return true;
 }

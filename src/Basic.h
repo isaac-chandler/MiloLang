@@ -1,5 +1,7 @@
 #pragma once
 
+#define _SILENCE_CXX17_ITERATOR_BASE_CLASS_DEPRECATION_WARNING
+
 #include <iostream>
 #include <Windows.h>
 #include <assert.h>
@@ -123,7 +125,7 @@ struct Profile {
 	u64 time;
 };
 
-#define PROFILER_THREADS 5
+#define PROFILER_THREADS 10
 
 
 inline Profile *volatile profiles[PROFILER_THREADS];

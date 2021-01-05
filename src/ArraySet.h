@@ -166,6 +166,3 @@ public:
 
 template <typename T>
 using ArraySet = _ArraySet<Array<T>, T>;
-
-template <typename T, int smallSize>
-using SmallArraySet = _ArraySet<SmallArray<T, smallSize>, T>;

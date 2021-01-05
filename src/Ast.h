@@ -240,9 +240,6 @@ struct ExprDefer : Expr {
 
 #define EXPR_FUNCTION_IS_C_CALL 0x100
 
-// This is set on expressions that are inside of a type_of, so that only the type is inferred
-#define EXPR_VALUE_NOT_REQUIRED 0x200
-
 // These two flags are used to check #must
 #define EXPR_FUNCTION_CALL_IS_STATEMENT_LEVEL 0x400     // This is set if the function call is a statement so all return values are ignored
 #define EXPR_FUNCTION_CALL_IS_IN_COMMA_ASSIGNMENT 0x800 // This is set if the function call is used as a value in an expression so only the first return value is received
@@ -339,7 +336,7 @@ struct ExprIdentifier : Expr {
 	Block *resolveFrom;
 	Block *enclosingScope;
 	Expr *structAccess;
-	u64 serial;
+	u32 serial;
 
 	Declaration *declaration;
 };

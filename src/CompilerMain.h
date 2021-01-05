@@ -31,7 +31,7 @@ inline MPMCWorkQueue<String> filesToLoadQueue;
 
 FileInfo *getFileInfoByUid(u32 fileUid);
 
-Array<FileInfo> getAllFilesNoLock();
+Array<FileInfo *> getAllFilesNoLock();
 
 struct Library {
 	String name;

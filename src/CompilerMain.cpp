@@ -11,6 +11,8 @@
 #include "TypeTable.h"
 #include "Find.h"
 
+#define NUM_PARSE_THREADS 4
+
 #if BUILD_PROFILE
 
 void NTAPI tls_callback(PVOID DllHandle, DWORD dwReason, PVOID) {
@@ -55,7 +57,7 @@ bool doColorPrint = true;
 
 std::mutex filesMutex;
 
-static ArraySet<FileInfo> files;
+static Array<FileInfo *> files;
 
 FileInfo *loadNewFile(String file) {
 	// Open the file here and keep it open until we parse it to avoid race condition
@@ -87,15 +89,19 @@ FileInfo *loadNewFile(String file) {
 
 	{
 		ScopeLock fileLock(filesMutex);
-		info.fileUid = static_cast<u32>(files.size());
+		info.fileUid = files.count;
 
-		if (!files.add(info)) {
-			CloseHandle(handle);
-			return nullptr;
+		for (auto file : files) {
+			if (*file == info) {
+				CloseHandle(handle);
+				return nullptr;
+			}
 		}
+
+		files.add(new FileInfo(info));
 	}
 
-	return &files.array[files.array.count - 1];
+	return files[files.count - 1];
 }
 
 FileInfo *getFileInfoByUid(u32 fileUid) {
@@ -103,7 +109,7 @@ FileInfo *getFileInfoByUid(u32 fileUid) {
 
 	{
 		ScopeLock fileLock(filesMutex);
-		info = &files[fileUid];
+		info = files[fileUid];
 	}
 
 	assert(info->fileUid == fileUid);
@@ -111,8 +117,8 @@ FileInfo *getFileInfoByUid(u32 fileUid) {
 	return info;
 }
 
-Array<FileInfo> getAllFilesNoLock() {
-	return files.array;
+Array<FileInfo *> getAllFilesNoLock() {
+	return files;
 }
 
 void displayErrorLocation(CodeLocation *start, EndLocation *end) {
@@ -388,10 +394,6 @@ int main(int argc, char *argv[]) {
 	QueryPerformanceCounter(reinterpret_cast<LARGE_INTEGER *>(&startTime));
 #endif
 
-	for (u64 i = 0; i < 10'000; i++) {
-		PROFILE_ZONE("Overhead");
-	}
-
 	char *input = nullptr;
 	bool useLlvm = false;
 
@@ -424,6 +426,17 @@ int main(int argc, char *argv[]) {
 	if (!hadError && loadNewFile("runtime.milo") && loadNewFile(String(input))) {
 		setupTypeTable();
 
+
+		for (u32 i = 0; i < NUM_PARSE_THREADS; i++) {
+			wchar_t name[] = L"Parser  ";
+
+			name[7] = static_cast<wchar_t>(i + '1');
+
+			std::thread parserThread(runParser);
+			SetThreadDescription(parserThread.native_handle(), name);
+			
+			parserThread.detach();
+		}
 		std::thread infer(runInfer);
 		std::thread irGenerator(runIrGenerator);
 
@@ -435,17 +448,9 @@ int main(int argc, char *argv[]) {
 
 		irGenerator.detach();
 
-		parseFile(getFileInfoByUid(0)); // @Robustness Hardcoded parsing of runtime.milo and file loaded from command line
-		if (hadError) {
-			goto error;
-		}
-		inferQueue.add(InferQueueJob((s64) 0));
-		parseFile(getFileInfoByUid(1)); // @Robustness Hardcoded parsing of runtime.milo and file loaded from command line
-		if (hadError) {
-			goto error;
-		}
-		inferQueue.add(InferQueueJob((s64) 1));
-
+		parserQueue.add(getFileInfoByUid(0));
+		parserQueue.add(getFileInfoByUid(1));
+		
 		while (true) {
 			auto load = filesToLoadQueue.take();
 
@@ -462,17 +467,10 @@ int main(int argc, char *argv[]) {
 				inferQueue.add(InferQueueJob(-1));
 			}
 			else {
-				parseFile(file);
-
-				if (hadError) {
-					break;
-				}
-
-				inferQueue.add(InferQueueJob(file->fileUid));
+				parserQueue.add(file);
 			}
 		}
 
-		error:
 		inferQueue.add(static_cast<Declaration *>(nullptr));
 
 
@@ -482,9 +480,6 @@ int main(int argc, char *argv[]) {
 
 
 	if (!hadError) {
-		auto backendStart = high_resolution_clock::now();
-		std::thread backend = std::thread(useLlvm ? runLlvm : runCoffWriter);
-		SetThreadDescription(backend.native_handle(), useLlvm ? L"LLVM" : L"Coff Writer");
 		u64 totalQueued = totalDeclarations + totalFunctions + totalTypesSized + totalImporters;
 
 		printf(
@@ -500,7 +495,13 @@ int main(int argc, char *argv[]) {
 		std::cout << "Frontend Time: " << (duration_cast<microseconds>(duration<double>(
 			high_resolution_clock::now() - start)).count() / 1000.0) << "ms\n";
 
-		backend.join();
+		auto backendStart = high_resolution_clock::now();
+		if (useLlvm) {
+			runLlvm();
+		}
+		else {
+			runCoffWriter();
+		}
 
 		std::cout << (useLlvm ? "LLVM" : "Coff Writer") << " Time: " << (duration_cast<microseconds>(duration<double>(
 			high_resolution_clock::now() - backendStart)).count() / 1000.0) << "ms\n";

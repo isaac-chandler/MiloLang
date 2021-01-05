@@ -33,9 +33,6 @@
 // This is the actual variable that the using refers to
 #define DECLARATION_MARKED_AS_USING     0x0'0200
 
-// Set on declarations that are silently inserted when a variable from some outer scopes is used so that later usings will cause an error if they try to override it
-#define DECLARATION_IS_IMPLICIT_IMPORT  0x0'0400 // @Speed @Cleanup This is a very costly mechanism for this relatively uncommon check
-
 #define DECLARATION_IS_ENUM_VALUE       0x0'0800
 
 #define DECLARATION_IS_RETURN           0x0'1000
@@ -87,16 +84,6 @@ struct Declaration {
 	Declaration() : llvmStorage(nullptr) {}
 };
 
-
-#define BLOCK_IS_ARGUMENTS 0x1
-
-// Set when a block is fully parsed so that we don't skip through it in identifier resolving until then
-#define BLOCK_IS_QUEUED 0x2
-
-#define BLOCK_IS_LOOP 0x4
-#define BLOCK_IS_STRUCT 0x8
-#define BLOCK_IS_RETURNS 0x10
-
 #define BLOCK_HASHTABLE_MIN_COUNT 32
 
 struct Importer {
@@ -109,16 +96,27 @@ struct Importer {
 
 };
 
+enum class BlockFlavor : u8 {
+	IMPERATIVE,
+	ARGUMENTS,
+	RETURNS,
+	STRUCT,
+	GLOBAL
+};
+
 struct Block {
 	Array<Declaration *> declarations;
 	Array<Importer *> importers;
+	Array<struct ExprIdentifier *> implicitImports;
 
 	struct BlockEntry *table = nullptr;
 	u32 tableCapacity;
 	u32 serial;
 
 	Block *parentBlock = nullptr;
-	u8 flags = 0;
+	BlockFlavor flavor;
+	bool queued = false;
+	bool loop = false;
 
 	Array<struct SubJob *> sleepingOnMe;
 };
@@ -127,7 +125,8 @@ inline Block globalBlock;
 
 Declaration *findInBlock(Block *block, String name);
 
-inline Declaration *findDeclarationIncludeImplictImports(Block *block, String name) {
+inline Declaration *findDeclarationNoYield(Block *block, String name) {
+	PROFILE_FUNC();
 	if (block->table) {
 		return findInBlock(block, name);
 	}
@@ -142,16 +141,6 @@ inline Declaration *findDeclarationIncludeImplictImports(Block *block, String na
 	return nullptr;
 }
 
-inline Declaration *findDeclarationNoYield(Block *block, String name) {
-	PROFILE_FUNC();
-	auto declaration = findDeclarationIncludeImplictImports(block, name);
-
-	if (!declaration)
-		return nullptr;
-
-	return declaration->flags & DECLARATION_IS_IMPLICIT_IMPORT ? nullptr : declaration;
-}
-
 bool replaceInTable(Block *block, Declaration *old, Declaration *declaration);
 
 inline void replaceDeclaration(Block *block, Declaration *&old, Declaration *declaration) {
@@ -164,48 +153,15 @@ inline void replaceDeclaration(Block *block, Declaration *&old, Declaration *dec
 	declaration->enclosingScope = block;
 }
 
-inline bool checkForRedeclaration(Block *block, Declaration *declaration, struct Expr *using_) {
-	PROFILE_FUNC();
-	assert(block);
-	assert(declaration);
+void addImplicitImport(Block *block, struct ExprIdentifier *identifier);
 
-	if (declaration->name.length) { // Multiple zero length names are used in the arguments block for function prototypes with unnamed 
-		auto previous = findDeclarationIncludeImplictImports(block, declaration->name);
-
-		if (previous) {
-			if (previous->flags & DECLARATION_IS_IMPLICIT_IMPORT) {
-				if (using_) {
-					reportError(using_, "Error: Attempt to import a variable that was used previously in the scope", STRING_PRINTF(declaration->name));
-					reportError(previous, "   ..: Here is the usage");
-					reportError(previous->import, "   ..: Here is the declaration of the previous usage");
-					reportError(declaration, "   ..: Here is the location it was imported from");
-				}
-				else {
-					reportError(declaration, "Error: Attempt to redeclare a variable that was used previously in the scope");
-					reportError(previous, "   ..: Here is the usage");
-					reportError(previous->import, "   ..: Here is the declaration of the previous usage");
-				}
-			} else if (using_) {
-				reportError(using_, "Error: Cannot import variable '%.*s' into scope, it already exists there", STRING_PRINTF(declaration->name));
-				reportError(previous, "   ..: Here is the location it was declared");
-				reportError(declaration, "   ..: Here is the location it was imported from");
-			}
-			else {
-				reportError(declaration, "Error: Cannot redeclare variable '%.*s' within the same scope", STRING_PRINTF(declaration->name));
-				reportError(previous, "   ..: Here is the location it was declared");
-			}
-			return false;
-		}
-	}
-
-	return true;
-}
+bool checkForRedeclaration(Block *block, Declaration *declaration, struct Expr *using_);
 
 void addToTable(Block *block, Declaration *declaration);
 void initTable(Block *block);
 
 inline void addImporterToBlock(Block *block, Importer *importer, u32 serial) {
-	assert(!(block->flags & (BLOCK_IS_ARGUMENTS | BLOCK_IS_RETURNS)));
+	assert(block->flavor != BlockFlavor::ARGUMENTS && block->flavor != BlockFlavor::RETURNS);
 
 	importer->serial = serial;
 	importer->enclosingScope = block;
@@ -245,7 +201,7 @@ inline bool addDeclarationToBlock(Block *block, Declaration *declaration, u32 se
 	return true;
 }
 
-inline Declaration *findDeclaration(Block *block, String name, bool *yield, u64 usingYieldLimit = UINT64_MAX) {
+inline Declaration *findDeclaration(Block *block, String name, bool *yield, u32 usingYieldLimit = UINT32_MAX) {
 	PROFILE_FUNC();
 
 	for (auto importer : block->importers) {
@@ -258,34 +214,4 @@ inline Declaration *findDeclaration(Block *block, String name, bool *yield, u64 
 	*yield = false;
 
 	return findDeclarationNoYield(block, name);
-}
-
-inline bool addImplicitImport(Block *block, Declaration *old, CodeLocation *start, EndLocation *end) {
-	PROFILE_FUNC();
-	if (block->flags & (BLOCK_IS_ARGUMENTS | BLOCK_IS_STRUCT | BLOCK_IS_RETURNS)) return true;
-
-	auto declaration = findDeclarationIncludeImplictImports(block, old->name);
-
-	if (declaration) {
-		if (declaration->flags & DECLARATION_IS_IMPLICIT_IMPORT) {
-			return true; 
-		}
-		else {
-			// @Incomplete Keep track of the using that imported something so we can report if the redeclaration is from a using
-			reportError(declaration, "Error: Attempt to redeclare a variable that was used previously in the scope");
-			reportError(start, end,  "   ..: Here is the usage");
-			return false;
-		}
-	}
-	else {
-		Declaration *import = new Declaration;
-		import->name = old->name;
-		import->start = *start;
-		import->end = *end;
-		import->import = old;
-		import->flags |= DECLARATION_IS_IMPLICIT_IMPORT;
-		addDeclarationToBlockUnchecked(block, import, 0);
-
-		return true;
-	}
 }
