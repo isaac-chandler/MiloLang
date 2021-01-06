@@ -3,7 +3,7 @@
 
 #if TARGET_WINDOWS {
 	// @Incomplete add multiple return values 
-	read_entire_file :: (file: string) (-> #must result: []u8, success := true) {
+	read_entire_file :: (file: string) -> (#must result: []u8, success := true) {
 		
 		CloseHandle :: (hObject: *void) -> s32 #external "kernel32"
 		CreateFileW :: (lpFileName: *u16, dwDesiredAccess: u32, dwShareMode: u32, lpSecurityAttributes := null, 

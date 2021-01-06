@@ -1165,19 +1165,6 @@ ExprStringLiteral *makeStringLiteral(LexerFile *lexer, CodeLocation &start, EndL
 	return literal;
 }
 
-void addVoidReturn(LexerFile *lexer, CodeLocation &start, EndLocation &end, ExprFunction *function) {
-	auto returnType = PARSER_NEW(Declaration);
-
-	returnType->type = parserMakeTypeLiteral(lexer, start, end, &TYPE_VOID);
-	returnType->start = start;
-	returnType->end = end;
-	returnType->name = String(nullptr, 0u);
-	returnType->initialValue = nullptr;
-	returnType->flags |= DECLARATION_IS_RETURN;
-
-	addDeclarationToBlock(&function->returns, returnType, function->returns.declarations.count);
-}
-
 Declaration *createAnonymousDeclaration(LexerFile *lexer, Expr *type) {
 	auto declaration = PARSER_NEW(Declaration);
 
@@ -1190,128 +1177,272 @@ Declaration *createAnonymousDeclaration(LexerFile *lexer, Expr *type) {
 	return declaration;
 }
 
+void addVoidReturn(LexerFile *lexer, CodeLocation &start, EndLocation &end, ExprFunction *function) {
+	auto void_ = parserMakeTypeLiteral(lexer, start, end, &TYPE_VOID);
+
+	auto returnType = createAnonymousDeclaration(lexer, void_);
+	returnType->flags |= DECLARATION_IS_RETURN;
+
+	addDeclarationToBlock(&function->returns, returnType, function->returns.declarations.count);
+}
+
+
+bool checkForNamedArguments(LexerFile *lexer) {
+	TokenT peek[2];
+	lexer->peekTokenTypes(2, peek);
+
+	return lexer->token.type == TokenT::USING ||
+		(lexer->token.type == TokenT::IDENTIFIER && peek[0] == TOKEN(':')) ||
+		(lexer->token.type == TokenT::MUST && peek[0] == TokenT::USING) || // Not actually a valid combination but check for it anyway so we can provide a good error message
+		(lexer->token.type == TokenT::MUST && peek[0] == TokenT::IDENTIFIER && peek[1] == TOKEN(':'));
+}
+
+bool isFunctionOrFunctionType(LexerFile *lexer) {
+	if (lexer->token.type == TOKEN(')'))
+		return true;
+
+	if (checkForNamedArguments(lexer))
+		return true;
+
+	auto save = lexer->save();
+
+	u32 parenCount = 0;
+
+	auto token = lexer->token.type;
+
+	while (true) {
+		if (token == TokenT::END_OF_FILE) {
+			return false;
+		}
+		else if (token == TOKEN(')')) {
+			if (parenCount == 0)
+				break;
+
+			parenCount--;
+		}
+		else if (token == TOKEN('(')) {
+			parenCount++;
+		}
+		else if (token == TOKEN(',') && parenCount == 0) {
+			lexer->restore(save);
+			return true;
+		}
+
+		token = lexer->advanceTokenType();
+	}
+
+	token = lexer->advanceTokenType();
+	lexer->restore(save);
+
+	return token == TokenT::ARROW || token == TokenT::EXTERNAL || token == TokenT::COMPILER || token == TokenT::C_CALL;
+}
+
+bool isFunctionType(LexerFile *lexer) {
+	auto save = lexer->save();
+
+	u32 parenCount = 0;
+
+	while (true) {
+		auto token = lexer->advanceTokenType();
+
+		if (token == TokenT::END_OF_FILE) {
+			return false;
+		}
+		else if (token == TOKEN(')')) {
+			if (parenCount == 0)
+				break;
+
+			parenCount--;
+		}
+		else if (token == TOKEN('(')) {
+			parenCount++;
+		}
+	}
+
+	auto token = lexer->advanceTokenType();
+	lexer->restore(save);
+
+	return token == TokenT::ARROW;
+}
+
+Declaration *parseSingleArgument(LexerFile *lexer, ExprFunction *function, bool arguments, bool named) {
+	auto token = lexer->token;
+
+	bool must = expectAndConsume(lexer, TokenT::MUST);
+
+	if (must && arguments) {
+		reportError(&lexer->token, "Error: Arguments cannot be marked as #must");
+		return nullptr;
+	}
+
+	Declaration *declaration;
+
+	if (named) {
+		declaration = parseDeclaration(lexer);
+
+		if (!declaration)
+			return nullptr;
+	}
+	else {
+		auto expr = parseExpr(lexer);
+
+		if (!expr)
+			return nullptr;
+
+		declaration = createAnonymousDeclaration(lexer, expr);
+	}
+
+
+	if (must)
+		declaration->flags |= DECLARATION_IS_MUST;
+
+	if (arguments)
+		declaration->flags |= DECLARATION_IS_ARGUMENT;
+	else
+		declaration->flags |= DECLARATION_IS_RETURN;
+
+	if (!arguments && (declaration->flags & DECLARATION_MARKED_AS_USING)) {
+		reportError(declaration, "Error: Cannot mark return types as using");
+		return nullptr;
+	}
+
+
+
+	if (declaration->flags & DECLARATION_IS_CONSTANT) {
+		reportError(declaration, "Error: %s cannot be constant declarations", arguments ? "Arguments" : "Returns");
+		return nullptr;
+	}
+
+	if (declaration->flags & DECLARATION_IS_UNINITIALIZED) {
+		reportError(declaration, "Error: %s cannot be uninitialized", arguments ? "Arguments" : "Returns");
+		return nullptr;
+	}
+
+	bool varargs = expectAndConsume(lexer, TokenT::DOUBLE_DOT);
+
+	if (varargs && !arguments) {
+		reportError(declaration, "Error: Returns cannot be varargs");
+		return nullptr;
+	}
+
+	if (varargs) {
+		if (declaration->initialValue) {
+			reportError(declaration, "Error: Varargs arguments cannot have a default value");
+			return nullptr;
+		}
+
+		auto arrayType = makeBinaryOperator(lexer, declaration->type->start, declaration->type->end, TokenT::ARRAY_TYPE, nullptr);
+		arrayType->type = nullptr;
+		arrayType->right = declaration->type;
+
+		declaration->type = arrayType;
+
+		declaration->flags |= DECLARATION_IS_VARARGS;
+		function->flags |= EXPR_FUNCTION_HAS_VARARGS;
+	}
+
+	if (!addDeclarationToBlock(lexer->currentBlock, declaration, lexer->currentBlock->declarations.count)) {
+		return nullptr;
+	}
+
+	return declaration;
+}
+
+bool parseArgumentList(LexerFile *lexer, ExprFunction *function, bool arguments, ExprBlock **usingBlock) {
+	if (expectAndConsume(lexer, ')')) {
+		if (!arguments)
+			addVoidReturn(lexer, lexer->token.start, lexer->token.end, function);
+
+		return true;
+	}
+
+	bool named = checkForNamedArguments(lexer);
+
+	Declaration *hadVarargs = nullptr;
+
+	do {
+		if (hadVarargs) {
+			reportError(hadVarargs, "Error: Only the final arugment can be varargs");
+			return false;
+		}
+
+		auto declaration = parseSingleArgument(lexer, function, arguments, named);
+
+		if (!declaration)
+			return false;
+
+		if (declaration->flags & DECLARATION_MARKED_AS_USING) {
+			if (!*usingBlock) {
+				*usingBlock = PARSER_NEW(ExprBlock);
+			}
+
+			addImporterToBlock(&(*usingBlock)->declarations, createImporterForUsing(lexer, declaration), lexer->identifierSerial++);
+		}
+
+		if (declaration->flags & DECLARATION_IS_VARARGS) {
+			hadVarargs = declaration;
+		}
+	} while (expectAndConsume(lexer, ','));
+
+	if (!expectAndConsume(lexer, ')')) {
+		reportExpectedError(&lexer->token, "Error: Expected ) after %s list", arguments ? "argument" : "return");
+		return false;
+	}
+
+	return true;
+}
+
+bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *usingBlock, bool allowBody);
+
+ExprFunction *parseFunctionOrFunctionType(LexerFile *lexer, bool allowBody) {
+	ExprFunction *function = PARSER_NEW(ExprFunction);
+	function->flavor = ExprFlavor::FUNCTION;
+	function->start = lexer->token.start;
+	function->arguments.flavor = BlockFlavor::ARGUMENTS;
+	function->returns.flavor = BlockFlavor::RETURNS;
+
+	ExprBlock *usingBlock = nullptr;
+
+	pushBlock(lexer, &function->arguments);
+	if (!parseArgumentList(lexer, function, true, &usingBlock))
+		return nullptr;
+
+	if (!parseFunctionPostfix(lexer, function, usingBlock, allowBody))
+		return nullptr;
+
+	popBlock(lexer, &function->arguments);
+
+	return function;
+}
+
+
 bool parseFunctionReturnTypes(LexerFile *lexer, ExprFunction *function, bool *hadReturns) {
 	pushBlock(lexer, &function->returns);
-	at_exit{
-		popBlock(lexer, &function->returns);
-	};
 
 	*hadReturns = true;
 
 	if (expectAndConsume(lexer, TokenT::ARROW)) {
-		bool must = expectAndConsume(lexer, TokenT::MUST);
-
-		auto expr = parseExpr(lexer);
-
-		if (!expr)
-			return false;
-
-		auto returnType = createAnonymousDeclaration(lexer, expr);
-		returnType->flags |= DECLARATION_IS_RETURN;
-
-		if (must)
-			returnType->flags |= DECLARATION_IS_MUST;
-
-		addDeclarationToBlock(&function->returns, returnType, function->returns.declarations.count);
-	}
-	else if (lexer->token.type == TOKEN('(')) {
-		TokenT peek;
-		
-		lexer->peekTokenTypes(1, &peek);
-
-		if (peek == TokenT::ARROW) {
-			lexer->advance();
-			lexer->advance();
-
-			bool must = expectAndConsume(lexer, TokenT::MUST);
-
-			if (lexer->token.type == TOKEN(')')) {
-				if (must) {
-					reportExpectedError(&lexer->token, "Error: Expected return type after #must directive");
-					return false;
-				}
-				else {
-					addVoidReturn(lexer, lexer->token.start, lexer->token.end, function);
-
-					lexer->advance();
-
-					return true;
-				}
-			}
-
-			if (lexer->token.type == TokenT::IDENTIFIER) {
-				lexer->peekTokenTypes(1, &peek);
-
-				if (peek == TOKEN(':')) {
-					do {
-						if (!must) {
-							must = expectAndConsume(lexer, TokenT::MUST);
-						}
-
-						auto returnType = parseDeclaration(lexer);
-
-						if (!returnType)
-							return false;
-
-						if (returnType->flags & DECLARATION_MARKED_AS_USING) {
-							reportError(returnType, "Error: Cannot mark return types as using");
-							return false;
-						}
-
-						if (returnType->flags & DECLARATION_IS_CONSTANT) {
-							reportError(returnType, "Error: Return types cannot be constant declarations");
-							return false;
-						}
-
-						if (returnType->flags & DECLARATION_IS_UNINITIALIZED) {
-							reportError(returnType, "Error: Return types cannot be uninitialized");
-							return false;
-						}
-
-						returnType->flags |= DECLARATION_IS_RETURN;
-
-						if (must) {
-							returnType->flags |= DECLARATION_IS_MUST;
-							must = false;
-						}
-						addDeclarationToBlock(&function->returns, returnType, function->returns.declarations.count);
-					} while (expectAndConsume(lexer, ','));
-
-					if (!expectAndConsume(lexer, ')')) {
-						reportExpectedError(&lexer->token, "Error: Expected ) after return list");
-						return false;
-					}
-
-					return true;
-				}
-			}
-
-			do {
-				if (!must) {
-					must = expectAndConsume(lexer, TokenT::MUST);
-				}
-
-				auto expr = parseExpr(lexer);
-
-				if (!expr)
+		if (expectAndConsume(lexer, '(')) {
+			if (isFunctionType(lexer)) {
+				auto function = parseFunctionOrFunctionType(lexer, false);
+				if (!function)
 					return false;
 
-				auto returnType = createAnonymousDeclaration(lexer, expr);
-				returnType->flags |= DECLARATION_IS_RETURN;
+				auto declaration = createAnonymousDeclaration(lexer, function);
+				declaration->flags |= DECLARATION_IS_RETURN;
 
-				if (must) {
-					returnType->flags |= DECLARATION_IS_MUST;
-				}
+				addDeclarationToBlock(lexer->currentBlock, declaration, lexer->currentBlock->declarations.count);
+			}
+			else {
+				if (!parseArgumentList(lexer, function, false, nullptr))
+					return false;
+			}
+		}
+		else {
+			auto declaration = parseSingleArgument(lexer, function, false, checkForNamedArguments(lexer));
 
-				must = false;
-
-				addDeclarationToBlock(&function->returns, returnType, function->returns.declarations.count);
-			} while (expectAndConsume(lexer, ','));
-
-			if (!expectAndConsume(lexer, ')')) {
-				reportExpectedError(&lexer->token, "Error: Expected ) after return list");
+			if (!declaration)
 				return false;
-			}
 		}
 	}
 	else {
@@ -1320,10 +1451,11 @@ bool parseFunctionReturnTypes(LexerFile *lexer, ExprFunction *function, bool *ha
 		addVoidReturn(lexer, lexer->token.start, lexer->token.end, function);
 	}
 
+	popBlock(lexer, &function->returns);
 	return true;
 }
 
-bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *usingBlock) {
+bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *usingBlock, bool allowBody) {
 	bool hadReturnType;
 
 	if (!parseFunctionReturnTypes(lexer, function, &hadReturnType)) {
@@ -1333,11 +1465,16 @@ bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *u
 	if (expectAndConsume(lexer, TokenT::C_CALL)) {
 		function->flags |= EXPR_FUNCTION_IS_C_CALL;
 	}
-	else if (expectAndConsume(lexer, TokenT::COMPILER)) { // The body of a #compiler function is what is called if the function is used at runtime
+	else if (allowBody && expectAndConsume(lexer, TokenT::COMPILER)) { // The body of a #compiler function is what is called if the function is used at runtime
 		function->flags |= EXPR_FUNCTION_IS_COMPILER;
 	}
 
-	if (lexer->token.type == TOKEN('{')) {
+	if (allowBody && lexer->token.type == TOKEN('{')) {
+		if (function->arguments.declarations.count && function->arguments.declarations[0]->name.length == 0) {
+			reportError(function->arguments.declarations[0], "Error: Non-external functions cannot have anonymous parameters");
+			return false;
+		}
+
 		function->flavor = ExprFlavor::FUNCTION;
 		function->end = lexer->previousTokenEnd;
 
@@ -1346,7 +1483,7 @@ bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *u
 			return false;
 		}
 	}
-	else if (lexer->token.type == TokenT::EXTERNAL) {
+	else if (allowBody && lexer->token.type == TokenT::EXTERNAL) {
 		function->flags |= EXPR_FUNCTION_IS_C_CALL;
 		lexer->advance();
 
@@ -1424,109 +1561,14 @@ bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *u
 	return true;
 }
 
-ExprFunction *createFunction(LexerFile *lexer, CodeLocation &start) {
-	ExprFunction *function = PARSER_NEW(ExprFunction);
-	function->flavor = ExprFlavor::FUNCTION;
-	function->start = start;
-	function->arguments.flavor = BlockFlavor::ARGUMENTS;
-	function->returns.flavor = BlockFlavor::RETURNS;
-
-	return function;
-}
-
 Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 	EndLocation end = lexer->token.end;
 	Expr *expr = nullptr;
 
-	TokenT peek;
-
-	lexer->peekTokenTypes(1, &peek);
-
-	if (expectAndConsume(lexer, ')')) { // This is a function with no arguments
-		auto function = createFunction(lexer, start);
-
-		pushBlock(lexer, &function->arguments);
-
-		if (!parseFunctionPostfix(lexer, function, nullptr))
+	if (isFunctionOrFunctionType(lexer)) { // This is an argument declaration
+		auto function = parseFunctionOrFunctionType(lexer, true);
+		if (!function)
 			return nullptr;
-
-		popBlock(lexer, &function->arguments);
-
-		expr = function;
-	}
-	else if ((lexer->token.type == TokenT::IDENTIFIER && peek == TOKEN(':')) || lexer->token.type == TokenT::USING) { // This is an argument declaration
-		auto function = createFunction(lexer, start);
-
-		ExprBlock *usingBlock = nullptr;
-
-		Declaration *hadVarargs = nullptr;
-
-		pushBlock(lexer, &function->arguments);
-
-		do {
-			// @Incomplete 
-			if (hadVarargs) {
-				reportError(hadVarargs, "Error: Varargs arguments must be the final argument");
-				return nullptr;
-			}
-
-
-			Declaration *declaration = parseDeclaration(lexer);
-			if (!declaration) {
-				return nullptr;
-			}
-
-			if (expectAndConsume(lexer, TokenT::DOUBLE_DOT)) {
-				if (declaration->initialValue) {
-					reportError(declaration, "Error: Varargs arguments cannot have a default value");
-					return nullptr;
-				}
-
-				auto arrayType = makeBinaryOperator(lexer, declaration->type->start, declaration->type->end, TokenT::ARRAY_TYPE, nullptr);
-				arrayType->type = nullptr;
-				arrayType->right = declaration->type;
-
-				declaration->type = arrayType;
-
-				declaration->flags |= DECLARATION_IS_VARARGS;
-				function->flags |= EXPR_FUNCTION_HAS_VARARGS;
-				hadVarargs = declaration;
-			}
-
-			declaration->flags |= DECLARATION_IS_ARGUMENT;
-
-			if (declaration->flags & DECLARATION_IS_CONSTANT) {
-				reportError(declaration, "Error: Cannot have a constant default argument");
-				return nullptr;
-			}
-
-			if (declaration->flags & DECLARATION_IS_UNINITIALIZED) {
-				reportError(declaration, "Error: Cannot have an uninitialized default argument");
-				return nullptr;
-			}
-
-			if (!addDeclarationToBlock(&function->arguments, declaration, function->arguments.declarations.count)) {
-				return nullptr;
-			}
-
-			if (declaration->flags & DECLARATION_MARKED_AS_USING) {
-				if (!usingBlock) {
-					usingBlock = PARSER_NEW(ExprBlock);
-				}
-
-				addImporterToBlock(&usingBlock->declarations, createImporterForUsing(lexer, declaration), lexer->identifierSerial++);
-			}
-		} while (expectAndConsume(lexer, ','));
-
-		if (!expectAndConsume(lexer, ')')) {
-			reportExpectedError(&lexer->token, "Error: Expected a ')' after function arguments");
-			return nullptr;
-		}
-
-		if (!parseFunctionPostfix(lexer, function, usingBlock))
-			return nullptr;
-
-		popBlock(lexer, &function->arguments);
 
 		expr = function;
 	}
@@ -1538,206 +1580,7 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 			return nullptr;
 		}
 
-		bool varargs = expectAndConsume(lexer, TokenT::DOUBLE_DOT);
-
-		if (expectAndConsume(lexer, ')')) { // It was a single expression in parentheses
-			bool func = varargs;
-
-			if (lexer->token.type == TokenT::ARROW) {
-				func = true;
-			}
-			else if (lexer->token.type == TOKEN('(')) {
-				TokenT peek;
-
-				lexer->peekTokenTypes(1, &peek);
-
-				func = peek == TokenT::ARROW;
-			}
-
-			if (func) { // This is a function type since it has a return value
-				auto type = createFunction(lexer, start);
-				type->flavor = ExprFlavor::FUNCTION_PROTOTYPE;
-
-				bool hadReturnType;
-
-				pushBlock(lexer, &type->arguments);
-
-				if (!parseFunctionReturnTypes(lexer, type, &hadReturnType))
-					return nullptr;
-
-				if (expectAndConsume(lexer, TokenT::C_CALL)) {
-					type->flags |= EXPR_FUNCTION_IS_C_CALL;
-				}
-
-				type->end = lexer->previousTokenEnd;
-				type->type = &TYPE_TYPE;
-
-
-
-				if (varargs) {
-					auto arrayType = makeBinaryOperator(lexer, expr->start, expr->end, TokenT::ARRAY_TYPE, nullptr);
-					arrayType->type = nullptr;
-					arrayType->right = expr;
-
-					expr = arrayType;
-					
-					type->flags |= EXPR_FUNCTION_HAS_VARARGS;
-				}
-
-				auto argument = createAnonymousDeclaration(lexer, expr);
-				argument->flags |= DECLARATION_IS_ARGUMENT;
-
-				if (varargs)
-					argument->flags |= DECLARATION_IS_VARARGS;
-
-				addDeclarationToBlock(&type->arguments, argument, type->arguments.declarations.count);
-
-				popBlock(lexer, &type->arguments);
-
-				if (!type->returns.declarations.count) {
-					reportError(type, "Error: A function prototype must have a return type");
-					return nullptr;
-				}
-
-				for (auto return_ : type->returns.declarations) {
-					if (return_->flags & DECLARATION_IS_MUST) {
-						reportError(type, "Error: A function prototype cannot have its return type marked as #must");
-						return nullptr;
-					}
-				}
-
-				if (type->flags & EXPR_FUNCTION_IS_C_CALL) {
-					if (type->flags & EXPR_FUNCTION_HAS_VARARGS) {
-						// @Incomplete allow c style varargs for external functions
-						reportError(type, "Error: C call functions cannot have varargs");
-						return nullptr;
-					}
-
-					if (type->returns.declarations.count != 1) {
-						reportError(type, "Error: C call functions cannot have multiple return values");
-						return nullptr;
-					}
-				}
-
-				expr = type;
-			}
-			else {
-				// We have put the bracketed expression in expr so we are done
-			}
-		}
-		else if (expectAndConsume(lexer, ',')) { // This is a function type since there are multiple comma separated values in parentheses
-			auto type = createFunction(lexer, start);
-
-			pushBlock(lexer, &type->arguments);
-
-			Declaration *hadVarargs = nullptr;
-
-			if (varargs) {
-				auto arrayType = makeBinaryOperator(lexer, expr->start, expr->end, TokenT::ARRAY_TYPE, nullptr);
-				arrayType->type = nullptr;
-				arrayType->right = expr;
-
-				expr = arrayType;
-
-				type->flags |= EXPR_FUNCTION_HAS_VARARGS;
-			}
-
-			auto argument = createAnonymousDeclaration(lexer, expr);
-			argument->flags |= DECLARATION_IS_ARGUMENT;
-
-			if (varargs) {
-				argument->flags |= DECLARATION_IS_VARARGS;
-				hadVarargs = argument;
-			}
-
-			addDeclarationToBlock(&type->arguments, argument, type->arguments.declarations.count);
-
-			do {
-				if (hadVarargs) {
-					reportError(hadVarargs, "Error: Varargs arguments must be the final argument");
-					return nullptr;
-				}
-
-
-				Expr *arg = parseExpr(lexer);
-				if (!arg)
-					return nullptr;
-
-				varargs = expectAndConsume(lexer, TokenT::DOUBLE_DOT);
-
-				if (varargs) {
-					auto arrayType = makeBinaryOperator(lexer, arg->start, arg->end, TokenT::ARRAY_TYPE, nullptr);
-					arrayType->type = nullptr;
-					arrayType->right = arg;
-
-					arg = arrayType;
-
-					type->flags |= EXPR_FUNCTION_HAS_VARARGS;
-				}
-
-				auto argument = createAnonymousDeclaration(lexer, arg);
-				argument->flags |= DECLARATION_IS_ARGUMENT;
-
-				if (varargs) {
-					argument->flags |= DECLARATION_IS_VARARGS;
-					hadVarargs = argument;
-				}
-
-				addDeclarationToBlock(&type->arguments, argument, type->arguments.declarations.count);
-			} while (expectAndConsume(lexer, ','));
-
-
-			if (!expectAndConsume(lexer, ')')) {
-				reportExpectedError(&lexer->token, "Error: Expected a ')' after function arguments");
-				return nullptr;
-			}
-
-			type->flavor = ExprFlavor::FUNCTION_PROTOTYPE;
-
-			bool hadReturnType;
-			
-			if (!parseFunctionReturnTypes(lexer, type, &hadReturnType))
-				return nullptr;
-
-			popBlock(lexer, &type->arguments);
-
-			if (expectAndConsume(lexer, TokenT::C_CALL)) {
-				type->flags |= EXPR_FUNCTION_IS_C_CALL;
-			}
-
-			if (hadReturnType) { // Even though this is unambiguously a function type, still require a return type to be given for consistency
-				reportExpectedError(&lexer->token, "Error: Expected a return type after function arguments");
-				return nullptr;
-			}
-
-			type->start = start;
-			type->end = lexer->previousTokenEnd;
-			type->type = &TYPE_TYPE;
-
-
-			for (auto return_ : type->returns.declarations) {
-				if (return_->flags & DECLARATION_IS_MUST) {
-					reportError(type, "Error: A function prototype cannot have its return type marked as #must");
-					return nullptr;
-				}
-			}
-
-			if (type->flags & EXPR_FUNCTION_IS_C_CALL) {
-				if (type->flags & EXPR_FUNCTION_HAS_VARARGS) {
-					// @Incomplete allow c style varargs for external functions
-					reportError(type, "Error: C call functions cannot have varargs");
-					return nullptr;
-				}
-
-				if (type->returns.declarations.count != 1) {
-					reportError(type, "Error: C call functions cannot have multiple return values");
-					return nullptr;
-				}
-			}
-
-			expr = type;
-		}
-		else {
+		if (!expectAndConsume(lexer, ')')) { // It was a single expression in parentheses
 			reportExpectedError(&lexer->token, "Error: Expected a ')'");
 			return nullptr;
 		}

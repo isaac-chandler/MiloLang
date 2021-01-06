@@ -7,8 +7,6 @@ enums
  - smallest_value 
  
 Cleanup the way importers work
- 
-better syntax for multiple return values
 
 Make constexpr slices work
 

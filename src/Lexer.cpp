@@ -194,7 +194,7 @@ static s64 getDigitForBase(u32 c, u64 base) {
 	return -1;
 }
 
-static TokenT advanceTokenType(LexerFile *lexer) {
+TokenT LexerFile::advanceTokenType() {
 	PROFILE_FUNC();
 	bool endOfFile;
 	u32 c;
@@ -208,7 +208,7 @@ static TokenT advanceTokenType(LexerFile *lexer) {
 	CodeLocation decimalPointUndoLocation;
 
 whitespace:
-	c = readCharacter(lexer, &endOfFile, true);
+	c = readCharacter(this, &endOfFile, true);
 
 	if (endOfFile) {
 	fileEnd:
@@ -217,7 +217,7 @@ whitespace:
 
 #define EQUAL_AFTER_OR_DOUBLE(character, tokenType, doubleType) \
 	case (character): {                                         \
-		c = readCharacter(lexer, &endOfFile, true);				\
+		c = readCharacter(this, &endOfFile, true);				\
 		                                                        \
 		if (c == (character)) {                                 \
 		    return TokenT::doubleType;                          \
@@ -226,7 +226,7 @@ whitespace:
 			return TokenT::tokenType;                           \
 		}                                                       \
 		else {                                                  \
-			undoReadChar(lexer, c);                             \
+			undoReadChar(this, c);                              \
 			return TOKEN((character));                          \
 		}                                                       \
 	}                                                           \
@@ -234,13 +234,13 @@ whitespace:
 
 #define EQUAL_AFTER(character, tokenType)           \
 	case (character): {                             \
-		c = readCharacter(lexer, &endOfFile, true); \
+		c = readCharacter(this, &endOfFile, true);  \
 		                                            \
 		if (c == '=') {						        \
 			return TokenT::tokenType;               \
 		}                                           \
 		else {                                      \
-			undoReadChar(lexer, c);                 \
+			undoReadChar(this, c);                  \
 			return TOKEN((character));              \
 		}                                           \
 	}                                               \
@@ -264,49 +264,49 @@ whitespace:
 
 
 		case '>':
-			c = readCharacter(lexer , &endOfFile);
+			c = readCharacter(this, &endOfFile);
 
 			if (c == '=') {
 				return TokenT::GREATER_EQUAL;
 			}
 			else if (c == '>') {
-				c = readCharacter(lexer, &endOfFile, true);
+				c = readCharacter(this, &endOfFile, true);
 
 				if (c == '=') {
 					return TokenT::SHIFT_RIGHT_EQUALS;
 				}
 				else {
-					undoReadChar(lexer, c);
+					undoReadChar(this, c);
 					return TokenT::SHIFT_RIGHT;
 				}
 			}
 			else {
-				undoReadChar(lexer, c);
+				undoReadChar(this, c);
 				return TOKEN('>');
 			}
 		case '<':
-			c = readCharacter(lexer, &endOfFile, true);
+			c = readCharacter(this, &endOfFile, true);
 
 			if (c == '=') {
 				return TokenT::LESS_EQUAL;
 			}
 			else if (c == '<') {
-				c = readCharacter(lexer, &endOfFile, true);
+				c = readCharacter(this, &endOfFile, true);
 
 				if (c == '=') {
 					return TokenT::SHIFT_LEFT_EQUALS;
 				}
 				else {
-					undoReadChar(lexer, c);
+					undoReadChar(this, c);
 					return TokenT::SHIFT_LEFT;
 				}
 			}
 			else {
-				undoReadChar(lexer, c);
+				undoReadChar(this, c);
 				return TOKEN('<');
 			}
 		case '-':
-			c = readCharacter(lexer, &endOfFile, true);
+			c = readCharacter(this, &endOfFile, true);
 
 			if (c == '=') {
 				return TokenT::MINUS_EQUALS;
@@ -318,7 +318,7 @@ whitespace:
 				return TokenT::DOUBLE_DASH;
 			}
 			else {
-				undoReadChar(lexer, c);
+				undoReadChar(this, c);
 				return TOKEN('-');
 			}
 		case '/':
@@ -346,8 +346,8 @@ whitespace:
 			goto dot;
 		default:
 			if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_' || c == '#') {
-				lexer->token.text.characters = lexer->text + lexer->undoLocation.locationInMemory;
-				lexer->token.text.length = 1;
+				token.text.characters = text + undoLocation.locationInMemory;
+				token.text.length = 1;
 				goto identifier;
 			}
 			else if (c >= '1' && c <= '9') {
@@ -363,7 +363,7 @@ whitespace:
 #undef EQUAL_AFTER_OR_DOUBLE
 
 	charLiteral :
-	c = readCharacter(lexer, &endOfFile, true);
+	c = readCharacter(this, &endOfFile, true);
 
 	if (endOfFile) {
 		return TokenT::INVALID;
@@ -376,7 +376,7 @@ whitespace:
 		return TokenT::INVALID;
 	}
 
-	c = readCharacter(lexer, &endOfFile, true);
+	c = readCharacter(this, &endOfFile, true);
 
 charLiteralEnd:
 	if (c == '\'') {
@@ -387,54 +387,54 @@ charLiteralEnd:
 	}
 
 charEscape:
-	c = readCharacter(lexer, &endOfFile, true);
+	c = readCharacter(this, &endOfFile, true);
 
 	if (c == '\\') {
-		c = readCharacter(lexer, &endOfFile, true);
+		c = readCharacter(this, &endOfFile, true);
 		goto charLiteralEnd;
 	}
 	else if (c == '\'') {
 
-		c = readCharacter(lexer, &endOfFile, true);
+		c = readCharacter(this, &endOfFile, true);
 
 		if (c == '\'') {
 			return TokenT::INT_LITERAL;
 		}
 		else {
-			undoReadChar(lexer, c);
+			undoReadChar(this, c);
 			return TokenT::INT_LITERAL;
 		}
 	}
 	else if (c == '"') {
-		c = readCharacter(lexer, &endOfFile, true);
+		c = readCharacter(this, &endOfFile, true);
 		goto charLiteralEnd;
 	}
 	else if (c == 't') {
-		c = readCharacter(lexer, &endOfFile, true);
+		c = readCharacter(this, &endOfFile, true);
 		goto charLiteralEnd;
 	}
 	else if (c == 'r') {
-		c = readCharacter(lexer, &endOfFile, true);
+		c = readCharacter(this, &endOfFile, true);
 		goto charLiteralEnd;
 	}
 	else if (c == 'n') {
-		c = readCharacter(lexer, &endOfFile, true);
+		c = readCharacter(this, &endOfFile, true);
 		goto charLiteralEnd;
 	}
 	else if (c == 'e') {
-		c = readCharacter(lexer, &endOfFile, true);
+		c = readCharacter(this, &endOfFile, true);
 		goto charLiteralEnd;
 	}
 	else if (c == 'b') {
-		c = readCharacter(lexer, &endOfFile, true);
+		c = readCharacter(this, &endOfFile, true);
 		goto charLiteralEnd;
 	}
 	else if (c == 'f') {
-		c = readCharacter(lexer, &endOfFile, true);
+		c = readCharacter(this, &endOfFile, true);
 		goto charLiteralEnd;
 	}
 	else if (c == 'v') {
-		c = readCharacter(lexer, &endOfFile, true);
+		c = readCharacter(this, &endOfFile, true);
 		goto charLiteralEnd;
 	}
 	else if (c == 'x') {
@@ -454,7 +454,7 @@ charEscape:
 	}
 
 charHexEscape:
-	c = readCharacter(lexer, &endOfFile, true);
+	c = readCharacter(this, &endOfFile, true);
 
 	digit = getDigitForBase(c, base);
 
@@ -465,14 +465,14 @@ charHexEscape:
 	}
 
 charNumericEscape:
-	c = readCharacter(lexer, &endOfFile, true);
+	c = readCharacter(this, &endOfFile, true);
 
 	digit = getDigitForBase(c, base);
 
 	if (digit >= 0) {
 	}
 	else if (c == '\\') {
-		c = readCharacter(lexer, &endOfFile, true);
+		c = readCharacter(this, &endOfFile, true);
 		goto charLiteralEnd;
 	}
 	else {
@@ -480,7 +480,7 @@ charNumericEscape:
 	}
 
 stringLiteral:
-	c = readCharacter(lexer, &endOfFile, true);
+	c = readCharacter(this, &endOfFile, true);
 
 stringLiteralRead:
 	if (endOfFile) {
@@ -500,7 +500,7 @@ stringLiteralRead:
 	}
 
 stringEscape:
-	c = readCharacter(lexer, &endOfFile, true);
+	c = readCharacter(this, &endOfFile, true);
 
 	if (c == '\\') {
 		goto stringLiteral;
@@ -549,7 +549,7 @@ stringEscape:
 	}
 
 stringHexEscape:
-	c = readCharacter(lexer, &endOfFile, true);
+	c = readCharacter(this, &endOfFile, true);
 
 	digit = getDigitForBase(c, base);
 
@@ -560,7 +560,7 @@ stringHexEscape:
 	}
 
 stringNumericEscape:
-	c = readCharacter(lexer, &endOfFile, true);
+	c = readCharacter(this, &endOfFile, true);
 
 	digit = getDigitForBase(c, base);
 
@@ -574,7 +574,7 @@ stringNumericEscape:
 	}
 
 zero:
-	c = readCharacter(lexer, &endOfFile, true);
+	c = readCharacter(this, &endOfFile, true);
 
 	if (c >= '0' && c <= '9') {
 		goto integerLiteral;
@@ -588,7 +588,7 @@ zero:
 		goto integerLiteral;
 	}
 	else if (c == '.') {
-		decimalPointUndoLocation = lexer->undoLocation;
+		decimalPointUndoLocation = undoLocation;
 
 		goto decimalPointFirst;
 	}
@@ -596,12 +596,12 @@ zero:
 		goto integerLiteral;
 	}
 	else {
-		undoReadChar(lexer, c);
+		undoReadChar(this, c);
 		return TokenT::INT_LITERAL;
 	}
 
 dot:
-	c = readCharacter(lexer, &endOfFile, true);
+	c = readCharacter(this, &endOfFile, true);
 
 	if (c >= '0' && c <= '9') {
 		base = 10;
@@ -611,12 +611,12 @@ dot:
 		return TokenT::DOUBLE_DOT;
 	}
 	else {
-		undoReadChar(lexer, c);
+		undoReadChar(this, c);
 		return TOKEN('.');
 	}
 
 slash:
-	c = readCharacter(lexer, &endOfFile, true);
+	c = readCharacter(this, &endOfFile, true);
 	switch (c) {
 		case '/':
 			goto lineComment;
@@ -626,12 +626,12 @@ slash:
 		case '=':
 			return TokenT::DIVIDE_EQUALS;
 		default:
-			undoReadChar(lexer, c);
+			undoReadChar(this, c);
 			return TOKEN('/');
 	}
 
 lineComment:
-	c = readCharacter(lexer, &endOfFile, true);
+	c = readCharacter(this, &endOfFile, true);
 
 	if (endOfFile)
 		goto fileEnd;
@@ -644,7 +644,7 @@ lineComment:
 		goto lineComment;
 
 blockComment:
-	c = readCharacter(lexer, &endOfFile, true);
+	c = readCharacter(this, &endOfFile, true);
 
 blockCommentAlreadyRead:
 	if (endOfFile)
@@ -658,7 +658,7 @@ blockCommentAlreadyRead:
 	goto blockComment;
 
 blockCommentSlash:
-	c = readCharacter(lexer, &endOfFile, true);
+	c = readCharacter(this, &endOfFile, true);
 
 	if (endOfFile)
 		goto fileEnd;
@@ -669,7 +669,7 @@ blockCommentSlash:
 	goto blockComment;
 
 blockCommentEnd:
-	c = readCharacter(lexer, &endOfFile, true);
+	c = readCharacter(this, &endOfFile, true);
 
 	if (endOfFile)
 		goto fileEnd;
@@ -679,25 +679,25 @@ blockCommentEnd:
 	else
 		goto blockCommentAlreadyRead;
 identifier:
-	c = readCharacter(lexer, &endOfFile, true);
+	c = readCharacter(this, &endOfFile, true);
 
 	if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_') {
-		++lexer->token.text.length;
+		++token.text.length;
 		goto identifier;
 	}
 	else {
-		undoReadChar(lexer, c);
+		undoReadChar(this, c);
 
 
 		for (auto &keyword : keywords) {
-			if (keyword.name == lexer->token.text) {
+			if (keyword.name == token.text) {
 				return keyword.type;
 			}
 		}
 
 
 		
-		if (lexer->token.text.characters[0] == '#') {
+		if (token.text.characters[0] == '#') {
 			return TokenT::INVALID;
 		}
 
@@ -705,7 +705,7 @@ identifier:
 	}
 
 integerLiteral:
-	c = readCharacter(lexer, &endOfFile, true);
+	c = readCharacter(this, &endOfFile, true);
 
 	digit = getDigitForBase(c, base);
 
@@ -713,7 +713,7 @@ integerLiteral:
 		goto integerLiteral;
 	}
 	else if (c == '.') {
-		decimalPointUndoLocation = lexer->undoLocation;
+		decimalPointUndoLocation = undoLocation;
 
 		goto decimalPointFirst;
 	}
@@ -729,13 +729,13 @@ integerLiteral:
 		goto exponentSign;
 	}
 	else {
-		undoReadChar(lexer, c);
+		undoReadChar(this, c);
 		return TokenT::INT_LITERAL;
 	}
 
 
 decimalPointFirst:
-	c = readCharacter(lexer, &endOfFile, true);
+	c = readCharacter(this, &endOfFile, true);
 
 	digit = getDigitForBase(c, base);
 
@@ -754,20 +754,20 @@ decimalPointFirst:
 		goto exponentSign;
 	}
 	else if (c == '.') {
-		lexer->bytesRemaining += lexer->location.locationInMemory - decimalPointUndoLocation.locationInMemory;
-		lexer->location = decimalPointUndoLocation;
+		bytesRemaining += location.locationInMemory - decimalPointUndoLocation.locationInMemory;
+		location = decimalPointUndoLocation;
 
 		return TokenT::INT_LITERAL;
 	}
 	else {
-		undoReadChar(lexer, c);
+		undoReadChar(this, c);
 		return TokenT::FLOAT_LITERAL;
 	}
 
 
 
 decimalPoint:
-	c = readCharacter(lexer, &endOfFile, true);
+	c = readCharacter(this, &endOfFile, true);
 
 	digit = getDigitForBase(c, base);
 
@@ -786,12 +786,12 @@ decimalPoint:
 		goto exponentSign;
 	}
 	else {
-		undoReadChar(lexer, c);
+		undoReadChar(this, c);
 		return TokenT::FLOAT_LITERAL;
 	}
 
 exponentSign:
-	c = readCharacter(lexer, &endOfFile, true);
+	c = readCharacter(this, &endOfFile, true);
 
 	digit = getDigitForBase(c, 10);
 
@@ -812,7 +812,7 @@ exponentSign:
 	}
 
 exponentDigit:
-	c = readCharacter(lexer, &endOfFile, true);
+	c = readCharacter(this, &endOfFile, true);
 
 	digit = getDigitForBase(c, 10);
 
@@ -827,7 +827,7 @@ exponentDigit:
 	}
 
 exponent:
-	c = readCharacter(lexer, &endOfFile, true);
+	c = readCharacter(this, &endOfFile, true);
 
 	digit = getDigitForBase(c, 10);
 
@@ -838,21 +838,29 @@ exponent:
 		goto exponentDigit;
 	}
 	else {
-		undoReadChar(lexer, c);
+		undoReadChar(this, c);
 		return TokenT::FLOAT_LITERAL;
 	}
 
 	assert(false);
 }
 
+LexerSave LexerFile::save() {
+	return { token, location, undoLocation, bytesRemaining };
+}
+
+void LexerFile::restore(LexerSave save) {
+	token = save.token;
+	location = save.location;
+	undoLocation = save.undoLocation;
+	bytesRemaining = save.bytesRemaining;
+}
+
 void LexerFile::peekTokenTypes(u64 count, TokenT *buffer) {
-	Token oldToken = token;
-	CodeLocation oldLocation = location;
-	CodeLocation oldUndoLocation = undoLocation;
-	u64 oldBytesRemaining = bytesRemaining;
+	auto point = save();
 
 	for (u64 i = 0; i < count; i++) {
-		TokenT type = advanceTokenType(this);
+		TokenT type = advanceTokenType();
 		
 		if (type == TokenT::INVALID || type == TokenT::END_OF_FILE) {
 			for (; i < count; i++) {
@@ -865,10 +873,8 @@ void LexerFile::peekTokenTypes(u64 count, TokenT *buffer) {
 			buffer[i] = type;
 		}
 	}
-	token = oldToken;
-	location = oldLocation;
-	undoLocation = oldUndoLocation;
-	bytesRemaining = oldBytesRemaining;
+
+	restore(point);
 }
 
 void LexerFile::advance() {

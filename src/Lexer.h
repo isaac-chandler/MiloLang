@@ -147,6 +147,13 @@ struct BigInt {
 	double getDouble();
 };
 
+struct LexerSave {
+	Token token;
+	CodeLocation location;
+	CodeLocation undoLocation = undoLocation;
+	u64 bytesRemaining;
+};
+
 struct LexerFile {
 	BucketedArenaAllocator parserArena;
 	Block *currentBlock;
@@ -167,7 +174,11 @@ struct LexerFile {
 
 	LexerFile() : parserArena(65536) {}
 
+	LexerSave save();
+	void restore(LexerSave save);
+
 	void peekTokenTypes(u64 count, TokenT *buffer);
+	TokenT advanceTokenType();
 	void advance();
 
 	bool open(FileInfo *file);

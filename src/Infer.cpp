@@ -2626,14 +2626,14 @@ bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char 
 
 	if (!arguments->names && arguments->count != block->declarations.count && !(functionLocation->flags & EXPR_FUNCTION_HAS_VARARGS)) {
 		if (arguments->count > block->declarations.count) {
-			reportError(callLocation, "Error: Too many %ss for %.*s (Expected: %" PRIu64 ", Given: %" PRIu64 ")",
+			reportError(callLocation, "Error: Too many %ss for %.*s (Expected: %" PRIu32 ", Given: %" PRIu32 ")",
 				message, STRING_PRINTF(functionName), block->declarations.count, arguments->count);
 			return false;
 		}
 		else {
 			for (u32 i = arguments->count; i < block->declarations.count; i++) {
 				if (!block->declarations[i]->initialValue) {
-					reportError(callLocation, "Error: Too few %ss for %.*s (Expected: %" PRIu64 ", Given: %" PRIu64 ")",
+					reportError(callLocation, "Error: Too few %ss for %.*s (Expected: %" PRIu32 ", Given: %" PRIu32 ")",
 						message, STRING_PRINTF(functionName), block->declarations.count, arguments->count);
 					return false;
 				}
@@ -4046,7 +4046,7 @@ bool inferFlattened(SubJob *job) {
 							}
 							else {
 								if (identifier->flags & EXPR_IDENTIFIER_RESOLVING_ONLY_CONSTANTS) {
-									reportError(identifier, "Error: Cannot refer to %s from outside, capture is not supported", (declaration->flags & DECLARATION_IS_ARGUMENT) ? "argument" : "variable");
+									reportError(identifier, "Error: Cannot refer to variable from outside function or struct, capture is not supported");
 									return false;
 								}
 
@@ -4838,7 +4838,7 @@ bool inferFlattened(SubJob *job) {
 
 					if (function->isVarargs) {
 						if (call->arguments.count < function->argumentCount - 1) {
-							reportError(call, "Error: Too few arguments for %.*s (Expected: %" PRIu64 ", Given: %" PRIu64 ")",
+							reportError(call, "Error: Too few arguments for %.*s (Expected: %" PRIu32 ", Given: %" PRIu32 ")",
 								STRING_PRINTF(functionName), function->argumentCount, call->arguments.count);
 							return false;
 						}
@@ -4887,11 +4887,11 @@ bool inferFlattened(SubJob *job) {
 					}
 					else {
 						if (call->arguments.count < function->argumentCount) {
-							reportError(call, "Error: Too few arguments for %.*s (Expected: %" PRIu64 ", Given: %" PRIu64 ")",
+							reportError(call, "Error: Too few arguments for %.*s (Expected: %" PRIu32 ", Given: %" PRIu32 ")",
 								STRING_PRINTF(functionName), function->argumentCount, call->arguments.count);
 						}
 						else if (call->arguments.count > function->argumentCount) {
-							reportError(call, "Error: Too many arguments for %.*s (Expected: %" PRIu64 ", Given: %" PRIu64 ")",
+							reportError(call, "Error: Too many arguments for %.*s (Expected: %" PRIu32 ", Given: %" PRIu32 ")",
 								STRING_PRINTF(functionName), function->argumentCount, call->arguments.count);
 						}
 
