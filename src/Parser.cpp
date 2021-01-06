@@ -1178,28 +1178,39 @@ void addVoidReturn(LexerFile *lexer, CodeLocation &start, EndLocation &end, Expr
 	addDeclarationToBlock(&function->returns, returnType, function->returns.declarations.count);
 }
 
+Declaration *createAnonymousDeclaration(LexerFile *lexer, Expr *type) {
+	auto declaration = PARSER_NEW(Declaration);
+
+	declaration->type = type;
+	declaration->start = type->start;
+	declaration->end = type->end;
+	declaration->name = String(nullptr, 0u);
+	declaration->initialValue = nullptr;
+
+	return declaration;
+}
+
 bool parseFunctionReturnTypes(LexerFile *lexer, ExprFunction *function, bool *hadReturns) {
 	pushBlock(lexer, &function->returns);
+	at_exit{
+		popBlock(lexer, &function->returns);
+	};
 
 	*hadReturns = true;
 
 	if (expectAndConsume(lexer, TokenT::ARROW)) {
-		auto returnType = PARSER_NEW(Declaration);
-
-		if (expectAndConsume(lexer, TokenT::MUST))
-			returnType->flags |= DECLARATION_IS_MUST;
+		bool must = expectAndConsume(lexer, TokenT::MUST);
 
 		auto expr = parseExpr(lexer);
 
 		if (!expr)
 			return false;
 
-		returnType->type = expr;
-		returnType->start = expr->start;
-		returnType->end = expr->end;
-		returnType->name = String(nullptr, 0u);
-		returnType->initialValue = nullptr;
+		auto returnType = createAnonymousDeclaration(lexer, expr);
 		returnType->flags |= DECLARATION_IS_RETURN;
+
+		if (must)
+			returnType->flags |= DECLARATION_IS_MUST;
 
 		addDeclarationToBlock(&function->returns, returnType, function->returns.declarations.count);
 	}
@@ -1271,7 +1282,6 @@ bool parseFunctionReturnTypes(LexerFile *lexer, ExprFunction *function, bool *ha
 						return false;
 					}
 
-					popBlock(lexer, &function->returns);
 					return true;
 				}
 			}
@@ -1281,24 +1291,19 @@ bool parseFunctionReturnTypes(LexerFile *lexer, ExprFunction *function, bool *ha
 					must = expectAndConsume(lexer, TokenT::MUST);
 				}
 
-				auto returnType = PARSER_NEW(Declaration);
-
-				if (must) {
-					returnType->flags |= DECLARATION_IS_MUST;
-					must = false;
-				}
-
 				auto expr = parseExpr(lexer);
 
 				if (!expr)
 					return false;
 
-				returnType->type = expr;
-				returnType->start = expr->start;
-				returnType->end = expr->end;
-				returnType->name = String(nullptr, 0u);
-				returnType->initialValue = nullptr;
+				auto returnType = createAnonymousDeclaration(lexer, expr);
 				returnType->flags |= DECLARATION_IS_RETURN;
+
+				if (must) {
+					returnType->flags |= DECLARATION_IS_MUST;
+				}
+
+				must = false;
 
 				addDeclarationToBlock(&function->returns, returnType, function->returns.declarations.count);
 			} while (expectAndConsume(lexer, ','));
@@ -1314,8 +1319,6 @@ bool parseFunctionReturnTypes(LexerFile *lexer, ExprFunction *function, bool *ha
 
 		addVoidReturn(lexer, lexer->token.start, lexer->token.end, function);
 	}
-
-	popBlock(lexer, &function->returns);
 
 	return true;
 }
@@ -1337,14 +1340,11 @@ bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *u
 	if (lexer->token.type == TOKEN('{')) {
 		function->flavor = ExprFlavor::FUNCTION;
 		function->end = lexer->previousTokenEnd;
-		pushBlock(lexer, &function->arguments);
 
 		function->body = parseBlock(lexer, false, usingBlock);
 		if (!function->body) {
 			return false;
 		}
-
-		popBlock(lexer, &function->arguments);
 	}
 	else if (lexer->token.type == TokenT::EXTERNAL) {
 		function->flags |= EXPR_FUNCTION_IS_C_CALL;
@@ -1368,8 +1368,6 @@ bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *u
 
 		function->flags |= EXPR_FUNCTION_IS_EXTERNAL;
 
-		insertBlock(lexer, &function->arguments);
-
 	}
 	else { // This is a function type
 		function->end = lexer->previousTokenEnd;
@@ -1381,8 +1379,6 @@ bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *u
 
 		function->flavor = ExprFlavor::FUNCTION_PROTOTYPE;
 		function->type = &TYPE_TYPE;
-
-		insertBlock(lexer, &function->arguments);
 		
 		for (auto return_ : function->returns.declarations) {
 			if (return_->flags & DECLARATION_IS_MUST) {
@@ -1428,6 +1424,16 @@ bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *u
 	return true;
 }
 
+ExprFunction *createFunction(LexerFile *lexer, CodeLocation &start) {
+	ExprFunction *function = PARSER_NEW(ExprFunction);
+	function->flavor = ExprFlavor::FUNCTION;
+	function->start = start;
+	function->arguments.flavor = BlockFlavor::ARGUMENTS;
+	function->returns.flavor = BlockFlavor::RETURNS;
+
+	return function;
+}
+
 Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 	EndLocation end = lexer->token.end;
 	Expr *expr = nullptr;
@@ -1437,26 +1443,25 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 	lexer->peekTokenTypes(1, &peek);
 
 	if (expectAndConsume(lexer, ')')) { // This is a function with no arguments
-		ExprFunction *function = PARSER_NEW(ExprFunction);
-		function->start = start;
-		function->arguments.flavor = BlockFlavor::ARGUMENTS;
-		function->returns.flavor = BlockFlavor::RETURNS;
+		auto function = createFunction(lexer, start);
+
+		pushBlock(lexer, &function->arguments);
 
 		if (!parseFunctionPostfix(lexer, function, nullptr))
 			return nullptr;
 
+		popBlock(lexer, &function->arguments);
+
 		expr = function;
 	}
-	else if ((lexer->token.type == TokenT::IDENTIFIER && peek == TOKEN(':')) || lexer->token.type == TokenT::USING || lexer->token.type == TokenT::DOUBLE_DOT) { // This is an argument declaration
-		ExprFunction *function = PARSER_NEW(ExprFunction);
-		function->flavor = ExprFlavor::FUNCTION;
-		function->start = start;
-		function->arguments.flavor = BlockFlavor::ARGUMENTS;
-		function->returns.flavor = BlockFlavor::RETURNS;
+	else if ((lexer->token.type == TokenT::IDENTIFIER && peek == TOKEN(':')) || lexer->token.type == TokenT::USING) { // This is an argument declaration
+		auto function = createFunction(lexer, start);
 
 		ExprBlock *usingBlock = nullptr;
 
 		Declaration *hadVarargs = nullptr;
+
+		pushBlock(lexer, &function->arguments);
 
 		do {
 			// @Incomplete 
@@ -1465,27 +1470,20 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 				return nullptr;
 			}
 
-			bool varargs = expectAndConsume(lexer, TokenT::DOUBLE_DOT);
 
 			Declaration *declaration = parseDeclaration(lexer);
 			if (!declaration) {
 				return nullptr;
 			}
 
-			if (varargs) {
+			if (expectAndConsume(lexer, TokenT::DOUBLE_DOT)) {
 				if (declaration->initialValue) {
 					reportError(declaration, "Error: Varargs arguments cannot have a default value");
 					return nullptr;
 				}
 
-				// @Incomplete: Create a separate type for varargs arrays so that non constant functions can be varargs
-				auto arrayType = PARSER_NEW(ExprBinaryOperator);
-				arrayType->start = declaration->type->start;
-				arrayType->end = declaration->type->end;
-				arrayType->flavor = ExprFlavor::BINARY_OPERATOR;
-				arrayType->op = TokenT::ARRAY_TYPE;
+				auto arrayType = makeBinaryOperator(lexer, declaration->type->start, declaration->type->end, TokenT::ARRAY_TYPE, nullptr);
 				arrayType->type = nullptr;
-				arrayType->left = nullptr;
 				arrayType->right = declaration->type;
 
 				declaration->type = arrayType;
@@ -1528,17 +1526,19 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 		if (!parseFunctionPostfix(lexer, function, usingBlock))
 			return nullptr;
 
+		popBlock(lexer, &function->arguments);
+
 		expr = function;
 	}
 	else {
 		// This is one or more expressions in parentheses
 
-		bool varargs = expectAndConsume(lexer, TokenT::DOUBLE_DOT);
-
 		expr = parseExpr(lexer);
 		if (!expr) {
 			return nullptr;
 		}
+
+		bool varargs = expectAndConsume(lexer, TokenT::DOUBLE_DOT);
 
 		if (expectAndConsume(lexer, ')')) { // It was a single expression in parentheses
 			bool func = varargs;
@@ -1555,14 +1555,12 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 			}
 
 			if (func) { // This is a function type since it has a return value
-				auto type = PARSER_NEW(ExprFunction);
+				auto type = createFunction(lexer, start);
 				type->flavor = ExprFlavor::FUNCTION_PROTOTYPE;
-				type->start = start;
-
-				type->arguments.flavor = BlockFlavor::ARGUMENTS;
-				type->returns.flavor = BlockFlavor::RETURNS;
 
 				bool hadReturnType;
+
+				pushBlock(lexer, &type->arguments);
 
 				if (!parseFunctionReturnTypes(lexer, type, &hadReturnType))
 					return nullptr;
@@ -1574,48 +1572,38 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 				type->end = lexer->previousTokenEnd;
 				type->type = &TYPE_TYPE;
 
-				pushBlock(lexer, &type->arguments);
 
-				auto argument = PARSER_NEW(Declaration);
 
 				if (varargs) {
-					auto arrayType = PARSER_NEW(ExprBinaryOperator);
-					arrayType->start = expr->start;
-					arrayType->end = expr->end;
-					arrayType->flavor = ExprFlavor::BINARY_OPERATOR;
-					arrayType->op = TokenT::ARRAY_TYPE;
+					auto arrayType = makeBinaryOperator(lexer, expr->start, expr->end, TokenT::ARRAY_TYPE, nullptr);
 					arrayType->type = nullptr;
-					arrayType->left = nullptr;
 					arrayType->right = expr;
 
-					argument->type = arrayType;
-
-					argument->flags |= DECLARATION_IS_VARARGS;
+					expr = arrayType;
+					
 					type->flags |= EXPR_FUNCTION_HAS_VARARGS;
 				}
-				else {
-					argument->type = expr;
-				}
-				argument->start = expr->start;
-				argument->end = expr->end;
-				argument->name = String(nullptr, 0u);
-				argument->initialValue = nullptr;
+
+				auto argument = createAnonymousDeclaration(lexer, expr);
 				argument->flags |= DECLARATION_IS_ARGUMENT;
+
+				if (varargs)
+					argument->flags |= DECLARATION_IS_VARARGS;
 
 				addDeclarationToBlock(&type->arguments, argument, type->arguments.declarations.count);
 
 				popBlock(lexer, &type->arguments);
+
+				if (!type->returns.declarations.count) {
+					reportError(type, "Error: A function prototype must have a return type");
+					return nullptr;
+				}
 
 				for (auto return_ : type->returns.declarations) {
 					if (return_->flags & DECLARATION_IS_MUST) {
 						reportError(type, "Error: A function prototype cannot have its return type marked as #must");
 						return nullptr;
 					}
-				}
-
-				if (!type->returns.declarations.count) {
-					reportError(type, "Error: A function prototype must have a return type");
-					return nullptr;
 				}
 
 				if (type->flags & EXPR_FUNCTION_IS_C_CALL) {
@@ -1638,41 +1626,29 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 			}
 		}
 		else if (expectAndConsume(lexer, ',')) { // This is a function type since there are multiple comma separated values in parentheses
-			auto type = PARSER_NEW(ExprFunction);
-
-			type->arguments.flavor = BlockFlavor::ARGUMENTS;
-			type->returns.flavor = BlockFlavor::RETURNS;
+			auto type = createFunction(lexer, start);
 
 			pushBlock(lexer, &type->arguments);
 
 			Declaration *hadVarargs = nullptr;
 
-			auto argument = PARSER_NEW(Declaration);
-
 			if (varargs) {
-				auto arrayType = PARSER_NEW(ExprBinaryOperator);
-				arrayType->start = expr->start;
-				arrayType->end = expr->end;
-				arrayType->flavor = ExprFlavor::BINARY_OPERATOR;
-				arrayType->op = TokenT::ARRAY_TYPE;
+				auto arrayType = makeBinaryOperator(lexer, expr->start, expr->end, TokenT::ARRAY_TYPE, nullptr);
 				arrayType->type = nullptr;
-				arrayType->left = nullptr;
 				arrayType->right = expr;
 
-				argument->type = arrayType;
+				expr = arrayType;
 
-				argument->flags |= DECLARATION_IS_VARARGS;
 				type->flags |= EXPR_FUNCTION_HAS_VARARGS;
+			}
+
+			auto argument = createAnonymousDeclaration(lexer, expr);
+			argument->flags |= DECLARATION_IS_ARGUMENT;
+
+			if (varargs) {
+				argument->flags |= DECLARATION_IS_VARARGS;
 				hadVarargs = argument;
 			}
-			else {
-				argument->type = expr;
-			}
-			argument->start = expr->start;
-			argument->end = expr->end;
-			argument->name = String(nullptr, 0u);
-			argument->initialValue = nullptr;
-			argument->flags |= DECLARATION_IS_ARGUMENT;
 
 			addDeclarationToBlock(&type->arguments, argument, type->arguments.declarations.count);
 
@@ -1682,42 +1658,34 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 					return nullptr;
 				}
 
-				varargs = expectAndConsume(lexer, TokenT::DOUBLE_DOT);
 
 				Expr *arg = parseExpr(lexer);
 				if (!arg)
 					return nullptr;
 
-				argument = PARSER_NEW(Declaration);
+				varargs = expectAndConsume(lexer, TokenT::DOUBLE_DOT);
+
 				if (varargs) {
-					auto arrayType = PARSER_NEW(ExprBinaryOperator);
-					arrayType->start = arg->start;
-					arrayType->end = arg->end;
-					arrayType->flavor = ExprFlavor::BINARY_OPERATOR;
-					arrayType->op = TokenT::ARRAY_TYPE;
+					auto arrayType = makeBinaryOperator(lexer, arg->start, arg->end, TokenT::ARRAY_TYPE, nullptr);
 					arrayType->type = nullptr;
-					arrayType->left = nullptr;
 					arrayType->right = arg;
 
-					argument->type = arrayType;
+					arg = arrayType;
 
-					argument->flags |= DECLARATION_IS_VARARGS;
 					type->flags |= EXPR_FUNCTION_HAS_VARARGS;
+				}
+
+				auto argument = createAnonymousDeclaration(lexer, arg);
+				argument->flags |= DECLARATION_IS_ARGUMENT;
+
+				if (varargs) {
+					argument->flags |= DECLARATION_IS_VARARGS;
 					hadVarargs = argument;
 				}
-				else {
-					argument->type = arg;
-				}
-				argument->start = arg->start;
-				argument->end = arg->end;
-				argument->name = String(nullptr, 0u);
-				argument->initialValue = nullptr;
-				argument->flags |= DECLARATION_IS_ARGUMENT;
 
 				addDeclarationToBlock(&type->arguments, argument, type->arguments.declarations.count);
 			} while (expectAndConsume(lexer, ','));
 
-			popBlock(lexer, &type->arguments);
 
 			if (!expectAndConsume(lexer, ')')) {
 				reportExpectedError(&lexer->token, "Error: Expected a ')' after function arguments");
@@ -1730,6 +1698,8 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 			
 			if (!parseFunctionReturnTypes(lexer, type, &hadReturnType))
 				return nullptr;
+
+			popBlock(lexer, &type->arguments);
 
 			if (expectAndConsume(lexer, TokenT::C_CALL)) {
 				type->flags |= EXPR_FUNCTION_IS_C_CALL;

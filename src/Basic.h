@@ -84,6 +84,21 @@
 
 #define prefetch(address, hint) (_mm_prefetch(reinterpret_cast<const CHAR *>(address), (hint)))
 
+template<typename T>
+struct AtExit {
+	T lambda;
+	AtExit(T lambda) :lambda(lambda) {}
+	~AtExit() { lambda(); }
+};
+
+class AtExitHelp {
+public:
+	template<typename T>
+	AtExit<T> operator+(T t) { return t; }
+};
+
+#define at_exit const auto &CONCAT(at_exit_, __LINE__) = AtExitHelp() + [&]()
+
 
 typedef uint8_t u8;
 typedef uint16_t u16;

@@ -409,7 +409,7 @@ print_f64 :: (num: f64, decimal_places: u64 = 6, base: u64 = 10) {
 	}
 }
 
-print :: (format: string, ..vals: any) {
+print :: (format: string, vals: any..) {
 	index: u64
 	
 	for format

@@ -7556,6 +7556,9 @@ void runInfer() {
 	printf("Infer memory used: %ukb\n", inferArena.totalSize / 1024);
 	printf("Type table memory used: %ukb\n", typeArena.totalSize / 1024);
 
+	irGeneratorQueue.add(nullptr);
+	filesToLoadQueue.add("");
+
 	return;
 error:;
 	assert(hadError);
