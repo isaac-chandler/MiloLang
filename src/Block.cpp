@@ -2,6 +2,7 @@
 
 #include "Block.h"
 #include "Ast.h"
+#include "Error.h"
 
 // Modified from original
 __forceinline u64 MurmurHash64A(const void *key, u64 len, u64 seed) {
@@ -50,15 +51,26 @@ struct BlockEntry {
 };
 
 u64 doHash(String string) {
+	u64 hash = 0;
+
+	for (u32 i = 0; i < string.length; i++) {
+		hash *= 251;
+		hash += string.characters[i];
+	}
 	// @Incomplete: 
-	return MurmurHash64A(string.characters, string.length, 0);
+	//return MurmurHash64A(string.characters, string.length, 0);
+
+	return hash;
 }
 
 void insert(Block *block, BlockEntry entry) {
+	PROFILE_ZONE();
 	u64 slot = entry.hash & (block->tableCapacity - 1);
 
+	u64 dist = 1;
+
 	while (block->table[slot].declaration) {
-		++slot;
+		slot += dist++;
 		slot &= block->tableCapacity - 1;
 	}
 
@@ -69,11 +81,13 @@ Declaration *findInBlock(Block *block, String name) {
 	u64 hash = doHash(name);
 	u64 slot = hash & (block->tableCapacity - 1);
 
+	u64 dist = 1;
+
 	while (block->table[slot].declaration) {
 		if (block->table[slot].hash == hash && block->table[slot].declaration->name == name) {
 			return block->table[slot].declaration;
 		}
-		++slot;
+		slot += dist++;
 		slot &= block->tableCapacity - 1;
 	}
 
@@ -86,12 +100,14 @@ bool replaceInTable(Block *block, Declaration *old, Declaration *declaration) {
 	u64 hash = doHash(old->name);
 	u64 slot = hash & (block->tableCapacity - 1);
 
+	u64 dist = 1;
+
 	while (block->table[slot].declaration) {
 		if (block->table[slot].declaration == old) {
 			block->table[slot].declaration = declaration;
 			return true;
 		}
-		++slot;
+		slot += dist++;
 		slot &= block->tableCapacity - 1;
 	}
 

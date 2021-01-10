@@ -4,6 +4,7 @@
 #include "Lexer.h"
 #include "Infer.h"
 #include "TypeTable.h"
+#include "Error.h"
 
 #if 1
 #define PARSER_NEW(T) new (static_cast<T *>(lexer->parserArena.allocate(sizeof(T)))) T
@@ -78,7 +79,7 @@ static bool expectAndConsume(LexerFile *lexer, char c) {
 
 Declaration *parseDeclaration(LexerFile *lexer);
 Expr *parseExpr(LexerFile *lexer);
-ExprBlock *parseBlock(LexerFile *lexer, bool allowLoads, ExprBlock *block = nullptr);
+ExprBlock *parseBlock(LexerFile *lexer, bool isCase, ExprBlock *block = nullptr);
 
 ExprLiteral *parserMakeTypeLiteral(LexerFile *lexer, CodeLocation &start, EndLocation &end, Type *type) {
 	ExprLiteral *literal = PARSER_NEW(ExprLiteral);
@@ -140,9 +141,7 @@ Importer *createImporterForUsing(LexerFile *lexer, Declaration *declaration) {
 
 bool parseArguments(LexerFile *lexer, Arguments *args, const char *message);
 
-ExprBlock *parseCase(LexerFile *lexer);
-
-ExprIf *parseStaticIf(LexerFile *lexer, bool allowLoads) {
+ExprIf *parseStaticIf(LexerFile *lexer) {
 	auto staticIf = PARSER_NEW(ExprIf);
 	staticIf->flavor = ExprFlavor::STATIC_IF;
 	staticIf->start = lexer->token.start;
@@ -160,7 +159,10 @@ ExprIf *parseStaticIf(LexerFile *lexer, bool allowLoads) {
 		staticIf->ifBody = nullptr;
 	}
 	else {
-		staticIf->ifBody = parseBlock(lexer, allowLoads);
+		auto block = PARSER_NEW(ExprBlock);
+		block->declarations.flavor = lexer->currentBlock ? lexer->currentBlock->flavor : BlockFlavor::GLOBAL;
+
+		staticIf->ifBody = parseBlock(lexer, false, block);
 
 		if (!staticIf->ifBody)
 			return nullptr;
@@ -170,7 +172,10 @@ ExprIf *parseStaticIf(LexerFile *lexer, bool allowLoads) {
 
 	if (expectAndConsume(lexer, TokenT::ELSE)) {
 		if (!expectAndConsume(lexer, ';')) {
-			staticIf->elseBody = parseBlock(lexer, allowLoads);
+			auto block = PARSER_NEW(ExprBlock);
+			block->declarations.flavor = lexer->currentBlock ? lexer->currentBlock->flavor : BlockFlavor::GLOBAL;
+
+			staticIf->elseBody = parseBlock(lexer, false, block);
 
 			if (!staticIf->elseBody)
 				return nullptr;
@@ -193,9 +198,6 @@ Expr *parseExprStatemenet(LexerFile *lexer, bool allowDeclarations) {
 
 	if (!expr)
 		return nullptr;
-
-	CodeLocation start = lexer->token.start;
-	EndLocation end = lexer->token.end;
 
 	if (expectAndConsume(lexer, ',')) {
 		auto comma = PARSER_NEW(ExprCommaAssignment);
@@ -281,16 +283,16 @@ Expr *parseExprStatemenet(LexerFile *lexer, bool allowDeclarations) {
 		return comma;
 	}
 
-#define MODIFY_ASSIGN(type)																\
-		else if (expectAndConsume(lexer, type)) {										\
-			ExprBinaryOperator *op = makeBinaryOperator(lexer, start, end, type, expr); \
-																						\
-			op->right = parseExpr(lexer);												\
-																						\
-			if (!op->right)																\
-				return nullptr;															\
-																						\
-			return op;																	\
+#define MODIFY_ASSIGN(type)																			\
+		else if (expectAndConsume(lexer, type)) {													\
+			ExprBinaryOperator *op = makeBinaryOperator(lexer, expr->start, expr->end, type, expr); \
+																									\
+			op->right = parseExpr(lexer);															\
+			if (!op->right)																			\
+				return nullptr;																		\
+			op->end = op->right->end;																\
+																									\
+			return op;																				\
 		}
 
 	if (false);
@@ -338,10 +340,11 @@ Expr *parseExprStatemenet(LexerFile *lexer, bool allowDeclarations) {
 	}
 }
 
-Importer *parseLoad(LexerFile *lexer) {
+Importer *parseLoadOrImport(LexerFile *lexer) {
 	auto load = PARSER_NEW(ExprLoad);
-	load->flavor = ExprFlavor::LOAD;
+	load->flavor = lexer->token.type == TokenT::LOAD ? ExprFlavor::LOAD : ExprFlavor::IMPORT;
 	load->start = lexer->token.start;
+	load->module = lexer->module;
 
 	lexer->advance();
 
@@ -378,75 +381,59 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 			loop->flags |= EXPR_FOR_BY_POINTER;
 		}
 
+		Declaration *it = nullptr;
+		Declaration *it_index = nullptr;
+
 		if (lexer->token.type == TokenT::IDENTIFIER) {
 			TokenT peek;
 
 			lexer->peekTokenTypes(1, &peek); // Check if this identifier is an it declaration, an it, it_index declaration or an identifier
-			if (peek == TOKEN(':')) {
-				Declaration *it = makeIterator(lexer, lexer->token.start, lexer->token.end, lexer->token.text);
-				it->flags |= DECLARATION_IS_ITERATOR;
-
-				addDeclarationToBlockUnchecked(&loop->iteratorBlock, it, lexer->identifierSerial++);
+			if (peek == TOKEN(':') || peek == TOKEN(',')) {
+				it = makeIterator(lexer, lexer->token.start, lexer->token.end, lexer->token.text);
 				lexer->advance();
 
-				assert(lexer->token.type == TOKEN(':'));
 
-				Declaration *it_index = makeIterator(lexer, lexer->token.start, lexer->token.end, "it_index");
-				it_index->flags |= DECLARATION_IS_ITERATOR_INDEX;
+				if (expectAndConsume(lexer, ',')) {
+					if (lexer->token.type != TokenT::IDENTIFIER) {
+						reportExpectedError(&lexer->token, "Error: Expected index variable name after ,");
+						return nullptr;
+					}
 
-				if (!addDeclarationToBlock(&loop->iteratorBlock, it_index, lexer->identifierSerial++)) {
-					return nullptr;
+					it_index = makeIterator(lexer, lexer->token.start, lexer->token.end, lexer->token.text);
+
+					lexer->advance();
+
+					if (!expectAndConsume(lexer, ':')) {
+						reportExpectedError(&lexer->token, "Error: Expected a ':' after index variable name");
+						return nullptr;
+					}
 				}
-
-				lexer->advance();
-			}
-			else if (peek == TOKEN(',')) {
-				Declaration *it = makeIterator(lexer, lexer->token.start, lexer->token.end, lexer->token.text);
-				it->flags |= DECLARATION_IS_ITERATOR;
-
-				addDeclarationToBlockUnchecked(&loop->iteratorBlock, it, lexer->identifierSerial++);
-				lexer->advance();
-
-				assert(lexer->token.type == TOKEN(','));
-
-				lexer->advance();
-
-				if (lexer->token.type != TokenT::IDENTIFIER) {
-					reportExpectedError(&lexer->token, "Error: Expected index variable name after ,");
-					return nullptr;
+				else {
+					assert(lexer->token.type == TOKEN(':'));
+					lexer->advance();
 				}
-
-				Declaration *it_index = makeIterator(lexer, lexer->token.start, lexer->token.end, lexer->token.text);
-				it_index->flags |= DECLARATION_IS_ITERATOR_INDEX;
-
-				if (!addDeclarationToBlock(&loop->iteratorBlock, it_index, lexer->identifierSerial++)) {
-					return nullptr;
-				}
-
-				lexer->advance();
-
-				if (!expectAndConsume(lexer, ':')) {
-					reportExpectedError(&lexer->token, "Error: Expected a ':' after index variable name");
-					return nullptr;
-				}
-			}
-			else {
-				goto notDeclaration;
 			}
 		}
-		else {
-		notDeclaration:
-			Declaration *it = makeIterator(lexer, loop->start, end, "it");
-			it->flags |= DECLARATION_IS_ITERATOR;
-			addDeclarationToBlockUnchecked(&loop->iteratorBlock, it, lexer->identifierSerial++);
 
-
-			Declaration *it_index = makeIterator(lexer, loop->start, end, "it_index");
-			it_index->flags |= DECLARATION_IS_ITERATOR_INDEX;
-			addDeclarationToBlockUnchecked(&loop->iteratorBlock, it_index, lexer->identifierSerial++);
+		if (!it) {
+			it = makeIterator(lexer, loop->start, end, "it");
 		}
+
+		if (!it_index) {
+			it_index = makeIterator(lexer, loop->start, end, "it_index");
+		}
+
+		it->flags |= DECLARATION_IS_ITERATOR;
+		if (!addDeclarationToBlock(&loop->iteratorBlock, it, lexer->identifierSerial++))
+			return nullptr;
+
+
+		it_index->flags |= DECLARATION_IS_ITERATOR_INDEX;
+		if (!addDeclarationToBlock(&loop->iteratorBlock, it_index, lexer->identifierSerial++))
+			return nullptr;
 
 		loop->forBegin = parseExpr(lexer);
+
 		if (!loop->forBegin)
 			return nullptr;
 
@@ -500,7 +487,7 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 		return loop;
 	}
 	else if (lexer->token.type == TOKEN('{')) {
-		return parseBlock(lexer, allowDeclarations);
+		return parseBlock(lexer, false);
 	}
 	else if (lexer->token.type == TokenT::WHILE) {
 		ExprLoop *loop = PARSER_NEW(ExprLoop);
@@ -625,7 +612,7 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 					case_.condition = equal;
 					
 
-					case_.block = parseCase(lexer);
+					case_.block = parseBlock(lexer, true);
 
 
 					if (!case_.block) {
@@ -664,7 +651,7 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 
 					case_.fallsThrough = false;
 					case_.condition = nullptr;
-					case_.block = parseCase(lexer);
+					case_.block = parseBlock(lexer, true);
 
 					if (!case_.block) {
 						return nullptr;
@@ -825,143 +812,19 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 	}
 }
 
-ExprBlock *parseCase(LexerFile *lexer) {
-	auto block = PARSER_NEW(ExprBlock);
-
-	block->flavor = ExprFlavor::BLOCK;
-	block->declarations.flavor = BlockFlavor::IMPERATIVE;
-
-	pushBlock(lexer, &block->declarations);
-
-	Expr *exitingStatement = nullptr;
-
-	while (true) {
-		if (expectAndConsume(lexer, ';')) {
-			continue;
-		}
-		else if (lexer->token.type == TOKEN('}') || lexer->token.type == TokenT::CASE || lexer->token.type == TokenT::ELSE) {
-			break;
-		}
-
-		if (exitingStatement) {
-			const char *label = exitingStatement->flavor == ExprFlavor::RETURN ? "return" : exitingStatement->flavor == ExprFlavor::BREAK ? "break" : "continue";
-			reportError(&lexer->token, "Error: Cannot have statements in a case after a %s", label);
-			reportError(exitingStatement, "   ..: Here is the %s", label);
-			return nullptr;
-		}
-
-		// a #through statement is checked for separately to }, case, else since it cannot occur after an exiting statement
-		if (lexer->token.type == TokenT::THROUGH) {
-			break;
-		}
-		else if (lexer->token.type == TokenT::USING) {
-			TokenT peek[2];
-			lexer->peekTokenTypes(2, peek);
-
-			if (peek[1] == TOKEN(':')) { // It is a declaration
-				Declaration *declaration = parseDeclaration(lexer);
-
-				if (!declaration)
-					return nullptr;
-
-				if (!addDeclarationToBlock(lexer->currentBlock, declaration, lexer->identifierSerial++)) {
-					return nullptr;
-				}
-
-				assert(declaration->flags & DECLARATION_MARKED_AS_USING);
-				lexer->currentBlock->importers.add(createImporterForUsing(lexer, declaration));
-
-				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_UNINITIALIZED))) { // If this declaration is constant or uninitialized don't add an initialization expression
-					ExprBinaryOperator *assign = PARSER_NEW(ExprBinaryOperator);
-					assign->start = declaration->start;
-					assign->end = declaration->end;
-					assign->flavor = ExprFlavor::BINARY_OPERATOR;
-					assign->op = TOKEN('=');
-					assign->left = makeIdentifier(lexer, declaration);
-					assign->right = nullptr;
-					assign->flags |= EXPR_ASSIGN_IS_IMPLICIT_INITIALIZER;
-
-					block->exprs.add(assign);
-				}
-
-			}
-			else {
-				auto start = lexer->token.start;
-
-				lexer->advance();
-
-				auto using_ = parseExpr(lexer);
-
-				if (!using_)
-					return nullptr;
-
-				auto importer = PARSER_NEW(Importer);
-				importer->import = using_;
-				addImporterToBlock(lexer->currentBlock, importer, lexer->identifierSerial++);
-			}
-
-			continue;
-		}
-		else if (lexer->token.type == TokenT::IDENTIFIER) { // This could be an expression or a declaration
-			TokenT peek;
-			lexer->peekTokenTypes(1, &peek);
-
-			if (peek == TOKEN(':')) { // It is a declaration
-				Declaration *declaration = parseDeclaration(lexer);
-
-				if (!declaration)
-					return nullptr;
-
-				if (!addDeclarationToBlock(lexer->currentBlock, declaration, lexer->identifierSerial++)) {
-					return nullptr;
-				}
-
-				assert(!(declaration->flags & DECLARATION_MARKED_AS_USING));
-
-				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_UNINITIALIZED))) { // If this declaration is constant or uninitialized don't add an initialization expression
-					ExprBinaryOperator *assign = PARSER_NEW(ExprBinaryOperator);
-					assign->start = declaration->start;
-					assign->end = declaration->end;
-					assign->flavor = ExprFlavor::BINARY_OPERATOR;
-					assign->op = TOKEN('=');
-					assign->left = makeIdentifier(lexer, declaration);
-					assign->right = nullptr;
-					assign->flags |= EXPR_ASSIGN_IS_IMPLICIT_INITIALIZER;
-
-					block->exprs.add(assign);
-				}
-
-				continue;
-			}
-		}
-
-		Expr *expr = parseStatement(lexer, true);
-
-		if (!expr)
-			return nullptr;
-
-		block->exprs.add(expr);
-	}
-
-	block->end = lexer->previousTokenEnd;
-
-	popBlock(lexer, &block->declarations);
-
-	return block;
-}
-
-ExprBlock *parseBlock(LexerFile *lexer, bool allowLoads, ExprBlock *block) {
+ExprBlock *parseBlock(LexerFile *lexer, bool isCase, ExprBlock *block) {
+	PROFILE_FUNC();
 	if (!block) { // A function may preallocate the block to fill in the 'using's
 		block = PARSER_NEW(ExprBlock);
+		block->declarations.flavor = BlockFlavor::IMPERATIVE;
 	}
 
 	block->start = lexer->token.start;
 	block->flavor = ExprFlavor::BLOCK;
-	block->declarations.flavor = BlockFlavor::IMPERATIVE;
 
 	pushBlock(lexer, &block->declarations);
 
-	if (!expectAndConsume(lexer, '{')) {
+	if (!isCase && !expectAndConsume(lexer, '{')) {
 		reportError(&lexer->token, "Error: Expected '{' at the start of a block");
 		return nullptr;
 	}
@@ -972,20 +835,32 @@ ExprBlock *parseBlock(LexerFile *lexer, bool allowLoads, ExprBlock *block) {
 		if (expectAndConsume(lexer, ';')) {
 			continue;
 		}
-		else if (expectAndConsume(lexer, '}')) {
-			break;
+		else {
+			if (isCase) {
+				if (lexer->token.type == TOKEN('}') || lexer->token.type == TokenT::CASE || lexer->token.type == TokenT::ELSE) {
+					break;
+				}
+			}
+			else {
+				if (expectAndConsume(lexer, '}')) {
+					break;
+				}
+			}
 		}
 
 
 		if (exitingStatement) {
 			const char *label = exitingStatement->flavor == ExprFlavor::RETURN ? "return" : exitingStatement->flavor == ExprFlavor::BREAK ? "break" : "continue";
-			reportError(&lexer->token,    "Error: Cannot have statements in a block after a %s", label);
+			reportError(&lexer->token,    "Error: Cannot have statements in a %s after a %s", isCase ? "case" : "block", label);
 			reportError(exitingStatement, "   ..: Here is the %s", label);
 			return nullptr;
 		}
 
-		
-		if (lexer->token.type == TokenT::DEFER) {
+		if (isCase && lexer->token.type == TokenT::THROUGH) {
+			break;
+		}
+		else if (lexer->token.type == TokenT::DEFER) {
+
 			auto defer = PARSER_NEW(ExprDefer);
 			defer->flavor = ExprFlavor::DEFER;
 			defer->start = lexer->token.start;
@@ -1001,15 +876,20 @@ ExprBlock *parseBlock(LexerFile *lexer, bool allowLoads, ExprBlock *block) {
 
 			defer->end = lexer->previousTokenEnd;
 
+			if (block->declarations.flavor != BlockFlavor::IMPERATIVE) {
+				reportError("Error: Defer statements can only be used in an imperative scope");
+				return nullptr;
+			}
+
 			block->exprs.add(defer);
 
 			continue;
 		}
-		else if (lexer->token.type == TokenT::USING) {
+		else if (lexer->token.type == TokenT::USING || lexer->token.type == TokenT::IDENTIFIER) {
 			TokenT peek[2];
 			lexer->peekTokenTypes(2, peek);
 
-			if (peek[1] == TOKEN(':')) { // It is a declaration
+			if ((lexer->token.type == TokenT::IDENTIFIER && peek[0] == TOKEN(':')) || (lexer->token.type == TokenT::USING && peek[1] == TOKEN(':'))) { // It is a declaration
 				Declaration *declaration = parseDeclaration(lexer);
 
 				if (!declaration)
@@ -1019,97 +899,11 @@ ExprBlock *parseBlock(LexerFile *lexer, bool allowLoads, ExprBlock *block) {
 					return nullptr;
 				}
 
-				assert(declaration->flags & DECLARATION_MARKED_AS_USING);
-				addImporterToBlock(lexer->currentBlock, createImporterForUsing(lexer, declaration), lexer->identifierSerial++);
-
-				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_UNINITIALIZED))) { // If this declaration is constant or uninitialized don't add an initialization expression
-					ExprBinaryOperator *assign = PARSER_NEW(ExprBinaryOperator);
-					assign->start = declaration->start;
-					assign->end = declaration->end;
-					assign->flavor = ExprFlavor::BINARY_OPERATOR;
-					assign->op = TOKEN('=');
-					assign->left = makeIdentifier(lexer, declaration);
-					assign->right = nullptr;
-					assign->flags |= EXPR_ASSIGN_IS_IMPLICIT_INITIALIZER;
-
-					block->exprs.add(assign);
+				if (declaration->flags & DECLARATION_MARKED_AS_USING) {
+					addImporterToBlock(lexer->currentBlock, createImporterForUsing(lexer, declaration), lexer->identifierSerial++);
 				}
 
-			}
-			else {
-				auto start = lexer->token.start;
-
-				lexer->advance();
-
-				auto using_ = parseExpr(lexer);
-
-				if (!using_)
-					return nullptr;
-
-				auto importer = PARSER_NEW(Importer);
-
-				importer->import = using_;
-				
-				addImporterToBlock(lexer->currentBlock, importer, lexer->identifierSerial++);
-			}
-
-			continue;
-		}
-		else if (lexer->token.type == TokenT::STATIC_IF) {
-			auto staticIf = parseStaticIf(lexer, allowLoads);
-
-			if (!staticIf)
-				return nullptr;
-
-			block->exprs.add(staticIf);
-
-			continue;
-		}
-		else if (lexer->token.type == TokenT::LOAD) {
-			if (allowLoads) {
-				parseLoad(lexer);
-			}
-			else {
-				reportError(&lexer->token, "Error: Can only have #load at the top level");
-
-				return nullptr;
-			}
-
-			continue;
-		}
-		else if (lexer->token.type == TokenT::RUN) {
-			if (allowLoads) {
-				auto run = parseExpr(lexer);
-
-				assert(run->flavor == ExprFlavor::RUN);
-
-				block->exprs.add(run);
-			}
-			else {
-				reportError(&lexer->token, "Error: Can only have #run statements at the top level");
-
-				return nullptr;
-			}
-
-			continue;
-		}
-		else if (lexer->token.type == TokenT::IDENTIFIER) { // This could be an expression or a declaration
-			TokenT peek;
-			lexer->peekTokenTypes(1, &peek);
-
-			if (peek == TOKEN(':')) { // It is a declaration
-				Declaration *declaration = parseDeclaration(lexer);
-
-				if (!declaration)
-					return nullptr;
-
-				if (!addDeclarationToBlock(lexer->currentBlock, declaration, lexer->identifierSerial++)) {
-					return nullptr;
-				}
-
-				assert(!(declaration->flags & DECLARATION_MARKED_AS_USING));
-
-				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_UNINITIALIZED))) { // If this declaration is constant or uninitialized don't add an initialization expression
+				if (block->declarations.flavor == BlockFlavor::IMPERATIVE && !(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_UNINITIALIZED))) { // If this declaration is constant or uninitialized don't add an initialization expression
 					ExprBinaryOperator *assign = PARSER_NEW(ExprBinaryOperator);
 					assign->start = declaration->start;
 					assign->end = declaration->end;
@@ -1124,7 +918,68 @@ ExprBlock *parseBlock(LexerFile *lexer, bool allowLoads, ExprBlock *block) {
 
 				continue;
 			}
+			else if (lexer->token.type == TokenT::USING) {
+				auto start = lexer->token.start;
+
+				lexer->advance();
+
+				auto using_ = parseExpr(lexer);
+
+				if (!using_)
+					return nullptr;
+
+				auto importer = PARSER_NEW(Importer);
+
+				importer->import = using_;
+				
+				addImporterToBlock(lexer->currentBlock, importer, lexer->identifierSerial++);
+
+				continue;
+			}
+
 		}
+		else if (lexer->token.type == TokenT::STATIC_IF) {
+			auto staticIf = parseStaticIf(lexer);
+
+			if (!staticIf)
+				return nullptr;
+
+			block->exprs.add(staticIf);
+
+			continue;
+		}
+		else if (lexer->token.type == TokenT::LOAD || lexer->token.type == TokenT::IMPORT) {
+			if (block->declarations.flavor == BlockFlavor::GLOBAL) {
+				parseLoadOrImport(lexer);
+			}
+			else {
+				reportError(&lexer->token, "Error: Can only have %s at the top level", lexer->token.type == TokenT::LOAD ? "#load" : "#import");
+
+				return nullptr;
+			}
+
+			continue;
+		}
+		else if (lexer->token.type == TokenT::RUN) {
+			if (block->declarations.flavor == BlockFlavor::GLOBAL) {
+				auto run = parseExpr(lexer);
+
+				if (run->flavor != ExprFlavor::RUN) {
+					reportError(run, "Error: Expected run directive at top level");
+					return nullptr;
+				}
+
+				block->exprs.add(run);
+			}
+			else {
+				reportError(&lexer->token, "Error: Can only have #run statements at the top level");
+
+				return nullptr;
+			}
+
+			continue;
+		}
+
 
 		Expr *expr = parseStatement(lexer, true);
 		if (!expr)
@@ -1134,8 +989,14 @@ ExprBlock *parseBlock(LexerFile *lexer, bool allowLoads, ExprBlock *block) {
 			exitingStatement = expr;
 		}
 
-
 		block->exprs.add(expr);
+
+
+		if (block->declarations.flavor != BlockFlavor::IMPERATIVE) {
+			reportError(expr, "Error: Cannot have imperative statements here");
+			return nullptr;
+		}
+
 	}
 
 	block->end = lexer->previousTokenEnd;
@@ -1374,6 +1235,7 @@ bool parseArgumentList(LexerFile *lexer, ExprFunction *function, bool arguments,
 		if (declaration->flags & DECLARATION_MARKED_AS_USING) {
 			if (!*usingBlock) {
 				*usingBlock = PARSER_NEW(ExprBlock);
+				(*usingBlock)->declarations.flavor = BlockFlavor::IMPERATIVE;
 			}
 
 			addImporterToBlock(&(*usingBlock)->declarations, createImporterForUsing(lexer, declaration), lexer->identifierSerial++);
@@ -1392,12 +1254,9 @@ bool parseArgumentList(LexerFile *lexer, ExprFunction *function, bool arguments,
 	return true;
 }
 
-bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *usingBlock, bool allowBody);
-
 ExprFunction *parseFunctionOrFunctionType(LexerFile *lexer, bool allowBody) {
+	PROFILE_FUNC();
 	ExprFunction *function = PARSER_NEW(ExprFunction);
-	function->flavor = ExprFlavor::FUNCTION;
-	function->start = lexer->token.start;
 	function->arguments.flavor = BlockFlavor::ARGUMENTS;
 	function->returns.flavor = BlockFlavor::RETURNS;
 
@@ -1407,26 +1266,19 @@ ExprFunction *parseFunctionOrFunctionType(LexerFile *lexer, bool allowBody) {
 	if (!parseArgumentList(lexer, function, true, &usingBlock))
 		return nullptr;
 
-	if (!parseFunctionPostfix(lexer, function, usingBlock, allowBody))
-		return nullptr;
+	bool hadReturnType = true;
 
-	popBlock(lexer, &function->arguments);
-
-	return function;
-}
-
-
-bool parseFunctionReturnTypes(LexerFile *lexer, ExprFunction *function, bool *hadReturns) {
 	pushBlock(lexer, &function->returns);
 
-	*hadReturns = true;
-
 	if (expectAndConsume(lexer, TokenT::ARROW)) {
+		auto start = lexer->token.start;
+
 		if (expectAndConsume(lexer, '(')) {
 			if (isFunctionType(lexer)) {
+				function->start = start;
 				auto function = parseFunctionOrFunctionType(lexer, false);
 				if (!function)
-					return false;
+					return nullptr;
 
 				auto declaration = createAnonymousDeclaration(lexer, function);
 				declaration->flags |= DECLARATION_IS_RETURN;
@@ -1435,32 +1287,23 @@ bool parseFunctionReturnTypes(LexerFile *lexer, ExprFunction *function, bool *ha
 			}
 			else {
 				if (!parseArgumentList(lexer, function, false, nullptr))
-					return false;
+					return nullptr;
 			}
 		}
 		else {
 			auto declaration = parseSingleArgument(lexer, function, false, checkForNamedArguments(lexer));
 
 			if (!declaration)
-				return false;
+				return nullptr;
 		}
 	}
 	else {
-		*hadReturns = false;
+		hadReturnType = false;
 
 		addVoidReturn(lexer, lexer->token.start, lexer->token.end, function);
 	}
 
 	popBlock(lexer, &function->returns);
-	return true;
-}
-
-bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *usingBlock, bool allowBody) {
-	bool hadReturnType;
-
-	if (!parseFunctionReturnTypes(lexer, function, &hadReturnType)) {
-		return false;
-	}
 
 	if (expectAndConsume(lexer, TokenT::C_CALL)) {
 		function->flags |= EXPR_FUNCTION_IS_C_CALL;
@@ -1469,18 +1312,19 @@ bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *u
 		function->flags |= EXPR_FUNCTION_IS_COMPILER;
 	}
 
+	function->end = lexer->previousTokenEnd;
+
 	if (allowBody && lexer->token.type == TOKEN('{')) {
 		if (function->arguments.declarations.count && function->arguments.declarations[0]->name.length == 0) {
 			reportError(function->arguments.declarations[0], "Error: Non-external functions cannot have anonymous parameters");
-			return false;
+			return nullptr;
 		}
 
 		function->flavor = ExprFlavor::FUNCTION;
-		function->end = lexer->previousTokenEnd;
 
 		function->body = parseBlock(lexer, false, usingBlock);
 		if (!function->body) {
-			return false;
+			return nullptr;
 		}
 	}
 	else if (allowBody && lexer->token.type == TokenT::EXTERNAL) {
@@ -1488,16 +1332,15 @@ bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *u
 		lexer->advance();
 
 		function->flavor = ExprFlavor::FUNCTION;
-		function->end = lexer->previousTokenEnd;
 
 		if (function->flags & EXPR_FUNCTION_IS_EXTERNAL) {
 			reportError(function, "Error: Compiler functions cannot be external");
-			return false;
+			return nullptr;
 		}
 
 		if (usingBlock) {
 			reportError(function, "Error: External functions cannot 'using' their parameters");
-			return false;
+			return nullptr;
 		}
 
 
@@ -1511,28 +1354,28 @@ bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *u
 
 		if (!hadReturnType) {
 			reportError(function, "Error: A function prototype must have a return type");
-			return false;
+			return nullptr;
 		}
 
 		function->flavor = ExprFlavor::FUNCTION_PROTOTYPE;
 		function->type = &TYPE_TYPE;
-		
+
 		for (auto return_ : function->returns.declarations) {
 			if (return_->flags & DECLARATION_IS_MUST) {
 				reportError(function, "Error: A function prototype cannot have its return type marked as #must");
-				return false;
+				return nullptr;
 			}
 		}
 
 		if (usingBlock) {
 			reportError(function, "Error: Function prototypes cannot 'using' their parameters");
-			return false;
+			return nullptr;
 		}
 
 		for (auto declaration : function->arguments.declarations) {
 			if (declaration->initialValue) {
 				reportError(declaration, "Error: A function prototype cannot have a default argument");
-				return false;
+				return nullptr;
 			}
 		}
 
@@ -1540,7 +1383,7 @@ bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *u
 		for (auto declaration : function->returns.declarations) {
 			if (declaration->initialValue) {
 				reportError(declaration, "Error: A function prototype cannot have a default return value");
-				return false;
+				return nullptr;
 			}
 		}
 	}
@@ -1549,16 +1392,18 @@ bool parseFunctionPostfix(LexerFile *lexer, ExprFunction *function, ExprBlock *u
 		if (function->flags & EXPR_FUNCTION_HAS_VARARGS) {
 			// @Incomplete allow c style varargs for external functions
 			reportError(function, "Error: C call functions cannot have varargs");
-			return false;
+			return nullptr;
 		}
 
 		if (function->returns.declarations.count != 1) {
 			reportError(function, "Error: C call functions cannot have multiple return values");
-			return false;
+			return nullptr;
 		}
 	}
 
-	return true;
+	popBlock(lexer, &function->arguments);
+
+	return function;
 }
 
 Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
@@ -1567,6 +1412,7 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 
 	if (isFunctionOrFunctionType(lexer)) { // This is an argument declaration
 		auto function = parseFunctionOrFunctionType(lexer, true);
+		function->start = start;
 		if (!function)
 			return nullptr;
 
@@ -1653,37 +1499,6 @@ bool parseArguments(LexerFile *lexer, Arguments *args, const char *message) {
 	return true;
 }
 
-bool checkTopLevelStaticIf(ExprIf *staticIf, const char *message);
-
-bool checkTopLevelStaticIfBlock(Expr *expr, const char *message) {
-	if (!expr) return true;
-
-	assert(expr->flavor == ExprFlavor::BLOCK);
-
-	for (auto statement : static_cast<ExprBlock *>(expr)->exprs) {
-		if (statement->flavor != ExprFlavor::STATIC_IF && !(statement->flags & EXPR_ASSIGN_IS_IMPLICIT_INITIALIZER) && statement->flavor != ExprFlavor::RUN) {
-			reportError(statement, "Error: #if can only contain declarations %s", message);
-			return false;
-		}
-		else if (statement->flavor == ExprFlavor::STATIC_IF) {
-			if (!checkTopLevelStaticIf(static_cast<ExprIf *>(statement), message))
-				return false;
-		}
-	}
-
-	return true;
-}
-
-bool checkTopLevelStaticIf(ExprIf *staticIf, const char *message) {
-	if (!checkTopLevelStaticIfBlock(staticIf->ifBody, message))
-		return false;
-
-	if (!checkTopLevelStaticIfBlock(staticIf->elseBody, message))
-		return false;
-
-	return true;
-}
-
 Expr *parsePrimaryExpr(LexerFile *lexer) {
 	CodeLocation start = lexer->token.start;
 	EndLocation end = lexer->token.end;
@@ -1728,6 +1543,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		identifier->name = lexer->token.text;
 		identifier->flavor = ExprFlavor::IDENTIFIER;
 		identifier->resolveFrom = lexer->currentBlock;
+		identifier->module = lexer->module;
 		identifier->enclosingScope = lexer->currentBlock;
 		identifier->declaration = nullptr;
 		identifier->structAccess = nullptr;
@@ -1925,14 +1741,10 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 			}
 			else if (lexer->token.type == TokenT::STATIC_IF) {
-				auto staticIf = parseStaticIf(lexer, false);
+				auto staticIf = parseStaticIf(lexer);
 
 				if (!staticIf)
 					break;
-
-				if (!checkTopLevelStaticIf(staticIf, tokenType == TokenT::UNION ? "in a union" : "in a struct")) {
-					return nullptr;
-				}
 			}
 			else if (expectAndConsume(lexer, '}')) {
 				break;
@@ -2111,7 +1923,6 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 	}
 
 	while (true) {
-		start = lexer->token.start;
 
 		if (expectAndConsume(lexer, '(')) {
 			ExprFunctionCall *call = PARSER_NEW(ExprFunctionCall);
@@ -2254,7 +2065,6 @@ Expr *parseUnaryExpr(LexerFile *lexer, CodeLocation plusStart = {});
 Expr *makeUnaryOperator(LexerFile *lexer, CodeLocation &start, EndLocation &end, TokenT type) {
 	ExprUnaryOperator *expr = PARSER_NEW(ExprUnaryOperator);
 	expr->start = start;
-	expr->end = end;
 	expr->flavor = ExprFlavor::UNARY_OPERATOR;
 	expr->op = type;
 
@@ -2262,6 +2072,8 @@ Expr *makeUnaryOperator(LexerFile *lexer, CodeLocation &start, EndLocation &end,
 	if (!expr->value) {
 		return nullptr;
 	}
+
+	expr->end = expr->value->end;
 
 	return expr;
 }
@@ -2389,7 +2201,6 @@ Expr *parseUnaryExpr(LexerFile *lexer, CodeLocation plusStart) {
 		}
 
 
-		expr->end = lexer->token.end;
 
 
 		if (expectAndConsume(lexer, ')')) {
@@ -2415,6 +2226,8 @@ Expr *parseUnaryExpr(LexerFile *lexer, CodeLocation plusStart) {
 			return nullptr;
 		}
 
+		expr->end = expr->right->end;
+
 		return expr;
 	}
 
@@ -2435,12 +2248,10 @@ Expr *parseUnaryExpr(LexerFile *lexer, CodeLocation plusStart) {
 			}
 		}
 		else if (expectAndConsume(lexer, ']')) {
-			array->end = lexer->previousTokenEnd;
 			array->left = nullptr;
 		}
 		else {
 			array->left = parseExpr(lexer);
-			array->end = lexer->token.end;
 
 			if (!array->left) {
 				return nullptr;
@@ -2458,6 +2269,7 @@ Expr *parseUnaryExpr(LexerFile *lexer, CodeLocation plusStart) {
 		if (!array->right) {
 			return nullptr;
 		}
+		array->end = array->right->end;
 
 
 		return array;
@@ -2490,6 +2302,8 @@ Expr *parseBinaryOperator(LexerFile *lexer) {
 	if (!current.left)
 		return nullptr;
 
+	current.start = current.left->start;
+
 	Expr *right;
 	u64 nextPrecedence;
 
@@ -2516,8 +2330,6 @@ Expr *parseBinaryOperator(LexerFile *lexer) {
 
 	right:
 		current.type = lexer->token.type;
-		current.start = lexer->token.start;
-		current.end = lexer->token.end;
 
 		lexer->advance();
 
@@ -2534,6 +2346,8 @@ Expr *parseBinaryOperator(LexerFile *lexer) {
 
 		if (!right)
 			return nullptr;
+
+		current.end = right->end;
 
 		nextPrecedence = getTokenPrecedence(lexer->token.type);
 
@@ -2733,8 +2547,11 @@ void runParser() {
 		}
 
 
-		if (!lexer->open(file))
-			return;
+		if (!lexer->open(file)) {
+			parserQueue.add(nullptr);
+			inferQueue.add(InferJobType::DONE);
+			break;
+		}
 
 		lexer->advance();
 
@@ -2754,7 +2571,7 @@ void runParser() {
 
 				assert(!(declaration->flags & DECLARATION_MARKED_AS_USING));
 
-				inferQueue.add(declaration);
+				inferQueue.add(InferQueueJob(declaration, lexer->module));
 			}
 			else if (lexer->token.type == TokenT::USING) {
 				TokenT peek[2];
@@ -2768,11 +2585,11 @@ void runParser() {
 
 					_ReadWriteBarrier();
 
-					inferQueue.add(declaration);
+					inferQueue.add(InferQueueJob(declaration, lexer->module));
 
 					assert(declaration->flags & DECLARATION_MARKED_AS_USING);
 
-					inferQueue.add(createImporterForUsing(lexer, declaration));
+					inferQueue.add(InferQueueJob(createImporterForUsing(lexer, declaration), lexer->module));
 
 
 				}
@@ -2789,35 +2606,31 @@ void runParser() {
 					auto importer = PARSER_NEW(Importer);
 					importer->import = using_;
 
-					inferQueue.add(importer);
+					inferQueue.add(InferQueueJob(importer, lexer->module));
 				}
 			}
-			else if (lexer->token.type == TokenT::LOAD) {
-				auto load = parseLoad(lexer);
+			else if (lexer->token.type == TokenT::LOAD || lexer->token.type == TokenT::IMPORT) {
+				auto load = parseLoadOrImport(lexer);
 
 				if (!load)
 					break;
 
-				inferQueue.add(load);
+				inferQueue.add(InferQueueJob(load, lexer->module));
 			}
 			else if (lexer->token.type == TokenT::END_OF_FILE) {
 				break;
 			}
 			else if (lexer->token.type == TokenT::STATIC_IF) {
-				auto staticIf = parseStaticIf(lexer, true);
+				auto staticIf = parseStaticIf(lexer);
 
 				if (!staticIf)
 					break;
-
-				if (!checkTopLevelStaticIf(staticIf, ", #loads or #runs at the top level")) {
-					break;
-				}
 
 				auto importer = PARSER_NEW(Importer);
 
 				importer->import = staticIf;
 
-				inferQueue.add(importer);
+				inferQueue.add(InferQueueJob(importer, lexer->module));
 			}
 			else if (lexer->token.type == TokenT::RUN) {
 				auto run = parseExpr(lexer);
@@ -2825,9 +2638,12 @@ void runParser() {
 				if (!run)
 					break;
 
-				assert(run->flavor == ExprFlavor::RUN);
+				if (run->flavor != ExprFlavor::RUN) {
+					reportError(run, "Error: Expected run directive at top level");
+					break;
+				}
 
-				inferQueue.add(static_cast<ExprRun *>(run));
+				inferQueue.add(InferQueueJob(static_cast<ExprRun *>(run), lexer->module));
 			}
 			else if (expectAndConsume(lexer, ';')) {
 				// We have consumed the semicolon we are done
@@ -2838,13 +2654,13 @@ void runParser() {
 			}
 		}
 
-		printf("Parser memory used %ukb\n", lexer->parserArena.totalSize / 1024);
+		//printf("Parser memory used %ukb\n", lexer->parserArena.totalSize / 1024);
 
-		inferQueue.add(InferQueueJob(file->fileUid));
+		inferQueue.add(InferQueueJob(file->fileUid, lexer->module));
 
 		if (hadError) {
 			parserQueue.add(nullptr);
-			inferQueue.add(static_cast<Declaration *>(nullptr));
+			inferQueue.add(InferJobType::DONE);
 			break;
 		}
 	}

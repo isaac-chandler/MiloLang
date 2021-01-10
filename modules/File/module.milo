@@ -1,0 +1,8 @@
+#import "Standard"
+
+
+#if TARGET_WINDOWS {
+	#load "Windows.milo"
+} else {
+	unsupported_os: u64 = "error"
+}

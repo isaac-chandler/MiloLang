@@ -16,6 +16,7 @@ enum class InferJobType : u8 {
 	FUNCTION_IR,
 	RUN, 
 	LOAD_COMPLETE, 
+	DONE
 };
 
 struct InferQueueJob {
@@ -29,14 +30,17 @@ struct InferQueueJob {
 		s64 fileUid;
 	};
 
-	InferQueueJob(Declaration *declaration) : type(InferJobType::GLOBAL_DECLARATION), declaration(declaration) {}
-	InferQueueJob(Importer *importer) : type(InferJobType::IMPORTER), importer(importer) {}
-	InferQueueJob(ExprFunction *function) : type(InferJobType::FUNCTION_IR), function(function) {}
-	InferQueueJob(ExprRun *run) : type(InferJobType::RUN), run(run) {}
-	explicit InferQueueJob(s64 fileUid) : type(InferJobType::LOAD_COMPLETE), fileUid(fileUid) {}
+	struct Module *module;
+
+	InferQueueJob(InferJobType type) : type(type) {}
+	InferQueueJob(Declaration *declaration, struct Module *module) : type(InferJobType::GLOBAL_DECLARATION), declaration(declaration), module(module) {}
+	InferQueueJob(Importer *importer, struct Module *module) : type(InferJobType::IMPORTER), importer(importer), module(module) {}
+	InferQueueJob(ExprFunction *function) : type(InferJobType::FUNCTION_IR), function(function), module(nullptr) {}
+	InferQueueJob(ExprRun *run, struct Module *module) : type(InferJobType::RUN), run(run), module(module) {}
+	InferQueueJob(s64 fileUid, struct Module *module) : type(InferJobType::LOAD_COMPLETE), fileUid(fileUid), module(module) {}
 };
 
 inline MPMCWorkQueue<InferQueueJob> inferQueue;
 inline Array<InferQueueJob> inferInput;
 
-void runInfer();
+void runInfer(String inputFile);

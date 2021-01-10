@@ -19,6 +19,7 @@
 #include <string_view>
 #include <cinttypes>
 #include <stdarg.h>
+#include <Shlwapi.h>
 
 
 #undef small

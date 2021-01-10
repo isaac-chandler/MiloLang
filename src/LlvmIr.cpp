@@ -5,6 +5,7 @@
 #include "CoffWriter.h"
 #include "Lexer.h"
 #include "IrGenerator.h"
+#include "Error.h"
 
 static llvm::FunctionCallee llvmDebugDeclare;
 static llvm::Type *createLlvmType(llvm::LLVMContext &context, Type *type);
@@ -629,7 +630,7 @@ static llvm::Function *createLlvmFunction(State *state, ExprFunction *function) 
 			function->llvmStorage = llvm::Function::Create(functionType, llvm::Function::ExternalLinkage, stringRef(function->valueOfDeclaration->name), state->module);
 		}
 		else if (function->valueOfDeclaration) {
-			function->llvmStorage = llvm::Function::Create(functionType, function->valueOfDeclaration->enclosingScope == &globalBlock ? llvm::Function::ExternalLinkage : llvm::Function::PrivateLinkage, stringRef(function->valueOfDeclaration->name), state->module);
+			function->llvmStorage = llvm::Function::Create(functionType, function->valueOfDeclaration->enclosingScope->flavor == BlockFlavor::GLOBAL ? llvm::Function::ExternalLinkage : llvm::Function::PrivateLinkage, stringRef(function->valueOfDeclaration->name), state->module);
 
 
 		}
@@ -822,7 +823,7 @@ llvm::Value *loadAddressOf(State *state, Expr *expr) {
 			}
 		}
 		else {
-			if (identifier->declaration->enclosingScope == &globalBlock) {
+			if (identifier->declaration->enclosingScope->flavor == BlockFlavor::GLOBAL) {
 				createLlvmGlobal(state, identifier->declaration);
 			}
 

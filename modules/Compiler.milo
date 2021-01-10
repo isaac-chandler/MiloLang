@@ -1,0 +1,5 @@
+#load "standard.milo"
+
+add_build_file :: (filename: string) #compiler {
+	print("Cannot call #compiler function add_build_file at runtime")
+}

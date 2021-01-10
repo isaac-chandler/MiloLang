@@ -440,6 +440,11 @@ OVERLAPPED :: struct {
 	hEvent: HANDLE
 }
 
+STD_OUTPUT_HANDLE :: cast(u32) -11
+
+GetStdHandle :: (nStdHandle: u32) -> HANDLE #external "kernel32"
+GetProcessHeap :: () -> HANDLE #external "kernel32"
+
 CloseHandle :: (hObject: HANDLE) -> s32 #external "kernel32"
 
 CreateFileW :: (lpFileName: *u16, dwDesiredAccess: Access_Flags, dwShareMode: File_Share_Flag, lpSecurityAttributes: *SECURITY_ATTRIBUTES = null, 

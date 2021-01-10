@@ -2,8 +2,7 @@
 
 #include "Lexer.h"
 #include "String.h"
-
-
+#include "Error.h"
 #include "UTF.h"
 
 struct Keyword {
@@ -58,7 +57,8 @@ static const Keyword keywords[] = {
 	{"defer", TokenT::DEFER}, 
 	{"#run", TokenT::RUN}, 
 	{"#c_call", TokenT::C_CALL}, 
-	{"#compiler", TokenT::COMPILER}
+	{"#compiler", TokenT::COMPILER}, 
+	{"#import", TokenT::IMPORT}
 };
 
 void BigInt::zero() {
@@ -1915,11 +1915,30 @@ exponent:
 }
 
 bool LexerFile::open(FileInfo *file) {
-	assert(file->handle != INVALID_HANDLE_VALUE);
-
+	PROFILE_FUNC();
 	LARGE_INTEGER size;
 
-	GetFileSizeEx(file->handle, &size);
+	if (file->module->name.length) {
+		if (file->path.length) {
+			file->path = msprintf("modules\\%.*s\\%.*s", STRING_PRINTF(file->module->name), STRING_PRINTF(file->path));
+		}
+		else {
+			if (PathIsDirectoryW(utf8ToWString(msprintf("modules\\%.*s", STRING_PRINTF(file->module->name))))) {
+				file->path = msprintf("modules\\%.*s\\module.milo", STRING_PRINTF(file->module->name));
+			}
+			else {
+				file->path = msprintf("modules\\%.*s.milo", STRING_PRINTF(file->module->name));
+			}
+		}
+	}
+
+	auto handle = CreateFileW(utf8ToWString(file->path), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+
+	if (handle == INVALID_HANDLE_VALUE) {
+		reportError("Error: Failed to open file: %.*s", STRING_PRINTF(file->path));
+	}
+
+	GetFileSizeEx(handle, &size);
 
 	text = static_cast<char *>(malloc(size.QuadPart));
 	file->data = text;
@@ -1933,8 +1952,8 @@ bool LexerFile::open(FileInfo *file) {
 	while (toRead) {
 		u32 readAmount = static_cast<u32>(my_min(toRead, UINT32_MAX));
 
-		if (!ReadFile(file->handle, buffer, readAmount, &bytesRead, nullptr) || bytesRead != readAmount) {
-			CloseHandle(file->handle);
+		if (!ReadFile(handle, buffer, readAmount, &bytesRead, nullptr) || bytesRead != readAmount) {
+			CloseHandle(handle);
 			reportError("Error: failed to read file: %.*s", STRING_PRINTF(file->path));
 			return false;
 		}
@@ -1943,7 +1962,7 @@ bool LexerFile::open(FileInfo *file) {
 		buffer += readAmount;
 	}
 
-	CloseHandle(file->handle);
+	CloseHandle(handle);
 
 	location.line = 1;
 	location.column = 0;
@@ -1956,6 +1975,7 @@ bool LexerFile::open(FileInfo *file) {
 	identifierSerial = 0;
 	currentBlock = nullptr;
 
+	module = file->module;
 
 	return true;
 }

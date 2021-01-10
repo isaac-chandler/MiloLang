@@ -8,6 +8,7 @@
 #include "CoffWriter.h"
 #include "TypeTable.h"
 #include "ArraySet.h"
+#include "Error.h"
 
 BucketedArenaAllocator inferArena(1024 * 1024);
 
@@ -112,6 +113,10 @@ struct SubJob {
 
 	JobFlavor flavor;
 
+#if BUILD_DEBUG
+	String sleepReason;
+#endif
+
 	SubJob(JobFlavor flavor, Array<Type *> *sizeDependencies) : flavor(flavor), sizeDependencies(sizeDependencies) {}
 };
 
@@ -123,7 +128,7 @@ Expr **getHalt(SubJob *job) {
 	return job->flatteneds[job->flattenedCount - 1][job->indices[job->flattenedCount - 1]];
 }
 
-void goToSleep(SubJob *job, Array<SubJob *> *sleepingOnMe, String name = String(nullptr, 0u)) {
+void goToSleep(SubJob *job, Array<SubJob *> *sleepingOnMe, String reason, String name = String(nullptr, 0u)) {
 	_ReadWriteBarrier();
 
 	if (job->sleepCount && job->sleepingOnName != name) {
@@ -136,6 +141,10 @@ void goToSleep(SubJob *job, Array<SubJob *> *sleepingOnMe, String name = String(
 	job->sleepCount++;
 	
 	sleepingOnMe->add(job);
+
+#ifdef BUILD_DEBUG
+	job->sleepReason = reason;
+#endif
 }
 
 template<typename T>
@@ -264,7 +273,7 @@ inline void addSubJob(SubJob *job, bool highPriority = false) {
 	}
 }
 
-bool addDeclaration(Declaration *declaration);
+bool addDeclaration(Declaration *declaration, Module *members);
 
 void wakeUpSleepers(Array<SubJob *> *sleepers, bool priority = false, String name = String(nullptr, 0u)) {
 
@@ -292,7 +301,7 @@ void wakeUpSleepers(Array<SubJob *> *sleepers, bool priority = false, String nam
 	}
 }
 
-void addImporter(Importer *importer);
+void addImporter(Importer *importer, struct Module *module);
 
 void addBlock(Block *block) {
 	if (block->queued)
@@ -301,13 +310,13 @@ void addBlock(Block *block) {
 	block->queued = true;
 
 	for (auto &declaration : block->declarations) {
-		auto success = addDeclaration(declaration);
+		auto success = addDeclaration(declaration, nullptr);
 
 		assert(success); // Adding a block should never fail, the only failing cases for addDeclaration are if it is added to global scope
 	}
 
 	for (auto importer : block->importers) {
-		addImporter(importer);
+		addImporter(importer, nullptr);
 	}
 
 	wakeUpSleepers(&block->sleepingOnMe);
@@ -406,6 +415,7 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 		flattenTo.add(expr);
 		break;
 	}
+	case ExprFlavor::IMPORT:
 	case ExprFlavor::LOAD: {
 		auto load = static_cast<ExprLoad *>(*expr);
 
@@ -1288,7 +1298,7 @@ bool inferIdentifier(SubJob *job, Expr **exprPointer, ExprIdentifier *identifier
 			}
 		}
 		else {
-			goToSleep(job, &identifier->declaration->sleepingOnMyType);
+			goToSleep(job, &identifier->declaration->sleepingOnMyType, "Identifier type not ready");
 
 			sleep = true;
 		}
@@ -1299,7 +1309,7 @@ bool inferIdentifier(SubJob *job, Expr **exprPointer, ExprIdentifier *identifier
 				copyLiteral(exprPointer, identifier->declaration->initialValue);
 			}
 			else {
-				goToSleep(job, &identifier->declaration->sleepingOnMyValue);
+				goToSleep(job, &identifier->declaration->sleepingOnMyValue, "Identifier value not ready");
 
 				sleep = true;
 			}
@@ -1308,6 +1318,52 @@ bool inferIdentifier(SubJob *job, Expr **exprPointer, ExprIdentifier *identifier
 		if (sleep) {
 			*yield = true;
 			return false;
+		}
+
+		if (!(identifier->declaration->flags & DECLARATION_IS_CONSTANT)) {
+			auto currentPointer = exprPointer;
+
+			while (auto &current = static_cast<ExprIdentifier *>(*currentPointer)->structAccess) {
+				if (current->type->flags & TYPE_ARRAY_IS_FIXED) {
+					if (!isAddressable(current)) {
+						reportError(*currentPointer, "Error: Cannot get the data pointer of a fixed array that has no storage");
+						return false;
+					}
+
+					auto address = INFER_NEW(ExprUnaryOperator);
+					address->flavor = ExprFlavor::UNARY_OPERATOR;
+					address->op = TOKEN('*');
+					address->start = (*currentPointer)->start;
+					address->end = (*currentPointer)->end;
+					address->value = current;
+					address->type = (*currentPointer)->type;
+					
+					*currentPointer = address;
+
+					currentPointer = &address->value;
+				}
+				else if (current->type->flavor == TypeFlavor::POINTER && 
+					(static_cast<TypePointer *>(current->type)->pointerTo->flags & TYPE_ARRAY_IS_FIXED)) {
+					auto cast = INFER_NEW(ExprBinaryOperator);
+					cast->op = TOKEN('*');
+					cast->start = (*currentPointer)->start;
+					cast->end = (*currentPointer)->end;
+					cast->right = current;
+					cast->type = (*currentPointer)->type;
+					cast->left = inferMakeTypeLiteral(cast->start, cast->end, cast->type);
+
+					*currentPointer = cast;
+
+					currentPointer = &cast->right;
+
+				}
+				else {
+					currentPointer = &current;
+				}
+
+				if ((*currentPointer)->flavor != ExprFlavor::IDENTIFIER)
+					break;
+			}
 		}
 	}
 
@@ -1323,7 +1379,7 @@ bool inferUnaryDot(SubJob *job, TypeEnum *enum_, Expr **exprPointer, bool *yield
 		auto member = findDeclaration(&enum_->members, identifier->name, &yield);
 
 		if (yield) {
-			goToSleep(job, &enum_->members.sleepingOnMe, identifier->name);
+			goToSleep(job, &enum_->members.sleepingOnMe, "Unary dot scope has importer", identifier->name);
 
 			return true;
 		}
@@ -1697,7 +1753,7 @@ bool evaluateConstantBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 				auto pointerTo = static_cast<TypePointer *>(left->type)->pointerTo;
 
 				if (!pointerTo->size) {
-					goToSleep(job, &pointerTo->sleepingOnMe);
+					goToSleep(job, &pointerTo->sleepingOnMe, "Constexpr + pointer math size not ready");
 					*yield = true;
 					return false;
 				}
@@ -1733,7 +1789,7 @@ bool evaluateConstantBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 				auto pointerTo = static_cast<TypePointer *>(left->type)->pointerTo;
 
 				if (!pointerTo->size) {
-					goToSleep(job, &pointerTo->sleepingOnMe);
+					goToSleep(job, &pointerTo->sleepingOnMe, "Constexpr - pointer size not ready");
 					*yield = true;
 					return false;
 				}
@@ -2188,7 +2244,7 @@ bool defaultValueIsZero(SubJob *job, Type *type, bool *yield) {
 			if (member->flags & DECLARATION_IS_UNINITIALIZED) return false;
 
 			if (!(member->flags & DECLARATION_VALUE_IS_READY)) {
-				goToSleep(job, &member->sleepingOnMyValue);
+				goToSleep(job, &member->sleepingOnMyValue, "Struct default value is zero member value not ready");
 
 				*yield = true;
 				continue;
@@ -2216,9 +2272,10 @@ bool defaultValueIsZero(SubJob *job, Type *type, bool *yield) {
 	}
 }
 
+Expr *getDefaultValue(SubJob *job, Type *type, bool *shouldYield);
 
 Expr *createDefaultValue(SubJob *job, Type *type, bool *shouldYield) {
-	bool yield;
+	bool yield = false;
 
 	if (defaultValueIsZero(job, type, &yield)) {
 		return createIntLiteral({}, {}, type, 0);
@@ -2258,10 +2315,8 @@ Expr *createDefaultValue(SubJob *job, Type *type, bool *shouldYield) {
 
 
 			defaults->storage = INFER_NEW_ARRAY(Expr *, my_min(defaults->count, 2));
-
-			bool yield;
-
-			Expr *value = createDefaultValue(job, array->arrayOf, &yield);
+			
+			Expr *value = getDefaultValue(job, array->arrayOf, &yield);
 
 			if (yield) {
 				*shouldYield = true;
@@ -2289,7 +2344,7 @@ Expr *createDefaultValue(SubJob *job, Type *type, bool *shouldYield) {
 			return first->initialValue;
 		}
 		else {
-			goToSleep(job, &first->sleepingOnMyValue);
+			goToSleep(job, &first->sleepingOnMyValue, "Enum default value first value not ready");
 
 			*shouldYield = true;
 			return nullptr;
@@ -2741,7 +2796,7 @@ bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char 
 					}
 					else {
 						*yield = true;
-						goToSleep(job, &argument->sleepingOnMyValue);
+						goToSleep(job, &argument->sleepingOnMyValue, "Default argument value not ready");
 
 						failed = true;
 					}
@@ -2797,7 +2852,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 		auto declaration = static_cast<ExprIdentifier *>(left)->declaration;
 
 		if (!(declaration->flags & DECLARATION_VALUE_IS_READY)) {
-			goToSleep(job, &declaration->sleepingOnMyValue);
+			goToSleep(job, &declaration->sleepingOnMyValue, "Implicit initializer value not ready");
 
 			*yield = true;
 			return true;
@@ -3968,8 +4023,6 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 	return true;
 }
 
-u32 loadsPending = 2; // @Robustness: For now this is hardcoded for runtime.milo and the file loaded via the command 
-
 void addRunJob(ExprRun *run) {
 	run->runJob = allocateRunJob();
 	run->runJob->run = run;
@@ -4016,7 +4069,7 @@ bool inferFlattened(SubJob *job) {
 					auto member = findDeclaration(&struct_->members, identifier->name, &yield);
 
 					if (yield) {
-						goToSleep(job, &struct_->members.sleepingOnMe, identifier->name);
+						goToSleep(job, &struct_->members.sleepingOnMe, "Struct access scope has importers", identifier->name);
 
 						return true;
 					}
@@ -4062,7 +4115,7 @@ bool inferFlattened(SubJob *job) {
 							}
 						}
 						else if (yield) {
-							goToSleep(job, &identifier->resolveFrom->sleepingOnMe, identifier->name);
+							goToSleep(job, &identifier->resolveFrom->sleepingOnMe, "Identifier scope has importers", identifier->name);
 
 							return true;
 						}
@@ -4075,10 +4128,10 @@ bool inferFlattened(SubJob *job) {
 
 					if (!identifier->declaration) {
 						if (!identifier->resolveFrom) { // If we have checked all the local scopes and the
-							identifier->declaration = findDeclarationNoYield(&globalBlock, identifier->name);
+							identifier->declaration = findDeclarationNoYield(&identifier->module->members, identifier->name);
 
 							if (!identifier->declaration) {
-								goToSleep(job, &globalBlock.sleepingOnMe, identifier->name);
+								goToSleep(job, &identifier->module->members.sleepingOnMe, "Identifier not found in module", identifier->name);
 
 								return true;
 							}
@@ -4112,7 +4165,7 @@ bool inferFlattened(SubJob *job) {
 			if (!expr->type) {
 				auto function = static_cast<ExprFunction *>(expr);
 
-				goToSleep(job, &function->sleepingOnInfer);
+				goToSleep(job, &function->sleepingOnInfer, "Function header not ready");
 
 				return true;
 			}
@@ -4130,7 +4183,7 @@ bool inferFlattened(SubJob *job) {
 			}
 
 			if (run->runJob) {
-				goToSleep(job, &run->sleepingOnMe);
+				goToSleep(job, &run->sleepingOnMe, "Run not completed");
 				return true;
 			}
 
@@ -4165,32 +4218,59 @@ bool inferFlattened(SubJob *job) {
 			}
 
 			addRunJob(run);
-			goToSleep(job, &run->sleepingOnMe);
+			goToSleep(job, &run->sleepingOnMe, "Run not completed");
 
 
 			return true;
 		}
+		case ExprFlavor::IMPORT: {
+			auto import = static_cast<ExprLoad *>(expr);
+
+			if (import->file->type != &TYPE_STRING) {
+				reportError(import->file, "Error: Module to import must be a string");
+				return false;
+			}
+			else if (import->file->flavor != ExprFlavor::STRING_LITERAL) {
+				reportError(import->file, "Error: Module to import must be a constant");
+				return false;
+			}
+
+			auto name = static_cast<ExprStringLiteral *>(import->file)->string;
+
+			auto module = getModule(name);
+
+			if (module == import->module) {
+				reportError(import, "Error: A module cannot import itself");
+				return false;
+			}
+
+			if (!module)
+				return false;
+
+			import->module = module;
+
+			break;
+		}
 		case ExprFlavor::LOAD: {
 			auto load = static_cast<ExprLoad *>(expr);
 
-			if (load->file->type != &TYPE_STRING) {
-				reportError(load->file, "Error: File to load must be a string");
-				return false;
-			}
-			else if (load->file->flavor != ExprFlavor::STRING_LITERAL) {
-				reportError(load->file, "Error: File to load must be a constant");
-				return false;
+			if (load->module) {
+				if (load->file->type != &TYPE_STRING) {
+					reportError(load->file, "Error: File to load must be a string");
+					return false;
+				}
+				else if (load->file->flavor != ExprFlavor::STRING_LITERAL) {
+					reportError(load->file, "Error: File to load must be a constant");
+					return false;
+				}
+
+				auto name = static_cast<ExprStringLiteral *>(load->file)->string;
+
+				loadNewFile(name, load->module);
+
+				load->module = nullptr;
 			}
 			
-			auto name = static_cast<ExprStringLiteral *>(load->file)->string;
-
-			if (name.length == 0) {
-				reportError(load->file, "Error: File to load cannot be an empty string");
-				return false;
-			}
-
-			loadsPending++;
-			filesToLoadQueue.add(name);
 			break;
 		}
 		case ExprFlavor::FUNCTION_PROTOTYPE: {
@@ -4202,7 +4282,7 @@ bool inferFlattened(SubJob *job) {
 				assert(argument);
 
 				if (!(argument->flags & DECLARATION_TYPE_IS_READY)) {
-					goToSleep(job, &argument->sleepingOnMyType);
+					goToSleep(job, &argument->sleepingOnMyType, "Function argument type not ready");
 
 					sleep = true;
 				}
@@ -4213,7 +4293,7 @@ bool inferFlattened(SubJob *job) {
 				assert(return_);
 
 				if (!(return_->flags & DECLARATION_TYPE_IS_READY)) {
-					goToSleep(job, &return_->sleepingOnMyType);
+					goToSleep(job, &return_->sleepingOnMyType, "Function return type not ready");
 
 					sleep = true;
 				}
@@ -4243,7 +4323,7 @@ bool inferFlattened(SubJob *job) {
 			for (auto declaration : block->declarations.declarations) {
 				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING))) {
 					if (!(declaration->flags & DECLARATION_TYPE_IS_READY)) {
-						goToSleep(job, &declaration->sleepingOnMyType);
+						goToSleep(job, &declaration->sleepingOnMyType, "Block declaration type not ready");
 
 						sleep = true;
 					}
@@ -4424,7 +4504,7 @@ bool inferFlattened(SubJob *job) {
 
 				for (auto member : enum_->values->declarations) {
 					if (!(member->flags & DECLARATION_VALUE_IS_READY)) {
-						goToSleep(job, &member->sleepingOnMyValue);
+						goToSleep(job, &member->sleepingOnMyValue, "Complete switch enum value not ready");
 						sleep = true;
 					}
 				}
@@ -5004,7 +5084,7 @@ bool inferFlattened(SubJob *job) {
 			auto return_ = static_cast<ExprReturn *>(expr);
 
 			if (!return_->returnsFrom->type) {
-				goToSleep(job, &return_->returnsFrom->sleepingOnInfer);
+				goToSleep(job, &return_->returnsFrom->sleepingOnInfer, "Return function type not ready");
 
 				return true;
 			}
@@ -5220,7 +5300,7 @@ bool inferFlattened(SubJob *job) {
 				}
 
 				if (!type->typeValue->size) {
-					goToSleep(job, &type->typeValue->sleepingOnMe);
+					goToSleep(job, &type->typeValue->sleepingOnMe, "Sizeof size not ready");
 
 					return true;
 				}
@@ -5470,7 +5550,7 @@ bool inferFlattened(SubJob *job) {
 				*exprPointer = literal;
 			}
 			else {
-				goToSleep(job, &increment->previous->sleepingOnMyValue);
+				goToSleep(job, &increment->previous->sleepingOnMyValue, "Enum previous value not ready");
 
 				return true;
 			}
@@ -5676,11 +5756,37 @@ else if (!checkStructDeclaration(declaration, value, name)) {	\
 #undef FUNCTION_DECLARATION
 }
 
-void addImporter(Importer *importer) {
+void addImporter(Importer *importer, Module *module) {
 	PROFILE_FUNC();
 
-	if (!importer->enclosingScope)
-		addImporterToBlock(&globalBlock, importer, 0);
+	if (importer->enclosingScope && importer->enclosingScope->flavor == BlockFlavor::GLOBAL) {
+		module = CAST_FROM_SUBSTRUCT(Module, members, importer->enclosingScope);
+	}
+
+	if (module) {
+		if (!importer->enclosingScope)
+			addImporterToBlock(&module->members, importer, 0);
+
+		if (importer->import->flavor != ExprFlavor::IMPORT && importer->import->flavor != ExprFlavor::LOAD && !(importer->flags & IMPORTER_IS_IMPORTED)) {
+			for (auto block : module->imports) {
+				auto import = INFER_NEW(Importer);
+				import->flags = importer->flags;
+
+				import->flags |= IMPORTER_IS_IMPORTED;
+				import->flags &= ~IMPORTER_IS_COMPLETE;
+
+				import->import = importer->import;
+				import->structAccess = nullptr;
+
+				addImporterToBlock(block->enclosingScope, import, importer->serial);
+
+				addImporter(import, nullptr);
+			}
+		}
+	}
+
+	assert(importer->enclosingScope);
+
 
 	++totalImporters;
 
@@ -5694,7 +5800,7 @@ void addImporter(Importer *importer) {
 	addSubJob(job);
 }
 
-bool addDeclaration(Declaration *declaration) {
+bool addDeclaration(Declaration *declaration, Module *module) {
 	PROFILE_FUNC();
 
 	declaration->inferJob = nullptr;
@@ -5703,17 +5809,34 @@ bool addDeclaration(Declaration *declaration) {
 		return true;
 	assert(!(declaration->flags & (DECLARATION_IS_ITERATOR | DECLARATION_IS_ITERATOR_INDEX | DECLARATION_IS_IN_COMPOUND)));
 
-	if (!declaration->enclosingScope) {
+	if (declaration->enclosingScope && declaration->enclosingScope->flavor == BlockFlavor::GLOBAL) {
+		module = CAST_FROM_SUBSTRUCT(Module, members, declaration->enclosingScope);
+	}
+
+	if (module) {
 		PROFILE_ZONE("Add declaration to global block");
 
-		if (!addDeclarationToBlock(&globalBlock, declaration, 0)) {
+		if (!declaration->enclosingScope && !addDeclarationToBlock(&module->members, declaration, 0)) {
 			return false;
 		}
 
-		wakeUpSleepers(&globalBlock.sleepingOnMe, false, declaration->name);
+		wakeUpSleepers(&module->members.sleepingOnMe, false, declaration->name);
+
+		if (!(declaration->flags & DECLARATION_IMPORTED_BY_USING)) {
+			for (auto import : module->imports) {
+				if (checkForRedeclaration(import->enclosingScope, declaration, import->import)) {
+					putDeclarationInBlock(import->enclosingScope, declaration);
+
+					wakeUpSleepers(&import->enclosingScope->sleepingOnMe, true, declaration->name);
+				}
+			}
+		}
+
 	}
 
-	if (declaration->enclosingScope == &globalBlock && declaration->start.fileUid == 0 && !checkBuiltinDeclaration(declaration)) {
+	assert(declaration->enclosingScope);
+
+	if (module == runtimeModule && !checkBuiltinDeclaration(declaration)) {
 		return false;
 	}
 
@@ -5739,7 +5862,7 @@ bool addDeclaration(Declaration *declaration) {
 			return true;
 		}
 	}
-	else if (declaration->enclosingScope && declaration->enclosingScope != &globalBlock) {
+	else if (declaration->enclosingScope && declaration->enclosingScope->flavor != BlockFlavor::GLOBAL) {
 
 		if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::INT_LITERAL) {
 			trySolidifyNumericLiteralToDefault(declaration->initialValue);
@@ -5886,8 +6009,6 @@ void getHaltStatus(Declaration *declaration, Declaration *next, Expr **haltedOn,
 Array<FunctionJob *> functionWaitingOnSize;
 Array<DeclarationJob *> declarationWaitingOnSize;
 
-void addImporter(Importer *importer);
-
 bool inferImporter(ImporterJob *job) {
 	PROFILE_FUNC();
 
@@ -5900,7 +6021,7 @@ bool inferImporter(ImporterJob *job) {
 
 	if (importer->import->flavor == ExprFlavor::STATIC_IF) {
 		auto staticIf = static_cast<ExprIf *>(importer->import);
-
+		
 		assert(staticIf->condition);
 		assert(staticIf->condition->flavor == ExprFlavor::INT_LITERAL);
 		assert(staticIf->condition->type == &TYPE_BOOL);
@@ -5921,6 +6042,46 @@ bool inferImporter(ImporterJob *job) {
 				block = &static_cast<ExprBlock *>(staticIf->elseBody)->declarations;
 			}
 		}
+	}
+	else if (importer->import->flavor == ExprFlavor::IMPORT) {
+		auto import = static_cast<ExprLoad *>(importer->import);
+
+		for (auto block : import->module->imports) {
+			if (block->enclosingScope == importer->enclosingScope) {
+				goto done;
+			}
+		}
+
+		import->module->imports.add(importer);
+
+		for (auto member : import->module->members.importers) {
+			if (member->enclosingScope == &import->module->members && member->import->flavor != ExprFlavor::IMPORT && member->import->flavor != ExprFlavor::LOAD && !(member->flags & IMPORTER_IS_IMPORTED)) {
+				auto import = INFER_NEW(Importer);
+				import->flags = member->flags;
+
+				import->flags |= IMPORTER_IS_IMPORTED;
+				import->flags &= ~IMPORTER_IS_COMPLETE;
+
+				import->import = member->import;
+				import->structAccess = structAccess;
+
+				addImporterToBlock(importer->enclosingScope, import, importer->serial);
+
+				addImporter(import, nullptr);
+			}
+		}
+
+
+		for (auto member : import->module->members.declarations) {
+			if (member->enclosingScope == &import->module->members && !(member->flags & DECLARATION_IMPORTED_BY_USING)) {
+				if (checkForRedeclaration(importer->enclosingScope, member, importer->import)) {
+					putDeclarationInBlock(importer->enclosingScope, member);
+
+					wakeUpSleepers(&importer->enclosingScope->sleepingOnMe, true, member->name);
+				}
+			}
+		}
+	done:;
 	}
 	else if (importer->import->flavor != ExprFlavor::LOAD) {
 		block = &getExpressionNamespace(importer->import, &onlyConstants, importer->import)->members;
@@ -5965,7 +6126,7 @@ bool inferImporter(ImporterJob *job) {
 
 				addImporterToBlock(importer->enclosingScope, import, importer->serial);
 
-				addImporter(import);
+				addImporter(import, nullptr);
 			}
 		}
 
@@ -5997,7 +6158,7 @@ bool inferImporter(ImporterJob *job) {
 
 						wakeUpSleepers(&importer->enclosingScope->sleepingOnMe, true, member->name);
 
-						if (!addDeclaration(member)) {
+						if (!addDeclaration(member, nullptr)) {
 							return false;
 						}
 					}
@@ -6009,7 +6170,7 @@ bool inferImporter(ImporterJob *job) {
 
 			block->declarations.clear();
 
-			if (importer->enclosingScope == &globalBlock) {
+			if (importer->enclosingScope->flavor == BlockFlavor::GLOBAL) {
 				auto exprBlock = CAST_FROM_SUBSTRUCT(ExprBlock, declarations, block);
 
 				for (auto expr : exprBlock->exprs) {
@@ -6047,7 +6208,7 @@ bool inferImporter(ImporterJob *job) {
 							wakeUpSleepers(&importer->enclosingScope->sleepingOnMe, true, import->name);
 
 							if (member->flags & DECLARATION_IS_CONSTANT) {
-								if (!addDeclaration(import)) {
+								if (!addDeclaration(import, nullptr)) {
 									return false;
 								}
 							}
@@ -6061,7 +6222,9 @@ bool inferImporter(ImporterJob *job) {
 		}
 	}
 
-	wakeUpSleepers(&importer->enclosingScope->sleepingOnMe);
+	if (importer->enclosingScope->flavor != BlockFlavor::GLOBAL)
+		wakeUpSleepers(&importer->enclosingScope->sleepingOnMe);
+
 	importer->flags |= IMPORTER_IS_COMPLETE;
 
 	removeJob(&importerJobs, job);
@@ -6148,7 +6311,7 @@ bool inferDeclarationType(DeclarationJob *job) {
 		declaration->sleepingOnMyValue.free();
 
 
-		if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
+		if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope->flavor == BlockFlavor::GLOBAL) {
 			declarationWaitingOnSize.add(job);
 		}
 		else {
@@ -6168,7 +6331,7 @@ bool inferDeclarationValue(DeclarationJob *job) {
 		if (declaration->flags & DECLARATION_VALUE_IS_READY) return true;
 
 		if (!(declaration->flags & DECLARATION_TYPE_IS_READY)) {
-			goToSleep(&job->value, &declaration->sleepingOnMyType);
+			goToSleep(&job->value, &declaration->sleepingOnMyType, "Declaration type not ready");
 			return true;
 		}
 
@@ -6183,7 +6346,7 @@ bool inferDeclarationValue(DeclarationJob *job) {
 				assert(declaration->initialValue->flavor == ExprFlavor::INT_LITERAL);
 
 				if (!static_cast<TypeEnum *>(correct)->integerType) {
-					goToSleep(&job->type, &correct->sleepingOnMe);
+					goToSleep(&job->type, &correct->sleepingOnMe, "Enum base type not ready");
 
 					return true;
 				}
@@ -6216,7 +6379,7 @@ bool inferDeclarationValue(DeclarationJob *job) {
 		wakeUpSleepers(&declaration->sleepingOnMyValue);
 		declaration->sleepingOnMyValue.free();
 
-		if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
+		if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope->flavor == BlockFlavor::GLOBAL) {
 			declarationWaitingOnSize.add(job);
 		}
 		else {
@@ -6263,7 +6426,7 @@ bool inferDeclarationValue(DeclarationJob *job) {
 			declaration->sleepingOnMyValue.free();
 
 
-			if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope == &globalBlock) {
+			if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->enclosingScope->flavor == BlockFlavor::GLOBAL) {
 				declarationWaitingOnSize.add(job);
 			}
 			else {
@@ -6336,7 +6499,7 @@ bool inferFunctionType(FunctionJob *job) {
 		assert(argument);
 
 		if (!(argument->flags & DECLARATION_TYPE_IS_READY)) {
-			goToSleep(&job->type, &argument->sleepingOnMyType);
+			goToSleep(&job->type, &argument->sleepingOnMyType, "Function argument type not ready");
 
 			sleep = true;
 		}
@@ -6348,7 +6511,7 @@ bool inferFunctionType(FunctionJob *job) {
 		assert(return_);
 
 		if (!(return_->flags & DECLARATION_TYPE_IS_READY)) {
-			goToSleep(&job->type, &return_->sleepingOnMyType);
+			goToSleep(&job->type, &return_->sleepingOnMyType, "Funtion return type not ready");
 
 			sleep = true;
 		}
@@ -6392,7 +6555,7 @@ bool inferFunctionValue(FunctionJob *job) {
 	auto function = job->function;
 
 	if (!function->type) {
-		goToSleep(&job->value, &function->sleepingOnInfer);
+		goToSleep(&job->value, &function->sleepingOnInfer, "Function type not ready");
 		return true;
 	}
 
@@ -6487,7 +6650,7 @@ bool inferSize(SizeJob *job) {
 
 		for (auto importer : struct_->members.importers) {
 			if (!(importer->flags & IMPORTER_IS_COMPLETE) && importer->import->flavor == ExprFlavor::STATIC_IF) {
-				goToSleep(job, &struct_->members.sleepingOnMe);
+				goToSleep(job, &struct_->members.sleepingOnMe, "Struct sizing #if not complete");
 				return true;
 			}
 		}
@@ -6499,7 +6662,7 @@ bool inferSize(SizeJob *job) {
 
 			if (!(member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING))) {
 				if (!(member->flags & DECLARATION_TYPE_IS_READY)) {
-					goToSleep(job, &member->sleepingOnMyType);
+					goToSleep(job, &member->sleepingOnMyType, "Struct sizing member type not ready");
 
 					if (sleeping == -1) sleeping = job->sizingIndexInMembers;
 				}
@@ -6507,7 +6670,7 @@ bool inferSize(SizeJob *job) {
 					auto memberType = static_cast<ExprLiteral *>(member->type)->typeValue;
 
 					if (!memberType->size) {
-						goToSleep(job, &memberType->sleepingOnMe);
+						goToSleep(job, &memberType->sleepingOnMe, "Struct sizing member size not ready");
 
 						if (sleeping == -1) sleeping = job->sizingIndexInMembers;
 					}
@@ -6583,7 +6746,7 @@ bool inferSize(SizeJob *job) {
 			freeJob(job);
 		}
 		else {
-			goToSleep(job, &array->arrayOf->sleepingOnMe);
+			goToSleep(job, &array->arrayOf->sleepingOnMe, "Array sizing element type not sized");
 			return true;
 		}
 	}
@@ -6715,7 +6878,7 @@ bool findTypeInfoInExprRecurse(RunJob *job, ArraySet<Type *> *types, Expr *expr)
 			if (member->flags & (DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_CONSTANT | DECLARATION_IS_UNINITIALIZED)) continue;
 
 			if (!(member->flags & DECLARATION_TYPE_IS_READY)) {
-				goToSleep(job, &member->sleepingOnMyValue);
+				goToSleep(job, &member->sleepingOnMyValue, "Find type info expr struct member type not ready");
 				return false;
 			}
 
@@ -6740,7 +6903,7 @@ bool findTypeInfoRecurse(RunJob *job, ArraySet<Type *> *types, Type *type) {
 	}
 
 	if (!type->size) {
-		goToSleep(job, &type->sleepingOnMe);
+		goToSleep(job, &type->sleepingOnMe, "Find type info type not sized");
 		return false;
 	}
 
@@ -6765,7 +6928,7 @@ bool findTypeInfoRecurse(RunJob *job, ArraySet<Type *> *types, Type *type) {
 
 		for (auto member : enum_->values->declarations) {
 			if (!(member->flags & DECLARATION_VALUE_IS_READY)) {
-				goToSleep(job, &member->sleepingOnMyValue);
+				goToSleep(job, &member->sleepingOnMyValue, "Find type info enum value not ready");
 				return false;
 			}
 		}
@@ -6799,7 +6962,7 @@ bool findTypeInfoRecurse(RunJob *job, ArraySet<Type *> *types, Type *type) {
 			if (member->flags & (DECLARATION_IMPORTED_BY_USING)) continue;
 
 			if (!(member->flags & DECLARATION_TYPE_IS_READY)) {
-				goToSleep(job, &member->sleepingOnMyType);
+				goToSleep(job, &member->sleepingOnMyType, "Find type info struct member type not ready");
 				return false;
 			}
 
@@ -6816,7 +6979,7 @@ bool findTypeInfoRecurse(RunJob *job, ArraySet<Type *> *types, Type *type) {
 			if (member->flags & DECLARATION_IS_UNINITIALIZED) continue;
 
 			if (!(member->flags & DECLARATION_VALUE_IS_READY)) {
-				goToSleep(job, &member->sleepingOnMyValue);
+				goToSleep(job, &member->sleepingOnMyValue, "Find type info struct member value not ready");
 				return false;
 			}
 
@@ -7069,7 +7232,7 @@ bool inferRun(RunJob *job) {
 		}
 		else {
 			if (!(function->flags & EXPR_FUNCTION_RUN_READY)) {
-				goToSleep(job, &function->sleepingOnIr);
+				goToSleep(job, &function->sleepingOnIr, "Run function ir not ready");
 				return true;
 			}
 
@@ -7131,7 +7294,7 @@ bool inferRun(RunJob *job) {
 					else if (op.op == IrOp::ADDRESS_OF_GLOBAL) {
 						if (!op.declaration->runtimeValue) {
 							if (!(op.declaration->flags & DECLARATION_VALUE_IS_READY)) {
-								goToSleep(job, &op.declaration->sleepingOnMyValue);
+								goToSleep(job, &op.declaration->sleepingOnMyValue, "Address of global declaration value not ready");
 								return true;
 							}
 
@@ -7186,14 +7349,14 @@ void createBasicDeclarations() {
 	targetWindows->start = {};
 	targetWindows->end = {};
 	targetWindows->name = "TARGET_WINDOWS";
-	targetWindows->type = inferMakeTypeLiteral(targetWindows->start, targetWindows->end, &TYPE_BOOL);
 
 	auto literal = createIntLiteral(targetWindows->start, targetWindows->end, &TYPE_BOOL, BUILD_WINDOWS);
 
 	targetWindows->initialValue = literal;
-	targetWindows->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY | DECLARATION_IS_CONSTANT;
+	targetWindows->type = nullptr;
+	targetWindows->flags |= DECLARATION_IS_CONSTANT;
 
-	addDeclarationToBlock(&globalBlock, targetWindows, 0);
+	addDeclaration(targetWindows, runtimeModule);
 }
 
 bool doJob(SubJob *job) {
@@ -7236,10 +7399,8 @@ bool doJob(SubJob *job) {
 	return true;
 }
 
-void runInfer() {
+void runInfer(String inputFile) {
 	PROFILE_FUNC();
-
-	globalBlock.flavor = BlockFlavor::GLOBAL;
 
 	u64 irGenerationPending = 0;
 
@@ -7251,19 +7412,40 @@ void runInfer() {
 		while (inferInput.count) {
 			auto job = inferInput.pop();
 
-			if (job.type == InferJobType::GLOBAL_DECLARATION && !job.declaration) {
+			if (job.type == InferJobType::DONE) {
 				goto outer;
 			}
 
 			if (job.type == InferJobType::IMPORTER) {
-				addImporter(job.importer);
+				addImporter(job.importer, job.module);
 			}
 			else if (job.type == InferJobType::GLOBAL_DECLARATION) {
 				if (job.declaration)
-					if (!addDeclaration(job.declaration))
+					if (!addDeclaration(job.declaration, job.module))
 						goto error;
 			}
 			else if (job.type == InferJobType::LOAD_COMPLETE) {
+				if (job.fileUid == 0) {
+					auto name = INFER_NEW(ExprStringLiteral);
+					name->flavor = ExprFlavor::STRING_LITERAL;
+					name->start = {};
+					name->end = {};
+					name->string = inputFile;
+					name->type = &TYPE_STRING;
+
+					auto load = INFER_NEW(ExprLoad);
+					load->flavor = ExprFlavor::LOAD;
+					load->start = {};
+					load->end = {};
+					load->file = name;
+					load->module = mainModule;
+
+					auto import = INFER_NEW(Importer);
+					import->import = load;
+
+					inferInput.add(InferQueueJob(import, mainModule));
+				}
+
 				loadsPending--;
 			}
 			else if (job.type == InferJobType::RUN) {
@@ -7339,7 +7521,7 @@ void runInfer() {
 
 		if (loadsPending == 0 && irGenerationPending == 0) {
 			irGeneratorQueue.add(nullptr);
-			filesToLoadQueue.add("");
+			break;
 		}
 	}
 	outer:
@@ -7467,10 +7649,22 @@ void runInfer() {
 			else {
 				reportError("%.*s sizing halted", STRING_PRINTF(type->name));
 			}
+
+#if BUILD_DEBUG
+			if (job->sleepCount) {
+				reportError("%.*s", STRING_PRINTF(job->sleepReason));
+			}
+#endif
 		}
 
 		for (auto job = runJobs; job; job = job->next) {
 			reportError(job->run, "Run halted");
+
+#if BUILD_DEBUG
+			if (job->sleepCount) {
+				reportError("%.*s", STRING_PRINTF(job->sleepReason));
+			}
+#endif
 		}
 
 		for (auto job = functionJobs; job; job = job->next) {
@@ -7486,10 +7680,6 @@ void runInfer() {
 				auto haltedOn = *getHalt(&job->value);
 
 				reportError(haltedOn, "%.*s value halted here", STRING_PRINTF(name));
-
-				if (haltedOn->flavor == ExprFlavor::IDENTIFIER) {
-					auto identifier = static_cast<ExprIdentifier *>(haltedOn);
-				}
 			}
 
 			if (isDone(&job->type) && isDone(&job->value)) {
@@ -7519,6 +7709,16 @@ void runInfer() {
 					}
 				}
 			}
+
+#if BUILD_DEBUG
+			if (job->type.sleepCount) {
+				reportError("Type: %.*s", STRING_PRINTF(job->type.sleepReason));
+			}
+
+			if (job->value.sleepCount) {
+				reportError("Value: %.*s", STRING_PRINTF(job->value.sleepReason));
+			}
+#endif
 		}
 
 		for (auto job = declarationJobs; job; job = job->next) {
@@ -7543,13 +7743,47 @@ void runInfer() {
 			if (isDone(&job->type) && isDone(&job->value)) {
 				reportError(job->declaration, "Declaration halted after completing infer");
 			}
+
+#if BUILD_DEBUG
+			if (job->type.sleepCount) {
+				reportError("Type: %.*s", STRING_PRINTF(job->type.sleepReason));
+			}
+
+			if (job->value.sleepCount) {
+				reportError("Value: %.*s", STRING_PRINTF(job->value.sleepReason));
+			}
+#endif
 		}
 
-		goto error;
-	}
+		for (auto job = importerJobs; job; job = job->next) {
+			if (isDone(job)) {
+				reportError(job->importer->import, "Importer halted after completing infer");
+			}
+			else {
+				auto haltedOn = *getHalt(job);
 
-	if (functionWaitingOnSize.count || declarationWaitingOnSize.count) {
-		reportError("Error: waiting on size @Incomplete");
+				reportError(haltedOn, "Importer halted here");
+			}
+
+#if BUILD_DEBUG
+			if (job->sleepCount) {
+				reportError("%.*s", STRING_PRINTF(job->sleepReason));
+			}
+#endif
+		}
+
+		for (auto job : declarationWaitingOnSize) {
+			for (auto depend : job->sizeDependencies) {
+				reportError(job->declaration, "Error: Declaration waiting on size of %.*s", STRING_PRINTF(depend->name));
+			}
+		}
+
+		for (auto job : functionWaitingOnSize) {
+			for (auto depend : job->sizeDependencies) {
+				reportError(job->function, "Error: Function waiting on size of %.*s", STRING_PRINTF(depend->name));
+			}
+		}
+
 		goto error;
 	}
 
@@ -7557,12 +7791,10 @@ void runInfer() {
 	printf("Type table memory used: %ukb\n", typeArena.totalSize / 1024);
 
 	irGeneratorQueue.add(nullptr);
-	filesToLoadQueue.add("");
 
 	return;
 error:;
 	assert(hadError);
 
 	irGeneratorQueue.add(nullptr);
-	filesToLoadQueue.add("");
 }

@@ -4,6 +4,8 @@
 #include <dyncall_signature.h>
 #include <dyncall_callback.h>
 #include "Infer.h"
+#include "CompilerMain.h"
+#include "Error.h"
 
 struct StackNode {
 	StackNode *next;
@@ -221,7 +223,7 @@ void runFunction(VMState *state, ExprFunction *expr, const Ir *caller, DCArgs *d
 	if (expr->flags & EXPR_FUNCTION_IS_COMPILER) {
 		assert(expr->valueOfDeclaration);
 
-		if (std::this_thread::get_id() != inferThread) {
+		if (std::this_thread::get_id() != mainThread) {
 			// @Incomplete: Display error location
 			reportError("Error: Compiler functions can only be called from the initial thread", STRING_PRINTF(expr->valueOfDeclaration->name));
 		}
@@ -243,9 +245,8 @@ void runFunction(VMState *state, ExprFunction *expr, const Ir *caller, DCArgs *d
 
 			auto import = new Importer;
 			import->import = load;
-
-
-			inferInput.add(import);
+			
+			inferInput.add(InferQueueJob(import, mainModule));
 		}
 		else {
 			// @Incomplete: Display error location

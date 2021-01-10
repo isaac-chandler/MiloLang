@@ -101,5 +101,7 @@ u32 getSingleUtf32FromUtf8(String string, String *newString);
 
 void appendUtf32ToUtf8(Array<u8> &string, u32 c);
 
+wchar_t *utf8ToWString(String filename);
+
 HANDLE createFileUtf8(u8 *filename, DWORD desiredAccess, DWORD shareMode, DWORD creationDisposition, DWORD flags);
 HANDLE createFileUtf8(String filename, DWORD desiredAccess, DWORD shareMode, DWORD creationDisposition, DWORD flags);

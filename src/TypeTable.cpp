@@ -3,7 +3,6 @@
 #include "Basic.h"
 #include "TypeTable.h"
 #include "Ast.h"
-#include "Parser.h" // For addDeclarationToBlock, that shouldn't be in parser
 #include "CoffWriter.h"
 
 BucketedArenaAllocator typeArena(1024 * 1024);
@@ -375,12 +374,13 @@ void generateTypeNameForFunction(TypeFunction *function) {
 
 	*cursor++ = ')';
 	*cursor++ = ' ';
-	if (function->returnCount != 1) {
-		*cursor++ = '(';
-	}
 	*cursor++ = '-';
 	*cursor++ = '>';
 	*cursor++ = ' ';
+
+	if (function->returnCount != 1) {
+		*cursor++ = '(';
+	}
 
 
 	for (u64 i = 0; i < function->returnCount; i++) {
@@ -454,10 +454,6 @@ TypeFunction *getFunctionType(ExprFunction *expr) {
 				goto cont;
 			}
 
-			if (((function->flags & TYPE_FUNCTION_IS_COMPILER) != 0) != ((expr->flags & EXPR_FUNCTION_IS_COMPILER) != 0)) {
-				goto cont;
-			}
-
 			if (function->argumentCount == arguments.count && function->returnCount == returns.count) {
 				for (u32 i = 0; i < arguments.count; i++) {
 					if (function->argumentTypes[i] != static_cast<ExprLiteral *>(arguments[i]->type)->typeValue) {
@@ -491,10 +487,6 @@ TypeFunction *getFunctionType(ExprFunction *expr) {
 
 	if (expr->flags & EXPR_FUNCTION_IS_C_CALL) {
 		result->flags |= TYPE_FUNCTION_IS_C_CALL;
-	}
-
-	if (expr->flags & EXPR_FUNCTION_IS_COMPILER) {
-		result->flags |= TYPE_FUNCTION_IS_COMPILER;
 	}
 
 	for (u32 i = 0; i < returns.count; i++) {

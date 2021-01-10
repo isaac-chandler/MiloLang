@@ -10,6 +10,7 @@
 #include "Lexer.h"
 #include "TypeTable.h"
 #include "Find.h"
+#include "Error.h"
 
 #define NUM_PARSE_THREADS 4
 
@@ -48,60 +49,26 @@ PIMAGE_TLS_CALLBACK tls_callback_func = tls_callback;
 
 #endif
 
-#if BUILD_WINDOWS
-bool doColorPrint = false; // False by default, set at startup if color can be enabled
-#else
-bool doColorPrint = true;
-#endif
-
 
 std::mutex filesMutex;
 
-static Array<FileInfo *> files;
-
-FileInfo *loadNewFile(String file) {
+void loadNewFile(String file, Module *module) {
 	// Open the file here and keep it open until we parse it to avoid race condition
-	HANDLE handle = createFileUtf8(file, GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN); // @Platform
-
-	if (handle == INVALID_HANDLE_VALUE) {
-		reportError("Error: failed to open file: %.*s", STRING_PRINTF(file));
-		return nullptr;
-	}
-
-	BY_HANDLE_FILE_INFORMATION fileInfo;
-
-	if (!GetFileInformationByHandle(handle, &fileInfo)) {
-		reportError("Error: failed to read file information for file: %.*s", STRING_PRINTF(file));
-		return nullptr;
-	}
-
-	if (fileInfo.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) { // Are there any other attributes we should check for?
-		reportError("Error: %.*s is a directory, you can only compile files", STRING_PRINTF(file));
-		return nullptr;
-	}
-
-	FileInfo info;
-	info.path = file;
-	info.handle = handle;
-	info.volumeSerialNumber = fileInfo.dwVolumeSerialNumber;
-	info.fileIndex = (static_cast<u64>(fileInfo.nFileIndexHigh) << 32ULL) | static_cast<u64>(fileInfo.nFileIndexLow);
+	FileInfo *info = new FileInfo;
+	info->path = file;
+	info->module = module;
 
 
 	{
 		ScopeLock fileLock(filesMutex);
-		info.fileUid = files.count;
+		info->fileUid = compilerFiles.count;
 
-		for (auto file : files) {
-			if (*file == info) {
-				CloseHandle(handle);
-				return nullptr;
-			}
-		}
+		compilerFiles.add((info));
 
-		files.add(new FileInfo(info));
 	}
 
-	return files[files.count - 1];
+	loadsPending++;
+	parserQueue.add(info);
 }
 
 FileInfo *getFileInfoByUid(u32 fileUid) {
@@ -109,160 +76,12 @@ FileInfo *getFileInfoByUid(u32 fileUid) {
 
 	{
 		ScopeLock fileLock(filesMutex);
-		info = files[fileUid];
+		info = compilerFiles[fileUid];
 	}
 
 	assert(info->fileUid == fileUid);
 
 	return info;
-}
-
-Array<FileInfo *> getAllFilesNoLock() {
-	return files;
-}
-
-void displayErrorLocation(CodeLocation *start, EndLocation *end) {
-	auto info = getFileInfoByUid(start->fileUid);
-
-	char *file = info->data;
-	char *errorStart = file + start->locationInMemory;
-	char *errorEnd = file + end->locationInMemory;
-
-	do {
-		--errorStart;
-		assert(errorStart >= file);
-	} while (!utf8ByteCount(*errorStart));
-
-	char *lineStart = errorStart;
-
-	while (lineStart != file) {
-		--lineStart;
-
-		if (*lineStart == '\n' || *lineStart == '\r') {
-			++lineStart;
-			break;
-		}
-	}
-
-	char *lineEnd = errorEnd;
-
-	while (lineEnd != file + info->size) {
-		if (*lineEnd == '\n' || *lineEnd == '\r') {
-			break;
-		}
-
-		++lineEnd;
-	}
-
-	String pre = { lineStart, errorStart };
-	String error = { errorStart, errorEnd };
-	String post = { errorEnd, lineEnd };
-
-	if (doColorPrint) {
-		printf("%.*s\x1b[91m%.*s\x1b[0m%.*s\n", STRING_PRINTF(pre), STRING_PRINTF(error), STRING_PRINTF(post));
-	}
-	else {
-		printf("%.*s%.*s%.*s\n", STRING_PRINTF(pre), STRING_PRINTF(error), STRING_PRINTF(post));
-	}
-}
-
-void printErrorLocation(CodeLocation *location) {
-	String filename = getFileInfoByUid(location->fileUid)->path;
-
-	printf("%.*s:%" PRIu32 ",%" PRIu32 " ", STRING_PRINTF(filename), location->line, location->column);
-
-}
-
-void reportError(CHECK_PRINTF const char *format, ...) {
-	hadError = true;
-
-	va_list args;
-	va_start(args, format);
-
-	vprintf(format, args);
-	puts("");
-
-	va_end(args);
-
-}
-
-void reportError(Expr *location, CHECK_PRINTF const char *format, ...) {
-	printErrorLocation(&location->start);
-	hadError = true;
-
-	va_list args;
-	va_start(args, format);
-
-	vprintf(format, args);
-	puts("");
-
-	va_end(args);
-
-	displayErrorLocation(&location->start, &location->end);
-}
-
-
-
-void reportError(CodeLocation *start, EndLocation *end, CHECK_PRINTF const char *format, ...) {
-	printErrorLocation(start);
-	hadError = true;
-
-	va_list args;
-	va_start(args, format);
-
-	vprintf(format, args);
-	puts("");
-
-	va_end(args);
-
-	displayErrorLocation(start, end);
-}
-
-void reportError(CodeLocation *location, CHECK_PRINTF const char *format, ...) {
-	printErrorLocation(location);
-
-	hadError = true;
-
-	va_list args;
-	va_start(args, format);
-
-	vprintf(format, args);
-	puts("");
-
-	va_end(args);
-}
-
-
-void reportError(Declaration *location, CHECK_PRINTF const char *format, ...) {
-	printErrorLocation(&location->start);
-
-	hadError = true;
-
-	va_list args;
-	va_start(args, format);
-
-	vprintf(format, args);
-	puts("");
-
-	va_end(args);
-
-	displayErrorLocation(&location->start, &location->end);
-}
-
-void reportError(Token *location, CHECK_PRINTF const char *format, ...) {
-	printErrorLocation(&location->start);
-
-	hadError = true;
-
-	va_list args;
-	va_start(args, format);
-
-	vprintf(format, args);
-	puts("");
-
-	va_end(args);
-
-	displayErrorLocation(&location->start, &location->end);
 }
 
 char *mprintf(const char *format, ...) {
@@ -285,6 +104,26 @@ char *mprintf(const char *format, ...) {
 	return buffer;
 }
 
+String msprintf(const char *format, ...) {
+
+	va_list args1;
+	va_start(args1, format);
+
+	va_list args2;
+	va_copy(args2, args1);
+
+	u32 size = 1 + (u32) vsnprintf(NULL, 0, format, args1);
+	va_end(args1);
+
+	char *buffer = static_cast<char *>(malloc(size));
+
+	vsprintf_s(buffer, size, format, args2);
+
+	va_end(args2);
+
+	return { buffer, size - 1 };
+}
+
 wchar_t *mprintf(const wchar_t *format, ...) {
 
 	va_list args1;
@@ -305,28 +144,45 @@ wchar_t *mprintf(const wchar_t *format, ...) {
 	return buffer;
 }
 
-void reportExpectedError(Token *location, CHECK_PRINTF const char *format, ...) {
-	if (location->type == TokenT::INVALID) { // If it was invalid assume that the lexer already reported an error, don't print the error so we don't double report
-		assert(hadError);
+Module *getModule(String name) {
+	for (auto module : modules) {
+		if (module->name == name) {
+			return module;
+		}
 	}
-	else {
-		printErrorLocation(&location->start);
 
-		hadError = true;
-
-		va_list args;
-		va_start(args, format);
-
-		vprintf(format, args);
-
-		va_end(args);
-
-		String token = getTokenString(location);
-		printf(" but got %.*s", STRING_PRINTF(token));
-		puts("");
-
-		displayErrorLocation(&location->start, &location->end);
+	auto module = new Module;
+	module->members.flavor = BlockFlavor::GLOBAL;
+	module->name = name;
+	
+	if (name.length) {		
+		loadNewFile("", module);
 	}
+
+	modules.add(module);
+
+	if (runtimeModule) {
+		auto name = new ExprStringLiteral;
+		name->flavor = ExprFlavor::STRING_LITERAL;
+		name->start = {};
+		name->end = {};
+		name->string = "Runtime";
+		name->type = &TYPE_STRING;
+
+		auto import = new ExprLoad;
+		import->flavor = ExprFlavor::IMPORT;
+		import->start = {};
+		import->end = {};
+		import->file = name;
+		import->module = module;
+
+		auto importer = new Importer;
+		importer->import = import;
+
+		inferQueue.add(InferQueueJob(importer, module));
+	}
+
+	return module;
 }
 
 void stompLastBackslash(char *name) {
@@ -367,20 +223,9 @@ bool directoryExists(wchar_t *file) {
 
 #if 1
 int main(int argc, char *argv[]) {
-#if BUILD_WINDOWS
-	{
-		HANDLE console = GetStdHandle(STD_OUTPUT_HANDLE);
-		if (console != INVALID_HANDLE_VALUE) {
-			DWORD mode;
+	setlocale(LC_ALL, "");
+	initPrinter();
 
-			if (GetConsoleMode(console, &mode)) {
-				if (SetConsoleMode(console, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) {
-					doColorPrint = true;
-				}
-			}
-		}
-	}
-#endif
 	using namespace std::chrono;
 
 #if BUILD_PROFILE
@@ -397,6 +242,8 @@ int main(int argc, char *argv[]) {
 	char *input = nullptr;
 	bool useLlvm = false;
 
+	bool noThreads = false;
+
 	for (int i = 1; i < argc; i++) {
 		if (strcmp("-llvm", argv[i]) == 0) {
 			if (useLlvm) {
@@ -405,6 +252,14 @@ int main(int argc, char *argv[]) {
 			}
 
 			useLlvm = true;
+		}
+		if (strcmp("-no_threads", argv[i]) == 0) {
+			if (noThreads) {
+				reportError("Error: Cannot specify no threads more than once");
+				return 1;
+			}
+
+			noThreads = true;
 		}
 		else {
 			if (input) {
@@ -423,11 +278,14 @@ int main(int argc, char *argv[]) {
 
 	auto start = high_resolution_clock::now();
 
-	if (!hadError && loadNewFile("runtime.milo") && loadNewFile(String(input))) {
+	runtimeModule = getModule("Runtime");
+	mainModule = getModule("");
+
+	if (!hadError && runtimeModule && mainModule) {
 		setupTypeTable();
 
 
-		for (u32 i = 0; i < NUM_PARSE_THREADS; i++) {
+		for (u32 i = 0; i < (noThreads ? 1 : NUM_PARSE_THREADS); i++) {
 			wchar_t name[] = L"Parser  ";
 
 			name[7] = static_cast<wchar_t>(i + '1');
@@ -437,45 +295,15 @@ int main(int argc, char *argv[]) {
 			
 			parserThread.detach();
 		}
-		std::thread infer(runInfer);
 		std::thread irGenerator(runIrGenerator);
 
 		mainThread = std::this_thread::get_id();
-		inferThread = infer.get_id();
 
-		SetThreadDescription(infer.native_handle(), L"Infer");
 		SetThreadDescription(irGenerator.native_handle(), L"Ir Generator");
 
 		irGenerator.detach();
 
-		parserQueue.add(getFileInfoByUid(0));
-		parserQueue.add(getFileInfoByUid(1));
-		
-		while (true) {
-			auto load = filesToLoadQueue.take();
-
-			if (load.length == 0)
-				break;
-
-			auto file = loadNewFile(load);
-
-			if (hadError) {
-				break;
-			}
-
-			if (!file) {
-				inferQueue.add(InferQueueJob(-1));
-			}
-			else {
-				parserQueue.add(file);
-			}
-		}
-
-		inferQueue.add(static_cast<Declaration *>(nullptr));
-
-
-		infer.join();
-
+		runInfer(input);
 	}
 
 
@@ -514,7 +342,7 @@ int main(int argc, char *argv[]) {
 	if (!hadError) {
 		auto linkerStart = high_resolution_clock::now();
 
-		wchar_t buffer[1024];
+		wchar_t *linkerCommand;
 
 		wchar_t *linkerPath;
 		wchar_t *windowsLibPath;
@@ -665,19 +493,19 @@ int main(int argc, char *argv[]) {
 			}
 
 
-			_snwprintf(buffer, 1024, L"\"%s\" out.obj __milo_chkstk.obj /debug /entry:main%S \"/libpath:%s\" \"/libpath:%s\" /incremental:no /nologo /natvis:milo.natvis",
+			linkerCommand = mprintf(L"\"%s\" out.obj __milo_chkstk.obj /debug /entry:main%S \"/libpath:%s\" \"/libpath:%s\" /incremental:no /nologo /natvis:milo.natvis",
 				linkerPath, libBuffer, windowsLibPath, crtLibPath);
 		}
 
 
-		fwprintf(stdout, L"Linker command: %s\n", buffer);
+		fwprintf(stdout, L"Linker command: %s\n", linkerCommand);
 
 		STARTUPINFOW startup = {};
 		startup.cb = sizeof(STARTUPINFOW);
 
 		PROCESS_INFORMATION info;
 
-		if (!CreateProcessW(NULL, buffer, NULL, NULL, false, 0, NULL, NULL, &startup, &info)) {
+		if (!CreateProcessW(NULL, linkerCommand, NULL, NULL, false, 0, NULL, NULL, &startup, &info)) {
 			std::cout << "Failed to run linker command" << std::endl;
 		}
 

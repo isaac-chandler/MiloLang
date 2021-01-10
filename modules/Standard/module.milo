@@ -1,4 +1,9 @@
-/*
+#if TARGET_WINDOWS {
+	#load "Windows.milo"
+	
+} else {
+	unsupported_os: u64 = "error"
+}
 
 Vector2 :: union {
 	using _xy: struct {
@@ -9,23 +14,10 @@ Vector2 :: union {
 	elements: [2]f32 = --
 	
 	print_me :: (using vector: *Vector2) {
-		print("(")
-		print(x)
-		print(", ")
-		print(y)
-		print(")")
-	}
-}
-*/
-
-Vector2 :: struct {
-	x: f32
-	y: f32
-	
-	print_me :: (using vector: *Vector2) {
 		print("(%, %)", x, y)
 	}
 }
+
 
 Vector3 :: union {
 	using _xyz: struct {
@@ -82,81 +74,6 @@ max :: (a: u64, b: u64) -> #must u64 {
 		return a
 	else 
 		return b
-}
-
-
-#if TARGET_WINDOWS {		
-	GetProcessHeap :: () -> *void #external "kernel32"
-	GetStdHandle :: (nStdHandle: u32) -> *void #external "kernel32"
-	STD_OUTPUT_HANDLE :: cast(u32) -11
-	
-	std_out: *void
-	process_heap: *void
-	
-} else {
-	unsupported_os: void
-}
-
-allocate :: (size: u64) -> #must *void {		
-	#if TARGET_WINDOWS {
-	
-		HeapAlloc :: (hHeap: *void, dwFlags: u32, dwBytes: u64) -> *void #external "kernel32"
-		
-		if !process_heap process_heap = GetProcessHeap()
-		return HeapAlloc(process_heap, 0, size)
-	} else {
-		unsupported_os = 1
-	}
-}
-
-reallocate :: (block: *void, size: u64) -> #must *void {
-	if block == null
-		return allocate(size)
-	else {
-		#if TARGET_WINDOWS {
-			HeapReAlloc :: (hHeap: *void, dwFlags: u32, lpMem: *void, dwBytes: u64) -> *void #external "kernel32"
-			
-			if !process_heap process_heap = GetProcessHeap()
-			return HeapReAlloc(process_heap, 0, block, size)
-		
-		} else {
-			unsupported_os = 1
-		}
-	}
-}
-
-deallocate :: (block: *void) {
-	#if TARGET_WINDOWS {
-		HeapFree :: (hHeap: *void, dwFlags: u32, lpMem: *void) -> s32 #external "kernel32"
-		
-		if !process_heap process_heap = GetProcessHeap()
-		HeapFree(process_heap, 0, block)
-	} else {
-		unsupported_os = 1
-	}
-}
-
-exit :: (code: u32 = 0) {
-	#if TARGET_WINDOWS {
-		ExitProcess :: (uExitCode: u32) #external "kernel32"
-
-		ExitProcess(code)
-	} else {
-		unsupported_os = 1
-	}
-}
-
-
-// @Unicode
-print_buffer :: (buffer: []u8) {
-	#if TARGET_WINDOWS {
-		WriteConsoleA :: (hConsoleOutput: *void, lpBuffer: *void, nNumberOfCharactersToWrite: u32, lpNumberOfCharactersWritten: *u32 = null, lpReserved := null) -> s32 #external "kernel32"
-		
-		if !std_out std_out = GetStdHandle(STD_OUTPUT_HANDLE)
-		WriteConsoleA(std_out, buffer.data, cast() buffer.count)
-	} else {
-		unsupported_os = 1
-	}
 }
 
 
@@ -262,15 +179,6 @@ create_wide_string :: (s: string) -> #must *u16 {
 	result[s.count] = 0
 	
 	return result
-}
-
-main :: () {
-	//args.data = argv
-	//args.count = cast(u64) argc
-
-	_main()
-	
-	exit()
 }
 
 get_command_line_arguments :: () -> []string {

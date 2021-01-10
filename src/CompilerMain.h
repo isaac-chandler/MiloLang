@@ -3,35 +3,29 @@
 #include "String.h"
 #include "Basic.h"
 #include "ArraySet.h"
-#include "WorkQueue.h"
 
 inline volatile bool hadError = false;
-inline std::thread::id inferThread;
 inline std::thread::id mainThread;
 
 
 struct FileInfo { // @Platform
-	u64 fileIndex;
-	u32 volumeSerialNumber;
-	u32 fileUid;
 	String path;
-	HANDLE handle;
+	u32 fileUid;
 
 	char *data;
-	u64 size;
+	u32 size;
+
+	struct Module *module;
 
 	u32 offsetInStringTable;
-
-	bool operator==(const FileInfo &other) const {
-		return fileIndex == other.fileIndex && volumeSerialNumber == other.volumeSerialNumber;
-	}
 };
-
-inline MPMCWorkQueue<String> filesToLoadQueue;
 
 FileInfo *getFileInfoByUid(u32 fileUid);
 
-Array<FileInfo *> getAllFilesNoLock();
+inline Array<FileInfo *> compilerFiles;
+inline Array<struct Module *> modules;
+
+struct Module *getModule(String name);
 
 struct Library {
 	String name;
@@ -42,19 +36,13 @@ struct Library {
 	}
 };
 
+inline struct Module *runtimeModule;
+inline struct Module *mainModule;
+
+inline u32 loadsPending = 0;
+
+void loadNewFile(String file, struct Module *module);
+
 inline ArraySet<Library> libraries;
 
-#ifdef BUILD_WINDOWS
-#define CHECK_PRINTF _Printf_format_string_
-#else
-// @Incomplete: other compilers have versions of this
-#define CHECK_PRINTF
-#endif
-
-void reportError(struct Expr *location, CHECK_PRINTF const char *format, ...);
-void reportError(struct Declaration *location, CHECK_PRINTF const char *format, ...);
-void reportError(struct Token *location, CHECK_PRINTF const char *format, ...);
-void reportError(struct CodeLocation *location, CHECK_PRINTF const char *format, ...);
-void reportError(CodeLocation *start, EndLocation *end, CHECK_PRINTF const char *format, ...);
-void reportExpectedError(struct Token *location, CHECK_PRINTF const char *format, ...);
-void reportError(CHECK_PRINTF const char *format, ...);
+String msprintf(const char *format, ...);

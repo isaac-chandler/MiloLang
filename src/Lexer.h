@@ -16,8 +16,6 @@
 
 #define TOKEN(x) (static_cast<TokenT>(x))
 
-String getTokenString(Token *token);
-
 // Call it TokenT instead of TokenType since Windows.h defines TokenType, @Sigh
 enum class TokenT : u8 {
 	INVALID = 0, 
@@ -117,7 +115,8 @@ enum class TokenT : u8 {
 	DEFER, 
 	RUN, 
 	C_CALL, 
-	COMPILER
+	COMPILER, 
+	IMPORT
 };
 
 struct Token {
@@ -136,6 +135,8 @@ struct Token {
 
 	Token() {}
 };
+
+String getTokenString(Token *token);
 
 struct BigInt {
 	Array<u32> numbers;
@@ -157,6 +158,7 @@ struct LexerSave {
 struct LexerFile {
 	BucketedArenaAllocator parserArena;
 	Block *currentBlock;
+	struct Module *module;
 	u32 identifierSerial;
 
 	char *text;

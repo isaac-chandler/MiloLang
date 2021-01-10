@@ -3,7 +3,6 @@
 #include "Basic.h"
 #include "Array.h"
 #include "String.h"
-#include "CompilerMain.h"
 
 #define IMPORTER_IS_CONSTANT 0x1
 #define IMPORTER_IS_COMPLETE 0x2
@@ -121,7 +120,11 @@ struct Block {
 	Array<struct SubJob *> sleepingOnMe;
 };
 
-inline Block globalBlock;
+struct Module {
+	String name;
+	Block members;
+	Array<struct Importer *> imports;
+};
 
 Declaration *findInBlock(Block *block, String name);
 

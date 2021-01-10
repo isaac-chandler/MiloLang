@@ -4,7 +4,7 @@
 #include "Block.h"
 #include "TypeTable.h"
 #include "CompilerMain.h"
-#include "IrGenerator.h"
+#include "Error.h"
 
 union SymbolName {
 	char name[8];
@@ -171,11 +171,11 @@ u32 getRegisterOffset(ExprFunction *function, u32 regNo) {
 #define C_G 0xF
 #define C_NLE 0xF
 
-void writeRSPOffsetByte(BucketedArenaAllocator *code, u8 physicalRegister, u64 offset) {
+void writeRSPOffsetByte(BucketedArenaAllocator *code, u8 physicalRegister, u32 offset) {
 	if (offset >= 0x80) {
 		code->add1Unchecked(0x84 | (physicalRegister << 3));
 		code->add1Unchecked(0x24);
-		code->add4Unchecked(static_cast<u32>(offset));
+		code->add4Unchecked(offset);
 	}
 	else if (offset != 0) {
 		code->add1Unchecked(0x44 | (physicalRegister << 3));
@@ -188,7 +188,7 @@ void writeRSPOffsetByte(BucketedArenaAllocator *code, u8 physicalRegister, u64 o
 	}
 }
 
-void writeRSPRegisterByte(BucketedArenaAllocator *code, ExprFunction *function, u8 physicalRegister, u32 stackRegister, u64 addition = 0) {
+void writeRSPRegisterByte(BucketedArenaAllocator *code, ExprFunction *function, u8 physicalRegister, u32 stackRegister, u32 addition = 0) {
 	writeRSPOffsetByte(code, physicalRegister, getRegisterOffset(function, stackRegister) + addition);
 }
 
@@ -1527,7 +1527,7 @@ void runCoffWriter() {
 				if (function->valueOfDeclaration) {
 					setSymbolName(&stringTable, &symbol->name, function->valueOfDeclaration->name);
 
-					if (function->valueOfDeclaration->enclosingScope == &globalBlock) {
+					if (function->valueOfDeclaration->enclosingScope->flavor == BlockFlavor::GLOBAL) {
 						symbol->storageClass = IMAGE_SYM_CLASS_EXTERNAL;
 					}
 					else {
@@ -2623,7 +2623,7 @@ void runCoffWriter() {
 					}
 				} break;
 				case IrOp::ADDRESS_OF_GLOBAL: {
-					assert(ir.declaration->enclosingScope == &globalBlock);
+					assert(ir.declaration->enclosingScope->flavor == BlockFlavor::GLOBAL);
 					assert(!(ir.declaration->flags & DECLARATION_IS_CONSTANT));
 
 					code.add1Unchecked(0x48);
@@ -2635,7 +2635,7 @@ void runCoffWriter() {
 					codeRelocations.add4Unchecked(createSymbolForDeclaration(&symbols, ir.declaration));
 					codeRelocations.add2Unchecked(IMAGE_REL_AMD64_REL32);
 
-					code.add4Unchecked(0);
+					code.add4Unchecked(ir.a);
 
 					storeFromIntRegister(&code, function, 8, ir.dest, RAX);
 				} break;
@@ -2643,7 +2643,7 @@ void runCoffWriter() {
 					code.add1Unchecked(0x48);
 					code.add1Unchecked(0x8D);
 
-					writeRSPRegisterByte(&code, function, RAX, ir.a, ir.immediate);
+					writeRSPRegisterByte(&code, function, RAX, ir.a, static_cast<u32>(ir.immediate));
 					storeFromIntRegister(&code, function, 8, ir.dest, RAX);
 				} break;
 				case IrOp::IMMEDIATE: {
@@ -3170,7 +3170,7 @@ void runCoffWriter() {
 						}
 					}
 
-					u64 dumpSpace = largeStorage;
+					u32 dumpSpace = largeStorage;
 
 					largeStorage = parameterSpace;
 
@@ -3524,7 +3524,7 @@ void runCoffWriter() {
 			PROFILE_ZONE("Write Declaration");
 			auto declaration = job.declaration;
 
-			assert(declaration->enclosingScope == &globalBlock);
+			assert(declaration->enclosingScope->flavor == BlockFlavor::GLOBAL);
 			assert(!(declaration->flags & DECLARATION_IS_CONSTANT));
 
 			createSymbolForDeclaration(&symbols, declaration);
@@ -3974,13 +3974,11 @@ void runCoffWriter() {
 		PROFILE_ZONE("Write output");
 		debugSymbols.add4(0xF3);
 
-		auto files = getAllFilesNoLock();
-
 		u32 *sizePointer = debugSymbols.add4(0);
 
 		u32 totalSize = 0;
 
-		for (auto file : files) {
+		for (auto file : compilerFiles) {
 			char buffer[1024]; // @Robustness
 
 			file->offsetInStringTable = totalSize;
@@ -3998,9 +3996,9 @@ void runCoffWriter() {
 		alignAllocator(&debugSymbols, 4);
 
 		debugSymbols.add4(0xF4);
-		debugSymbols.add4(8 * files.count);
+		debugSymbols.add4(8 * compilerFiles.count);
 
-		for (auto &file : files) {
+		for (auto &file : compilerFiles) {
 			debugSymbols.add4(file->offsetInStringTable);
 			debugSymbols.add4(0);
 		}

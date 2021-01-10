@@ -30,7 +30,8 @@ enum class TypeFlavor : u8 {
 	ARRAY, 
 	STRUCT, 
 	ENUM, 
-	NAMESPACE
+	NAMESPACE, 
+	MODULE
 };
 
 #define TYPE_INTEGER_IS_SIGNED 0x2
@@ -41,7 +42,6 @@ enum class TypeFlavor : u8 {
 #define TYPE_STRUCT_IS_PACKED 0x40
 #define TYPE_ENUM_IS_FLAGS 0x80
 #define TYPE_FUNCTION_IS_C_CALL 0x100
-#define TYPE_FUNCTION_IS_COMPILER 0x200
 
 struct Type {
 	u32 size;

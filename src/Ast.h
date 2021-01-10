@@ -175,7 +175,8 @@ enum class ExprFlavor : u8 {
 	SLICE, 
 	RUN, 
 
-	LOAD
+	LOAD, 
+	IMPORT
 };
 
 struct Declaration;
@@ -277,6 +278,7 @@ struct ExprDefer : Expr {
 
 struct ExprLoad : Expr {
 	Expr *file;
+	struct Module *module;
 };
 
 struct ExprLiteral : Expr {
@@ -333,10 +335,11 @@ struct Block;
 
 struct ExprIdentifier : Expr {
 	String name;
+	u32 serial;
 	Block *resolveFrom;
 	Block *enclosingScope;
 	Expr *structAccess;
-	u32 serial;
+	Module *module;
 
 	Declaration *declaration;
 };

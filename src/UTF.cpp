@@ -279,6 +279,22 @@ HANDLE createFileUtf8(u8 *filename, DWORD desiredAccess, DWORD shareMode, DWORD 
 	return handle;
 }
 
+wchar_t *utf8ToWString(String filename) {
+	static_assert(sizeof(wchar_t) == sizeof(u16), "wchar_t should be UTF16");
+	u64 len = utf8LenForUtf16(filename);
+
+	u16 *utf16 = (u16 *)malloc((len + 1) * sizeof(u16));
+
+	for (u64 i = 0; i < len;) {
+		i += writeUtf16(&utf16[i], getSingleUtf32FromUtf8(filename, &filename));
+	}
+
+	utf16[len] = 0;
+
+
+	return reinterpret_cast<wchar_t *>(utf16);
+}
+
 HANDLE createFileUtf8(String filename, DWORD desiredAccess, DWORD shareMode, DWORD creationDisposition, DWORD flags) {
 	static_assert(sizeof(wchar_t) == sizeof(u16), "wchar_t should be UTF16");
 

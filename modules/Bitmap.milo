@@ -1,3 +1,5 @@
+#import "Standard"
+
 Bmp_File_Header :: struct #pack {
 	EXPECTED_HEADER :: 0x4D42 // BM
 
