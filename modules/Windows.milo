@@ -512,6 +512,7 @@ using File_Flag.members
 
 WriteConsoleA :: (hConsoleOutput: *void, lpBuffer: *void, nNumberOfCharactersToWrite: u32, lpNumberOfCharactersWritten: *u32 = null, lpReserved := null) -> s32 #external "kernel32"
 ExitProcess :: (uExitCode: u32) #external "kernel32"
+ExitThread :: (uExitCode: u32) #external "kernel32"
 HeapAlloc :: (hHeap: HANDLE, dwFlags: u32, dwBytes: u64) -> *void #external "kernel32"
 HeapReAlloc :: (hHeap: HANDLE, dwFlags: u32, lpMem: *void, dwBytes: u64) -> *void #external "kernel32"
 HeapFree :: (hHeap: HANDLE, dwFlags: u32, lpMem: *void) -> s32 #external "kernel32"

@@ -21,7 +21,7 @@ BucketedArenaAllocator inferArena(1024 * 1024);
 #define PARSER_NEW_ARRAY(T, C) new T[C]
 #endif
 
-enum class JobFlavor {
+enum class JobFlavor : u8 {
 	SIZE,
 	DECLARATION_TYPE,
 	DECLARATION_VALUE,
@@ -673,19 +673,13 @@ void beginFlatten(SubJob *job, Expr **expr) {
 }
 
 
-void pushFlatten(SubJob *job) {
+void pushFlatten(SubJob *job, Expr *newExpr) {
 	auto expr = getHalt(job);
+	*expr = newExpr;
 
 	job->indices[job->flattenedCount - 1]++;
 
 	beginFlatten(job, expr);
-}
-Type *getDeclarationType(Declaration *declaration) {
-	assert(declaration->flags & DECLARATION_TYPE_IS_READY);
-	assert(declaration->type);
-	assert(declaration->type->flavor == ExprFlavor::TYPE_LITERAL);
-
-	return static_cast<ExprLiteral *>(declaration->type)->typeValue;
 }
 
 void trySolidifyNumericLiteralToDefault(Expr *expr) {
@@ -2152,40 +2146,6 @@ bool assignOpForFloatAndIntLiteral(ExprBinaryOperator *binary) {
 	return true;
 }
 
-bool isAssignable(Expr *expr) {
-	if ((expr->flavor == ExprFlavor::UNARY_OPERATOR && static_cast<ExprUnaryOperator *>(expr)->op == TokenT::SHIFT_LEFT)) {
-		return true;
-	}
-	else if (expr->flavor == ExprFlavor::BINARY_OPERATOR && static_cast<ExprBinaryOperator *>(expr)->op == TOKEN('[')) {
-		auto binary = static_cast<ExprBinaryOperator *>(expr);
-
-		return !(binary->left->type->flags & TYPE_ARRAY_IS_FIXED) || isAssignable(binary->left);
-	}
-	else if (expr->flavor == ExprFlavor::IDENTIFIER) {
-		auto identifier = static_cast<ExprIdentifier *>(expr);
-		auto access = identifier->structAccess;
-
-		if (!access) return !(identifier->declaration->flags & (DECLARATION_IS_ARGUMENT | DECLARATION_IS_ITERATOR | DECLARATION_IS_ITERATOR_INDEX));
-
-		if (access->type->flavor == TypeFlavor::ARRAY) {
-			return !(access->type->flags & TYPE_ARRAY_IS_FIXED) && isAssignable(access);
-		}
-		else if (access->type->flavor == TypeFlavor::STRUCT || access->type->flavor == TypeFlavor::STRING) {
-			return isAssignable(access);
-		}
-		else if (access->type->flavor == TypeFlavor::POINTER) {
-			auto pointer = static_cast<TypePointer *>(access->type);
-
-			return !(pointer->pointerTo->flags & TYPE_ARRAY_IS_FIXED);
-		}
-		else {
-			return false;
-		}
-	}
-
-	return false;
-}
-
 bool isLiteral(Expr *expr);
 
 bool arrayIsLiteral(ExprArray *array) {
@@ -2729,7 +2689,7 @@ bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char 
 				array->start = arguments->values[i]->start;
 				array->flags |= EXPR_IS_SPREAD;
 
-				Type *varargsType = static_cast<TypeArray *>(static_cast<ExprLiteral *>(argument->type)->typeValue)->arrayOf;
+				Type *varargsType = static_cast<TypeArray *>(getDeclarationType(argument))->arrayOf;
 
 				for (; i < arguments->count; i++) {
 					if (arguments->names && arguments->names[i].length) {
@@ -2796,7 +2756,7 @@ bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char 
 					}
 				}
 				else if (argument->flags & DECLARATION_IS_VARARGS) {
-					auto literal = createIntLiteral(argument->start, argument->end, static_cast<ExprLiteral *>(argument->type)->typeValue, 0);
+					auto literal = createIntLiteral(argument->start, argument->end, getDeclarationType(argument), 0);
 					literal->flags |= EXPR_IS_SPREAD;
 					sortedArguments[i] = literal;
 					addSizeDependency(job->sizeDependencies, literal->type);
@@ -2818,7 +2778,7 @@ bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char 
 	}
 
 	for (u32 i = 0; i < arguments->count; i++) {
-		Type *correct = static_cast<ExprLiteral *>(block->declarations[i]->type)->typeValue;
+		Type *correct = getDeclarationType(block->declarations[i]);
 
 		if (!assignOp(job, arguments->values[i], correct, arguments->values[i], yield)) { // @Incomplete: Give function call specific error messages instead of general type conversion errors
 			return false;
@@ -3522,7 +3482,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 		break;
 	}
 	case TOKEN('='): {
-		if (!isAssignable(left)) {
+		if (!isAddressable(left)) {
 			// @Incomplete: better error messages here
 			//  - If we were assigning to a constant
 			//  - If we were assigning to a pointer
@@ -3552,7 +3512,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 	}
 	case TokenT::PLUS_EQUALS:
 	case TokenT::MINUS_EQUALS: {
-		if (!isAssignable(left)) {
+		if (!isAddressable(left)) {
 			// @Incomplete: better error messages here
 			//  - If we were assigning to a constant
 			//  - If we were assigning to a pointer
@@ -3674,7 +3634,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 	case TokenT::AND_EQUALS:
 	case TokenT::OR_EQUALS:
 	case TokenT::XOR_EQUALS: {
-		if (!isAssignable(left)) {
+		if (!isAddressable(left)) {
 			// @Incomplete: better error messages here
 			//  - If we were assigning to a constant
 			//  - If we were assigning to a pointer
@@ -3772,7 +3732,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 	}
 	case TokenT::SHIFT_LEFT_EQUALS:
 	case TokenT::SHIFT_RIGHT_EQUALS: {
-		if (!isAssignable(left)) {
+		if (!isAddressable(left)) {
 			// @Incomplete: better error messages here
 			//  - If we were assigning to a constant
 			//  - If we were assigning to a pointer
@@ -3847,7 +3807,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 	case TokenT::TIMES_EQUALS:
 	case TokenT::DIVIDE_EQUALS:
 	case TokenT::MOD_EQUALS: {
-		if (!isAssignable(left)) {
+		if (!isAddressable(left)) {
 			// @Incomplete: better error messages here
 			//  - If we were assigning to a constant
 			//  - If we were assigning to a pointer
@@ -3927,6 +3887,20 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 		break;
 	}
 	case TokenT::ARRAY_TYPE: {
+		if (right->type == &TYPE_AUTO_CAST) {
+			bool yield = false;
+			if (!tryAutoCast(job, &right, &TYPE_TYPE, &yield)) {
+				if (!yield) {
+					reportError(right, "Error: Cannot convert %.*s to type",
+						STRING_PRINTF(static_cast<ExprBinaryOperator *>(right)->right->type->name));
+					return false;
+				}
+				else {
+					return true;
+				}
+			}
+		}
+
 		if (right->type->flavor != TypeFlavor::TYPE) {
 			reportError(right, "Error: Array element type must be a type");
 			return false;
@@ -4044,6 +4018,8 @@ bool inferFlattened(SubJob *job) {
 
 		auto exprPointer = getHalt(job);
 		auto expr = *exprPointer;
+
+		++totalInferIterations;
 
 		switch (expr->flavor) {
 		case ExprFlavor::IDENTIFIER: {
@@ -4185,7 +4161,7 @@ bool inferFlattened(SubJob *job) {
 			assert(function->returns.declarations.count == 1);
 			assert(!(function->flags &EXPR_FUNCTION_IS_C_CALL));
 
-			auto returnType = static_cast<ExprLiteral *>(function->returns.declarations[0]->type)->typeValue;
+			auto returnType = getDeclarationType(function->returns.declarations[0]);
 
 			// @Incomplete: Warn if #run returns a pointer? Maybe issuse a warning for any non-null pointer
 			while (true) {
@@ -4330,7 +4306,7 @@ bool inferFlattened(SubJob *job) {
 			// Do two passes over the array because if the first pass added dependencies on some declarations then yielded, it would add them again next time round
 			for (auto declaration : block->declarations.declarations) {
 				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING))) {
-					addSizeDependency(job->sizeDependencies, static_cast<ExprLiteral *>(declaration->type)->typeValue);
+					addSizeDependency(job->sizeDependencies, getDeclarationType(declaration));
 				}
 			}
 
@@ -4367,6 +4343,12 @@ bool inferFlattened(SubJob *job) {
 
 				if (continue_->refersTo->forBegin->type->flags & TYPE_ARRAY_IS_FIXED) {
 					reportError(continue_, "Error: Cannot remove from a static size array");
+
+					return false;
+				}
+
+				if (!isAddressable(continue_->refersTo->forBegin)) {
+					reportError("Error: Cannot remove from a temporary value");
 
 					return false;
 				}
@@ -4828,7 +4810,7 @@ bool inferFlattened(SubJob *job) {
 			}
 			else {
 				for (u32 i = 0; i < comma->exprCount; i++) {
-					if (!isAssignable(comma->left[i])) {
+					if (!isAddressable(comma->left[i])) {
 						reportError(comma->left[i], "Error: This expression cannot be assigned to");
 						return false;
 					}
@@ -5067,8 +5049,7 @@ bool inferFlattened(SubJob *job) {
 				}
 
 				if (block) {
-					*exprPointer = block;
-					pushFlatten(job);
+					pushFlatten(job, block);
 					continue;
 				}
 			}
@@ -5089,7 +5070,7 @@ bool inferFlattened(SubJob *job) {
 
 			assert(returnTypes->declarations.count >= 1);
 
-			if (static_cast<ExprLiteral *>(returnTypes->declarations[0]->type)->typeValue == &TYPE_VOID) {
+			if (getDeclarationType(returnTypes->declarations[0]) == &TYPE_VOID) {
 				if (returnTypes->declarations[0]->initialValue) {
 					assert(returnTypes->declarations[0]->flags & DECLARATION_IS_RUN_RETURN);
 					*exprPointer = returnTypes->declarations[0]->initialValue;
@@ -5451,6 +5432,20 @@ bool inferFlattened(SubJob *job) {
 				break;
 			}
 			case TOKEN('*'): {
+				if (value->type == &TYPE_AUTO_CAST) {
+					bool yield = false;
+					if (!tryAutoCast(job, &value, &TYPE_TYPE, &yield)) {
+						if (!yield) {
+							reportError(value, "Error: Cannot convert %.*s to type",
+								STRING_PRINTF(static_cast<ExprBinaryOperator *>(value)->right->type->name));
+							return false;
+						}
+						else {
+							return true;
+						}
+					}
+				}
+
 				if (value->flavor == ExprFlavor::TYPE_LITERAL) {
 					auto literal = static_cast<ExprLiteral *>(value);
 
@@ -5466,14 +5461,25 @@ bool inferFlattened(SubJob *job) {
 					auto binary = static_cast<ExprBinaryOperator *>(value);
 
 					if (binary->op == TOKEN('[')) {
-						checkedRemoveLastSizeDependency(job->sizeDependencies, value->type);
-
 						auto pointer = getPointer(value->type);
 
 						unary->type = pointer;
 					}
 					else {
-						reportError(value, "Error: Cannot take an addres to something that has no storage");
+						reportError(value, "Error: Cannot take an address to something that has no storage");
+						return false;
+					}
+				}
+				else if (value->flavor == ExprFlavor::UNARY_OPERATOR) {
+					auto unary2 = static_cast<ExprUnaryOperator *>(value);
+
+					if (unary2->op == TokenT::SHIFT_LEFT) {
+						checkedRemoveLastSizeDependency(job->sizeDependencies, value->type);
+
+						unary->type = unary2->value->type;
+					}
+					else {
+						reportError(value, "Error: Cannot take an address to something that has no storage");
 						return false;
 					}
 				}
@@ -6003,8 +6009,9 @@ void getHaltStatus(Declaration *declaration, Declaration *next, Expr **haltedOn,
 Array<FunctionJob *> functionWaitingOnSize;
 Array<DeclarationJob *> declarationWaitingOnSize;
 
-bool inferImporter(ImporterJob *job) {
+bool inferImporter(SubJob *subJob) {
 	PROFILE_FUNC();
+	auto job = static_cast<ImporterJob *>(subJob);
 
 	auto importer = job->importer;
 
@@ -6232,8 +6239,10 @@ bool inferImporter(ImporterJob *job) {
 }
 
 
-bool inferDeclarationType(DeclarationJob *job) {
+bool inferDeclarationType(SubJob *subJob) {
 	PROFILE_FUNC();
+	auto job = CAST_FROM_SUBSTRUCT(DeclarationJob, type, subJob);
+
 	auto declaration = job->declaration;
 
 	if (!(declaration->flags & DECLARATION_TYPE_IS_READY) && declaration->type) {
@@ -6258,7 +6267,7 @@ bool inferDeclarationType(DeclarationJob *job) {
 			return false;
 		}
 
-		if (static_cast<ExprLiteral *>(declaration->type)->typeValue == &TYPE_VOID) {
+		if (getDeclarationType(declaration) == &TYPE_VOID) {
 			if (declaration->flags & DECLARATION_IS_RETURN) {
 				if (declaration->enclosingScope->declarations.count != 1) {
 					reportError(declaration->type, "Error: Functions with multiple return values cannot return void");
@@ -6271,7 +6280,7 @@ bool inferDeclarationType(DeclarationJob *job) {
 			}
 		}
 
-		if (static_cast<ExprLiteral *>(declaration->type)->typeValue->flavor == TypeFlavor::NAMESPACE) {
+		if (getDeclarationType(declaration)->flavor == TypeFlavor::NAMESPACE) {
 			reportError(declaration->type, "Error: Declaration type cannot be a namespace");
 			return false;
 		}
@@ -6283,7 +6292,7 @@ bool inferDeclarationType(DeclarationJob *job) {
 
 	if (declaration->type && !declaration->initialValue) {
 		if ((declaration->flags & DECLARATION_IS_EXPLICIT_DEFAULT) || !(declaration->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_ITERATOR | DECLARATION_IS_ITERATOR_INDEX | DECLARATION_IS_ARGUMENT | DECLARATION_IS_RETURN))) {
-			auto type = static_cast<ExprLiteral *>(declaration->type)->typeValue;
+			auto type = getDeclarationType(declaration);
 
 			bool yield;
 			declaration->initialValue = getDefaultValue(&job->type, type, &yield);
@@ -6320,8 +6329,9 @@ bool inferDeclarationType(DeclarationJob *job) {
 	return true;
 }
 
-bool inferDeclarationValue(DeclarationJob *job) {
+bool inferDeclarationValue(SubJob *subJob) {
 	PROFILE_FUNC();
+	auto job = CAST_FROM_SUBSTRUCT(DeclarationJob, value, subJob);
 
 	auto declaration = job->declaration;
 
@@ -6335,7 +6345,7 @@ bool inferDeclarationValue(DeclarationJob *job) {
 
 		assert(declaration->initialValue->type);
 
-		Type *correct = static_cast<ExprLiteral *>(declaration->type)->typeValue;
+		Type *correct = getDeclarationType(declaration);
 
 		if (declaration->flags & DECLARATION_IS_ENUM_VALUE) {
 			assert(correct->flavor == TypeFlavor::ENUM);
@@ -6486,8 +6496,9 @@ bool checkGuaranteedReturn(Expr *expr) {
 	}
 }
 
-bool inferFunctionType(FunctionJob *job) {
+bool inferFunctionType(SubJob *subJob) {
 	PROFILE_FUNC();
+	auto job = CAST_FROM_SUBSTRUCT(FunctionJob, type, subJob);
 
 	auto function = job->function;
 
@@ -6513,7 +6524,7 @@ bool inferFunctionType(FunctionJob *job) {
 
 			sleep = true;
 		}
-		else if (static_cast<ExprLiteral *>(return_->type)->typeValue == &TYPE_VOID && function->returns.declarations.count != 1) {
+		else if (getDeclarationType(return_) == &TYPE_VOID && function->returns.declarations.count != 1) {
 			reportError(return_, "Error: Functions with multiple return values cannot return a void value");
 			return false;
 		}
@@ -6537,19 +6548,20 @@ bool inferFunctionType(FunctionJob *job) {
 	}
 
 	for (auto argument : function->arguments.declarations) {
-		addSizeDependency(&job->sizeDependencies, static_cast<ExprLiteral *>(argument->type)->typeValue);
+		addSizeDependency(&job->sizeDependencies, getDeclarationType(argument));
 	}
 
 	for (auto return_ : function->returns.declarations) {
-		addSizeDependency(&job->sizeDependencies, static_cast<ExprLiteral *>(return_->type)->typeValue);
+		addSizeDependency(&job->sizeDependencies, getDeclarationType(return_));
 	}
 
 	return true;
 }
 
-bool inferFunctionValue(FunctionJob *job) {
+bool inferFunctionValue(SubJob *subJob) {
 	PROFILE_FUNC();
 
+	auto job = CAST_FROM_SUBSTRUCT(FunctionJob, value, subJob);
 	auto function = job->function;
 
 	if (!function->type) {
@@ -6596,7 +6608,7 @@ bool inferFunctionValue(FunctionJob *job) {
 		if (!checkGuaranteedReturn(function->body)) {
 			bool needsReturn = false;
 
-			if (static_cast<ExprLiteral *>(function->returns.declarations[0]->type)->typeValue != &TYPE_VOID) {
+			if (getDeclarationType(function->returns.declarations[0]) != &TYPE_VOID) {
 				for (auto declaration : function->returns.declarations) {
 					if (!declaration->initialValue)
 						needsReturn = true;
@@ -6636,8 +6648,9 @@ bool inferFunctionValue(FunctionJob *job) {
 }
 
 
-bool inferSize(SizeJob *job) {
+bool inferSize(SubJob *subJob) {
 	PROFILE_FUNC();
+	auto job = static_cast<SizeJob *>(subJob);
 
 	auto type = job->type;
 
@@ -6665,7 +6678,7 @@ bool inferSize(SizeJob *job) {
 					if (sleeping == -1) sleeping = job->sizingIndexInMembers;
 				}
 				else {
-					auto memberType = static_cast<ExprLiteral *>(member->type)->typeValue;
+					auto memberType = getDeclarationType(member);
 
 					if (!memberType->size) {
 						goToSleep(job, &memberType->sleepingOnMe, "Struct sizing member size not ready");
@@ -6964,7 +6977,7 @@ bool findTypeInfoRecurse(RunJob *job, ArraySet<Type *> *types, Type *type) {
 				return false;
 			}
 
-			auto memberType = static_cast<ExprLiteral *>(member->type)->typeValue;
+			auto memberType = getDeclarationType(member);
 
 			if (memberType == &TYPE_UNSIGNED_INT_LITERAL || memberType == &TYPE_SIGNED_INT_LITERAL || memberType == &TYPE_FLOAT_LITERAL) {
 				assert(member->initialValue);
@@ -7146,7 +7159,7 @@ void fillTypeInfo(Type *type) {
 			memberInfo.name = member->name;
 			memberInfo.offset = (member->flags & DECLARATION_IS_CONSTANT) ? 0 : member->physicalStorage;
 
-			auto memberType = static_cast<ExprLiteral *>(member->type)->typeValue;
+			auto memberType = getDeclarationType(member);
 
 			if (member->initialValue) {
 				memberType = getTypeForExpr(member->initialValue);
@@ -7215,8 +7228,10 @@ bool ensureTypeInfos(RunJob *job, Expr *expr) {
 }
 
 
-bool inferRun(RunJob *job) {
+bool inferRun(SubJob *subJob) {
 	PROFILE_FUNC();
+
+	auto job = static_cast<RunJob *>(subJob);
 	auto run = job->run;
 
 	while (job->checkingFunctions.count) {
@@ -7300,7 +7315,7 @@ bool inferRun(RunJob *job) {
 								return true;
 							}
 
-							op.declaration->runtimeValue = malloc(static_cast<ExprLiteral *>(op.declaration->type)->typeValue->size);
+							op.declaration->runtimeValue = malloc(getDeclarationType(op.declaration)->size);
 
 							createRuntimeValue(op.declaration->initialValue, op.declaration->runtimeValue);
 						}
@@ -7325,7 +7340,7 @@ bool inferRun(RunJob *job) {
 	if (hadError)
 		return false;
 
-	if (static_cast<ExprLiteral *>(static_cast<ExprFunction *>(run->function)->returns.declarations[0]->type)->typeValue == &TYPE_VOID) {
+	if (getDeclarationType(static_cast<ExprFunction *>(run->function)->returns.declarations[0]) == &TYPE_VOID) {
 		assert(!run->returnValue);
 		run->returnValue = run;
 		run->type = &TYPE_VOID;
@@ -7362,40 +7377,18 @@ bool doJob(SubJob *job) {
 		return false;
 	}
 	else if (isDone(job)) {
-		constexpr bool (*table[])(DeclarationJob *) = {
-			inferDeclarationType
+		constexpr bool (*table[])(SubJob *) = {
+			inferSize, 
+			inferDeclarationType, 
+			inferDeclarationValue, 
+			inferFunctionType, 
+			inferFunctionValue, 
+			inferImporter, 
+			inferRun
 		};
 
-		if (job->flavor == JobFlavor::DECLARATION_TYPE) {
-			if (!inferDeclarationType(CAST_FROM_SUBSTRUCT(DeclarationJob, type, job)))
-				return false;
-		}
-		else if (job->flavor == JobFlavor::DECLARATION_VALUE) {
-			if (!inferDeclarationValue(CAST_FROM_SUBSTRUCT(DeclarationJob, value, job)))
-				return false;
-		}
-		else if (job->flavor == JobFlavor::FUNCTION_TYPE) {
-			if (!inferFunctionType(CAST_FROM_SUBSTRUCT(FunctionJob, type, job)))
-				return false;
-		}
-		else if (job->flavor == JobFlavor::FUNCTION_VALUE) {
-			if (!inferFunctionValue(CAST_FROM_SUBSTRUCT(FunctionJob, value, job)))
-				return false;
-		}
-		else if (job->flavor == JobFlavor::SIZE) {
-			if (!inferSize(static_cast<SizeJob *>(job))) {
-				return false;
-			}
-		}
-		else if (job->flavor == JobFlavor::IMPORTER) {
-			if (!inferImporter(static_cast<ImporterJob *>(job)))
-				return false;
-		}
-		else if (job->flavor == JobFlavor::RUN) {
-			if (!inferRun(static_cast<RunJob *>(job))) {
-				return false;
-			}
-		}
+		if (!table[(u8) job->flavor](job))
+			return false;
 	}
 
 	return true;

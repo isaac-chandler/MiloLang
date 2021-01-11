@@ -1302,7 +1302,7 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 
 			for (auto declaration : block->declarations.declarations) {
 				if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING))) {
-					declaration->physicalStorage = allocateSpaceForType(state, static_cast<ExprLiteral *>(declaration->type)->typeValue);
+					declaration->physicalStorage = allocateSpaceForType(state, getDeclarationType(declaration));
 				}
 			}
 
@@ -1498,9 +1498,9 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 			auto it = loop->iteratorBlock.declarations[0];
 			auto it_index = loop->iteratorBlock.declarations[1];
 
-			it->physicalStorage = allocateSpaceForType(state, static_cast<ExprLiteral *>(it->type)->typeValue);
+			it->physicalStorage = allocateSpaceForType(state, getDeclarationType(it));
 
-			assert(static_cast<ExprLiteral *>(it_index->type)->typeValue == &TYPE_U64);
+			assert(getDeclarationType(it_index) == &TYPE_U64);
 			it_index->physicalStorage = state->nextRegister++;
 
 			u32 itReg = it->physicalStorage;
@@ -1624,7 +1624,7 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 					read.op = IrOp::READ;
 					read.dest = it->physicalStorage;
 					read.opSize = 8;
-					read.destSize = static_cast<ExprLiteral *>(it->type)->typeValue->size;
+					read.destSize = getDeclarationType(it)->size;
 					read.a = loop->irPointer;
 				}
 			}
@@ -1923,7 +1923,7 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 				if (decl->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING)) continue;
 
 				if (decl->physicalStorage & 7) {
-					memberSize = my_max(static_cast<ExprLiteral *>(decl->type)->typeValue->size, memberSize);
+					memberSize = my_max(getDeclarationType(decl)->size, memberSize);
 				}
 			}
 
@@ -1948,7 +1948,7 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 					write.op = IrOp::WRITE;
 					write.a = addressReg;
 					write.b = memberTemp;
-					write.opSize = static_cast<ExprLiteral *>(decl->type)->typeValue->size;
+					write.opSize = getDeclarationType(decl)->size;
 				}
 				else {
 					generateIrForceDest(state, decl->initialValue, dest + decl->physicalStorage / 8);
@@ -1964,11 +1964,6 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 
 			if (type->flavor == TypeFlavor::NAMESPACE) {
 				reportError(expr, "Error: Cannot operate on a namespace");
-				return dest;
-			}
-
-			if (type->flavor == TypeFlavor::MODULE) {
-				reportError(expr, "Error: Cannot operate on a module");
 				return dest;
 			}
 
@@ -2215,7 +2210,7 @@ u32 generateIrForceDest(IrState *state, Expr *expr, u32 dest) {
 bool generateIrForFunction(ExprFunction *function) {
 	u32 paramOffset;
 
-	if (!isStandardSize(static_cast<ExprLiteral *>(function->returns.declarations[0]->type)->typeValue->size)) {
+	if (!isStandardSize(getDeclarationType(function->returns.declarations[0])->size)) {
 		paramOffset = 1;
 	}
 	else {
@@ -2228,7 +2223,7 @@ bool generateIrForFunction(ExprFunction *function) {
 
 	for (u32 i = 0; i < function->arguments.declarations.count; i++) {
 		auto declaration = function->arguments.declarations[i];
-		auto type = static_cast<ExprLiteral *>(declaration->type)->typeValue;
+		auto type = getDeclarationType(declaration);
 
 		if (isStandardSize(type->size)) {
 			declaration->physicalStorage = i + 1 + paramOffset;

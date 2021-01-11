@@ -57,7 +57,12 @@ struct ArrayAllocator {
 		return block->data;
 	}
 
-	void free(u32 powerOf2, u8 *data) {
+	void free(u32 size, u8 *data) {
+		u32 powerOf2;
+		
+		assert(size && (size & size - 1) == 0);
+		_BitScanReverse((unsigned long *)&powerOf2, size);
+
 		ArrayAllocatorBlock *block = (ArrayAllocatorBlock *) (data - 8);
 
 		block->next = freeBlocks[powerOf2];
@@ -79,14 +84,13 @@ public:
 	u32 count = 0;
 	u32 capacity = 0;
 
-	void resize(u32 newCapacity) {
+	__declspec(noinline) void resize(u32 newCapacity) {
 		assert(newCapacity >= count);
 
 		if (newCapacity < 4) {
 			newCapacity = 2;
 		}
 		else {
-
 			newCapacity = findHigherPowerOf2(newCapacity);
 		}
 
@@ -99,11 +103,11 @@ public:
 
 		storage = newStorage;
 
-		capacity = newCapacity;
+		capacity = 1U << newCapacity;
 	}
 
 	void reserve(u32 capacity) {
-		if (1U << this->capacity < capacity) {
+		if (this->capacity < capacity) {
 			resize(capacity);
 		}
 	}
@@ -137,8 +141,8 @@ public:
 	}
 
 	T &add(const T &value) {
-		if (!capacity || count >= 1U << capacity) {
-			resize(my_max(count + 1, 1U << (capacity + 1)));
+		if (count >= capacity) {
+			resize(capacity * 2);
 		}
 
 		storage[count] = value;

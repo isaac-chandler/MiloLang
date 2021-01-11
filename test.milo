@@ -665,12 +665,22 @@ main :: () {
 	
 		if uMsg == {
 			case WM_CLOSE
-				glFinish()
-				wglDeleteContext(gl_context)
 
 				DestroyWindow(hwnd)
 				
+				print("Closing\n")
+				
 			case WM_DESTROY
+				glFinish()
+				
+				dc := wglGetCurrentDC()
+				
+				if !wglDeleteContext(gl_context)
+					print("Failed to delete gl context\n")
+					
+				if !ReleaseDC(hwnd, dc)
+					print("Failed to delete device context\n")
+				
 				PostQuitMessage(0)
 				
 			case WM_PAINT
@@ -1104,4 +1114,6 @@ main :: () {
 		
 		last_time = current_time
 	}
+	
+	ExitThread(0)
 }

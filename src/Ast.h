@@ -464,3 +464,12 @@ inline Type *getTypeForExpr(Expr *expr) {
 
 	return type;
 }
+
+
+inline Type *getDeclarationType(Declaration *declaration) {
+	assert(declaration->flags & DECLARATION_TYPE_IS_READY);
+	assert(declaration->type);
+	assert(declaration->type->flavor == ExprFlavor::TYPE_LITERAL);
+
+	return static_cast<ExprLiteral *>(declaration->type)->typeValue;
+}

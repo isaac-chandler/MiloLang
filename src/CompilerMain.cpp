@@ -319,9 +319,9 @@ int main(int argc, char *argv[]) {
 			"  %llu functions\n"
 			"  %llu types\n"
 			"  %llu importers\n"
-			"Total infers: %llu, %.1f infers/queued\n"
+			"Total infers: %llu, %.1f infers/queued, %.1f iterations/infer\n"
 			"Total sizes: %llu, %.1f sizes/type\n",
-			totalQueued, totalDeclarations, totalFunctions, totalTypesSized, totalImporters, totalInfers, static_cast<float>(totalInfers) / totalQueued, totalSizes, static_cast<float>(totalSizes) / totalTypesSized);
+			totalQueued, totalDeclarations, totalFunctions, totalTypesSized, totalImporters, totalInfers, static_cast<float>(totalInfers) / totalQueued, static_cast<float>(totalInferIterations) / totalInfers, totalSizes, static_cast<float>(totalSizes) / totalTypesSized);
 
 
 		auto backendStart = high_resolution_clock::now();

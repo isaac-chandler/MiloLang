@@ -30,8 +30,7 @@ enum class TypeFlavor : u8 {
 	ARRAY, 
 	STRUCT, 
 	ENUM, 
-	NAMESPACE, 
-	MODULE
+	NAMESPACE
 };
 
 #define TYPE_INTEGER_IS_SIGNED 0x2

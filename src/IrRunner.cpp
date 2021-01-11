@@ -270,7 +270,7 @@ void runFunction(VMState *state, ExprFunction *expr, Ir *caller, DCArgs *dcArgs,
 	for (u32 i = 0; i < outParameters; i++) {
 		if (caller->arguments->args[expr->arguments.declarations.count + i].number == static_cast<u32>(-1)) {
 			dummyStorage = my_max(dummyStorage,
-				(static_cast<ExprLiteral *>(expr->returns.declarations[i + 1]->type)->typeValue->size + 7) / 8);
+				(getDeclarationType(expr->returns.declarations[i + 1])->size + 7) / 8);
 		}
 	}
 
@@ -284,7 +284,7 @@ void runFunction(VMState *state, ExprFunction *expr, Ir *caller, DCArgs *dcArgs,
 	if (dcArgs) {
 		for (u32 i = 0; i < expr->arguments.declarations.count; i++) {
 			auto &argument = expr->arguments.declarations[i];
-			auto argumentType = static_cast<ExprLiteral *>(argument->type)->typeValue;
+			auto argumentType = getDeclarationType(argument);
 
 			if (argumentType == &TYPE_F32) {
 				*reinterpret_cast<float *>(stack + expr->arguments.declarations[i]->physicalStorage) = dcbArgFloat(dcArgs);
@@ -1078,7 +1078,7 @@ Expr *runFunctionRoot(VMState *state, ExprFunction *expr, Module *module) {
 
 	u64 *stackPointer = store;
 
-	auto returnType = static_cast<ExprLiteral *>(expr->returns.declarations[0]->type)->typeValue;
+	auto returnType = getDeclarationType(expr->returns.declarations[0]);
 
 	if (returnType->size > sizeof(store)) {
 		stackPointer = static_cast<u64 *>(malloc(returnType->size));
@@ -1107,7 +1107,7 @@ Expr *runFunctionRoot(VMState *state, ExprFunction *expr, Module *module) {
 char cCallCallback(DCCallback *pcb, DCArgs *args, DCValue *result, void *userdata) {
 	auto function = static_cast<ExprFunction *>(userdata);
 
-	auto returnType = static_cast<ExprLiteral *>(function->returns.declarations[0]->type)->typeValue;
+	auto returnType = getDeclarationType(function->returns.declarations[0]);
 
 	u64 *resultPointer = &result->L;
 
@@ -1140,7 +1140,7 @@ char cCallCallback(DCCallback *pcb, DCArgs *args, DCValue *result, void *userdat
 
 void *createCCallFunction(ExprFunction *function) {
 	assert(function->returns.declarations.count == 1);
-	auto returnType = static_cast<ExprLiteral *>(function->returns.declarations[0]->type)->typeValue;
+	auto returnType = getDeclarationType(function->returns.declarations[0]);
 
 	char *callback;
 
@@ -1150,7 +1150,7 @@ void *createCCallFunction(ExprFunction *function) {
 		callback[0] = 'p';
 
 		for (u32 i = 0; i < function->arguments.declarations.count; i++) {
-			auto arg = static_cast<ExprLiteral *>(function->arguments.declarations[i]->type)->typeValue;
+			auto arg = getDeclarationType(function->arguments.declarations[i]);
 
 			callback[i + 1] = getSigChar(arg);
 		}
@@ -1163,7 +1163,7 @@ void *createCCallFunction(ExprFunction *function) {
 		callback = static_cast<char *>(malloc(function->arguments.declarations.count + 3));
 
 		for (u32 i = 0; i < function->arguments.declarations.count; i++) {
-			auto arg = static_cast<ExprLiteral *>(function->arguments.declarations[i]->type)->typeValue;
+			auto arg = getDeclarationType(function->arguments.declarations[i]);
 
 			callback[i] = getSigChar(arg);
 		}

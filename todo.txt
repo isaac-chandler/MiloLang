@@ -45,9 +45,6 @@ Standard modules
  - File I/O
  - Standard basic operations -> array_add, memory allocation, printing?
  
- 
-Emit calls to __chkstk (or our own version of __chkstk if we don't want to depend on the CRT) when the stack allocation size is too large
- 
 Remove void 
  - Functions with no return will just have 0 return types
  - Replace *void with another type that has the same operations, but doesn't have pointer syntax
@@ -63,7 +60,6 @@ Make it a compile time error to out of bounds index a static array if the index 
  - Compile time error for things that are an array literal of normal or dynamic type
 
 Make auto cast work in more places where the target type is known
- - Array/pointer type
  - Array type count slot
  - Array index
  - Array slice start/end

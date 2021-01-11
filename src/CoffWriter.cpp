@@ -1008,7 +1008,7 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 			};
 		}
 		else {
-			u32 dataType = getCoffTypeIndex(debugTypes, static_cast<ExprLiteral *>(array->members.declarations[0]->type)->typeValue);
+			u32 dataType = getCoffTypeIndex(debugTypes, getDeclarationType(array->members.declarations[0]));
 
 			u32 fieldList = DEBUG_LEAF{
 				debugTypes->ensure(12);
@@ -1249,7 +1249,7 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 		for (auto member : structure->members.declarations) {
 			if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING)) continue;
 
-			auto type = static_cast<ExprLiteral *>(member->type)->typeValue;
+			auto type = getDeclarationType(member);
 
 			getCoffTypeIndex(debugTypes, type);
 		}
@@ -1264,7 +1264,7 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 			for (auto member : struct_->members.declarations) {
 				if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING)) continue;
 
-				auto type = static_cast<ExprLiteral *>(member->type)->typeValue;
+				auto type = getDeclarationType(member);
 
 				alignDebugTypes(debugTypes);
 				debugTypes->ensure(10);
@@ -1429,6 +1429,7 @@ void runCoffWriter() {
 	s64 f32ToU64ConstantSymbolIndex = -1;
 	s64 f64ToU64ConstantSymbolIndex = -1;
 	s64 emptyStringSymbolIndex = -1;
+	s64 chkstkSymbolIndex = -1;
 
 	u64 alignmentPadding = 0;
 
@@ -1610,7 +1611,7 @@ void runCoffWriter() {
 
 			code.ensure(256);
 
-			if (!isStandardSize(static_cast<ExprLiteral *>(function->returns.declarations[0]->type)->typeValue->size)) {
+			if (!isStandardSize(getDeclarationType(function->returns.declarations[0])->size)) {
 				paramOffset = 1;
 
 				code.add1Unchecked(0x48); // mov qword ptr[rsp + 8], rcx
@@ -1627,7 +1628,7 @@ void runCoffWriter() {
 				auto argument = function->arguments.declarations[i];
 				REGREL32 argumentInfo;
 				argumentInfo.off = getRegisterOffset(function, i + 1 + paramOffset);
-				argumentInfo.typind = getCoffTypeIndex(&debugTypes, static_cast<ExprLiteral *>(argument->type)->typeValue);
+				argumentInfo.typind = getCoffTypeIndex(&debugTypes, getDeclarationType(argument));
 
 				debugSymbols.ensure(2 + sizeof(argumentInfo));
 				debugSymbols.add2Unchecked(static_cast<u16>(sizeof(argumentInfo) + 1 + argument->name.length));
@@ -1641,7 +1642,7 @@ void runCoffWriter() {
 				Type *type;
 
 				if (i < function->arguments.declarations.count) {
-					type = static_cast<ExprLiteral *>(function->arguments.declarations[i]->type)->typeValue;
+					type = getDeclarationType(function->arguments.declarations[i]);
 				}
 				else {
 					type = TYPE_VOID_POINTER;
@@ -1692,14 +1693,46 @@ void runCoffWriter() {
 			code.add1Unchecked(0x57); // push rdi
 			u32 pushRdiOffset = code.totalSize - functionStart;
 
-			// sub rsp, spaceToAllocate
-			if (spaceToAllocate < 0x80) {
+			if (spaceToAllocate >= 4096) {
+				loadImmediateIntoRAX(&code, spaceToAllocate);
+
+				// call __chkstk
+				code.add1(0xE8);
+
+				if (chkstkSymbolIndex == -1) {
+					chkstkSymbolIndex = symbols.count();
+
+					Symbol chkstk;
+					setSymbolName(&stringTable, &chkstk.name, "__chkstk");
+					chkstk.value = 0;
+					chkstk.sectionNumber = 0;
+					chkstk.type = 0x20;
+					chkstk.storageClass = IMAGE_SYM_CLASS_EXTERNAL;
+					chkstk.numberOfAuxSymbols = 0;
+
+					symbols.add(chkstk);
+				}
+
+				codeRelocations.ensure(10);
+				codeRelocations.add4Unchecked(code.totalSize);
+				codeRelocations.add4Unchecked(static_cast<u32>(chkstkSymbolIndex));
+				codeRelocations.add2Unchecked(IMAGE_REL_AMD64_REL32);
+				code.add4(0);
+
+				// sub rsp, rax
+				code.add1(0x48);
+				code.add1(0x29);
+				code.add1(0xC4);
+			}
+			else if (spaceToAllocate < 0x80) {
+				// sub rsp, spaceToAllocate
 				code.add1Unchecked(0x48);
 				code.add1Unchecked(0x83);
 				code.add1Unchecked(0xEC);
 				code.add1Unchecked(static_cast<u8>(spaceToAllocate));
 			}
 			else {
+				// sub rsp, spaceToAllocate
 				code.add1Unchecked(0x48);
 				code.add1Unchecked(0x81);
 				code.add1Unchecked(0xEC);
@@ -1711,7 +1744,7 @@ void runCoffWriter() {
 			*functionPreambleEndPatch = functionPreambleEnd;
 
 			for (u32 i = 0; i < function->arguments.declarations.count; i++) {
-				auto type = static_cast<ExprLiteral *>(function->arguments.declarations[i]->type)->typeValue;
+				auto type = getDeclarationType(function->arguments.declarations[i]);
 
 				if (!isStandardSize(type->size)) {
 					loadIntoIntRegister(&code, function, 8, RSI, i + 1 + paramOffset);
@@ -3377,7 +3410,7 @@ void runCoffWriter() {
 							REGREL32 variableInfo;
 
 							variableInfo.off = getRegisterOffset(function, declaration->physicalStorage);
-							variableInfo.typind = getCoffTypeIndex(&debugTypes, static_cast<ExprLiteral *>(declaration->type)->typeValue);
+							variableInfo.typind = getCoffTypeIndex(&debugTypes, getDeclarationType(declaration));
 
 							debugSymbols.ensure(2 + sizeof(variableInfo));
 							debugSymbols.add2Unchecked(static_cast<u16>(sizeof(variableInfo) + declaration->name.length + 1));
@@ -3539,7 +3572,7 @@ void runCoffWriter() {
 			debugSymbols.add2Unchecked(static_cast<u16>(sizeof(DATASYM32) + declaration->name.length - 1));
 			debugSymbols.add2Unchecked(0x110d); // S_GDATA32
 
-			debugSymbols.add4Unchecked(getCoffTypeIndex(&debugTypes, static_cast<ExprLiteral *>(declaration->type)->typeValue));
+			debugSymbols.add4Unchecked(getCoffTypeIndex(&debugTypes, getDeclarationType(declaration)));
 
 			debugSymbolsRelocations.add4Unchecked(debugSymbols.totalSize);
 			debugSymbolsRelocations.add4Unchecked(declaration->physicalStorage);
@@ -3560,7 +3593,7 @@ void runCoffWriter() {
 			alignAllocator(&debugSymbols, 4);
 
 			auto symbol = declaration->symbol;
-			auto type = static_cast<ExprLiteral *>(declaration->type)->typeValue;
+			auto type = getDeclarationType(declaration);
 
 			setSymbolName(&stringTable, &symbol->name, declaration->name);
 
@@ -3870,7 +3903,7 @@ void runCoffWriter() {
 						}
 						else {
 							addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), member_type),
-								createSymbolForType(&symbols, static_cast<ExprLiteral *>(member->type)->typeValue));
+								createSymbolForType(&symbols, getDeclarationType(member)));
 						}
 
 						if (member->initialValue) { // @Incomplete: Export info for namespaces

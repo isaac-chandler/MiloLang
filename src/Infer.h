@@ -8,6 +8,7 @@ inline u64 totalDeclarations;
 inline u64 totalFunctions;
 inline u64 totalTypesSized;
 inline u64 totalInfers;
+inline u64 totalInferIterations;
 inline u64 totalSizes;
 
 enum class InferJobType : u8 {

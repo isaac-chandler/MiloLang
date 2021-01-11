@@ -90,7 +90,7 @@ static llvm::Type *createLlvmType(llvm::LLVMContext &context, Type *type) {
 				if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING))
 					continue;
 
-				auto memberType = static_cast<ExprLiteral *>(member->type)->typeValue;
+				auto memberType = getDeclarationType(member);
 
 				if ((type->flags & TYPE_STRUCT_IS_PACKED) || memberType->alignment == struct_->alignment) {
 					if (!mainMember || (memberType->size > mainMember->size)) {
@@ -138,7 +138,7 @@ static llvm::Type *createLlvmType(llvm::LLVMContext &context, Type *type) {
 				if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING))
 					continue;
 
-				body.add(getLlvmType(context, static_cast<ExprLiteral *>(member->type)->typeValue));
+				body.add(getLlvmType(context, getDeclarationType(member)));
 			}
 
 			llvmType->setBody(llvm::ArrayRef(body.begin(), body.end()), struct_->flags & TYPE_STRUCT_IS_PACKED ? true : false);
@@ -415,7 +415,7 @@ static llvm::Constant *createConstant(State *state, Expr *expr) {
 
 static llvm::GlobalVariable *createLlvmGlobal(State *state, Declaration *declaration) {
 	if (!declaration->llvmStorage) {
-		auto llvmType = getLlvmType(state->context, static_cast<ExprLiteral *>(declaration->type)->typeValue);
+		auto llvmType = getLlvmType(state->context, getDeclarationType(declaration));
 
 		auto global = static_cast<llvm::GlobalVariable *>(state->module.getOrInsertGlobal(stringRef(declaration->name), 
 			llvmType));
@@ -1456,7 +1456,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 
 		for (auto declaration : block->declarations.declarations) {
 			if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING))) {				
-				declaration->llvmStorage = allocateType(state, static_cast<ExprLiteral *>(declaration->type)->typeValue, declaration->name);
+				declaration->llvmStorage = allocateType(state, getDeclarationType(declaration), declaration->name);
 			}
 		}
 
@@ -1572,9 +1572,9 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 		auto it = loop->iteratorBlock.declarations[0];
 		auto it_index = loop->iteratorBlock.declarations[1];
 
-		it->llvmStorage = allocateType(state, static_cast<ExprLiteral *>(it->type)->typeValue, it->name);
+		it->llvmStorage = allocateType(state, getDeclarationType(it), it->name);
 
-		it_index->llvmStorage = allocateType(state, static_cast<ExprLiteral *>(it_index->type)->typeValue, it_index->name);
+		it_index->llvmStorage = allocateType(state, getDeclarationType(it_index), it_index->name);
 
 		state->builder.CreateStore(llvm::ConstantInt::get(llvm::Type::getInt64Ty(state->context), 0), it_index->llvmStorage);
 
@@ -2075,11 +2075,11 @@ void runLlvm() {
 					state.function = llvmFunction;
 					state.entryBlock = entry;
 
-					u32 paramOffset = isStandardSize(static_cast<ExprLiteral *>(function->returns.declarations[0]->type)->typeValue->size) ? 0 : 1;
+					u32 paramOffset = isStandardSize(getDeclarationType(function->returns.declarations[0])->size) ? 0 : 1;
 
 					for (u32 i = 0; i < function->arguments.declarations.count; i++) {
 						auto argument = function->arguments.declarations[i];
-						auto argType = static_cast<ExprLiteral *>(function->arguments.declarations[i]->type)->typeValue;
+						auto argType = getDeclarationType(function->arguments.declarations[i]);
 
 
 						llvm::Value *llvmArg = llvmFunction->getArg(i + paramOffset);
@@ -2094,7 +2094,7 @@ void runLlvm() {
 							argument->llvmStorage = builder.CreateBitCast(alloc, llvm::PointerType::getUnqual(getLlvmType(context, argType)), stringRef(argument->name));
 						}
 						else {
-							argument->llvmStorage = allocateType(&state, static_cast<ExprLiteral *>(argument->type)->typeValue, argument->name);
+							argument->llvmStorage = allocateType(&state, getDeclarationType(argument), argument->name);
 
 							
 
@@ -2137,7 +2137,7 @@ void runLlvm() {
 
 				auto global = createLlvmGlobal(&state, declaration);
 
-				auto llvmType = getLlvmType(state.context, static_cast<ExprLiteral *>(declaration->type)->typeValue);
+				auto llvmType = getLlvmType(state.context, getDeclarationType(declaration));
 
 				if (!declaration->initialValue) {
 					global->setInitializer(llvm::UndefValue::get(llvmType));
@@ -2346,7 +2346,7 @@ void runLlvm() {
 
 							auto memberName = createLlvmString(&state, member->name);
 							auto offset = llvm::ConstantInt::get(int64, member->physicalStorage);
-							auto member_type = TO_TYPE_INFO(static_cast<ExprLiteral *>(member->type)->typeValue);
+							auto member_type = TO_TYPE_INFO(getDeclarationType(member));
 
 
 							u64 flags_int = 0;

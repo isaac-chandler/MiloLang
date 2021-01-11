@@ -414,13 +414,13 @@ TypeFunction *getFunctionType(ExprFunction *expr) {
 	u32 hash = 0;
 
 	for (auto return_ : returns) {
-		hash += static_cast<ExprLiteral *>(return_->type)->typeValue->hash;
+		hash += getDeclarationType(return_)->hash;
 		hash *= FUNCTION_RETURN_HASH_PRIME;
 	}
 
 
 	for (auto argument : arguments) {
-		hash += static_cast<ExprLiteral *>(argument->type)->typeValue->hash;
+		hash += getDeclarationType(argument)->hash;
 		hash *= FUNCTION_ARGUMENT_HASH_PRIME;
 	}
 
@@ -456,13 +456,13 @@ TypeFunction *getFunctionType(ExprFunction *expr) {
 
 			if (function->argumentCount == arguments.count && function->returnCount == returns.count) {
 				for (u32 i = 0; i < arguments.count; i++) {
-					if (function->argumentTypes[i] != static_cast<ExprLiteral *>(arguments[i]->type)->typeValue) {
+					if (function->argumentTypes[i] != getDeclarationType(arguments[i])) {
 						goto cont;
 					}
 				}
 
 				for (u32 i = 0; i < returns.count; i++) {
-					if (function->returnTypes[i] != static_cast<ExprLiteral *>(returns[i]->type)->typeValue) {
+					if (function->returnTypes[i] != getDeclarationType(returns[i])) {
 						goto cont;
 					}
 				}
@@ -490,11 +490,11 @@ TypeFunction *getFunctionType(ExprFunction *expr) {
 	}
 
 	for (u32 i = 0; i < returns.count; i++) {
-		result->returnTypes[i] = static_cast<ExprLiteral *>(returns[i]->type)->typeValue;
+		result->returnTypes[i] = getDeclarationType(returns[i]);
 	}
 
 	for (u32 i = 0; i < arguments.count; i++) {
-		result->argumentTypes[i] = static_cast<ExprLiteral *>(arguments[i]->type)->typeValue;
+		result->argumentTypes[i] = getDeclarationType(arguments[i]);
 	}
 
 	result->flavor = TypeFlavor::FUNCTION;
