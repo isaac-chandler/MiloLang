@@ -1932,13 +1932,16 @@ bool LexerFile::open(FileInfo *file) {
 		}
 	}
 
-	auto handle = CreateFileW(utf8ToWString(file->path), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+	auto handle = CreateFileW(utf8ToWString(file->path), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+
 
 	if (handle == INVALID_HANDLE_VALUE) {
 		reportError("Error: Failed to open file: %.*s", STRING_PRINTF(file->path));
+		return false;
 	}
 
 	GetFileSizeEx(handle, &size);
+
 
 	text = static_cast<char *>(malloc(size.QuadPart));
 	file->data = text;

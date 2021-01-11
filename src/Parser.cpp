@@ -2111,6 +2111,7 @@ Expr *parseUnaryExpr(LexerFile *lexer, CodeLocation plusStart) {
 		run->flavor = ExprFlavor::RUN;
 		run->start = start;
 
+		run->module = lexer->module;
 
 		auto function = PARSER_NEW(ExprFunction);
 		function->start = lexer->token.start;
@@ -2548,7 +2549,6 @@ void runParser() {
 
 
 		if (!lexer->open(file)) {
-			parserQueue.add(nullptr);
 			inferQueue.add(InferJobType::DONE);
 			break;
 		}
@@ -2654,14 +2654,16 @@ void runParser() {
 			}
 		}
 
-		//printf("Parser memory used %ukb\n", lexer->parserArena.totalSize / 1024);
 
 		inferQueue.add(InferQueueJob(file->fileUid, lexer->module));
 
 		if (hadError) {
-			parserQueue.add(nullptr);
 			inferQueue.add(InferJobType::DONE);
 			break;
 		}
 	}
+
+	wchar_t *name;
+	GetThreadDescription(GetCurrentThread(), &name);
+	reportInfo("%ls memory used %ukb", name, lexer->parserArena.totalSize / 1024);
 }

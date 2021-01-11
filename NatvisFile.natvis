@@ -56,7 +56,7 @@
     <DisplayString Condition="op == IrOp::TYPE">TYPE {dest} &lt;- {type}</DisplayString>
     <DisplayString Condition="op == IrOp::READ">{op,en}_{destSize*8} {dest} &lt;- {a}</DisplayString>
     <DisplayString Condition="op == IrOp::WRITE">{op,en}_{opSize*8} {a} {b}</DisplayString>
-    <DisplayString Condition="op == IrOp::IMMEDIATE">{op,en}_{opSize*8} {dest} &lt;- {a}</DisplayString>
+    <DisplayString Condition="op == IrOp::IMMEDIATE">{op,en}_{opSize*8} {dest} &lt;- {immediate}</DisplayString>
     <DisplayString>{op,en}_{opSize*8} {dest} &lt;- {a}, {b}</DisplayString>
   </Type>
 

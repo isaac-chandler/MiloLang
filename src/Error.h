@@ -17,3 +17,4 @@ void reportError(CodeLocation *location, CHECK_PRINTF const char *format, ...);
 void reportError(CodeLocation *start,  EndLocation *end, CHECK_PRINTF const char *format, ...);
 void reportExpectedError(struct Token *location, CHECK_PRINTF const char *format, ...);
 void reportError(CHECK_PRINTF const char *format, ...);
+void reportInfo(CHECK_PRINTF const char *format, ...);

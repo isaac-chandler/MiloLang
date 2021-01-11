@@ -219,13 +219,19 @@ void deinitVMState(VMState *state) {
 	}
 }
 
-void runFunction(VMState *state, ExprFunction *expr, const Ir *caller, DCArgs *dcArgs, u64 *callerStack) {
+static Module *runningModule;
+
+void runFunction(VMState *state, ExprFunction *expr, Ir *caller, DCArgs *dcArgs, u64 *callerStack) {
 	if (expr->flags & EXPR_FUNCTION_IS_COMPILER) {
 		assert(expr->valueOfDeclaration);
 
 		if (std::this_thread::get_id() != mainThread) {
+			Ir *location;
+
+			for (location = caller - 1; location->op != IrOp::LINE_MARKER; location--); // There had better be a location
+
 			// @Incomplete: Display error location
-			reportError("Error: Compiler functions can only be called from the initial thread", STRING_PRINTF(expr->valueOfDeclaration->name));
+			reportError(&location->location.start, &location->location.end, "Error: Compiler functions can only be called from the initial thread", STRING_PRINTF(expr->valueOfDeclaration->name));
 		}
 
 		if (expr->valueOfDeclaration->name == "add_build_file") {
@@ -242,15 +248,18 @@ void runFunction(VMState *state, ExprFunction *expr, const Ir *caller, DCArgs *d
 			load->start = {};
 			load->end = {};
 			load->file = name;
+			load->module = runningModule;
 
 			auto import = new Importer;
 			import->import = load;
 			
-			inferInput.add(InferQueueJob(import, mainModule));
+			inferInput.add(InferQueueJob(import, runningModule));
 		}
 		else {
-			// @Incomplete: Display error location
-			reportError("Error: Unknown compiler function: %.*s", STRING_PRINTF(expr->valueOfDeclaration->name));
+			Ir *location;
+
+			for (location = caller - 1; location->op != IrOp::LINE_MARKER; location--); // There had better be a location
+			reportError(&location->location.start, &location->location.end, "Error: Unknown compiler function: %.*s", STRING_PRINTF(expr->valueOfDeclaration->name));
 		}
 		return;
 	}
@@ -307,7 +316,7 @@ void runFunction(VMState *state, ExprFunction *expr, const Ir *caller, DCArgs *d
 		for (u32 i = 0; i < expr->arguments.declarations.count; i++) {
 			auto &argument = caller->arguments->args[i];
 			for (u32 j = 0; j < (argument.type->size + 7) / 8; j++) {
-				stack[expr->arguments.declarations[i]->physicalStorage + j] = callerStack[argument.number + j];
+				stack[expr->arguments.declarations[i]->physicalStorage + j] = callerStack[argument.number + (argument.number == 0 ? 0 : j)];
 			}
 		}
 
@@ -348,7 +357,7 @@ if (op.flags & IR_FLOAT_OP) {\
 	break;\
 }
 
-		const auto &op = expr->state.ir[i++];
+		auto &op = expr->state.ir[i++];
 		u64 opMask = 0;
 		u64 destMask = 0;
 
@@ -751,7 +760,7 @@ if (op.flags & IR_FLOAT_OP) {\
 			break;
 		}
 		case IrOp::IMMEDIATE: {
-			stack[op.dest] = op.a & opMask;
+			stack[op.dest] = op.immediate & opMask;
 			break;
 		}
 		case IrOp::SET: {
@@ -806,11 +815,11 @@ if (op.flags & IR_FLOAT_OP) {\
 		}
 		case IrOp::ADDRESS_OF_GLOBAL: {
 			assert(op.declaration->runtimeValue);
-			stack[op.dest] = reinterpret_cast<u64>(op.declaration->runtimeValue);
+			stack[op.dest] = reinterpret_cast<u64>(op.declaration->runtimeValue) + op.a;
 			break;
 		}
 		case IrOp::ADDRESS_OF_LOCAL: {
-			stack[op.dest] = reinterpret_cast<u64>(reinterpret_cast<u8 *>(stack + op.a) + op.b);
+			stack[op.dest] = reinterpret_cast<u64>(reinterpret_cast<u8 *>(stack + op.a) + op.immediate);
 			break;
 		}
 		case IrOp::FUNCTION: {
@@ -1061,9 +1070,11 @@ Expr *getReturnValueFromBytes(CodeLocation start, EndLocation end, Type *type, v
 	}
 }
 
-Expr *runFunctionRoot(VMState *state, ExprFunction *expr) {
+Expr *runFunctionRoot(VMState *state, ExprFunction *expr, Module *module) {
 	PROFILE_FUNC();
 	u64 store[32];
+
+	runningModule = module;
 
 	u64 *stackPointer = store;
 

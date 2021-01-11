@@ -252,9 +252,8 @@ RunJob *runJobs;
 ImporterJob *importerJobs;
 
 Array<SubJob *> subJobs;
-Array<SubJob *> priorityJobs;
 
-inline void addSubJob(SubJob *job, bool highPriority = false) {
+inline void addSubJob(SubJob *job) {
 #if BUILD_DEBUG
 	for (auto x : priorityJobs) {
 		assert(x != job);
@@ -264,18 +263,13 @@ inline void addSubJob(SubJob *job, bool highPriority = false) {
 		assert(x != job);
 	}
 #endif
-
-	if (highPriority) {
-		priorityJobs.add(job);
-	}
-	else {
-		subJobs.add(job);
-	}
+	
+	subJobs.add(job);
 }
 
 bool addDeclaration(Declaration *declaration, Module *members);
 
-void wakeUpSleepers(Array<SubJob *> *sleepers, bool priority = false, String name = String(nullptr, 0u)) {
+void wakeUpSleepers(Array<SubJob *> *sleepers, String name = String(nullptr, 0u)) {
 
 	if (name.length == 0) {
 		PROFILE_ZONE("Unnamed wakeUpSleepers");
@@ -294,7 +288,7 @@ void wakeUpSleepers(Array<SubJob *> *sleepers, bool priority = false, String nam
 			if (sleeper->sleepingOnName.length == 0 || name == sleeper->sleepingOnName) {
 				if (--sleeper->sleepCount == 0) {
 					sleepers->unordered_remove(i--);
-					addSubJob(sleeper, priority);
+					addSubJob(sleeper);
 				}
 			}
 		}
@@ -342,7 +336,7 @@ void addFunction(ExprFunction *function) {
 	assert(function->body);
 	beginFlatten(&job->value, &function->body);
 
-	addSubJob(&job->type, true);
+	addSubJob(&job->type);
 
 	addSubJob(&job->value);
 
@@ -395,7 +389,7 @@ void addTypeBlock(Expr *expr) {
 			++totalTypesSized;
 
 			addJob(&sizeJobs, job);
-			addSubJob(job, true);
+			addSubJob(job);
 		}
 	}
 }
@@ -5820,14 +5814,14 @@ bool addDeclaration(Declaration *declaration, Module *module) {
 			return false;
 		}
 
-		wakeUpSleepers(&module->members.sleepingOnMe, false, declaration->name);
+		wakeUpSleepers(&module->members.sleepingOnMe, declaration->name);
 
 		if (!(declaration->flags & DECLARATION_IMPORTED_BY_USING)) {
 			for (auto import : module->imports) {
 				if (checkForRedeclaration(import->enclosingScope, declaration, import->import)) {
 					putDeclarationInBlock(import->enclosingScope, declaration);
 
-					wakeUpSleepers(&import->enclosingScope->sleepingOnMe, true, declaration->name);
+					wakeUpSleepers(&import->enclosingScope->sleepingOnMe, declaration->name);
 				}
 			}
 		}
@@ -5898,7 +5892,7 @@ bool addDeclaration(Declaration *declaration, Module *module) {
 
 	if (declaration->type) {
 		beginFlatten(&job->type, &declaration->type);
-		addSubJob(&job->type, true);
+		addSubJob(&job->type);
 	}
 
 	if (declaration->initialValue) {
@@ -6077,7 +6071,7 @@ bool inferImporter(ImporterJob *job) {
 				if (checkForRedeclaration(importer->enclosingScope, member, importer->import)) {
 					putDeclarationInBlock(importer->enclosingScope, member);
 
-					wakeUpSleepers(&importer->enclosingScope->sleepingOnMe, true, member->name);
+					wakeUpSleepers(&importer->enclosingScope->sleepingOnMe, member->name);
 				}
 			}
 		}
@@ -6156,7 +6150,7 @@ bool inferImporter(ImporterJob *job) {
 							}
 						}
 
-						wakeUpSleepers(&importer->enclosingScope->sleepingOnMe, true, member->name);
+						wakeUpSleepers(&importer->enclosingScope->sleepingOnMe, member->name);
 
 						if (!addDeclaration(member, nullptr)) {
 							return false;
@@ -6172,10 +6166,14 @@ bool inferImporter(ImporterJob *job) {
 
 			if (importer->enclosingScope->flavor == BlockFlavor::GLOBAL) {
 				auto exprBlock = CAST_FROM_SUBSTRUCT(ExprBlock, declarations, block);
+				auto module = CAST_FROM_SUBSTRUCT(Module, members, importer->enclosingScope);
 
 				for (auto expr : exprBlock->exprs) {
-					if (expr->flavor == ExprFlavor::RUN) {
-						addRunJob(static_cast<ExprRun *>(expr));
+					assert(expr->flavor == ExprFlavor::RUN);
+
+					auto run = static_cast<ExprRun *>(expr);
+					if (run->module == module) {
+						addRunJob(run);
 					}
 				}
 			}
@@ -6205,7 +6203,7 @@ bool inferImporter(ImporterJob *job) {
 							addDeclarationToBlockUnchecked(importer->enclosingScope, import, importer->serial);
 
 							assert(import->name.length);
-							wakeUpSleepers(&importer->enclosingScope->sleepingOnMe, true, import->name);
+							wakeUpSleepers(&importer->enclosingScope->sleepingOnMe, import->name);
 
 							if (member->flags & DECLARATION_IS_CONSTANT) {
 								if (!addDeclaration(import, nullptr)) {
@@ -6778,7 +6776,7 @@ bool inferSize(SizeJob *job) {
 		enum_->struct_.size = enum_->struct_.integerType->size;
 		enum_->struct_.flags |= enum_->struct_.integerType->flags & TYPE_INTEGER_IS_SIGNED;
 
-		wakeUpSleepers(&struct_->sleepingOnMe, true);
+		wakeUpSleepers(&struct_->sleepingOnMe);
 
 		removeJob(&sizeJobs, job);
 		type->sleepingOnMe.free();
@@ -7321,7 +7319,7 @@ bool inferRun(RunJob *job) {
 
 	VMState state;
 	initVMState(&state); // @Speed, keep this around for multiple run directives
-	run->returnValue = runFunctionRoot(&state, static_cast<ExprFunction *>(run->function));
+	run->returnValue = runFunctionRoot(&state, static_cast<ExprFunction *>(run->function), run->module);
 	deinitVMState(&state);
 
 	if (hadError)
@@ -7364,6 +7362,10 @@ bool doJob(SubJob *job) {
 		return false;
 	}
 	else if (isDone(job)) {
+		constexpr bool (*table[])(DeclarationJob *) = {
+			inferDeclarationType
+		};
+
 		if (job->flavor == JobFlavor::DECLARATION_TYPE) {
 			if (!inferDeclarationType(CAST_FROM_SUBSTRUCT(DeclarationJob, type, job)))
 				return false;
@@ -7462,8 +7464,8 @@ void runInfer(String inputFile) {
 				wakeUpSleepers(&function->sleepingOnIr);
 			}
 
-			while (subJobs.count || priorityJobs.count) {
-				auto job = priorityJobs.count ? priorityJobs.pop() : subJobs.pop();
+			while (subJobs.count) {
+				auto job = subJobs.pop();
 
 				if (!doJob(job)) {
 					goto error;
@@ -7520,7 +7522,6 @@ void runInfer(String inputFile) {
 		}
 
 		if (loadsPending == 0 && irGenerationPending == 0) {
-			irGeneratorQueue.add(nullptr);
 			break;
 		}
 	}
@@ -7791,10 +7792,12 @@ void runInfer(String inputFile) {
 	printf("Type table memory used: %ukb\n", typeArena.totalSize / 1024);
 
 	irGeneratorQueue.add(nullptr);
+	parserQueue.add(nullptr);
 
 	return;
 error:;
 	assert(hadError);
 
+	parserQueue.add(nullptr);
 	irGeneratorQueue.add(nullptr);
 }

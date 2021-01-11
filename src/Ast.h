@@ -206,6 +206,7 @@ struct ExprSlice : Expr {
 struct ExprRun : Expr {
 	Expr *returnValue = nullptr;
 	struct RunJob *runJob = nullptr;
+	struct Module *module;
 	Array<struct SubJob *> sleepingOnMe;
 	Expr *function;
 };

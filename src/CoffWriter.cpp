@@ -4160,6 +4160,8 @@ void runCoffWriter() {
 			//assert(ftell(out) == header.pointerToSymbolTable);
 			writeAllocator(out, symbols.allocator);
 
+			reportInfo("%u COFF symbols", symbols.count());
+
 			doWrite(&stringTableSize, sizeof(stringTableSize));
 			writeAllocator(out, stringTable);
 
@@ -4169,10 +4171,15 @@ void runCoffWriter() {
 				auto section = sections[i];
 
 				if (section.data) {
+					reportInfo("%s size: %u", section.header->name, section.data->totalSize);
+
 					//assert(section.header->pointerToRawData == ftell(out));
 					writeAllocator(out, *section.data);
+
+
 				}
 				else if (section.header->sizeOfRawData) {
+					reportInfo("%s size: %u", section.header->name, section.header->sizeOfRawData);
 					char zero[1024] = {};
 
 					for (s64 write = section.header->sizeOfRawData; write > 0; write -= sizeof(zero)) {
@@ -4181,6 +4188,7 @@ void runCoffWriter() {
 				}
 
 				if (section.relocations) {
+					reportInfo("%s relocations: %u", section.header->name, section.relocations->totalSize / sizeof(Relocation));
 					//assert(section.header->pointerToRelocations == ftell(out));
 
 					writeAllocator(out, *section.relocations);

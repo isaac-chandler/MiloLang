@@ -5,7 +5,7 @@
 #include "Ast.h"
 #include "Lexer.h"
 
-
+static std::mutex errorMutex;
 
 #if BUILD_WINDOWS
 bool doColorPrint = false; // False by default, set at startup if color can be enabled
@@ -81,6 +81,7 @@ void printErrorLocation(CodeLocation *location) {
 }
 
 void reportError(CHECK_PRINTF const char *format, ...) {
+	ScopeLock lock(errorMutex);
 	hadError = true;
 
 	va_list args;
@@ -94,6 +95,7 @@ void reportError(CHECK_PRINTF const char *format, ...) {
 }
 
 void reportError(Expr *location, CHECK_PRINTF const char *format, ...) {
+	ScopeLock lock(errorMutex);
 	printErrorLocation(&location->start);
 	hadError = true;
 
@@ -111,6 +113,7 @@ void reportError(Expr *location, CHECK_PRINTF const char *format, ...) {
 
 
 void reportError(CodeLocation *start, EndLocation *end, CHECK_PRINTF const char *format, ...) {
+	ScopeLock lock(errorMutex);
 	printErrorLocation(start);
 	hadError = true;
 
@@ -126,6 +129,7 @@ void reportError(CodeLocation *start, EndLocation *end, CHECK_PRINTF const char 
 }
 
 void reportError(CodeLocation *location, CHECK_PRINTF const char *format, ...) {
+	ScopeLock lock(errorMutex);
 	printErrorLocation(location);
 
 	hadError = true;
@@ -141,6 +145,7 @@ void reportError(CodeLocation *location, CHECK_PRINTF const char *format, ...) {
 
 
 void reportError(Declaration *location, CHECK_PRINTF const char *format, ...) {
+	ScopeLock lock(errorMutex);
 	printErrorLocation(&location->start);
 
 	hadError = true;
@@ -157,6 +162,7 @@ void reportError(Declaration *location, CHECK_PRINTF const char *format, ...) {
 }
 
 void reportError(Token *location, CHECK_PRINTF const char *format, ...) {
+	ScopeLock lock(errorMutex);
 	printErrorLocation(&location->start);
 
 	hadError = true;
@@ -172,7 +178,20 @@ void reportError(Token *location, CHECK_PRINTF const char *format, ...) {
 	displayErrorLocation(&location->start, &location->end);
 }
 
+void reportInfo(CHECK_PRINTF const char *format, ...) {
+	ScopeLock lock(errorMutex);
+
+	va_list args;
+	va_start(args, format);
+
+	vprintf(format, args);
+	puts("");
+
+	va_end(args);
+}
+
 void reportExpectedError(Token *location, CHECK_PRINTF const char *format, ...) {
+	ScopeLock lock(errorMutex);
 	if (location->type == TokenT::INVALID) { // If it was invalid assume that the lexer already reported an error, don't print the error so we don't double report
 		assert(hadError);
 	}

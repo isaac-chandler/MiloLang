@@ -304,6 +304,9 @@ int main(int argc, char *argv[]) {
 		irGenerator.detach();
 
 		runInfer(input);
+
+		std::cout << "Frontend Time: " << (duration_cast<microseconds>(duration<double>(
+			high_resolution_clock::now() - start)).count() / 1000.0) << "ms\n";
 	}
 
 
@@ -320,8 +323,6 @@ int main(int argc, char *argv[]) {
 			"Total sizes: %llu, %.1f sizes/type\n",
 			totalQueued, totalDeclarations, totalFunctions, totalTypesSized, totalImporters, totalInfers, static_cast<float>(totalInfers) / totalQueued, totalSizes, static_cast<float>(totalSizes) / totalTypesSized);
 
-		std::cout << "Frontend Time: " << (duration_cast<microseconds>(duration<double>(
-			high_resolution_clock::now() - start)).count() / 1000.0) << "ms\n";
 
 		auto backendStart = high_resolution_clock::now();
 		if (useLlvm) {
@@ -514,6 +515,14 @@ int main(int argc, char *argv[]) {
 			PROFILE_ZONE("Wait for linker");
 			WaitForSingleObject(info.hProcess, INFINITE);
 		}
+
+		// Make sure a failing exit code is returned if the linker fails
+		DWORD exitCode;
+		GetExitCodeProcess(info.hProcess, &exitCode);
+		if (exitCode) {
+			hadError = true;
+		}
+		
 		CloseHandle(info.hProcess);
 
 		std::cout << "Linker Time: " << (duration_cast<microseconds>(duration<double>(
