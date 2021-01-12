@@ -255,10 +255,6 @@ Array<SubJob *> subJobs;
 
 inline void addSubJob(SubJob *job) {
 #if BUILD_DEBUG
-	for (auto x : priorityJobs) {
-		assert(x != job);
-	}
-
 	for (auto x : subJobs) {
 		assert(x != job);
 	}
@@ -373,7 +369,6 @@ void addTypeBlock(Expr *expr) {
 		if (!type->sizeJob) {
 			auto enum_ = static_cast<TypeEnum *>(type);
 
-			addBlock(enum_->values);
 			addBlock(&enum_->members);
 
 			SizeJob *job = allocateSizeJob();
@@ -393,6 +388,9 @@ void addTypeBlock(Expr *expr) {
 		}
 	}
 }
+
+
+void addRunJob(ExprRun *run);
 
 void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 	switch ((*expr)->flavor) {
@@ -421,6 +419,8 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 	}
 	case ExprFlavor::RUN: {
 		auto run = static_cast<ExprRun *>(*expr);
+
+		addRunJob(run);
 
 		flattenTo.add(expr);
 		break;
@@ -676,8 +676,6 @@ void beginFlatten(SubJob *job, Expr **expr) {
 void pushFlatten(SubJob *job, Expr *newExpr) {
 	auto expr = getHalt(job);
 	*expr = newExpr;
-
-	job->indices[job->flattenedCount - 1]++;
 
 	beginFlatten(job, expr);
 }
@@ -1205,200 +1203,30 @@ bool switchCasesAreSame(Expr *a, Expr *b) {
 	}
 }
 
-
-Expr *pushStructAccessDown(ExprIdentifier *accesses, Expr *base, CodeLocation start, EndLocation end) {
-	if (!accesses) {
-		return base;
-	}
-
-	auto result = INFER_NEW(ExprIdentifier);
-	auto current = result;
-
-	while (true) {
-		*current = *accesses;
-		current->start = start;
-		current->end = end;
-
-		if (current->structAccess) {
-			current->structAccess = INFER_NEW(ExprIdentifier);
-			current = static_cast<ExprIdentifier *>(current->structAccess);
-
-			assert(accesses->structAccess->flavor == ExprFlavor::IDENTIFIER);
-			accesses = static_cast<ExprIdentifier *>(accesses->structAccess);
-		}
-		else {
-			current->structAccess = base;
-			return result;
-		}
-	}
-}
-
-bool inferIdentifier(SubJob *job, Expr **exprPointer, ExprIdentifier *identifier, bool *yield) {
-	*yield = false;
-
-	if ((identifier->declaration->flags & DECLARATION_IMPORTED_BY_USING) && !(identifier->declaration->flags & DECLARATION_IS_CONSTANT)) {
-		if (identifier->declaration->initialValue) {
-			auto current = static_cast<ExprIdentifier *>(identifier->declaration->initialValue);
-
-			if (job->sizeDependencies) {
-				while (current->structAccess) {
-					bool onlyConstants;
-					addSizeDependency(job->sizeDependencies, getExpressionNamespace(current->structAccess, &onlyConstants, current->structAccess));
-
-					current = static_cast<ExprIdentifier *>(current->structAccess);
-					assert(current->flavor == ExprFlavor::IDENTIFIER);
-				}
-			}
-
-			identifier->structAccess = pushStructAccessDown(static_cast<ExprIdentifier *>(identifier->declaration->initialValue), identifier->structAccess, identifier->start, identifier->end);
-		}
-		identifier->declaration = identifier->declaration->import;
-	}
-
-
-
-	if (identifier->flags & EXPR_IDENTIFIER_IS_BREAK_OR_CONTINUE_LABEL) {
-		// We shouldn't bother resolving types they aren't needed
-		// Replacing a constant would mean we have to check if the label
-		// is still an identifier when we infer break/continue and if we did that it would be a bad error message
-		// so we are done
-
-	}
-	else {
-
-		if (identifier->declaration->flags & DECLARATION_IS_ITERATOR) {
-			auto loop = CAST_FROM_SUBSTRUCT(ExprLoop, iteratorBlock, identifier->declaration->enclosingScope);
-			assert(loop->flavor == ExprFlavor::WHILE || loop->flavor == ExprFlavor::FOR);
-
-			if (loop->flavor == ExprFlavor::WHILE) {
-				reportError(identifier, "Error: Cannot use while loop label as a variable, it has no storage");
-				reportError(identifier->declaration, "   ..: Here is the location of the loop");
-				return false;
-			}
-		}
-
-		bool sleep = false;
-
-		if (identifier->declaration->flags & DECLARATION_TYPE_IS_READY) {
-			if (!identifier->type) {
-				identifier->type = getDeclarationType(identifier->declaration);
-				addSizeDependency(job->sizeDependencies, identifier->type);
-			}
-		}
-		else {
-			goToSleep(job, &identifier->declaration->sleepingOnMyType, "Identifier type not ready");
-
-			sleep = true;
-		}
-
-		if (identifier->declaration->flags & DECLARATION_IS_CONSTANT) {
-			if (identifier->declaration->flags & DECLARATION_VALUE_IS_READY) {
-				assert(identifier->declaration->flags & DECLARATION_TYPE_IS_READY);
-				copyLiteral(exprPointer, identifier->declaration->initialValue);
-			}
-			else {
-				goToSleep(job, &identifier->declaration->sleepingOnMyValue, "Identifier value not ready");
-
-				sleep = true;
-			}
-		}
-
-		if (sleep) {
-			*yield = true;
-			return false;
-		}
-
-		if (!(identifier->declaration->flags & DECLARATION_IS_CONSTANT)) {
-			auto currentPointer = exprPointer;
-
-			while (auto &current = static_cast<ExprIdentifier *>(*currentPointer)->structAccess) {
-				if (current->type->flags & TYPE_ARRAY_IS_FIXED) {
-					if (!isAddressable(current)) {
-						reportError(*currentPointer, "Error: Cannot get the data pointer of a fixed array that has no storage");
-						return false;
-					}
-
-					auto address = INFER_NEW(ExprUnaryOperator);
-					address->flavor = ExprFlavor::UNARY_OPERATOR;
-					address->op = TOKEN('*');
-					address->start = (*currentPointer)->start;
-					address->end = (*currentPointer)->end;
-					address->value = current;
-					address->type = (*currentPointer)->type;
-					
-					*currentPointer = address;
-
-					currentPointer = &address->value;
-				}
-				else if (current->type->flavor == TypeFlavor::POINTER && 
-					(static_cast<TypePointer *>(current->type)->pointerTo->flags & TYPE_ARRAY_IS_FIXED)) {
-					auto cast = INFER_NEW(ExprBinaryOperator);
-					cast->op = TOKEN('*');
-					cast->start = (*currentPointer)->start;
-					cast->end = (*currentPointer)->end;
-					cast->right = current;
-					cast->type = (*currentPointer)->type;
-					cast->left = inferMakeTypeLiteral(cast->start, cast->end, cast->type);
-
-					*currentPointer = cast;
-
-					currentPointer = &cast->right;
-
-				}
-				else {
-					currentPointer = &current;
-				}
-
-				if ((*currentPointer)->flavor != ExprFlavor::IDENTIFIER)
-					break;
-			}
-		}
-	}
-
-	return true;
-}
-
-bool inferUnaryDot(SubJob *job, TypeEnum *enum_, Expr **exprPointer, bool *yield) {
+bool inferUnaryDot(SubJob *job, TypeEnum *enum_, Expr **exprPointer) {
 	auto identifier = static_cast<ExprIdentifier *>(*exprPointer);
 	assert(identifier->flavor == ExprFlavor::IDENTIFIER);
 
-	if (!identifier->declaration) {
-		bool yield;
-		auto member = findDeclaration(&enum_->members, identifier->name, &yield);
+	auto member = findDeclarationNoYield(&enum_->members, identifier->name);
 
-		if (yield) {
-			goToSleep(job, &enum_->members.sleepingOnMe, "Unary dot scope has importer", identifier->name);
-
-			return true;
-		}
-
-		if (!member) {
-			reportError(identifier, "Error: %.*s does not have member %.*s", STRING_PRINTF(enum_->name), STRING_PRINTF(identifier->name));
-			return false;
-		}
-		else if (!(member->flags & DECLARATION_IS_CONSTANT)) {
-			reportError(identifier, "Error: Can only access constant members of %.*s from a unary dot", STRING_PRINTF(enum_->name));
-			return false;
-		}
-
-		identifier->declaration = member;
+	if (!member) {
+		reportError(identifier, "Error: %.*s does not have member %.*s", STRING_PRINTF(enum_->name), STRING_PRINTF(identifier->name));
+		return false;
+	}
+	else if (!(member->flags & DECLARATION_IS_CONSTANT)) {
+		reportError(identifier, "Error: Can only access constant members of %.*s from a unary dot", STRING_PRINTF(enum_->name));
+		return false;
 	}
 
-	assert(identifier->declaration);
-
-	if (!inferIdentifier(job, exprPointer, identifier, yield)) {
-		return *yield;
-	}
+	copyLiteral(exprPointer, member->initialValue);
 
 	return true;
 }
-bool tryUsingConversion(SubJob *job, Type *correct, Expr **exprPointer, bool *yield) {
-	*yield = false;
+
+bool tryUsingConversion(SubJob *job, Type *correct, Expr **exprPointer) {
 	auto given = *exprPointer;
 
-	if (correct == given->type) {
-		return true;
-	}
+	assert(correct != given->type);
 
 	bool onlyConstants = false;
 	auto struct_ = getExpressionNamespace(given, &onlyConstants, nullptr);
@@ -1407,19 +1235,18 @@ bool tryUsingConversion(SubJob *job, Type *correct, Expr **exprPointer, bool *yi
 	if (!struct_)
 		return false;
 
-	for (auto importer : struct_->members.importers) {
-		if (!(importer->flags & IMPORTER_IS_COMPLETE)) {
-			*yield = true;
-			return false;
-		}
+	if (struct_->members.importers.count) {
+		goToSleep(job, &struct_->members.sleepingOnMe, "Using conversion waiting on importer");
+		job->sleepCount += struct_->members.importers.count - 1;
+		return true;
 	}
 
 	Declaration *found = nullptr;
 	for (auto member : struct_->members.declarations) {
 		if (member->flags & DECLARATION_MARKED_AS_USING) {
 			if (!(member->flags & DECLARATION_TYPE_IS_READY)) {
-				*yield = true;
-				return false;
+				goToSleep(job, &member->sleepingOnMyType, "Using conversion waiting on declaration type");
+				return true;
 			}
 
 			if (getDeclarationType(member) == correct) {
@@ -1436,11 +1263,6 @@ bool tryUsingConversion(SubJob *job, Type *correct, Expr **exprPointer, bool *yi
 	if (!found)
 		return false;
 
-	if ((found->flags & DECLARATION_IS_CONSTANT) && !(found->flags & DECLARATION_VALUE_IS_READY)) {
-		*yield = true;
-		return false;
-	}
-
 	auto identifier = INFER_NEW(ExprIdentifier);
 	identifier->start = given->start;
 	identifier->end = given->end;
@@ -1453,10 +1275,6 @@ bool tryUsingConversion(SubJob *job, Type *correct, Expr **exprPointer, bool *yi
 	identifier->declaration = found;
 
 	Expr *expr = identifier;
-
-	if (!inferIdentifier(job, &expr, identifier, yield)) {
-		assert(false); // This shouldn't fail
-	}
 
 	if (getDeclarationType(found) != correct) {
 		assert(given->type->flavor == TypeFlavor::POINTER && !(found->flags & DECLARATION_IS_CONSTANT) && getPointer(getDeclarationType(found)) == correct);
@@ -1473,8 +1291,10 @@ bool tryUsingConversion(SubJob *job, Type *correct, Expr **exprPointer, bool *yi
 		expr = unary;
 	}
 
-	expr->valueOfDeclaration = given->valueOfDeclaration;
 	*exprPointer = expr;
+	beginFlatten(job, exprPointer);
+
+	addSubJob(job);
 
 	return true;
 }
@@ -1500,19 +1320,21 @@ bool tryAutoCast(SubJob *job, Expr **cast, Type *castTo, bool *yield) {
 	autoCast->type = castTo;
 	autoCast->left = inferMakeTypeLiteral(autoCast->start, autoCast->end, castTo);
 
-	if (!tryUsingConversion(job, castTo, &autoCast->right, yield)) {
-		if (*yield) {
+	if (castTo == castFrom)
+		return true;
+
+	if (tryUsingConversion(job, castTo, &autoCast->right)) {
+		*yield = true;
+		return false;
+	} else {
+		if (!isValidCast(castTo, autoCast->right->type, autoCast->flags)) {
+			reportError(autoCast, "Error: Cannot cast from %.*s to %.*s", STRING_PRINTF(autoCast->right->type->name), STRING_PRINTF(castTo->name));
 			return false;
 		}
-	}
 
-	if (!isValidCast(castTo, autoCast->right->type, autoCast->flags)) {
-		reportError(autoCast, "Error: Cannot cast from %.*s to %.*s", STRING_PRINTF(autoCast->right->type->name), STRING_PRINTF(castTo->name));
-		return false;
+		addSizeDependency(job->sizeDependencies, castTo);
+		doConstantCast(cast);
 	}
-
-	addSizeDependency(job->sizeDependencies, castTo);
-	doConstantCast(cast);
 
 	return true;
 }
@@ -2445,16 +2267,11 @@ bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yi
 						}
 					}
 					else {
-						if (!tryUsingConversion(job, correct, &given, yield)) {
-							if (*yield) {
-								return false;
-							}
+						if (tryUsingConversion(job, correct, &given)) {
+							*yield = true;
+							return false;
 						}
 						else {
-							addSizeDependency(job->sizeDependencies, given->type);
-						}
-
-						if (correct != given->type) {
 							reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
 							return false;
 						}
@@ -2467,24 +2284,20 @@ bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yi
 				break;
 			}
 			case TypeFlavor::STRUCT: {
-				if (!tryUsingConversion(job, correct, &given, yield)) {
-					if (*yield) {
-						return false;
-					}
-
+				if (tryUsingConversion(job, correct, &given)) {
+					*yield = true;
+					return false;
+				}
+				else {
 					if (correct == TYPE_ANY && given->type != TYPE_ANY) {
 						insertImplicitCast(job->sizeDependencies, &given, TYPE_ANY);
 						return true;
 					}
-				}
-				else {
 
-					addSizeDependency(job->sizeDependencies, given->type);
-				}
-
-				if (correct != given->type) {
-					reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
-					return false;
+					if (correct != given->type) {
+						reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
+						return false;
+					}
 				}
 
 				break;
@@ -2537,12 +2350,9 @@ bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yi
 					identifier->structAccess = given;
 					identifier->serial = 0;
 					identifier->declaration = TYPE_STRING.members.declarations[0];
+					identifier->type = correct;
 
 					given = identifier;
-					
-					if (!inferIdentifier(job, &given, identifier, yield)) {
-						assert(false); // This shouldn't fail
-					}
 				}
 				else if (correct->flavor == TypeFlavor::FLOAT && given->type == &TYPE_SIGNED_INT_LITERAL) {
 					auto literal = static_cast<ExprLiteral *>(given);
@@ -2555,34 +2365,26 @@ bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yi
 					insertImplicitCast(job->sizeDependencies, &given, correct);
 				}
 				else if (correct->flavor == TypeFlavor::ENUM && given->type == &TYPE_UNARY_DOT) {
-					if (!inferUnaryDot(job, static_cast<TypeEnum *>(correct), &given, yield)) {
-						return false;
-					}
-
-					if (*yield) {
+					if (!inferUnaryDot(job, static_cast<TypeEnum *>(correct), &given)) {
 						return false;
 					}
 				}
 
-				if (!tryUsingConversion(job, correct, &given, yield)) {
-					if (*yield) {
-						return false;
-					}
-
-					if (correct == TYPE_ANY && given->type != TYPE_ANY) {
-						trySolidifyNumericLiteralToDefault(given);
-						insertImplicitCast(job->sizeDependencies, &given, TYPE_ANY);
-						return true;
-					}
-				}
-				else {
-
-					addSizeDependency(job->sizeDependencies, given->type);
-				}
 
 				if (correct != given->type) {
-					reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
-					return false;
+					if (tryUsingConversion(job, correct, &given)) {
+						*yield = true;
+						return false;
+					} else {
+						if (correct == TYPE_ANY && given->type != TYPE_ANY) {
+							trySolidifyNumericLiteralToDefault(given);
+							insertImplicitCast(job->sizeDependencies, &given, TYPE_ANY);
+							return true;
+						}
+
+						reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
+						return false;
+					}
 				}
 			}
 		}
@@ -2879,18 +2681,17 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 		Type *castTo = static_cast<ExprLiteral *>(left)->typeValue;
 		trySolidifyNumericLiteralToDefault(right);
 
-		if (!tryUsingConversion(job, castTo, &right, yield)) {
-			if (*yield) {
-				return true;
-			}
-
+		if (tryUsingConversion(job, castTo, &right)) {
+			return true;
+		}
+		else {
 			if (!isValidCast(castTo, right->type, binary->flags)) {
 				reportError(binary, "Error: Cannot cast from %.*s to %.*s", STRING_PRINTF(right->type->name), STRING_PRINTF(castTo->name));
 				return false;
 			}
-		}
 
-		expr->type = castTo;
+			expr->type = castTo;
+		}
 
 		break;
 	}
@@ -3032,21 +2833,13 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 				insertImplicitCast(job->sizeDependencies, &left, right->type);
 			}
 			else if (left->type->flavor == TypeFlavor::ENUM && right->type == &TYPE_UNARY_DOT) {
-				if (!inferUnaryDot(job, static_cast<TypeEnum *>(left->type), &right, yield)) {
+				if (!inferUnaryDot(job, static_cast<TypeEnum *>(left->type), &right)) {
 					return false;
-				}
-
-				if (*yield) {
-					return true;
 				}
 			}
 			else if (right->type->flavor == TypeFlavor::ENUM && left->type == &TYPE_UNARY_DOT) {
-				if (!inferUnaryDot(job, static_cast<TypeEnum *>(left->type), &left, yield)) {
+				if (!inferUnaryDot(job, static_cast<TypeEnum *>(left->type), &left)) {
 					return false;
-				}
-
-				if (*yield) {
-					return true;
 				}
 			}
 
@@ -3315,21 +3108,13 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 				insertImplicitCast(job->sizeDependencies, &left, right->type);
 			}
 			else if ((left->type->flavor == TypeFlavor::ENUM && (left->type->flags & TYPE_ENUM_IS_FLAGS)) && right->type == &TYPE_UNARY_DOT) {
-				if (!inferUnaryDot(job, static_cast<TypeEnum *>(left->type), &right, yield)) {
+				if (!inferUnaryDot(job, static_cast<TypeEnum *>(left->type), &right)) {
 					return false;
-				}
-
-				if (*yield) {
-					return true;
 				}
 			}
 			else if ((right->type->flavor == TypeFlavor::ENUM && (right->type->flags & TYPE_ENUM_IS_FLAGS)) && left->type == &TYPE_UNARY_DOT) {
-				if (!inferUnaryDot(job, static_cast<TypeEnum *>(right->type), &left, yield)) {
+				if (!inferUnaryDot(job, static_cast<TypeEnum *>(right->type), &left)) {
 					return false;
-				}
-
-				if (*yield) {
-					return true;
 				}
 			}
 
@@ -3495,8 +3280,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 			assert(false);
 		}
 		else {
-			bool yield;
-			if (!assignOp(job, binary, left->type, binary->right, &yield)) {
+			if (!assignOp(job, binary, left->type, binary->right, yield)) {
 				if (yield) {
 					return true;
 				}
@@ -3504,8 +3288,6 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 					return false;
 				}
 			}
-
-			assert(binary->left->type == binary->right->type);
 		}
 
 		break;
@@ -3711,12 +3493,8 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 				insertImplicitCast(job->sizeDependencies, &right, left->type);
 			}
 			else if ((left->type->flavor == TypeFlavor::ENUM && (left->type->flags & TYPE_ENUM_IS_FLAGS)) && right->type == &TYPE_UNARY_DOT) {
-				if (!inferUnaryDot(job, static_cast<TypeEnum *>(left->type), &right, yield)) {
+				if (!inferUnaryDot(job, static_cast<TypeEnum *>(left->type), &right)) {
 					return false;
-				}
-
-				if (*yield) {
-					return true;
 				}
 			}
 
@@ -4016,6 +3794,8 @@ bool inferFlattened(SubJob *job) {
 			continue;
 		}
 
+		u32 layer = job->flattenedCount - 1;
+
 		auto exprPointer = getHalt(job);
 		auto expr = *exprPointer;
 
@@ -4114,19 +3894,116 @@ bool inferFlattened(SubJob *job) {
 				}
 			}
 
-			if (identifier->declaration) {
-				bool yield;
-				if (!inferIdentifier(job, exprPointer, identifier, &yield)) {
-					if (yield) {
-						return true;
-					}
-					else {
-						return false;
-					}
+			if (!identifier->declaration)
+				return true;
+
+			if ((identifier->declaration->flags & DECLARATION_IMPORTED_BY_USING) && !(identifier->declaration->flags & DECLARATION_IS_CONSTANT)) {
+				assert(identifier->declaration->initialValue->flavor == ExprFlavor::IDENTIFIER);
+
+				auto accesses = static_cast<ExprIdentifier *>(identifier->declaration->initialValue);
+				auto result = INFER_NEW(ExprIdentifier);
+				auto current = result;
+
+				while (true) {
+					*current = *accesses;
+					current->start = identifier->start;
+					current->end = identifier->end;
+
+					if (!current->structAccess)
+						break;
+
+					bool onlyConstants;
+					addSizeDependency(job->sizeDependencies, getExpressionNamespace(current->structAccess, &onlyConstants, current->structAccess));
+
+					current->structAccess = INFER_NEW(ExprIdentifier);
+					current = static_cast<ExprIdentifier *>(current->structAccess);
+
+					assert(accesses->structAccess->flavor == ExprFlavor::IDENTIFIER);
+					accesses = static_cast<ExprIdentifier *>(accesses->structAccess);
 				}
+
+				current->structAccess = identifier->structAccess;
+				identifier->structAccess = result;
+				identifier->declaration = identifier->declaration->import;
+
+				pushFlatten(job, identifier);
+				continue;
 			}
 			else {
-				return true;
+				if (identifier->flags & EXPR_IDENTIFIER_IS_BREAK_OR_CONTINUE_LABEL) {
+					// We shouldn't bother resolving types they aren't needed
+					// Replacing a constant would mean we have to check if the label
+					// is still an identifier when we infer break/continue and if we did that it would be a bad error message
+					// so we are done
+
+				}
+				else {
+
+					if (identifier->declaration->flags & DECLARATION_IS_ITERATOR) {
+						auto loop = CAST_FROM_SUBSTRUCT(ExprLoop, iteratorBlock, identifier->declaration->enclosingScope);
+						assert(loop->flavor == ExprFlavor::WHILE || loop->flavor == ExprFlavor::FOR);
+
+						if (loop->flavor == ExprFlavor::WHILE) {
+							reportError(identifier, "Error: Cannot use while loop label as a variable, it has no storage");
+							reportError(identifier->declaration, "   ..: Here is the location of the loop");
+							return false;
+						}
+					}
+
+					if (identifier->declaration->flags & DECLARATION_TYPE_IS_READY) {
+						if (!identifier->type) {
+							identifier->type = getDeclarationType(identifier->declaration);
+							addSizeDependency(job->sizeDependencies, identifier->type);
+						}
+					}
+					else {
+						goToSleep(job, &identifier->declaration->sleepingOnMyType, "Identifier type not ready");
+
+						return true;
+					}
+
+					if (identifier->declaration->flags & DECLARATION_IS_CONSTANT) {
+						if (identifier->declaration->flags & DECLARATION_VALUE_IS_READY) {
+							assert(identifier->declaration->flags & DECLARATION_TYPE_IS_READY);
+							copyLiteral(exprPointer, identifier->declaration->initialValue);
+						}
+						else {
+							goToSleep(job, &identifier->declaration->sleepingOnMyValue, "Identifier value not ready");
+
+							return true;
+						}
+					}
+					else if (identifier->structAccess) {
+						if (identifier->structAccess->type->flags & TYPE_ARRAY_IS_FIXED) {
+							if (!isAddressable(identifier->structAccess)) {
+								reportError(identifier, "Error: Cannot get the data pointer of a fixed array that has no storage");
+								return false;
+							}
+
+							auto address = INFER_NEW(ExprUnaryOperator);
+							address->flavor = ExprFlavor::UNARY_OPERATOR;
+							address->op = TOKEN('*');
+							address->start = identifier->start;
+							address->end = identifier->end;
+							address->value = identifier->structAccess;
+							address->type = identifier->type;
+
+							*exprPointer = address;
+						}
+						else if (identifier->structAccess->type->flavor == TypeFlavor::POINTER &&
+							(static_cast<TypePointer *>(identifier->structAccess->type)->pointerTo->flags & TYPE_ARRAY_IS_FIXED)) {
+							auto cast = INFER_NEW(ExprBinaryOperator);
+							cast->op = TokenT::CAST;
+							cast->start = identifier->start;
+							cast->end = identifier->end;
+							cast->right = identifier->structAccess;
+							cast->type = identifier->type;
+							cast->left = inferMakeTypeLiteral(cast->start, cast->end, cast->type);
+
+							*exprPointer = cast;
+						}
+					}
+				}
 			}
 
 			break;
@@ -4152,44 +4029,11 @@ bool inferFlattened(SubJob *job) {
 				break;
 			}
 
+			assert(run->runJob);
 			if (run->runJob) {
 				goToSleep(job, &run->sleepingOnMe, "Run not completed");
 				return true;
 			}
-
-			assert(function->arguments.declarations.count == 0);
-			assert(function->returns.declarations.count == 1);
-			assert(!(function->flags &EXPR_FUNCTION_IS_C_CALL));
-
-			auto returnType = getDeclarationType(function->returns.declarations[0]);
-
-			// @Incomplete: Warn if #run returns a pointer? Maybe issuse a warning for any non-null pointer
-			while (true) {
-
-				if (returnType->flags & EXPR_FUNCTION_IS_C_CALL) {
-					reportError(run, "Error: #run statements cannot return a #c_call function");
-					return false;
-				}
-				else if (returnType->flags & EXPR_ARRAY_IS_DYNAMIC) {
-					reportError(run, "Error: #run statements cannot return a dynamic array");
-					return false;
-				}
-				else if (returnType->flavor == TypeFlavor::STRUCT) {
-					reportError(run, "Error: #run statements cannot return a struct @Incomplete");
-					return false;
-				}
-
-				if (returnType->flavor == TypeFlavor::ARRAY) {
-					returnType = static_cast<TypeArray *>(returnType)->arrayOf;
-				}
-				else {
-					break;
-				}
-			}
-
-			addRunJob(run);
-			goToSleep(job, &run->sleepingOnMe, "Run not completed");
-
 
 			return true;
 		}
@@ -5050,7 +4894,6 @@ bool inferFlattened(SubJob *job) {
 
 				if (block) {
 					pushFlatten(job, block);
-					continue;
 				}
 			}
 			break;
@@ -5561,7 +5404,7 @@ bool inferFlattened(SubJob *job) {
 			assert(false);
 		}
 
-		++job->indices[job->flattenedCount - 1];
+		++job->indices[layer];
 	}
 
 	return true;
@@ -5759,30 +5602,8 @@ else if (!checkStructDeclaration(declaration, value, name)) {	\
 void addImporter(Importer *importer, Module *module) {
 	PROFILE_FUNC();
 
-	if (importer->enclosingScope && importer->enclosingScope->flavor == BlockFlavor::GLOBAL) {
-		module = CAST_FROM_SUBSTRUCT(Module, members, importer->enclosingScope);
-	}
-
-	if (module) {
-		if (!importer->enclosingScope)
-			addImporterToBlock(&module->members, importer, 0);
-
-		if (importer->import->flavor != ExprFlavor::IMPORT && importer->import->flavor != ExprFlavor::LOAD && !(importer->flags & IMPORTER_IS_IMPORTED)) {
-			for (auto block : module->imports) {
-				auto import = INFER_NEW(Importer);
-				import->flags = importer->flags;
-
-				import->flags |= IMPORTER_IS_IMPORTED;
-				import->flags &= ~IMPORTER_IS_COMPLETE;
-
-				import->import = importer->import;
-				import->structAccess = nullptr;
-
-				addImporterToBlock(block->enclosingScope, import, importer->serial);
-
-				addImporter(import, nullptr);
-			}
-		}
+	if (!importer->enclosingScope) {
+		addImporterToBlock(&module->members, importer, 0);
 	}
 
 	assert(importer->enclosingScope);
@@ -5800,6 +5621,25 @@ void addImporter(Importer *importer, Module *module) {
 	addSubJob(job);
 }
 
+
+bool maybeAddDeclarationToImports(Block *block, Declaration *declaration) {
+	if (!block->module)
+		return true;
+	
+	auto module = CAST_FROM_SUBSTRUCT(Module, members, block);
+
+	for (auto import : module->imports) {
+		if (!checkForRedeclaration(import->enclosingScope, declaration, import->import))
+			return false;
+
+		putDeclarationInBlock(import->enclosingScope, declaration);
+
+		wakeUpSleepers(&import->enclosingScope->sleepingOnMe, declaration->name);
+	}
+
+	return true;
+}
+
 bool addDeclaration(Declaration *declaration, Module *module) {
 	PROFILE_FUNC();
 
@@ -5809,29 +5649,17 @@ bool addDeclaration(Declaration *declaration, Module *module) {
 		return true;
 	assert(!(declaration->flags & (DECLARATION_IS_ITERATOR | DECLARATION_IS_ITERATOR_INDEX | DECLARATION_IS_IN_COMPOUND)));
 
-	if (declaration->enclosingScope && declaration->enclosingScope->flavor == BlockFlavor::GLOBAL) {
-		module = CAST_FROM_SUBSTRUCT(Module, members, declaration->enclosingScope);
-	}
-
-	if (module) {
+	if (!declaration->enclosingScope) {
 		PROFILE_ZONE("Add declaration to global block");
 
-		if (!declaration->enclosingScope && !addDeclarationToBlock(&module->members, declaration, 0)) {
+		if (!addDeclarationToBlock(&module->members, declaration, 0)) {
 			return false;
 		}
 
 		wakeUpSleepers(&module->members.sleepingOnMe, declaration->name);
 
-		if (!(declaration->flags & DECLARATION_IMPORTED_BY_USING)) {
-			for (auto import : module->imports) {
-				if (checkForRedeclaration(import->enclosingScope, declaration, import->import)) {
-					putDeclarationInBlock(import->enclosingScope, declaration);
-
-					wakeUpSleepers(&import->enclosingScope->sleepingOnMe, declaration->name);
-				}
-			}
-		}
-
+		if (!maybeAddDeclarationToImports(&module->members, declaration))
+			return false;
 	}
 
 	assert(declaration->enclosingScope);
@@ -6055,26 +5883,9 @@ bool inferImporter(SubJob *subJob) {
 
 		import->module->imports.add(importer);
 
-		for (auto member : import->module->members.importers) {
-			if (member->enclosingScope == &import->module->members && member->import->flavor != ExprFlavor::IMPORT && member->import->flavor != ExprFlavor::LOAD && !(member->flags & IMPORTER_IS_IMPORTED)) {
-				auto import = INFER_NEW(Importer);
-				import->flags = member->flags;
-
-				import->flags |= IMPORTER_IS_IMPORTED;
-				import->flags &= ~IMPORTER_IS_COMPLETE;
-
-				import->import = member->import;
-				import->structAccess = structAccess;
-
-				addImporterToBlock(importer->enclosingScope, import, importer->serial);
-
-				addImporter(import, nullptr);
-			}
-		}
-
 
 		for (auto member : import->module->members.declarations) {
-			if (member->enclosingScope == &import->module->members && !(member->flags & DECLARATION_IMPORTED_BY_USING)) {
+			if (member->enclosingScope == &import->module->members) {
 				if (checkForRedeclaration(importer->enclosingScope, member, importer->import)) {
 					putDeclarationInBlock(importer->enclosingScope, member);
 
@@ -6086,8 +5897,6 @@ bool inferImporter(SubJob *subJob) {
 	}
 	else if (importer->import->flavor != ExprFlavor::LOAD) {
 		block = &getExpressionNamespace(importer->import, &onlyConstants, importer->import)->members;
-
-		onlyConstants |= (importer->flags & IMPORTER_IS_CONSTANT) != 0;
 
 		if (!block) {
 			return false;
@@ -6104,133 +5913,122 @@ bool inferImporter(SubJob *subJob) {
 
 				identifier = static_cast<ExprIdentifier *>(identifier->structAccess);
 			}
-
-			structAccess = pushStructAccessDown(static_cast<ExprIdentifier *>(importer->import), importer->structAccess, importer->import->start, importer->import->end);
 		}
 	}
 
 	if (block) {
-		for (auto member : block->importers) {
-			if (!(member->flags & IMPORTER_IS_IMPORTED)) {
-				auto import = INFER_NEW(Importer);
-				import->flags = member->flags;
-
-				if (onlyConstants) {
-					import->flags |= IMPORTER_IS_CONSTANT;
-				}
-
-				import->flags |= IMPORTER_IS_IMPORTED;
-				import->flags &= ~IMPORTER_IS_COMPLETE;
-
-				import->import = member->import;
-				import->structAccess = structAccess;
-
-				addImporterToBlock(importer->enclosingScope, import, importer->serial);
-
-				addImporter(import, nullptr);
-			}
-		}
-
 		if (importer->import->flavor == ExprFlavor::STATIC_IF) {
 			assert(!onlyConstants);
 			assert(!structAccess);
 
+			for (auto importer : block->importers) {
+				addImporterToBlock(importer->enclosingScope, importer, importer->serial);
+
+				addImporter(importer, nullptr);
+			}
+
+			block->importers.clear();
+
 			for (auto member : block->declarations) {
-				if (!(member->flags & DECLARATION_IMPORTED_BY_USING)) {
-					if (checkForRedeclaration(importer->enclosingScope, member, importer->import)) {
-						addDeclarationToBlockUnchecked(importer->enclosingScope, member, member->serial);
+				if (!checkForRedeclaration(importer->enclosingScope, member, importer->import))
+					return false;
 
+				addDeclarationToBlockUnchecked(importer->enclosingScope, member, member->serial);
 
-						if (importer->enclosingScope->flavor == BlockFlavor::STRUCT) {
-							if (!(member->flags & DECLARATION_IS_CONSTANT)) {
-								// Do an insertion sort by declaration serial since struct members must be ordered to preserve memory layout
-								// @Speed create space big enough for all the inserted members then just sort the inserted members
-								u32 index = importer->enclosingScope->declarations.count - 1;
+				if (importer->enclosingScope->flavor == BlockFlavor::STRUCT) {
+					if (!(member->flags & DECLARATION_IS_CONSTANT)) {
+						// Do an insertion sort by declaration serial since struct members must be ordered to preserve memory layout
+						// @Speed create space big enough for all the inserted members then just sort the inserted members
+						u32 index = importer->enclosingScope->declarations.count - 1;
 
-								while (index > 0 && member->serial < importer->enclosingScope->declarations[index - 1]->serial) {
-									importer->enclosingScope->declarations[index] = importer->enclosingScope->declarations[index - 1];
+						while (index > 0 && member->serial < importer->enclosingScope->declarations[index - 1]->serial) {
+							importer->enclosingScope->declarations[index] = importer->enclosingScope->declarations[index - 1];
 
-									index--;
-								}
-
-								importer->enclosingScope->declarations[index] = member;
-							}
+							index--;
 						}
 
-						wakeUpSleepers(&importer->enclosingScope->sleepingOnMe, member->name);
-
-						if (!addDeclaration(member, nullptr)) {
-							return false;
-						}
-					}
-					else {
-						return false;
+						importer->enclosingScope->declarations[index] = member;
 					}
 				}
+
+				wakeUpSleepers(&importer->enclosingScope->sleepingOnMe, member->name);
+
+				if (!maybeAddDeclarationToImports(importer->enclosingScope, member))
+					return false;
+
+				if (!addDeclaration(member, nullptr))
+					return false;
 			}
 
 			block->declarations.clear();
 
-			if (importer->enclosingScope->flavor == BlockFlavor::GLOBAL) {
-				auto exprBlock = CAST_FROM_SUBSTRUCT(ExprBlock, declarations, block);
-				auto module = CAST_FROM_SUBSTRUCT(Module, members, importer->enclosingScope);
+			auto exprBlock = CAST_FROM_SUBSTRUCT(ExprBlock, declarations, block);
+
+			if (importer->enclosingScope->module) {
+				for (auto expr : exprBlock->exprs) {
+					assert(expr->flavor == ExprFlavor::RUN);
+					addRunJob(static_cast<ExprRun *>(expr));
+				}
+
+				exprBlock->exprs.clear();
+			}
+			else if (importer->enclosingScope->flavor == BlockFlavor::GLOBAL) {
+				auto parentBlock = CAST_FROM_SUBSTRUCT(ExprBlock, declarations, importer->enclosingScope);
 
 				for (auto expr : exprBlock->exprs) {
 					assert(expr->flavor == ExprFlavor::RUN);
-
-					auto run = static_cast<ExprRun *>(expr);
-					if (run->module == module) {
-						addRunJob(run);
-					}
+					parentBlock->exprs.add(expr);
 				}
+
+				exprBlock->exprs.clear();
 			}
 		}
 		else if (importer->import->flavor != ExprFlavor::LOAD) {
+			if (block->importers.count) {
+				goToSleep(job, &importer->enclosingScope->sleepingOnMe, "Importer waiting for importer");
+				job->sleepCount += block->importers.count - 1;
+				return true;
+			}
+
 			for (auto member : block->declarations) {
-				if (!(member->flags & DECLARATION_IMPORTED_BY_USING)) {
-					if (checkForRedeclaration(importer->enclosingScope, member, importer->import)) {
-						if (!onlyConstants || (member->flags & DECLARATION_IS_CONSTANT)) {
-							auto import = INFER_NEW(Declaration);
-							import->start = member->start;
-							import->end = member->end;
-							import->name = member->name;
-							import->flags = member->flags;
+				if (onlyConstants && !(member->flags & DECLARATION_IS_CONSTANT))
+					continue;
 
-							if (member->flags & DECLARATION_IS_CONSTANT) {
-								import->type = member->type;
-								import->initialValue = member->initialValue;
-							}
-							else {
-								import->import = member;
-								import->initialValue = structAccess;
-							}
+				if (!checkForRedeclaration(importer->enclosingScope, member, importer->import))
+					return false;
 
-							import->flags |= DECLARATION_IMPORTED_BY_USING;
+				auto import = INFER_NEW(Declaration);
+				import->start = member->start;
+				import->end = member->end;
+				import->name = member->name;
+				import->flags = member->flags;
 
-							addDeclarationToBlockUnchecked(importer->enclosingScope, import, importer->serial);
-
-							assert(import->name.length);
-							wakeUpSleepers(&importer->enclosingScope->sleepingOnMe, import->name);
-
-							if (member->flags & DECLARATION_IS_CONSTANT) {
-								if (!addDeclaration(import, nullptr)) {
-									return false;
-								}
-							}
-						}
-					}
-					else {
-						return false;
-					}
+				if (member->flags & DECLARATION_IS_CONSTANT) {
+					import->type = member->type;
+					import->initialValue = member->initialValue;
 				}
+				else {
+					import->import = member;
+					import->initialValue = importer->import;
+				}
+
+				import->flags |= DECLARATION_IMPORTED_BY_USING;
+
+				addDeclarationToBlockUnchecked(importer->enclosingScope, import, importer->serial);
+
+				assert(import->name.length);
+				wakeUpSleepers(&importer->enclosingScope->sleepingOnMe, import->name);
+
+				if (!maybeAddDeclarationToImports(importer->enclosingScope, import))
+					return false;
 			}
 		}
 	}
 
-	if (importer->enclosingScope->flavor != BlockFlavor::GLOBAL)
+	if (!importer->enclosingScope->module)
 		wakeUpSleepers(&importer->enclosingScope->sleepingOnMe);
 
-	importer->flags |= IMPORTER_IS_COMPLETE;
+	importer->enclosingScope->importers.unordered_remove(importer);
 
 	removeJob(&importerJobs, job);
 	freeJob(job);
@@ -6267,6 +6065,8 @@ bool inferDeclarationType(SubJob *subJob) {
 			return false;
 		}
 
+		declaration->flags |= DECLARATION_TYPE_IS_READY;
+
 		if (getDeclarationType(declaration) == &TYPE_VOID) {
 			if (declaration->flags & DECLARATION_IS_RETURN) {
 				if (declaration->enclosingScope->declarations.count != 1) {
@@ -6285,7 +6085,6 @@ bool inferDeclarationType(SubJob *subJob) {
 			return false;
 		}
 
-		declaration->flags |= DECLARATION_TYPE_IS_READY;
 		wakeUpSleepers(&declaration->sleepingOnMyType);
 		declaration->sleepingOnMyType.free();
 	}
@@ -6660,7 +6459,7 @@ bool inferSize(SubJob *subJob) {
 		auto struct_ = static_cast<TypeStruct *>(type);
 
 		for (auto importer : struct_->members.importers) {
-			if (!(importer->flags & IMPORTER_IS_COMPLETE) && importer->import->flavor == ExprFlavor::STATIC_IF) {
+			if (importer->import->flavor == ExprFlavor::STATIC_IF) {
 				goToSleep(job, &struct_->members.sleepingOnMe, "Struct sizing #if not complete");
 				return true;
 			}
@@ -7234,6 +7033,38 @@ bool inferRun(SubJob *subJob) {
 	auto job = static_cast<RunJob *>(subJob);
 	auto run = job->run;
 
+	auto function = static_cast<TypeFunction *>(run->function->type);
+
+	assert(function->argumentCount == 0);
+	assert(function->returnCount == 1);
+	assert(!(function->flags & TYPE_FUNCTION_IS_C_CALL));
+
+	auto returnType = function->returnTypes[0];
+
+	// @Incomplete: Warn if #run returns a pointer? Maybe issuse a warning for any non-null pointer
+	while (true) {
+
+		if (returnType->flags & EXPR_FUNCTION_IS_C_CALL) {
+			reportError(run, "Error: #run statements cannot return a #c_call function");
+			return false;
+		}
+		else if (returnType->flags & EXPR_ARRAY_IS_DYNAMIC) {
+			reportError(run, "Error: #run statements cannot return a dynamic array");
+			return false;
+		}
+		else if (returnType->flavor == TypeFlavor::STRUCT) {
+			reportError(run, "Error: #run statements cannot return a struct @Incomplete");
+			return false;
+		}
+
+		if (returnType->flavor == TypeFlavor::ARRAY) {
+			returnType = static_cast<TypeArray *>(returnType)->arrayOf;
+		}
+		else {
+			break;
+		}
+	}
+
 	while (job->checkingFunctions.count) {
 		auto &index = job->checkingFunctionIndices[job->checkingFunctionIndices.count - 1];
 		auto &function = job->checkingFunctions[job->checkingFunctions.count - 1];
@@ -7523,112 +7354,112 @@ void runInfer(String inputFile) {
 	if ((sizeJobs || functionJobs || declarationJobs || runJobs || importerJobs) && !hadError) { // We didn't complete type inference, check for undeclared identifiers or circular dependencies! If we already had an error don't spam more
 		// Check for undeclared identifiers
 
-		for (auto job = functionJobs; job; job = job->next) {
-			if (!isDone(&job->type)) {
-				auto haltedOn = *getHalt(&job->type);
+		//for (auto job = functionJobs; job; job = job->next) {
+		//	if (!isDone(&job->type)) {
+		//		auto haltedOn = *getHalt(&job->type);
 
-				if (checkForUndeclaredIdentifier(haltedOn)) {
-					goto error;
-				}
-			}
+		//		if (checkForUndeclaredIdentifier(haltedOn)) {
+		//			goto error;
+		//		}
+		//	}
 
-			if (!isDone(&job->value)) {
-				auto haltedOn = *getHalt(&job->value);
+		//	if (!isDone(&job->value)) {
+		//		auto haltedOn = *getHalt(&job->value);
 
-				if (checkForUndeclaredIdentifier(haltedOn)) {
-					goto error;
-				}
-			}
-		}
+		//		if (checkForUndeclaredIdentifier(haltedOn)) {
+		//			goto error;
+		//		}
+		//	}
+		//}
 
-		for (auto job = declarationJobs; job; job = job->next) {
-			if (!isDone(&job->type)) {
-				auto haltedOn = *getHalt(&job->type);
+		//for (auto job = declarationJobs; job; job = job->next) {
+		//	if (!isDone(&job->type)) {
+		//		auto haltedOn = *getHalt(&job->type);
 
-				if (checkForUndeclaredIdentifier(haltedOn)) {
-					goto error;
-				}
-			}
+		//		if (checkForUndeclaredIdentifier(haltedOn)) {
+		//			goto error;
+		//		}
+		//	}
 
-			if (!isDone(&job->value)) {
-				auto haltedOn = *getHalt(&job->value);
+		//	if (!isDone(&job->value)) {
+		//		auto haltedOn = *getHalt(&job->value);
 
-				if (checkForUndeclaredIdentifier(haltedOn)) {
-					goto error;
-				}
-			}
-		}
+		//		if (checkForUndeclaredIdentifier(haltedOn)) {
+		//			goto error;
+		//		}
+		//	}
+		//}
 
-		for (auto job = importerJobs; job; job = job->next) {
-			if (!isDone(job)) {
-				auto haltedOn = *getHalt(job);
+		//for (auto job = importerJobs; job; job = job->next) {
+		//	if (!isDone(job)) {
+		//		auto haltedOn = *getHalt(job);
 
-				if (checkForUndeclaredIdentifier(haltedOn)) {
-					goto error;
-				}
-			}
-		}
+		//		if (checkForUndeclaredIdentifier(haltedOn)) {
+		//			goto error;
+		//		}
+		//	}
+		//}
 
-		for (auto job = sizeJobs; job; job = job->next) {
-			if (!isDone(job)) {
-				auto haltedOn = *getHalt(job);
+		//for (auto job = sizeJobs; job; job = job->next) {
+		//	if (!isDone(job)) {
+		//		auto haltedOn = *getHalt(job);
 
-				if (checkForUndeclaredIdentifier(haltedOn)) {
-					goto error;
-				}
-			}
-		}
+		//		if (checkForUndeclaredIdentifier(haltedOn)) {
+		//			goto error;
+		//		}
+		//	}
+		//}
 
-		for (auto job = runJobs; job; job = job->next) {
-			if (!isDone(job)) {
-				auto haltedOn = *getHalt(job);
+		//for (auto job = runJobs; job; job = job->next) {
+		//	if (!isDone(job)) {
+		//		auto haltedOn = *getHalt(job);
 
-				if (checkForUndeclaredIdentifier(haltedOn)) {
-					goto error;
-				}
-			}
-		}
+		//		if (checkForUndeclaredIdentifier(haltedOn)) {
+		//			goto error;
+		//		}
+		//	}
+		//}
 
-		// Check for circular dependencies
+		//// Check for circular dependencies
 
-		Array<Declaration *> loop;
+		//Array<Declaration *> loop;
 
-		for (auto job = declarationJobs; job; job = job->next) {
-			loop.clear();
+		//for (auto job = declarationJobs; job; job = job->next) {
+		//	loop.clear();
 
-			s64 loopIndex = findLoop(loop, job->declaration);
+		//	s64 loopIndex = findLoop(loop, job->declaration);
 
-			if (loopIndex == -1) continue;
+		//	if (loopIndex == -1) continue;
 
-			reportError(loop[static_cast<u32>(loopIndex)], "Error: There were circular dependencies");
+		//	reportError(loop[static_cast<u32>(loopIndex)], "Error: There were circular dependencies");
 
-			if (loopIndex + 1 == loop.count) {
-				Expr *haltedOn;
-				bool typeDependece;
+		//	if (loopIndex + 1 == loop.count) {
+		//		Expr *haltedOn;
+		//		bool typeDependece;
 
 
-				auto declaration = loop[static_cast<u32>(loopIndex)];
+		//		auto declaration = loop[static_cast<u32>(loopIndex)];
 
-				getHaltStatus(declaration, declaration, &haltedOn, &typeDependece);
+		//		getHaltStatus(declaration, declaration, &haltedOn, &typeDependece);
 
-				reportError(haltedOn, "   ..: The %s of %.*s depends on itself", typeDependece ? "type" : "value", STRING_PRINTF(declaration->name));
-			}
-			else {
-				for (u32 i = static_cast<u32>(loopIndex); i < loop.count; i++) {
-					Expr *haltedOn;
-					bool typeDependece;
+		//		reportError(haltedOn, "   ..: The %s of %.*s depends on itself", typeDependece ? "type" : "value", STRING_PRINTF(declaration->name));
+		//	}
+		//	else {
+		//		for (u32 i = static_cast<u32>(loopIndex); i < loop.count; i++) {
+		//			Expr *haltedOn;
+		//			bool typeDependece;
 
-					auto declaration = loop[i];
-					auto next = loop[i + 1 == loop.count ? static_cast<u32>(loopIndex) : i + 1];
+		//			auto declaration = loop[i];
+		//			auto next = loop[i + 1 == loop.count ? static_cast<u32>(loopIndex) : i + 1];
 
-					getHaltStatus(declaration, next, &haltedOn, &typeDependece);
+		//			getHaltStatus(declaration, next, &haltedOn, &typeDependece);
 
-					reportError(haltedOn, "   ..: The %s of %.*s depends on %.*s", typeDependece ? "type" : "value", STRING_PRINTF(declaration->name), STRING_PRINTF(next->name));
-				}
-			}
+		//			reportError(haltedOn, "   ..: The %s of %.*s depends on %.*s", typeDependece ? "type" : "value", STRING_PRINTF(declaration->name), STRING_PRINTF(next->name));
+		//		}
+		//	}
 
-			goto error;
-		}
+		//	goto error;
+		//}
 
 		reportError("Internal Compiler Error: Inference got stuck but no undeclared identifiers or circular dependencies were detected");
 

@@ -153,6 +153,7 @@ Module *getModule(String name) {
 
 	auto module = new Module;
 	module->members.flavor = BlockFlavor::GLOBAL;
+	module->members.module = true;
 	module->name = name;
 	
 	if (name.length) {		

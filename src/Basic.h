@@ -100,6 +100,18 @@ public:
 
 #define at_exit const auto &CONCAT(at_exit_, __LINE__) = AtExitHelp() + [&]()
 
+template<typename T>
+T validate_(T value) {
+	assert(value);
+	return value;
+}
+
+#if BUILD_DEBUG
+#define validate(x) validate_(x)
+#else
+#define validate(...)
+#endif
+
 
 typedef uint8_t u8;
 typedef uint16_t u16;

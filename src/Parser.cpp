@@ -944,7 +944,9 @@ ExprBlock *parseBlock(LexerFile *lexer, bool isCase, ExprBlock *block) {
 			if (!staticIf)
 				return nullptr;
 
-			block->exprs.add(staticIf);
+			if (block->declarations.flavor != BlockFlavor::GLOBAL) {
+				block->exprs.add(staticIf);
+			}
 
 			continue;
 		}
@@ -1804,11 +1806,10 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		membersDeclaration->name = "members";
 		membersDeclaration->type = parserMakeTypeLiteral(lexer, lexer->token.start, lexer->token.end, &TYPE_TYPE);
 		membersDeclaration->initialValue = parserMakeTypeLiteral(lexer, lexer->token.start, lexer->token.end, members);
-		membersDeclaration->flags |= DECLARATION_IS_CONSTANT | DECLARATION_MARKED_AS_USING;
+		membersDeclaration->flags |= DECLARATION_IS_CONSTANT;
 		membersDeclaration->inferJob = nullptr;
 
 		addDeclarationToBlock(lexer->currentBlock, membersDeclaration, lexer->identifierSerial++);
-		addImporterToBlock(lexer->currentBlock, createImporterForUsing(lexer, membersDeclaration), lexer->identifierSerial++);
 
 
 		auto integer = PARSER_NEW(Declaration);
@@ -1892,6 +1893,8 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 				if (!addDeclarationToBlock(lexer->currentBlock, declaration, lexer->identifierSerial++)) {
 					return nullptr;
 				}
+
+				putDeclarationInBlock(&enum_->struct_.members, declaration);
 			}
 			else {
 				reportExpectedError(&lexer->token, "Error: Expected enum declaration name");

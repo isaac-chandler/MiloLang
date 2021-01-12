@@ -41,8 +41,13 @@
   </Type>
 
   <Type Name="ExprFunction">
-    <DisplayString Condition="valueOfDeclaration">{valueOfDeclaration->name}</DisplayString>
+    <DisplayString Condition="valueOfDeclaration">Func{{{valueOfDeclaration->name}}}</DisplayString>
     <DisplayString>(function)</DisplayString>
+  </Type>
+
+  <Type Name="ExprIdentifier">
+    <DisplayString Condition="structAccess">{structAccess}.{name}</DisplayString>
+    <DisplayString>{name}</DisplayString>
   </Type>
   
 

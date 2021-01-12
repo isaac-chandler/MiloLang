@@ -337,6 +337,8 @@ u32 loadAddressOf(IrState *state, Expr *expr, u32 offset, u32 dest) {
 				address.opSize = 8;
 			}
 			else {
+				assert(identifier->declaration->physicalStorage);
+
 				Ir &address = state->ir.add();
 				address.op = IrOp::ADDRESS_OF_LOCAL;
 				address.a = identifier->declaration->physicalStorage;
@@ -1560,9 +1562,7 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 			}
 
 			pushLoop(state, loop);
-
-
-
+			addLineMarker(state, expr);
 
 			u32 compareDest;
 
@@ -1635,6 +1635,7 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 				generateIr(state, loop->body, DEST_NONE);
 			}
 
+			addLineMarker(state, expr);
 			exitBlock(state, &loop->iteratorBlock, false);
 
 			Expr *inc = deferStack.pop();
@@ -1878,6 +1879,7 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 			if (return_->returns.count) {
 				u32 result = generateIr(state, return_->returns.values[0], state->nextRegister++);
 
+				// @Incomplete: Make the writes happen after exitBlock in case the return pointers alias
 				for (u32 i = 1; i < return_->returns.count; i++) {
 					u32 store = generateIr(state, return_->returns.values[i], state->nextRegister++);
 
@@ -2241,8 +2243,6 @@ bool generateIrForFunction(ExprFunction *function) {
 
 
 	generateIr(&function->state, function->body, DEST_NONE);
-
-	exitBlock(&function->state, nullptr, true);
 
 	if (hadError) {
 		return false;

@@ -4,10 +4,6 @@
 #include "Array.h"
 #include "String.h"
 
-#define IMPORTER_IS_CONSTANT 0x1
-#define IMPORTER_IS_COMPLETE 0x2
-#define IMPORTER_IS_IMPORTED 0x4
-
 #define DECLARATION_IS_CONSTANT         0x0'0001
 #define DECLARATION_IS_UNINITIALIZED    0x0'0002
 
@@ -87,7 +83,6 @@ struct Declaration {
 
 struct Importer {
 	u32 serial;
-	u8 flags = 0;
 
 	Block *enclosingScope = nullptr;
 	Expr *import;
@@ -113,11 +108,13 @@ struct Block {
 	u32 serial;
 
 	Block *parentBlock = nullptr;
+
+	Array<struct SubJob *> sleepingOnMe;
+
 	BlockFlavor flavor;
 	bool queued = false;
 	bool loop = false;
-
-	Array<struct SubJob *> sleepingOnMe;
+	bool module = false;
 };
 
 struct Module {
@@ -208,7 +205,7 @@ inline Declaration *findDeclaration(Block *block, String name, bool *yield, u32 
 	PROFILE_FUNC();
 
 	for (auto importer : block->importers) {
-		if (importer->serial < usingYieldLimit && !(importer->flags & IMPORTER_IS_COMPLETE)) {
+		if (importer->serial < usingYieldLimit) {
 			*yield = true;
 			return nullptr;
 		}
