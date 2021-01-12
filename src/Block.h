@@ -45,6 +45,8 @@
 
 #define DECLARATION_IS_RUN_RETURN 0x2'0000
 
+#define DECLARATION_IS_MODULE_SCOPE 0x4'0000
+
 struct Declaration {
 	CodeLocation start;
 	EndLocation end;
@@ -83,6 +85,7 @@ struct Declaration {
 
 struct Importer {
 	u32 serial;
+	bool moduleScope = false;
 
 	Block *enclosingScope = nullptr;
 	Expr *import;

@@ -136,10 +136,22 @@ Importer *createImporterForUsing(LexerFile *lexer, Declaration *declaration) {
 	auto import = PARSER_NEW(Importer);
 	import->import = makeIdentifier(lexer, declaration);
 
+	if (declaration->flags & DECLARATION_IS_MODULE_SCOPE)
+		import->moduleScope = true;
+
 	return import;
 }
 
 bool parseArguments(LexerFile *lexer, Arguments *args, const char *message);
+
+void parseModuleOrExportScope(LexerFile *lexer) {
+	if (expectAndConsume(lexer, TokenT::SCOPE_EXPORT)) {
+		lexer->moduleScope = false;
+	}
+	else if (expectAndConsume(lexer, TokenT::SCOPE_MODULE)) {
+		lexer->moduleScope = true;
+	}
+}
 
 ExprIf *parseStaticIf(LexerFile *lexer) {
 	auto staticIf = PARSER_NEW(ExprIf);
@@ -827,6 +839,11 @@ ExprBlock *parseBlock(LexerFile *lexer, bool isCase, ExprBlock *block) {
 		block->declarations.flavor = BlockFlavor::IMPERATIVE;
 	}
 
+	bool oldModuleScope = lexer->moduleScope;
+	at_exit{
+		lexer->moduleScope = oldModuleScope;
+	};
+
 	block->start = lexer->token.start;
 	block->flavor = ExprFlavor::BLOCK;
 
@@ -893,6 +910,15 @@ ExprBlock *parseBlock(LexerFile *lexer, bool isCase, ExprBlock *block) {
 
 			continue;
 		}
+		else if (lexer->token.type == TokenT::SCOPE_MODULE || lexer->token.type == TokenT::SCOPE_EXPORT) {
+			if (lexer->currentBlock->flavor != BlockFlavor::GLOBAL) {
+				reportError(&lexer->token, "Error: Scope directives can only be at the top level");
+				return nullptr;
+			}
+
+			parseModuleOrExportScope(lexer);
+			continue;
+		}
 		else if (lexer->token.type == TokenT::USING || lexer->token.type == TokenT::IDENTIFIER) {
 			TokenT peek[2];
 			lexer->peekTokenTypes(2, peek);
@@ -939,6 +965,7 @@ ExprBlock *parseBlock(LexerFile *lexer, bool isCase, ExprBlock *block) {
 				auto importer = PARSER_NEW(Importer);
 
 				importer->import = using_;
+				importer->moduleScope = lexer->moduleScope;
 				
 				addImporterToBlock(lexer->currentBlock, importer, lexer->identifierSerial++);
 
@@ -1772,7 +1799,8 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		
 		if (!expr)
 			return nullptr;
-		
+
+		// :ImportExprFlagging
 		expr->flags |= EXPR_IMPORT_IS_EXPR;
 	}
 	else if (lexer->token.type == TokenT::ENUM || lexer->token.type == TokenT::ENUM_FLAGS) {
@@ -2425,6 +2453,10 @@ Declaration *parseDeclaration(LexerFile *lexer) {
 	Declaration *declaration = PARSER_NEW(Declaration);
 	declaration->flags = 0;
 
+
+	if (lexer->moduleScope)
+		declaration->flags |= DECLARATION_IS_MODULE_SCOPE;
+
 	if (expectAndConsume(lexer, TokenT::USING)) {
 		declaration->flags |= DECLARATION_MARKED_AS_USING;
 	}
@@ -2592,6 +2624,9 @@ void runParser() {
 
 				inferQueue.add(InferQueueJob(declaration, lexer->module));
 			}
+			else if (lexer->token.type == TokenT::SCOPE_MODULE || lexer->token.type == TokenT::SCOPE_EXPORT) {
+				parseModuleOrExportScope(lexer);
+			}
 			else if (lexer->token.type == TokenT::USING) {
 				TokenT peek[2];
 				lexer->peekTokenTypes(2, peek);
@@ -2624,6 +2659,8 @@ void runParser() {
 
 					auto importer = PARSER_NEW(Importer);
 					importer->import = using_;
+
+					importer->moduleScope = lexer->moduleScope;
 
 					inferQueue.add(InferQueueJob(importer, lexer->module));
 				}

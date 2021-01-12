@@ -116,7 +116,8 @@ enum class TokenT : u8 {
 	RUN, 
 	C_CALL, 
 	COMPILER, 
-	IMPORT
+	IMPORT, 
+	SCOPE_MODULE, SCOPE_EXPORT
 };
 
 struct Token {
@@ -160,6 +161,7 @@ struct LexerFile {
 	Block *currentBlock;
 	struct Module *module;
 	u32 identifierSerial;
+	bool moduleScope;
 
 	char *text;
 

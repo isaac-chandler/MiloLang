@@ -1,8 +1,5 @@
 #import "Windows"
 
-std_out: HANDLE
-process_heap: HANDLE
-
 allocate :: (size: u64) -> #must *void {
 	if !process_heap process_heap = GetProcessHeap()
 	return HeapAlloc(process_heap, 0, size)
@@ -34,3 +31,8 @@ print_buffer :: (buffer: []u8) {
 	if !std_out std_out = GetStdHandle(STD_OUTPUT_HANDLE)
 	WriteConsoleA(std_out, buffer.data, cast() buffer.count)
 }
+
+#scope_module
+
+std_out: HANDLE
+process_heap: HANDLE

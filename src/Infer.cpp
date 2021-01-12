@@ -5651,6 +5651,9 @@ void addImporter(Importer *importer, Module *module) {
 
 
 bool maybeAddDeclarationToImports(Block *block, Declaration *declaration) {
+	if (declaration->flags & DECLARATION_IS_MODULE_SCOPE)
+		return true;
+
 	if (!block->module)
 		return true;
 	
@@ -5900,9 +5903,15 @@ bool inferImporter(SubJob *subJob) {
 			}
 		}
 	}
-	else if (importer->import->flavor == ExprFlavor::IMPORT) {
-		if (importer->import->flags & EXPR_IMPORT_IS_EXPR) { // @Hack @Cleanup There is no way to tell the difference between a normal import and
-															 // std :: #import "Standard"; using std
+	else if (importer->import->flavor == ExprFlavor::IMPORT) { 
+		// @Hack @Cleanup There is no way to tell the difference between a normal import and
+		// std :: #import "Standard"; using std
+		// since the constant gets subsituted into the Importer struct, 
+		// causing the using to become a #import
+		// To fix this when import is parsed other than at the top level, 
+		// it is flagged as an expression
+		// :ImportExprFlagging
+		if (importer->import->flags & EXPR_IMPORT_IS_EXPR) {
 			reportError(importer->import, "Error: Cannot using an import");
 			return false;
 		}
@@ -5919,7 +5928,7 @@ bool inferImporter(SubJob *subJob) {
 
 
 		for (auto member : import->module->members.declarations) {
-			if (member->enclosingScope == &import->module->members) {
+			if (member->enclosingScope == &import->module->members && !(member->flags & DECLARATION_IS_MODULE_SCOPE)) {
 				if (checkForRedeclaration(importer->enclosingScope, member, importer->import)) {
 					putDeclarationInBlock(importer->enclosingScope, member);
 
@@ -6037,6 +6046,9 @@ bool inferImporter(SubJob *subJob) {
 				import->end = member->end;
 				import->name = member->name;
 				import->flags = member->flags;
+
+				if (importer->moduleScope)
+					import->flags |= DECLARATION_IS_MODULE_SCOPE;
 
 				if (member->flags & DECLARATION_IS_CONSTANT) {
 					import->type = member->type;

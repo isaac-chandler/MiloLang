@@ -58,7 +58,9 @@ static const Keyword keywords[] = {
 	{"#run", TokenT::RUN}, 
 	{"#c_call", TokenT::C_CALL}, 
 	{"#compiler", TokenT::COMPILER}, 
-	{"#import", TokenT::IMPORT}
+	{"#import", TokenT::IMPORT}, 
+	{"#scope_module", TokenT::SCOPE_MODULE}, 
+	{"#scope_export", TokenT::SCOPE_EXPORT}
 };
 
 void BigInt::zero() {
@@ -1692,7 +1694,6 @@ identifier:
 		}
 		
 		if (token.text.characters[0] == '#') {
-			assert(false);
 			token.type = TokenT::INVALID;
 			reportError(&location, "Error: Invalid compiler directive '%.*s", STRING_PRINTF(token.text));
 			return;
@@ -1979,6 +1980,8 @@ bool LexerFile::open(FileInfo *file) {
 	currentBlock = nullptr;
 
 	module = file->module;
+
+	moduleScope = false;
 
 	return true;
 }

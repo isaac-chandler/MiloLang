@@ -4,9 +4,7 @@ enums
  - array of values
  - is_indexable -> do the enum values go in order from 0..N, so the names array can be indexed directly with the enum value
  - largest_value
- - smallest_value 
- 
-Cleanup the way importers work
+ - smallest_value
 
 Make constexpr slices work
 
@@ -15,8 +13,6 @@ array literals
 struct literals
 
 Make how the infer phase being completed is checked better
-
-Reduce specific handling of global scope
 
 Make the error message when you try to using a #import that has been assigned to a constant show the correct location
 
@@ -37,7 +33,7 @@ Syntax for for loops to iterate in reverse
 
 Modules
  - Allow symbols to be locally scoped to a module
- - Modules searched for relative to the path to the compiler binary, instead of the working directory
+ - Modules searched for relative to the path to the compiler binary, instead of the working directory?
 
 
 Standard modules
