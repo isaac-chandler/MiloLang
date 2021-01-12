@@ -1959,6 +1959,11 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 
 			return dest;
 		}
+		case ExprFlavor::IMPORT: {
+			reportError(expr, "Error: Cannot operate on a namespace");
+
+			return dest;
+		}
 		case ExprFlavor::TYPE_LITERAL: {
 			if (dest == DEST_NONE) return DEST_NONE;
 

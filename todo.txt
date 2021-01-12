@@ -18,6 +18,8 @@ Make how the infer phase being completed is checked better
 
 Reduce specific handling of global scope
 
+Make the error message when you try to using a #import that has been assigned to a constant show the correct location
+
 Give compile time execution new abilities
  - Add files/strings to compilation
  - Control build settings i.e. optimization, bounds checking

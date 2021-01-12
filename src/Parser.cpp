@@ -340,11 +340,13 @@ Expr *parseExprStatemenet(LexerFile *lexer, bool allowDeclarations) {
 	}
 }
 
-Importer *parseLoadOrImport(LexerFile *lexer) {
+ExprLoad *parseLoadOrImportExpr(LexerFile *lexer) {
 	auto load = PARSER_NEW(ExprLoad);
 	load->flavor = lexer->token.type == TokenT::LOAD ? ExprFlavor::LOAD : ExprFlavor::IMPORT;
 	load->start = lexer->token.start;
 	load->module = lexer->module;
+
+	load->type = &TYPE_MODULE;
 
 	lexer->advance();
 
@@ -353,6 +355,12 @@ Importer *parseLoadOrImport(LexerFile *lexer) {
 		return nullptr;
 
 	load->end = lexer->previousTokenEnd;
+
+	return load;
+}
+
+Importer *parseLoadOrImport(LexerFile *lexer) {
+	auto load = parseLoadOrImportExpr(lexer);
 
 	auto importer = PARSER_NEW(Importer);
 
@@ -1758,6 +1766,14 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 		popBlock(lexer, &type->members);
 		expr = parserMakeTypeLiteral(lexer, start, lexer->previousTokenEnd, type);
+	}
+	else if (lexer->token.type == TokenT::IMPORT) {
+		expr = parseLoadOrImportExpr(lexer);
+		
+		if (!expr)
+			return nullptr;
+		
+		expr->flags |= EXPR_IMPORT_IS_EXPR;
 	}
 	else if (lexer->token.type == TokenT::ENUM || lexer->token.type == TokenT::ENUM_FLAGS) {
 		auto enum_ = PARSER_NEW(ExprEnum);

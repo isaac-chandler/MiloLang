@@ -127,6 +127,7 @@ inline Type TYPE_BOOL = { 1, 1, "bool", 47, 0, TypeFlavor::BOOL };
 inline Type TYPE_TYPE = { 8, 8, "type", 53, 0, TypeFlavor::TYPE };
 
 inline Type TYPE_AUTO_CAST = { 0, 0, "<auto cast>", 59, TYPE_IS_INTERNAL, TypeFlavor::AUTO_CAST };
+inline Type TYPE_MODULE = { 0, 0, "<module>", 59, TYPE_IS_INTERNAL, TypeFlavor::NAMESPACE };
 
 inline TypeStruct TYPE_STRING = { 16, 8, "string", 61, 0, TypeFlavor::STRING };
 

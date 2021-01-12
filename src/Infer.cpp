@@ -1152,6 +1152,7 @@ TypeStruct *getExpressionNamespace(Expr *expr, bool *onlyConstants, Expr *locati
 void copyLiteral(Expr **exprPointer, Expr *expr) {
 	switch (expr->flavor) {
 	case ExprFlavor::FUNCTION: // Functions are unique
+	case ExprFlavor::IMPORT: // No reason to duplicate imports
 	case ExprFlavor::STRUCT_DEFAULT: // Struct defaults have no mutable data
 	case ExprFlavor::STRING_LITERAL: // Don't duplicate string literals this will bloat the binary
 	case ExprFlavor::ARRAY: { // Don't duplicate array literals this will bloat the binary
@@ -1170,6 +1171,8 @@ void copyLiteral(Expr **exprPointer, Expr *expr) {
 
 		break;
 	}
+	default:
+		assert(false);
 	}
 }
 
@@ -1984,8 +1987,14 @@ bool arrayIsLiteral(ExprArray *array) {
 }
 
 bool isLiteral(Expr *expr) {
-	return ((expr->flavor == ExprFlavor::INT_LITERAL || expr->flavor == ExprFlavor::FLOAT_LITERAL))
-		|| expr->flavor == ExprFlavor::TYPE_LITERAL || expr->flavor == ExprFlavor::STRING_LITERAL || expr->flavor == ExprFlavor::FUNCTION || (expr->flavor == ExprFlavor::ARRAY && arrayIsLiteral(static_cast<ExprArray *>(expr))) || expr->flavor == ExprFlavor::STRUCT_DEFAULT;
+	return expr->flavor == ExprFlavor::INT_LITERAL || 
+		expr->flavor == ExprFlavor::FLOAT_LITERAL || 
+		expr->flavor == ExprFlavor::TYPE_LITERAL || 
+		expr->flavor == ExprFlavor::STRING_LITERAL || 
+		expr->flavor == ExprFlavor::FUNCTION || 
+		expr->flavor == ExprFlavor::IMPORT || 
+		(expr->flavor == ExprFlavor::ARRAY && arrayIsLiteral(static_cast<ExprArray *>(expr))) || 
+		expr->flavor == ExprFlavor::STRUCT_DEFAULT;
 }
 
 bool defaultValueIsZero(SubJob *job, Type *type, bool *yield) {
@@ -3808,34 +3817,49 @@ bool inferFlattened(SubJob *job) {
 
 			if (!identifier->declaration) {
 				if (identifier->structAccess) {
-					bool onlyConstants;
-					auto struct_ = getExpressionNamespace(identifier->structAccess, &onlyConstants, identifier);
+					if (identifier->structAccess->flavor == ExprFlavor::IMPORT) {
+						auto import = static_cast<ExprLoad *>(identifier->structAccess);
 
-					if (!struct_) {
-						return false;
+						identifier->declaration = findDeclarationNoYield(&import->module->members, identifier->name);
+
+						if (!identifier->declaration) {
+							goToSleep(job, &identifier->module->members.sleepingOnMe, "Identifier not found in module by namespace", identifier->name);
+
+							return true;
+						}
+
+						identifier->structAccess = nullptr;
 					}
+					else {
+						bool onlyConstants;
+						auto struct_ = getExpressionNamespace(identifier->structAccess, &onlyConstants, identifier);
 
-					bool yield;
-					auto member = findDeclaration(&struct_->members, identifier->name, &yield);
+						if (!struct_) {
+							return false;
+						}
 
-					if (yield) {
-						goToSleep(job, &struct_->members.sleepingOnMe, "Struct access scope has importers", identifier->name);
+						bool yield;
+						auto member = findDeclaration(&struct_->members, identifier->name, &yield);
 
-						return true;
-					}
+						if (yield) {
+							goToSleep(job, &struct_->members.sleepingOnMe, "Struct access scope has importers", identifier->name);
 
-					if (!member) {
-						reportError(identifier, "Error: %.*s does not have member %.*s", STRING_PRINTF(struct_->name), STRING_PRINTF(identifier->name));
-						return false;
-					}
-					else if (onlyConstants & !(member->flags & DECLARATION_IS_CONSTANT)) {
-						reportError(identifier, "Error: Can only access constant members of %.*s from it's prototype", STRING_PRINTF(struct_->name));
-						return false;
-					}
-					identifier->declaration = member;
+							return true;
+						}
 
-					if (!(identifier->declaration->flags & DECLARATION_IS_CONSTANT)) {
-						addSizeDependency(job->sizeDependencies, struct_);
+						if (!member) {
+							reportError(identifier, "Error: %.*s does not have member %.*s", STRING_PRINTF(struct_->name), STRING_PRINTF(identifier->name));
+							return false;
+						}
+						else if (onlyConstants & !(member->flags & DECLARATION_IS_CONSTANT)) {
+							reportError(identifier, "Error: Can only access constant members of %.*s from it's prototype", STRING_PRINTF(struct_->name));
+							return false;
+						}
+						identifier->declaration = member;
+
+						if (!(identifier->declaration->flags & DECLARATION_IS_CONSTANT)) {
+							addSizeDependency(job->sizeDependencies, struct_);
+						}
 					}
 				}
 				else {
@@ -5139,6 +5163,10 @@ bool inferFlattened(SubJob *job) {
 					reportError(value, "Error: Cannot take the type of an auto casted value");
 					return false;
 				}
+				else if (value->type == &TYPE_UNARY_DOT) {
+					reportError(value, "Error: Cannot take the type of a unary dot value");
+					return false;
+				}
 				else if (value->type->flavor == TypeFlavor::NAMESPACE) {
 					reportError(value, "Error: Cannot take the type of a namespace");
 					return false;
@@ -5873,6 +5901,12 @@ bool inferImporter(SubJob *subJob) {
 		}
 	}
 	else if (importer->import->flavor == ExprFlavor::IMPORT) {
+		if (importer->import->flags & EXPR_IMPORT_IS_EXPR) { // @Hack @Cleanup There is no way to tell the difference between a normal import and
+															 // std :: #import "Standard"; using std
+			reportError(importer->import, "Error: Cannot using an import");
+			return false;
+		}
+
 		auto import = static_cast<ExprLoad *>(importer->import);
 
 		for (auto block : import->module->imports) {
@@ -5896,6 +5930,7 @@ bool inferImporter(SubJob *subJob) {
 	done:;
 	}
 	else if (importer->import->flavor != ExprFlavor::LOAD) {
+
 		block = &getExpressionNamespace(importer->import, &onlyConstants, importer->import)->members;
 
 		if (!block) {
@@ -6202,16 +6237,18 @@ bool inferDeclarationValue(SubJob *subJob) {
 			}
 
 			if (declaration->initialValue->type == &TYPE_VOID && !(declaration->flags & DECLARATION_IS_RUN_RETURN)) {
-				reportError(declaration->type, "Error: Declaration cannot have type void");
+				reportError(declaration, "Error: Declaration cannot have type void");
 				return false;
 			}
 			else if (declaration->initialValue->type == &TYPE_AUTO_CAST) {
-				reportError(declaration->type, "Error: Cannot infer the type of a declaration if the value is an auto cast");
+				reportError(declaration, "Error: Cannot infer the type of a declaration if the value is an auto cast");
 				return false;
 			}
 			else if (declaration->initialValue->type->flavor == TypeFlavor::NAMESPACE) {
-				reportError(declaration->type, "Error: Declaration type cannot be a namespace");
-				return false;
+				if (!(declaration->flags & DECLARATION_IS_CONSTANT) || declaration->initialValue->type != &TYPE_MODULE) {
+					reportError(declaration, "Error: Declaration type cannot be a namespace");
+					return false;
+				}
 			}
 
 			declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, declaration->initialValue->type);

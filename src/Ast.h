@@ -277,6 +277,8 @@ struct ExprDefer : Expr {
 
 #define EXPR_FUNCTION_IS_COMPILER 0x40'0000
 
+#define EXPR_IMPORT_IS_EXPR 0x80'0000
+
 struct ExprLoad : Expr {
 	Expr *file;
 	struct Module *module;

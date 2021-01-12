@@ -594,12 +594,6 @@ intersect :: (bullet: *Bullet, b: *Entity) -> bool {
 
 gl_context: HGLRC
 
-#if true {
-	#if true {
-	#run print("Test")
-	}
-}
-
 main :: () {
 	rand_seed: s64
 	
