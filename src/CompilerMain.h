@@ -39,6 +39,8 @@ struct Library {
 inline struct Module *runtimeModule;
 inline struct Module *mainModule;
 
+inline bool printDiagnostics = false;
+
 inline u32 loadsPending = 0;
 
 void loadNewFile(String file, struct Module *module);

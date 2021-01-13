@@ -2530,7 +2530,7 @@ error:;
 #else
 
 void runLlvm() {
-	printf("LLVM is not supported in this build.\n");
+	reportInfo("LLVM is not supported in this build.");
 }
 
 #endif

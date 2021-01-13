@@ -509,7 +509,6 @@ File_Flag :: enum_flags u32 {
 
 using File_Flag.members
 
-
 WriteConsoleA :: (hConsoleOutput: *void, lpBuffer: *void, nNumberOfCharactersToWrite: u32, lpNumberOfCharactersWritten: *u32 = null, lpReserved := null) -> s32 #external "kernel32"
 ExitProcess :: (uExitCode: u32) #external "kernel32"
 ExitThread :: (uExitCode: u32) #external "kernel32"

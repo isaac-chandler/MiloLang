@@ -5965,10 +5965,10 @@ bool inferImporter(SubJob *subJob) {
 			assert(!onlyConstants);
 			assert(!structAccess);
 
-			for (auto importer : block->importers) {
-				addImporterToBlock(importer->enclosingScope, importer, importer->serial);
+			for (auto member : block->importers) {
+				addImporterToBlock(importer->enclosingScope, member, member->serial);
 
-				addImporter(importer, nullptr);
+				addImporter(member, nullptr);
 			}
 
 			block->importers.clear();
@@ -6012,16 +6012,6 @@ bool inferImporter(SubJob *subJob) {
 				for (auto expr : exprBlock->exprs) {
 					assert(expr->flavor == ExprFlavor::RUN);
 					addRunJob(static_cast<ExprRun *>(expr));
-				}
-
-				exprBlock->exprs.clear();
-			}
-			else if (importer->enclosingScope->flavor == BlockFlavor::GLOBAL) {
-				auto parentBlock = CAST_FROM_SUBSTRUCT(ExprBlock, declarations, importer->enclosingScope);
-
-				for (auto expr : exprBlock->exprs) {
-					assert(expr->flavor == ExprFlavor::RUN);
-					parentBlock->exprs.add(expr);
 				}
 
 				exprBlock->exprs.clear();
@@ -7661,8 +7651,10 @@ void runInfer(String inputFile) {
 		goto error;
 	}
 
-	printf("Infer memory used: %ukb\n", inferArena.totalSize / 1024);
-	printf("Type table memory used: %ukb\n", typeArena.totalSize / 1024);
+	if (printDiagnostics) {
+		reportInfo("Infer memory used: %ukb", inferArena.totalSize / 1024);
+		reportInfo("Type table memory used: %ukb", typeArena.totalSize / 1024);
+	}
 
 	irGeneratorQueue.add(nullptr);
 	parserQueue.add(nullptr);

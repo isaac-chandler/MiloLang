@@ -253,14 +253,22 @@ int main(int argc, char *argv[]) {
 			}
 
 			useLlvm = true;
-		}
-		if (strcmp("-no_threads", argv[i]) == 0) {
+		} 
+		else if (strcmp("-no_threads", argv[i]) == 0) {
 			if (noThreads) {
 				reportError("Error: Cannot specify no threads more than once");
 				return 1;
 			}
 
 			noThreads = true;
+		}
+		else if (strcmp("-diagnostic", argv[i]) == 0) {
+			if (printDiagnostics) {
+				reportError("Error: Cannot specify print diagnostics more than once");
+				return 1;
+			}
+
+			printDiagnostics = true;
 		}
 		else {
 			if (input) {
@@ -306,24 +314,25 @@ int main(int argc, char *argv[]) {
 
 		runInfer(input);
 
-		std::cout << "Frontend Time: " << (duration_cast<microseconds>(duration<double>(
-			high_resolution_clock::now() - start)).count() / 1000.0) << "ms\n";
+		reportInfo("Frontend Time: %.1fms", duration_cast<microseconds>(duration<double>(
+			high_resolution_clock::now() - start)).count() / 1000.0);
 	}
 
 
 	if (!hadError) {
 		u64 totalQueued = totalDeclarations + totalFunctions + totalTypesSized + totalImporters;
 
-		printf(
-			"Total queued: %llu\n"
-			"  %llu declarations\n"
-			"  %llu functions\n"
-			"  %llu types\n"
-			"  %llu importers\n"
-			"Total infers: %llu, %.1f infers/queued, %.1f iterations/infer\n"
-			"Total sizes: %llu, %.1f sizes/type\n",
-			totalQueued, totalDeclarations, totalFunctions, totalTypesSized, totalImporters, totalInfers, static_cast<float>(totalInfers) / totalQueued, static_cast<float>(totalInferIterations) / totalInfers, totalSizes, static_cast<float>(totalSizes) / totalTypesSized);
-
+		if (printDiagnostics) {
+			reportInfo(
+				"Total queued: %llu\n"
+				"  %llu declarations\n"
+				"  %llu functions\n"
+				"  %llu types\n"
+				"  %llu importers\n"
+				"Total infers: %llu, %.1f infers/queued, %.1f iterations/infer\n"
+				"Total sizes: %llu, %.1f sizes/type",
+				totalQueued, totalDeclarations, totalFunctions, totalTypesSized, totalImporters, totalInfers, static_cast<float>(totalInfers) / totalQueued, static_cast<float>(totalInferIterations) / totalInfers, totalSizes, static_cast<float>(totalSizes) / totalTypesSized);
+		}
 
 		auto backendStart = high_resolution_clock::now();
 		if (useLlvm) {
@@ -333,11 +342,11 @@ int main(int argc, char *argv[]) {
 			runCoffWriter();
 		}
 
-		std::cout << (useLlvm ? "LLVM" : "Coff Writer") << " Time: " << (duration_cast<microseconds>(duration<double>(
-			high_resolution_clock::now() - backendStart)).count() / 1000.0) << "ms\n";
+		reportInfo("%s Time: %.1fms", useLlvm ? "LLVM" : "Coff Writer", duration_cast<microseconds>(duration<double>(
+			high_resolution_clock::now() - backendStart)).count() / 1000.0);
 
-		std::cout << "Compiler Time: " << (duration_cast<microseconds>(duration<double>(
-			high_resolution_clock::now() - start)).count() / 1000.0) << "ms\n";
+		reportInfo("Compiler Time: %.1fms", duration_cast<microseconds>(duration<double>(
+			high_resolution_clock::now() - start)).count() / 1000.0);
 	}
 
 #if BUILD_WINDOWS
@@ -367,7 +376,7 @@ int main(int argc, char *argv[]) {
 #define read(dest, count) ((count) == fread(dest, sizeof(*(dest)), count, cache))
 
 				if (!read(&length, 1)) {
-					printf("Failed to read linker cache\n");
+					reportInfo("Failed to read linker cache");
 					fclose(cache);
 					goto linkerCacheFail;
 				}
@@ -375,13 +384,13 @@ int main(int argc, char *argv[]) {
 				linkerPath = new wchar_t[length];
 
 				if (!read(linkerPath, length)) {
-					printf("Failed to read linker cache\n");
+					reportInfo("Failed to read linker cache");
 					fclose(cache);
 					goto linkerCacheFail;
 				}
 
 				if (!read(&length, 1)) {
-					printf("Failed to read linker cache\n");
+					reportInfo("Failed to read linker cache");
 					fclose(cache);
 					goto linkerCacheFail;
 				}
@@ -389,13 +398,13 @@ int main(int argc, char *argv[]) {
 				windowsLibPath = new wchar_t[length];
 
 				if (!read(windowsLibPath, length)) {
-					printf("Failed to read linker cache\n");
+					reportInfo("Failed to read linker cache");
 					fclose(cache);
 					goto linkerCacheFail;
 				}
 
 				if (!read(&length, 1)) {
-					printf("Failed to read linker cache\n");
+					reportInfo("Failed to read linker cache");
 					fclose(cache);
 					goto linkerCacheFail;
 				}
@@ -403,7 +412,7 @@ int main(int argc, char *argv[]) {
 				crtLibPath = new wchar_t[length];
 
 				if (!read(crtLibPath, length)) {
-					printf("Failed to read linker cache\n");
+					reportInfo("Failed to read linker cache");
 					fclose(cache);
 					goto linkerCacheFail;
 				}
@@ -411,22 +420,22 @@ int main(int argc, char *argv[]) {
 				fclose(cache);
 
 				if (!fileExists(linkerPath)) {
-					printf("Linker cache had invalid linker\n");
+					reportInfo("Linker cache had invalid linker");
 					goto linkerCacheFail;
 				}
 
 				if (!directoryExists(windowsLibPath)) {
-					printf("Linker cache had invalid library path\n");
+					reportInfo("Linker cache had invalid library path");
 					goto linkerCacheFail;
 				}
 
 				if (!directoryExists(crtLibPath)) {
-					printf("Linker cache had invalid library path\n");
+					reportInfo("Linker cache had invalid library path");
 					goto linkerCacheFail;
 				}
 			}
 			else {
-				printf("Failed to find cached linker, searching for linker\n");
+				reportInfo("Failed to find cached linker, searching for linker");
 
 			linkerCacheFail:
 
@@ -508,7 +517,7 @@ int main(int argc, char *argv[]) {
 		PROCESS_INFORMATION info;
 
 		if (!CreateProcessW(NULL, linkerCommand, NULL, NULL, false, 0, NULL, NULL, &startup, &info)) {
-			std::cout << "Failed to run linker command" << std::endl;
+			reportInfo("Failed to run linker command");
 		}
 
 		CloseHandle(info.hThread);
@@ -526,11 +535,11 @@ int main(int argc, char *argv[]) {
 		
 		CloseHandle(info.hProcess);
 
-		std::cout << "Linker Time: " << (duration_cast<microseconds>(duration<double>(
-			high_resolution_clock::now() - linkerStart)).count() / 1000.0) << "ms\n";
+		reportInfo("Linker Time: %.1fms", duration_cast<microseconds>(duration<double>(
+			high_resolution_clock::now() - linkerStart)).count() / 1000.0);
 
-		std::cout << "Total Time: " << (duration_cast<microseconds>(duration<double>(
-			high_resolution_clock::now() - start)).count() / 1000.0) << "ms\n";
+		reportInfo("Total Time: %.1fms", duration_cast<microseconds>(duration<double>(
+			high_resolution_clock::now() - start)).count() / 1000.0);
 	}
 #else
 	// @Platform

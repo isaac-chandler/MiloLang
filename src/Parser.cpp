@@ -183,14 +183,44 @@ ExprIf *parseStaticIf(LexerFile *lexer) {
 	staticIf->elseBody = nullptr;
 
 	if (expectAndConsume(lexer, TokenT::ELSE)) {
-		if (!expectAndConsume(lexer, ';')) {
+		if (expectAndConsume(lexer, ';')) {
+		}
+		else {
+
 			auto block = PARSER_NEW(ExprBlock);
 			block->declarations.flavor = lexer->currentBlock ? lexer->currentBlock->flavor : BlockFlavor::GLOBAL;
 
-			staticIf->elseBody = parseBlock(lexer, false, block);
+			if (lexer->token.type == TOKEN('{')) {
+				staticIf->elseBody = parseBlock(lexer, false, block);
 
-			if (!staticIf->elseBody)
+				if (!staticIf->elseBody)
+					return nullptr;
+			}
+			else if (lexer->token.type == TokenT::IF) {
+				staticIf->elseBody = block;
+
+				block->start = lexer->token.start;
+				block->flavor = ExprFlavor::BLOCK;
+
+				pushBlock(lexer, &block->declarations);
+
+				auto body = parseStaticIf(lexer);
+
+				block->end = lexer->previousTokenEnd;
+
+				if (!body)
+					return nullptr;
+
+				if (block->declarations.flavor != BlockFlavor::GLOBAL)
+					block->exprs.add(body);
+
+
+				popBlock(lexer, &block->declarations);
+			}
+			else {
+				reportError("Error: Expected block or if after else");
 				return nullptr;
+			}
 		}
 	}
 
@@ -2719,7 +2749,9 @@ void runParser() {
 		}
 	}
 
-	wchar_t *name;
-	GetThreadDescription(GetCurrentThread(), &name);
-	reportInfo("%ls memory used %ukb", name, lexer->parserArena.totalSize / 1024);
+	if (printDiagnostics) {
+		wchar_t *name;
+		GetThreadDescription(GetCurrentThread(), &name);
+		reportInfo("%ls memory used %ukb", name, lexer->parserArena.totalSize / 1024);
+	}
 }
