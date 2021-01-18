@@ -3,13 +3,23 @@
 #include "Ast.h"
 #include "WorkQueue.h"
 
-inline u64 totalImporters;
+inline u64 totalInferImporters;
+inline u64 totalInferRuns;
+inline u64 totalInferDeclarationTypes;
+inline u64 totalInferDeclarationValues;
+inline u64 totalInferFunctionHeaders;
+inline u64 totalInferFunctionBodies;
+inline u64 totalInferStructSizes;
+inline u64 totalInferEnumSizes;
+inline u64 totalInferArraySizes;
 inline u64 totalDeclarations;
+inline u64 totalInferredDeclarations;
 inline u64 totalFunctions;
-inline u64 totalTypesSized;
-inline u64 totalInfers;
-inline u64 totalInferIterations;
 inline u64 totalSizes;
+inline u64 totalImporters;
+inline u64 totalRuns;
+inline u64 totalFlattenedInfers;
+inline u64 totalInferIterations;
 
 enum class InferJobType : u8 {
 	GLOBAL_DECLARATION,

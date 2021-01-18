@@ -51,6 +51,9 @@
 #include <llvm/Transforms/IPO.h>
 #include <llvm/Transforms/IPO/AlwaysInliner.h>
 #include <llvm/Transforms/IPO/PassManagerBuilder.h>
+#include <llvm/InitializePasses.h>
+#include <llvm/Support/CommandLine.h>
+#include <llvm/CodeGen/CommandFlags.h>
 #pragma warning(pop)
 
 #pragma warning(error: 4715)
@@ -122,6 +125,17 @@ typedef int8_t s8;
 typedef int16_t s16;
 typedef int32_t s32;
 typedef int64_t s64;
+
+template<typename T>
+struct MiloArray {
+	T *data;
+	u64 count;
+};
+
+struct MiloString {
+	u8 *data;
+	u64 count;
+};
 
 #define CAST_FROM_SUBSTRUCT(castTo, subStruct, castFrom) (	reinterpret_cast<castTo *>(reinterpret_cast<u8 *>(castFrom) - offsetof(castTo, subStruct)) + ((decltype(castFrom)) 0 - (decltype(&((castTo *) 0)->subStruct)) 0)	)
 

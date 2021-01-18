@@ -1117,3 +1117,19 @@ main :: () {
 	
 	exit(0)
 }
+
+#import "Compiler"
+
+setup_build :: () {
+	arguments := get_build_arguments()
+	
+	if arguments {
+		options: Build_Options
+		options.backend = .LLVM
+		options.llvm_options = arguments
+		
+		set_build_options(options)
+	}
+}
+
+#run setup_build()

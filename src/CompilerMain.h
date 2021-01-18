@@ -8,6 +8,22 @@ inline volatile bool hadError = false;
 inline std::thread::id mainThread;
 
 
+struct BuildOptions {
+	enum class Backend : u64 {
+		X64 = 0,
+		LLVM = 1
+	};
+
+	Backend backend = Backend::X64;
+	MiloArray<MiloString> llvmOptions = { nullptr, 0 };
+	MiloString outputName;
+	
+};
+
+inline BuildOptions buildOptions;
+inline MiloArray<MiloString> buildArguments;
+inline char *objectFileName;
+
 struct FileInfo { // @Platform
 	String path;
 	u32 fileUid;

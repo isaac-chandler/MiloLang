@@ -103,7 +103,7 @@ char getSigChar(Type *type) {
 	else if (type->flavor == TypeFlavor::ENUM) {
 		return getSigChar(static_cast<TypeEnum *>(type)->integerType);
 	}
-	else if (type->flavor == TypeFlavor::POINTER || type->flavor == TypeFlavor::TYPE) {
+	else if (type->flavor == TypeFlavor::POINTER || type->flavor == TypeFlavor::TYPE || type->flavor == TypeFlavor::FUNCTION) {
 		return DC_SIGCHAR_POINTER;
 	}
 	else if (type->size == 1) {
@@ -219,19 +219,17 @@ void deinitVMState(VMState *state) {
 	}
 }
 
-static Module *runningModule;
+static ExprRun *runningDirective;
+
+
 
 void runFunction(VMState *state, ExprFunction *expr, Ir *caller, DCArgs *dcArgs, u64 *callerStack) {
 	if (expr->flags & EXPR_FUNCTION_IS_COMPILER) {
 		assert(expr->valueOfDeclaration);
 
 		if (std::this_thread::get_id() != mainThread) {
-			Ir *location;
-
-			for (location = caller - 1; location->op != IrOp::LINE_MARKER; location--); // There had better be a location
-
-			// @Incomplete: Display error location
-			reportError(&location->location.start, &location->location.end, "Error: Compiler functions can only be called from the initial thread", STRING_PRINTF(expr->valueOfDeclaration->name));
+			reportError(caller, "Error: Compiler functions can only be called from the initial thread", STRING_PRINTF(expr->valueOfDeclaration->name));
+			return;
 		}
 
 		if (expr->valueOfDeclaration->name == "add_build_file") {
@@ -248,18 +246,37 @@ void runFunction(VMState *state, ExprFunction *expr, Ir *caller, DCArgs *dcArgs,
 			load->start = {};
 			load->end = {};
 			load->file = name;
-			load->module = runningModule;
+			load->module = runningDirective->module;
 
 			auto import = new Importer;
 			import->import = load;
 			
-			inferInput.add(InferQueueJob(import, runningModule));
+			inferInput.add(InferQueueJob(import, runningDirective->module));
+		}
+		else if (expr->valueOfDeclaration->name == "set_build_options") {
+			auto options = *reinterpret_cast<BuildOptions *>(callerStack + caller->arguments->args[0].number);
+
+			if (options.backend != BuildOptions::Backend::X64 && options.backend != BuildOptions::Backend::LLVM) {
+				reportError(caller, "Error: Unrecognized backend %llu in set_build_options", options.backend);
+				reportError(runningDirective, "   ..: From #run directive");
+				return;
+			}
+
+			buildOptions = options;
+		}
+		else if (expr->valueOfDeclaration->name == "get_build_options") {
+			if (caller->dest) {
+				*reinterpret_cast<BuildOptions *>(callerStack + caller->dest) = buildOptions;
+			}
+		}
+		else if (expr->valueOfDeclaration->name == "get_build_arguments") {
+			if (caller->dest) {
+				*reinterpret_cast<MiloArray<MiloString> *>(callerStack + caller->dest) = buildArguments;
+			}
 		}
 		else {
-			Ir *location;
-
-			for (location = caller - 1; location->op != IrOp::LINE_MARKER; location--); // There had better be a location
-			reportError(&location->location.start, &location->location.end, "Error: Unknown compiler function: %.*s", STRING_PRINTF(expr->valueOfDeclaration->name));
+			reportError(caller,           "Error: Unknown compiler function: %.*s", STRING_PRINTF(expr->valueOfDeclaration->name));
+			reportError(runningDirective, "   ..: From #run directive");
 		}
 		return;
 	}
@@ -592,7 +609,7 @@ if (op.flags & IR_FLOAT_OP) {\
 					else if (type == &TYPE_S64 || type == &TYPE_U64) {
 						dcArgLongLong(state->dc, stack[number]);
 					}
-					else if (type == &TYPE_TYPE || type->flavor == TypeFlavor::POINTER) {
+					else if (type == &TYPE_TYPE || type->flavor == TypeFlavor::POINTER || type->flavor == TypeFlavor::FUNCTION) {
 						dcArgPointer(state->dc, reinterpret_cast<void *>(stack[number]));
 					}
 					else if (type == &TYPE_F32) {
@@ -666,7 +683,7 @@ if (op.flags & IR_FLOAT_OP) {\
 					if (op.dest)
 						stack[op.dest] = val;
 				}
-				else if (type == &TYPE_TYPE || type->flavor == TypeFlavor::POINTER) {
+				else if (type == &TYPE_TYPE || type->flavor == TypeFlavor::POINTER || type->flavor == TypeFlavor::FUNCTION) {
 					void *val = dcCallPointer(state->dc, function);
 
 					if (op.dest)
@@ -1070,15 +1087,17 @@ Expr *getReturnValueFromBytes(CodeLocation start, EndLocation end, Type *type, v
 	}
 }
 
-Expr *runFunctionRoot(VMState *state, ExprFunction *expr, Module *module) {
+Expr *runFunctionRoot(VMState *state, ExprRun *directive) {
 	PROFILE_FUNC();
 	u64 store[32];
 
-	runningModule = module;
+	runningDirective = directive;
+
+	auto function = static_cast<ExprFunction *>(directive->function);
 
 	u64 *stackPointer = store;
 
-	auto returnType = getDeclarationType(expr->returns.declarations[0]);
+	auto returnType = getDeclarationType(function->returns.declarations[0]);
 
 	if (returnType->size > sizeof(store)) {
 		stackPointer = static_cast<u64 *>(malloc(returnType->size));
@@ -1092,9 +1111,9 @@ Expr *runFunctionRoot(VMState *state, ExprFunction *expr, Module *module) {
 	dummyOp.arguments = &arguments;
 	dummyOp.dest = arguments.returnType == &TYPE_VOID ? 0 : 1;
 
-	runFunction(state, expr, &dummyOp, nullptr, stackPointer - 1);
+	runFunction(state, function, &dummyOp, nullptr, stackPointer - 1);
 
-	auto result = getReturnValueFromBytes(expr->start, expr->end, returnType, stackPointer);
+	auto result = getReturnValueFromBytes(function->start, function->end, returnType, stackPointer);
 
 	if (returnType->size > sizeof(store)) {
 		free(stackPointer);

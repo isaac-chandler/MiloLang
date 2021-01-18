@@ -1,0 +1,22 @@
+#import "Windows"
+
+Thread :: struct {
+	handle: HANDLE
+	id: u32
+}
+
+create_thread :: (procedure: (*void) -> u32 #c_call, data := null) -> #must Thread {
+	thread: Thread = --
+
+	thread.handle = CreateThread(null, 0, procedure, data, 0, *thread.id)
+	
+	return thread
+}
+
+wait_for_thread :: (thread: *Thread) {
+	WaitForSingleObject(thread.handle)
+}
+
+close_thread :: (thread: *Thread) {
+	CloseHandle(thread.handle)
+}

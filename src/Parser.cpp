@@ -2484,7 +2484,7 @@ Declaration *parseDeclaration(LexerFile *lexer) {
 	declaration->flags = 0;
 
 
-	if (lexer->moduleScope)
+	if (lexer->moduleScope && (!lexer->currentBlock || lexer->currentBlock->flavor == BlockFlavor::GLOBAL))
 		declaration->flags |= DECLARATION_IS_MODULE_SCOPE;
 
 	if (expectAndConsume(lexer, TokenT::USING)) {

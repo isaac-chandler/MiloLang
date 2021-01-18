@@ -1,12 +1,13 @@
-#load "standard.milo"
-#load "bitmap.milo"
-#load "thread.milo"
-#load "file.milo"
+#import "Standard"
+#import "Bitmap"
+#import "Thread"
+#import "File"
+#import "Windows"
 
 ITERATIONS :: 256
 
-width :: 512
-height :: 512
+width :: 4096
+height :: 4096
 
 x_min :: -0.77
 x_max :: -0.702
@@ -63,7 +64,7 @@ thread_proc :: (data: *void) -> u32 #c_call {
 
 THREAD_COUNT :: 4
 
-_main :: () {
+main :: () {
 	assert(height % THREAD_COUNT == 0)
 
 	file: []u8
@@ -102,6 +103,15 @@ _main :: () {
 		it.data = image.data + it.start_row * width * 3
 	}
 	
+	performance_counter_frequency: s64
+	
+	QueryPerformanceFrequency(*performance_counter_frequency)
+	
+	counter_scale := 1.0 / cast(f32) performance_counter_frequency
+	start_time: s64
+	
+	QueryPerformanceCounter(*start_time)
+	
 	for * threads {
 		<<it = create_thread(thread_proc, *jobs[it_index])
 	}
@@ -109,6 +119,12 @@ _main :: () {
 	for * threads {
 		wait_for_thread(it)
 	}
+	
+	end_time: s64
+	
+	QueryPerformanceCounter(*end_time)
+	
+	print("% s\n", cast() (end_time - start_time) * counter_scale)
 	
 	write_entire_file("mandelbrot.bmp", file)	
 }

@@ -128,6 +128,24 @@ void reportError(CodeLocation *start, EndLocation *end, CHECK_PRINTF const char 
 	displayErrorLocation(start, end);
 }
 
+void reportError(struct Ir *ir, CHECK_PRINTF const char *format, ...) {
+	for (; ir->op != IrOp::LINE_MARKER; ir--); // There had better be a location
+
+	ScopeLock lock(errorMutex);
+	printErrorLocation(&ir->location.start);
+	hadError = true;
+
+	va_list args;
+	va_start(args, format);
+
+	vprintf(format, args);
+	puts("");
+
+	va_end(args);
+
+	displayErrorLocation(&ir->location.start, &ir->location.end);
+}
+
 void reportError(CodeLocation *location, CHECK_PRINTF const char *format, ...) {
 	ScopeLock lock(errorMutex);
 	printErrorLocation(location);

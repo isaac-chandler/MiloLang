@@ -1,5 +1,42 @@
-#load "standard.milo"
+#import "Standard"
+
+Build_Options :: struct {
+	Backend :: enum u64 {
+		X64 :: 0
+		LLVM :: 1
+	}
+	
+	backend := Backend.X64
+	llvm_options: []string
+	output_name: string
+}
 
 add_build_file :: (filename: string) #compiler {
-	print("Cannot call #compiler function add_build_file at runtime")
+	runtime_call("add_build_file")
+}
+
+set_build_options :: (build_options: Build_Options) #compiler {
+	runtime_call("set_build_options")
+}
+
+get_build_options :: () -> #must Build_Options #compiler {
+	runtime_call("get_build_options")
+	
+	result: Build_Options
+	
+	return result
+}
+
+get_build_arguments :: () -> #must []string #compiler {
+	runtime_call("get_build_arguments")
+	
+	result: []string
+	
+	return result
+}
+
+#scope_module
+
+runtime_call :: (function: string) {
+	print("Cannot call #compiler function % at runtime\n", function)
 }

@@ -5,6 +5,7 @@
 #include "TypeTable.h"
 #include "CompilerMain.h"
 #include "Error.h"
+#include "UTF.h"
 
 union SymbolName {
 	char name[8];
@@ -598,13 +599,119 @@ u32 createSymbolForString(s64 *emptyStringSymbolIndex, BucketArray<Symbol> *symb
 	return string->physicalStorage;
 }
 
-u32 createSymbolForType(BucketArray<Symbol> *symbols, Type *type) {
-	if (!type->symbol) {
-		type->physicalStorage = symbols->count();
-		type->symbol = reinterpret_cast<Symbol *>(symbols->allocator.allocateUnaligned(sizeof(Symbol)));
-	}
 
-	return type->physicalStorage;
+void markUsedTypeInfoInType(BucketArray<Symbol> *symbols, Type *type);
+
+void markUsedTypeInfoInExpr(BucketArray<Symbol> *symbols, Expr *expr) {
+	switch (expr->flavor) {
+	case ExprFlavor::ARRAY: {
+		auto array = static_cast<ExprArray *>(expr);
+
+		for (u64 i = 0; i < array->count; i++) {
+			if (!array->storage[i])
+				break;
+
+			markUsedTypeInfoInExpr(symbols, array->storage[i]);
+		}
+		break;
+	}
+	case ExprFlavor::TYPE_LITERAL: {
+		markUsedTypeInfoInType(symbols, static_cast<ExprLiteral *>(expr)->typeValue);
+		break;
+	}
+	case ExprFlavor::STRUCT_DEFAULT: {
+		if (expr->type->flags & TYPE_USED_IN_OUTPUT) // Optimisation since if we have already emitted the Type_Info for a struct type, it's default value has been outputted
+			return;
+
+		auto struct_ = static_cast<TypeStruct *>(expr->type);
+
+		for (auto member : struct_->members.declarations) {
+			if (member->flags & (DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_CONSTANT | DECLARATION_IS_UNINITIALIZED)) continue;
+
+			assert(member->flags & DECLARATION_TYPE_IS_READY);
+
+			markUsedTypeInfoInExpr(symbols, member->initialValue);
+		}
+
+		break;
+	}
+	}
+}
+
+void createSymbolForType(BucketArray<Symbol> *symbols, Type *type) {
+	type->physicalStorage = symbols->count();
+	type->symbol = reinterpret_cast<Symbol *>(symbols->allocator.allocateUnaligned(sizeof(Symbol)));
+}
+
+void markUsedTypeInfoInType(BucketArray<Symbol> *symbols, Type *type) {
+	if (type->flags & TYPE_USED_IN_OUTPUT)
+		return;
+
+	if (type->flavor == TypeFlavor::NAMESPACE) // @Incomplete Output type info for namespaces
+		return;
+
+	type->flags |= TYPE_USED_IN_OUTPUT;
+
+	createSymbolForType(symbols, type);
+
+	switch (type->flavor) {
+	case TypeFlavor::ARRAY: {
+		auto array = static_cast<TypeArray *>(type);
+
+		markUsedTypeInfoInType(symbols, array->arrayOf);
+
+		break;
+	}
+	case TypeFlavor::ENUM: {
+		auto enum_ = static_cast<TypeEnum *>(type);
+
+		markUsedTypeInfoInType(symbols, enum_->integerType);
+
+		break;
+	}
+	case TypeFlavor::POINTER: {
+		auto pointer = static_cast<TypePointer *>(type);
+
+		markUsedTypeInfoInType(symbols, pointer->pointerTo);
+
+		break;
+	}
+	case TypeFlavor::FUNCTION: {
+		auto function = static_cast<TypeFunction *>(type);
+
+		for (u64 i = 0; i < function->argumentCount; i++) {
+			markUsedTypeInfoInType(symbols, function->argumentTypes[i]);
+		}
+
+		for (u64 i = 0; i < function->returnCount; i++) {
+			markUsedTypeInfoInType(symbols, function->returnTypes[i]);
+		}
+
+		break;
+	}
+	case TypeFlavor::STRUCT: {
+		auto struct_ = static_cast<TypeStruct *>(type);
+
+		for (auto member : struct_->members.declarations) {
+			if (member->flags & (DECLARATION_IMPORTED_BY_USING)) continue;
+
+			auto memberType = getDeclarationType(member);
+
+			if (memberType == &TYPE_UNSIGNED_INT_LITERAL || memberType == &TYPE_SIGNED_INT_LITERAL || memberType == &TYPE_FLOAT_LITERAL) {
+				assert(member->initialValue);
+				memberType = getTypeForExpr(member->initialValue);
+			}
+
+			markUsedTypeInfoInType(symbols, memberType);
+
+			if (member->flags & DECLARATION_IS_UNINITIALIZED) continue;
+
+			markUsedTypeInfoInExpr(symbols, member->initialValue);
+		}
+
+		break;
+	}
+	}
 }
 
 
@@ -718,9 +825,10 @@ void writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataRelocations,
 		}
 	}
 	else if (value->flavor == ExprFlavor::TYPE_LITERAL) {
+		markUsedTypeInfoInType(symbols, static_cast<ExprLiteral *>(value)->typeValue);
 		dataRelocations->ensure(10);
 		dataRelocations->add4Unchecked(dataSize);
-		dataRelocations->add4Unchecked(createSymbolForType(symbols, static_cast<ExprLiteral *>(value)->typeValue));
+		dataRelocations->add4Unchecked(static_cast<ExprLiteral *>(value)->typeValue->physicalStorage);
 		dataRelocations->add2Unchecked(IMAGE_REL_AMD64_ADDR64);
 
 		*reinterpret_cast<u64 *>(data) = 0;
@@ -810,9 +918,9 @@ u32 getCoffTypeIndex(BucketedArenaAllocator *debugTypes, Type *type);
 u32 debugTypeId = 0x1000;
 
 void alignDebugTypes(BucketedArenaAllocator *debugTypes) {
-	u32 padding = AlignPO2(debugTypes->totalSize, 4) - debugTypes->totalSize;
+	u32 padding = -debugTypes->totalSize & 3;
 
-	debugTypes->ensure(3);
+	debugTypes->ensure(padding);
 	for (u32 i = 0; i < padding; i++) {
 		debugTypes->add1Unchecked(0xF0 + padding - i);
 	}
@@ -1781,17 +1889,20 @@ void runCoffWriter() {
 
 				switch (ir.op) {
 				case IrOp::TYPE: {
+					markUsedTypeInfoInType(&symbols, ir.type);
+
 					code.add1Unchecked(0x48);
 					code.add1Unchecked(0xB8);
 
 					codeRelocations.ensure(10);
 					codeRelocations.add4Unchecked(code.totalSize);
-					codeRelocations.add4Unchecked(createSymbolForType(&symbols, ir.type));
+					codeRelocations.add4Unchecked(ir.type->physicalStorage);
 					codeRelocations.add2Unchecked(IMAGE_REL_AMD64_ADDR64);
 
 					code.add8Unchecked(0);
 
 					storeFromIntRegister(&code, function, 8, ir.dest, RAX);
+
 
 					break;
 				}
@@ -3629,13 +3740,27 @@ void runCoffWriter() {
 	if (!hadError) {
 		PROFILE_ZONE("Write types");
 
+		/*
+		for (u64 i = 0; i < typeTableCapacity; i++) {
+			auto entry = typeTableEntries[i];
+
+			if (entry.hash) {
+				if (!entry.value->symbol) {
+					createSymbolForType(&symbols, entry.value);
+				}
+			}
+		}
+		*/
+
 		for (u64 i = 0; i < typeTableCapacity; i++) {
 			auto entry = typeTableEntries[i];
 
 			if (entry.hash) {
 				auto type = entry.value;
 
-				createSymbolForType(&symbols, type);
+				if (!(type->flags & TYPE_USED_IN_OUTPUT))
+					continue;
+
 				auto symbol = type->symbol;
 
 				u32 name = createRdataPointer(&stringTable, &symbols, &rdata);
@@ -3762,7 +3887,7 @@ void runCoffWriter() {
 						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
 
 					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), value_type),
-						createSymbolForType(&symbols, static_cast<TypePointer *>(type)->pointerTo));
+						static_cast<TypePointer *>(type)->pointerTo->physicalStorage);
 
 					rdata.add(&info, sizeof(info));
 
@@ -3776,14 +3901,14 @@ void runCoffWriter() {
 					u32 arguments = createRdataPointer(&stringTable, &symbols, &rdata);
 
 					for (u64 i = 0; i < function->argumentCount; i++) {
-						addPointerRelocation(&rdataRelocations, rdata.totalSize, createSymbolForType(&symbols, function->argumentTypes[i]));
+						addPointerRelocation(&rdataRelocations, rdata.totalSize, function->argumentTypes[i]->physicalStorage);
 						rdata.add8(0);
 					}
 					
 					u32 returns = createRdataPointer(&stringTable, &symbols, &rdata);
 
 					for (u64 i = 0; i < function->returnCount; i++) {
-						addPointerRelocation(&rdataRelocations, rdata.totalSize, createSymbolForType(&symbols, function->returnTypes[i]));
+						addPointerRelocation(&rdataRelocations, rdata.totalSize, function->returnTypes[i]->physicalStorage);
 						rdata.add8(0);
 					}
 
@@ -3831,7 +3956,7 @@ void runCoffWriter() {
 						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
 
 					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), element_type),
-						createSymbolForType(&symbols, static_cast<TypeArray *>(type)->arrayOf));
+						static_cast<TypeArray *>(type)->arrayOf->physicalStorage);
 
 					rdata.add(&info, sizeof(info));
 
@@ -3899,11 +4024,11 @@ void runCoffWriter() {
 
 						if (member->initialValue) {
 							addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), member_type),
-								createSymbolForType(&symbols, getTypeForExpr(member->initialValue)));
+								getTypeForExpr(member->initialValue)->physicalStorage);
 						}
 						else {
 							addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), member_type),
-								createSymbolForType(&symbols, getDeclarationType(member)));
+								getDeclarationType(member)->physicalStorage);
 						}
 
 						if (member->initialValue) { // @Incomplete: Export info for namespaces
@@ -3987,7 +4112,7 @@ void runCoffWriter() {
 						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
 
 					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), base_type), 
-						createSymbolForType(&symbols, enum_->integerType));
+						enum_->integerType->physicalStorage);
 					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), values.data), values);
 
 					rdata.add(&info, sizeof(info));
@@ -4150,7 +4275,7 @@ void runCoffWriter() {
 		}
 
 		if (!hadError) {
-			HANDLE out = CreateFileA("out.obj", GENERIC_WRITE | GENERIC_READ, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
+			HANDLE out = CreateFileW(utf8ToWString(objectFileName), GENERIC_WRITE | GENERIC_READ, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
 
 
 			HANDLE mapping = CreateFileMappingA(out, 0, PAGE_READWRITE, 0, sectionPointer, 0);
@@ -4179,7 +4304,7 @@ void runCoffWriter() {
 			};
 
 			if (out == INVALID_HANDLE_VALUE) {
-				reportError("Error: Could not open out.obj intermediate for writing");
+				reportError("Error: Could not open %s intermediate for writing", objectFileName);
 				goto error;
 			}
 			

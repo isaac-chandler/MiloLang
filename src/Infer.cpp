@@ -25,8 +25,8 @@ enum class JobFlavor : u8 {
 	SIZE,
 	DECLARATION_TYPE,
 	DECLARATION_VALUE,
-	FUNCTION_TYPE,
-	FUNCTION_VALUE,
+	FUNCTION_HEADER,
+	FUNCTION_BODY,
 	IMPORTER, 
 	RUN
 };
@@ -199,15 +199,15 @@ struct DeclarationJob {
 struct FunctionJob {
 	ExprFunction *function;
 
-	SubJob type;
-	SubJob value;
+	SubJob header;
+	SubJob body;
 
 	Array<Type *> sizeDependencies;
 	FunctionJob *next = nullptr;
 	FunctionJob *previous = nullptr;
 
-	FunctionJob() : type(JobFlavor::FUNCTION_TYPE, nullptr),
-		value(JobFlavor::FUNCTION_VALUE, &sizeDependencies) {}
+	FunctionJob() : header(JobFlavor::FUNCTION_HEADER, nullptr),
+		body(JobFlavor::FUNCTION_BODY, &sizeDependencies) {}
 };
 
 struct SizeJob : SubJob {
@@ -263,6 +263,7 @@ inline void addSubJob(SubJob *job) {
 	subJobs.add(job);
 }
 
+void forceAddDeclaration(Declaration *declaration);
 bool addDeclaration(Declaration *declaration, Module *members);
 
 void wakeUpSleepers(Array<SubJob *> *sleepers, String name = String(nullptr, 0u)) {
@@ -330,11 +331,11 @@ void addFunction(ExprFunction *function) {
 	addBlock(&function->returns);
 
 	assert(function->body);
-	beginFlatten(&job->value, &function->body);
+	beginFlatten(&job->body, &function->body);
 
-	addSubJob(&job->type);
+	addSubJob(&job->header);
 
-	addSubJob(&job->value);
+	addSubJob(&job->body);
 
 
 	++totalFunctions;
@@ -359,7 +360,7 @@ void addTypeBlock(Expr *expr) {
 			addStruct(struct_);
 
 			type->sizeJob = job;
-			++totalTypesSized;
+			++totalSizes;
 
 			addJob(&sizeJobs, job);
 			addSubJob(job);
@@ -381,7 +382,7 @@ void addTypeBlock(Expr *expr) {
 			beginFlatten(job, &CAST_FROM_SUBSTRUCT(ExprEnum, struct_, enum_)->integerType);
 
 			type->sizeJob = job;
-			++totalTypesSized;
+			++totalSizes;
 
 			addJob(&sizeJobs, job);
 			addSubJob(job);
@@ -913,28 +914,19 @@ FunctionJob *allocateFunctionJob();
 
 bool isAddressable(Expr *expr);
 
-bool isValidCast(Type *to, Type *from, u64 flags) {
-	if (from == &TYPE_VOID || to->flavor == TypeFlavor::AUTO_CAST || from->flavor == TypeFlavor::NAMESPACE) {
+bool isValidCast(Type *to, Type *from) {
+	if (from == &TYPE_VOID || from->flavor == TypeFlavor::AUTO_CAST || from->flavor == TypeFlavor::NAMESPACE) {
 		return false;
 	}
 
 	if (to == &TYPE_VOID || to->flavor == TypeFlavor::AUTO_CAST || to->flavor == TypeFlavor::NAMESPACE) {
 		return false;
 	}
-
-	if ((flags & EXPR_CAST_IS_BITWISE) && to->size == from->size) {
-		return true;
-	}
-
 	if (from == TYPE_ANY && to != TYPE_ANY) {
 		return true;
 	}
 
 	if (to->flavor == from->flavor) {
-		if (from->flavor == TypeFlavor::AUTO_CAST || from->flavor == TypeFlavor::VOID || from->flavor == TypeFlavor::NAMESPACE) {
-			return false;
-		}
-
 		if (to->flavor == TypeFlavor::ARRAY) {
 			if (to->flags & (TYPE_ARRAY_IS_FIXED | TYPE_ARRAY_IS_DYNAMIC)) {
 				return to == from;
@@ -996,6 +988,35 @@ bool isValidCast(Type *to, Type *from, u64 flags) {
 	}
 }
 
+bool isValidCast(SubJob *job, Type *to, Type *from, u64 flags, bool *yield) {
+	*yield = false;
+	if (from == &TYPE_VOID || from->flavor == TypeFlavor::AUTO_CAST || from->flavor == TypeFlavor::NAMESPACE) {
+		return false;
+	}
+
+	if (to == &TYPE_VOID || to->flavor == TypeFlavor::AUTO_CAST || to->flavor == TypeFlavor::NAMESPACE) {
+		return false;
+	}
+
+	if (flags & EXPR_CAST_IS_BITWISE) {
+		if (!to->size) {
+			goToSleep(job, &to->sleepingOnMe, "Bit cast waiting on dest size");
+			*yield = true;
+			return false;
+		}
+
+		if (!from->size) {
+			goToSleep(job, &to->sleepingOnMe, "Bit cast waiting on source size");
+			*yield = true;
+			return false;
+		}
+
+		return to->size == from->size;
+	}
+
+	return isValidCast(to, from);
+}
+
 void addSizeDependency(Array<Type *> *sizeDependencies, Type *type) {
 	if (sizeDependencies && type->size == 0 && !(type->flags & TYPE_IS_INTERNAL)) {
 		sizeDependencies->add(type);
@@ -1017,6 +1038,10 @@ void doConstantCast(Expr **cast) {
 
 	if (expr->type == castTo) {
 		*cast = expr;
+	}
+
+	if (binary->flags & EXPR_CAST_IS_BITWISE) {
+		return; // @Incomplete
 	}
 
 	if (expr->flavor == ExprFlavor::INT_LITERAL) {
@@ -1099,7 +1124,7 @@ void insertImplicitCast(Array<Type *> *sizeDependencies, Expr **castFrom, Type *
 
 	addSizeDependency(sizeDependencies, castTo);
 
-	assert(isValidCast(castTo, cast->right->type, 0));
+	assert(isValidCast(castTo, cast->right->type));
 
 	doConstantCast(castFrom);
 }
@@ -1305,7 +1330,7 @@ bool tryUsingConversion(SubJob *job, Type *correct, Expr **exprPointer) {
 bool tryAutoCast(SubJob *job, Expr **cast, Type *castTo, bool *yield) {
 	*yield = false;
 	auto castExpr = *cast;
-	assert(castExpr->type->flavor == TypeFlavor::AUTO_CAST);
+	assert(castExpr->type == &TYPE_AUTO_CAST);
 	assert(castExpr->flavor == ExprFlavor::BINARY_OPERATOR);
 
 	auto autoCast = static_cast<ExprBinaryOperator *>(castExpr);
@@ -1330,8 +1355,9 @@ bool tryAutoCast(SubJob *job, Expr **cast, Type *castTo, bool *yield) {
 		*yield = true;
 		return false;
 	} else {
-		if (!isValidCast(castTo, autoCast->right->type, autoCast->flags)) {
-			reportError(autoCast, "Error: Cannot cast from %.*s to %.*s", STRING_PRINTF(autoCast->right->type->name), STRING_PRINTF(castTo->name));
+		if (!isValidCast(job, castTo, autoCast->right->type, autoCast->flags, yield)) {
+			
+			if (!*yield) reportError(autoCast, "Error: Cannot cast from %.*s to %.*s", STRING_PRINTF(autoCast->right->type->name), STRING_PRINTF(castTo->name));
 			return false;
 		}
 
@@ -2526,7 +2552,7 @@ bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char 
 
 					addJob(&sizeJobs, sizeJob);
 					addSubJob(sizeJob);
-					++totalTypesSized;
+					++totalSizes;
 				}
 
 
@@ -2646,7 +2672,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 			}
 		}
 		else if (left->type->flavor == right->type->flavor && left->type->flavor == TypeFlavor::AUTO_CAST) {
-			reportError(binary, "Error: Cannot infer the type of an expression when the sides are an auto cast and a unary dot");
+			reportError(binary, "Error: Cannot infer the type of an expression when the sides are %.*s and %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
 			return false;
 		}
 	}
@@ -2691,10 +2717,12 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 		trySolidifyNumericLiteralToDefault(right);
 
 		if (tryUsingConversion(job, castTo, &right)) {
+			*yield = true;
 			return true;
 		}
 		else {
-			if (!isValidCast(castTo, right->type, binary->flags)) {
+			if (!isValidCast(job, castTo, right->type, binary->flags, yield)) {
+				if (*yield) return true;
 				reportError(binary, "Error: Cannot cast from %.*s to %.*s", STRING_PRINTF(right->type->name), STRING_PRINTF(castTo->name));
 				return false;
 			}
@@ -3399,7 +3427,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 	case TokenT::LOGIC_AND:
 	case TokenT::LOGIC_OR: {
 		if (left->type != &TYPE_BOOL) {
-			if (isValidCast(&TYPE_BOOL, left->type, 0)) {
+			if (isValidCast(&TYPE_BOOL, left->type)) {
 				insertImplicitCast(job->sizeDependencies, &left, &TYPE_BOOL);
 			}
 			else {
@@ -3409,7 +3437,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 		}
 
 		if (right->type != &TYPE_BOOL) {
-			if (isValidCast(&TYPE_BOOL, right->type, 0)) {
+			if (isValidCast(&TYPE_BOOL, right->type)) {
 				insertImplicitCast(job->sizeDependencies, &right, &TYPE_BOOL);
 			}
 			else {
@@ -3747,7 +3775,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 
 				addJob(&sizeJobs, sizeJob);
 				addSubJob(sizeJob);
-				++totalTypesSized;
+				++totalSizes;
 			}
 		}
 		else {
@@ -3779,6 +3807,8 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 }
 
 void addRunJob(ExprRun *run) {
+	++totalRuns;
+
 	run->runJob = allocateRunJob();
 	run->runJob->run = run;
 
@@ -3795,7 +3825,7 @@ void addRunJob(ExprRun *run) {
 
 bool inferFlattened(SubJob *job) {
 	PROFILE_FUNC();
-	++totalInfers;
+	++totalFlattenedInfers;
 
 	while (job->flattenedCount) {
 		if (job->indices[job->flattenedCount - 1] == job->flatteneds[job->flattenedCount - 1].count) {
@@ -3983,6 +4013,9 @@ bool inferFlattened(SubJob *job) {
 					else {
 						goToSleep(job, &identifier->declaration->sleepingOnMyType, "Identifier type not ready");
 
+						if (!identifier->declaration->inferJob)
+							forceAddDeclaration(identifier->declaration);
+
 						return true;
 					}
 
@@ -3993,6 +4026,9 @@ bool inferFlattened(SubJob *job) {
 						}
 						else {
 							goToSleep(job, &identifier->declaration->sleepingOnMyValue, "Identifier value not ready");
+
+							if (!identifier->declaration->inferJob)
+								forceAddDeclaration(identifier->declaration);
 
 							return true;
 						}
@@ -4853,7 +4889,7 @@ bool inferFlattened(SubJob *job) {
 						}
 					}
 				}
-				else if (isValidCast(&TYPE_BOOL, ifElse->condition->type, 0)) {
+				else if (isValidCast(&TYPE_BOOL, ifElse->condition->type)) {
 					insertImplicitCast(job->sizeDependencies, &ifElse->condition, &TYPE_BOOL);
 				}
 				else {
@@ -4881,7 +4917,7 @@ bool inferFlattened(SubJob *job) {
 						}
 					}
 				}
-				else if (isValidCast(&TYPE_BOOL, staticIf->condition->type, 0)) {
+				else if (isValidCast(&TYPE_BOOL, staticIf->condition->type)) {
 					insertImplicitCast(job->sizeDependencies, &staticIf->condition, &TYPE_BOOL);
 				}
 				else {
@@ -4926,7 +4962,7 @@ bool inferFlattened(SubJob *job) {
 			auto return_ = static_cast<ExprReturn *>(expr);
 
 			if (!return_->returnsFrom->type) {
-				goToSleep(job, &return_->returnsFrom->sleepingOnInfer, "Return function type not ready");
+				goToSleep(job, &return_->returnsFrom->sleepingOnInfer, "Return function header not ready");
 
 				return true;
 			}
@@ -5100,7 +5136,7 @@ bool inferFlattened(SubJob *job) {
 							}
 						}
 					}
-					else if (isValidCast(&TYPE_BOOL, value->type, 0)) {
+					else if (isValidCast(&TYPE_BOOL, value->type)) {
 						insertImplicitCast(job->sizeDependencies, &value, &TYPE_BOOL);
 					}
 					else {
@@ -5394,7 +5430,7 @@ bool inferFlattened(SubJob *job) {
 						}
 					}
 				}
-				else if (isValidCast(&TYPE_BOOL, loop->whileCondition->type, 0)) {
+				else if (isValidCast(&TYPE_BOOL, loop->whileCondition->type)) {
 					insertImplicitCast(job->sizeDependencies, &loop->whileCondition, &TYPE_BOOL);
 				}
 				else {
@@ -5528,8 +5564,8 @@ FunctionJob *allocateFunctionJob() {
 		auto result = firstFreeFunctionJob;
 		firstFreeFunctionJob = firstFreeFunctionJob->next;
 
-		result->type.flattenedCount = 0;
-		result->value.flattenedCount = 0;
+		result->header.flattenedCount = 0;
+		result->body.flattenedCount = 0;
 		result->sizeDependencies.clear();
 
 		return result;
@@ -5660,6 +5696,7 @@ bool maybeAddDeclarationToImports(Block *block, Declaration *declaration) {
 	auto module = CAST_FROM_SUBSTRUCT(Module, members, block);
 
 	for (auto import : module->imports) {
+		Declaration *overload;
 		if (!checkForRedeclaration(import->enclosingScope, declaration, import->import))
 			return false;
 
@@ -5671,10 +5708,87 @@ bool maybeAddDeclarationToImports(Block *block, Declaration *declaration) {
 	return true;
 }
 
+void forceAddDeclaration(Declaration *declaration) {
+	PROFILE_FUNC();
+
+	if (declaration->flags & (DECLARATION_IS_ITERATOR_INDEX | DECLARATION_IS_IN_COMPOUND | DECLARATION_IS_ITERATOR))
+		return;
+
+	if ((declaration->flags & DECLARATION_TYPE_IS_READY) && (declaration->flags & DECLARATION_VALUE_IS_READY)) {
+		return;
+	}
+
+	// Fast path for declarations that are trivial to infer
+	if (declaration->flags & DECLARATION_IS_CONSTANT) {
+		if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::INT_LITERAL) {
+			declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, &TYPE_UNSIGNED_INT_LITERAL);
+			declaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
+			wakeUpSleepers(&declaration->sleepingOnMyType);
+			wakeUpSleepers(&declaration->sleepingOnMyValue);
+			declaration->sleepingOnMyType.free();
+			declaration->sleepingOnMyValue.free();
+			return;
+		}
+		else if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::FUNCTION) {
+			addFunction(static_cast<ExprFunction *>(declaration->initialValue));
+
+			return;
+		}
+	}
+	else if (declaration->enclosingScope && declaration->enclosingScope->flavor != BlockFlavor::GLOBAL) {
+
+		if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::INT_LITERAL) {
+			trySolidifyNumericLiteralToDefault(declaration->initialValue);
+			declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, declaration->initialValue->type);
+			declaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
+			wakeUpSleepers(&declaration->sleepingOnMyType);
+			wakeUpSleepers(&declaration->sleepingOnMyValue);
+			declaration->sleepingOnMyType.free();
+			declaration->sleepingOnMyValue.free();
+			return;
+		}
+		else if (declaration->type && declaration->type->flavor == ExprFlavor::TYPE_LITERAL && !declaration->initialValue && (declaration->flags & (DECLARATION_IS_ARGUMENT | DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_RETURN))) {
+			declaration->flags |= DECLARATION_TYPE_IS_READY;
+
+			addTypeBlock(declaration->type);
+
+			wakeUpSleepers(&declaration->sleepingOnMyType);
+			declaration->sleepingOnMyType.free();
+			return;
+		}
+		else if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::FUNCTION) {
+			addFunction(static_cast<ExprFunction *>(declaration->initialValue));
+
+			return;
+		}
+	}
+
+	++totalInferredDeclarations;
+
+
+	DeclarationJob *job = allocateDeclarationJob();
+	job->declaration = declaration;
+	job->declaration->inferJob = job;
+
+	if (declaration->type) {
+		beginFlatten(&job->type, &declaration->type);
+		addSubJob(&job->type);
+	}
+
+	if (declaration->initialValue) {
+		beginFlatten(&job->value, &declaration->initialValue);
+		addSubJob(&job->value);
+	}
+
+	addJob(&declarationJobs, job);
+
+	return;
+}
+
 bool addDeclaration(Declaration *declaration, Module *module) {
 	PROFILE_FUNC();
 
-	declaration->inferJob = nullptr;
+	++totalDeclarations;
 
 	if (declaration->flags & DECLARATION_IS_IN_COMPOUND)
 		return true;
@@ -5698,74 +5812,9 @@ bool addDeclaration(Declaration *declaration, Module *module) {
 	if (module == runtimeModule && !checkBuiltinDeclaration(declaration)) {
 		return false;
 	}
-
-	if ((declaration->flags & DECLARATION_TYPE_IS_READY) && (declaration->flags & DECLARATION_VALUE_IS_READY)) {
-		return true;
-	}
-
-
-	// Fast path for declarations that are trivial to infer
-	if (declaration->flags & DECLARATION_IS_CONSTANT) {
-		if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::INT_LITERAL) {
-			declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, &TYPE_UNSIGNED_INT_LITERAL);
-			declaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
-			wakeUpSleepers(&declaration->sleepingOnMyType);
-			wakeUpSleepers(&declaration->sleepingOnMyValue);
-			declaration->sleepingOnMyType.free();
-			declaration->sleepingOnMyValue.free();
-			return true;
-		}
-		else if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::FUNCTION) {
-			addFunction(static_cast<ExprFunction *>(declaration->initialValue));
-
-			return true;
-		}
-	}
-	else if (declaration->enclosingScope && declaration->enclosingScope->flavor != BlockFlavor::GLOBAL) {
-
-		if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::INT_LITERAL) {
-			trySolidifyNumericLiteralToDefault(declaration->initialValue);
-			declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, declaration->initialValue->type);
-			declaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
-			wakeUpSleepers(&declaration->sleepingOnMyType);
-			wakeUpSleepers(&declaration->sleepingOnMyValue);
-			declaration->sleepingOnMyType.free();
-			declaration->sleepingOnMyValue.free();
-			return true;
-		}
-		else if (declaration->type && declaration->type->flavor == ExprFlavor::TYPE_LITERAL && !declaration->initialValue && (declaration->flags & (DECLARATION_IS_ARGUMENT | DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_RETURN))) {
-			declaration->flags |= DECLARATION_TYPE_IS_READY;
-
-			addTypeBlock(declaration->type);
-
-			wakeUpSleepers(&declaration->sleepingOnMyType);
-			declaration->sleepingOnMyType.free();
-			return true;
-		}
-		else if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::FUNCTION) {
-			addFunction(static_cast<ExprFunction *>(declaration->initialValue));
-
-			return true;
-		}
-	}
-
-	++totalDeclarations;
-
-	DeclarationJob *job = allocateDeclarationJob();
-	job->declaration = declaration;
-	job->declaration->inferJob = job;
-
-	if (declaration->type) {
-		beginFlatten(&job->type, &declaration->type);
-		addSubJob(&job->type);
-	}
-
-	if (declaration->initialValue) {
-		beginFlatten(&job->value, &declaration->initialValue);
-		addSubJob(&job->value);
-	}
-
-	addJob(&declarationJobs, job);
+	
+	if (declaration->enclosingScope->flavor != BlockFlavor::GLOBAL || declaration->enclosingScope == &mainModule->members || declaration->enclosingScope == &runtimeModule->members)
+		forceAddDeclaration(declaration);
 
 	return true;
 }
@@ -5872,6 +5921,8 @@ bool inferImporter(SubJob *subJob) {
 	PROFILE_FUNC();
 	auto job = static_cast<ImporterJob *>(subJob);
 
+	++totalInferImporters;
+
 	auto importer = job->importer;
 
 	Block *block = nullptr;
@@ -5976,7 +6027,7 @@ bool inferImporter(SubJob *subJob) {
 			for (auto member : block->declarations) {
 				if (!checkForRedeclaration(importer->enclosingScope, member, importer->import))
 					return false;
-
+				
 				addDeclarationToBlockUnchecked(importer->enclosingScope, member, member->serial);
 
 				if (importer->enclosingScope->flavor == BlockFlavor::STRUCT) {
@@ -6028,6 +6079,7 @@ bool inferImporter(SubJob *subJob) {
 				if (onlyConstants && !(member->flags & DECLARATION_IS_CONSTANT))
 					continue;
 
+				Declaration *overload;
 				if (!checkForRedeclaration(importer->enclosingScope, member, importer->import))
 					return false;
 
@@ -6077,6 +6129,8 @@ bool inferImporter(SubJob *subJob) {
 bool inferDeclarationType(SubJob *subJob) {
 	PROFILE_FUNC();
 	auto job = CAST_FROM_SUBSTRUCT(DeclarationJob, type, subJob);
+
+	++totalInferDeclarationTypes;
 
 	auto declaration = job->declaration;
 
@@ -6168,6 +6222,8 @@ bool inferDeclarationType(SubJob *subJob) {
 bool inferDeclarationValue(SubJob *subJob) {
 	PROFILE_FUNC();
 	auto job = CAST_FROM_SUBSTRUCT(DeclarationJob, value, subJob);
+
+	++totalInferDeclarationValues;
 
 	auto declaration = job->declaration;
 
@@ -6334,9 +6390,11 @@ bool checkGuaranteedReturn(Expr *expr) {
 	}
 }
 
-bool inferFunctionType(SubJob *subJob) {
+bool inferFunctionHeader(SubJob *subJob) {
 	PROFILE_FUNC();
-	auto job = CAST_FROM_SUBSTRUCT(FunctionJob, type, subJob);
+	auto job = CAST_FROM_SUBSTRUCT(FunctionJob, header, subJob);
+
+	++totalInferFunctionHeaders;
 
 	auto function = job->function;
 
@@ -6346,7 +6404,7 @@ bool inferFunctionType(SubJob *subJob) {
 		assert(argument);
 
 		if (!(argument->flags & DECLARATION_TYPE_IS_READY)) {
-			goToSleep(&job->type, &argument->sleepingOnMyType, "Function argument type not ready");
+			goToSleep(&job->header, &argument->sleepingOnMyType, "Function argument type not ready");
 
 			sleep = true;
 		}
@@ -6358,7 +6416,7 @@ bool inferFunctionType(SubJob *subJob) {
 		assert(return_);
 
 		if (!(return_->flags & DECLARATION_TYPE_IS_READY)) {
-			goToSleep(&job->type, &return_->sleepingOnMyType, "Funtion return type not ready");
+			goToSleep(&job->header, &return_->sleepingOnMyType, "Funtion return type not ready");
 
 			sleep = true;
 		}
@@ -6396,14 +6454,16 @@ bool inferFunctionType(SubJob *subJob) {
 	return true;
 }
 
-bool inferFunctionValue(SubJob *subJob) {
+bool inferFunctionBody(SubJob *subJob) {
 	PROFILE_FUNC();
 
-	auto job = CAST_FROM_SUBSTRUCT(FunctionJob, value, subJob);
+	++totalInferFunctionBodies;
+
+	auto job = CAST_FROM_SUBSTRUCT(FunctionJob, body, subJob);
 	auto function = job->function;
 
 	if (!function->type) {
-		goToSleep(&job->value, &function->sleepingOnInfer, "Function type not ready");
+		goToSleep(&job->body, &function->sleepingOnInfer, "Function header not ready");
 		return true;
 	}
 
@@ -6469,9 +6529,9 @@ bool inferFunctionValue(SubJob *subJob) {
 				return_->returns.count = 0;
 
 				auto body = static_cast<ExprBlock *>(function->body);
-				beginFlatten(&job->value, &body->exprs.add(return_));
+				beginFlatten(&job->body, &body->exprs.add(return_));
 
-				subJobs.add(&job->value);
+				subJobs.add(&job->body);
 				return true;
 			}
 		}
@@ -6493,7 +6553,7 @@ bool inferSize(SubJob *subJob) {
 	auto type = job->type;
 
 	if (type->flavor == TypeFlavor::STRUCT) {
-		totalSizes++;
+		++totalInferStructSizes;
 
 		auto struct_ = static_cast<TypeStruct *>(type);
 
@@ -6581,6 +6641,8 @@ bool inferSize(SubJob *subJob) {
 		}
 	}
 	else if (type->flavor == TypeFlavor::ARRAY) {
+		++totalInferArraySizes;
+
 		auto array = static_cast<TypeArray *>(type);
 
 		assert(array->flags & TYPE_ARRAY_IS_FIXED);
@@ -6600,6 +6662,8 @@ bool inferSize(SubJob *subJob) {
 		}
 	}
 	else if (type->flavor == TypeFlavor::ENUM) {
+		++totalInferEnumSizes;
+
 		auto struct_ = static_cast<TypeEnum *>(type);
 
 		auto enum_ = CAST_FROM_SUBSTRUCT(ExprEnum, struct_, struct_);
@@ -7071,6 +7135,7 @@ bool inferRun(SubJob *subJob) {
 
 	auto job = static_cast<RunJob *>(subJob);
 	auto run = job->run;
+	++totalInferRuns;
 
 	auto function = static_cast<TypeFunction *>(run->function->type);
 
@@ -7204,7 +7269,7 @@ bool inferRun(SubJob *subJob) {
 
 	VMState state;
 	initVMState(&state); // @Speed, keep this around for multiple run directives
-	run->returnValue = runFunctionRoot(&state, static_cast<ExprFunction *>(run->function), run->module);
+	run->returnValue = runFunctionRoot(&state, run);
 	deinitVMState(&state);
 
 	if (hadError)
@@ -7251,8 +7316,8 @@ bool doJob(SubJob *job) {
 			inferSize, 
 			inferDeclarationType, 
 			inferDeclarationValue, 
-			inferFunctionType, 
-			inferFunctionValue, 
+			inferFunctionHeader, 
+			inferFunctionBody, 
 			inferImporter, 
 			inferRun
 		};
@@ -7534,53 +7599,53 @@ void runInfer(String inputFile) {
 		for (auto job = functionJobs; job; job = job->next) {
 			String name = (job->function->valueOfDeclaration ? job->function->valueOfDeclaration->name : "(function)");
 
-			if (!isDone(&job->type)) {
-				auto haltedOn = *getHalt(&job->type);
+			if (!isDone(&job->header)) {
+				auto haltedOn = *getHalt(&job->header);
 
-				reportError(haltedOn, "%.*s type halted here", STRING_PRINTF(name));
+				reportError(haltedOn, "%.*s header halted here", STRING_PRINTF(name));
 			}
 
-			if (!isDone(&job->value)) {
-				auto haltedOn = *getHalt(&job->value);
+			if (!isDone(&job->body)) {
+				auto haltedOn = *getHalt(&job->body);
 
-				reportError(haltedOn, "%.*s value halted here", STRING_PRINTF(name));
+				reportError(haltedOn, "%.*s body halted here", STRING_PRINTF(name));
 			}
 
-			if (isDone(&job->type) && isDone(&job->value)) {
+			if (isDone(&job->header) && isDone(&job->body)) {
 				reportError(job->function, "Function halted after completing infer");
 
 				for (auto declaration : job->function->arguments.declarations) {
 					if (declaration->sleepingOnMyType.count) {
-						reportError(declaration, "Declaration type has sleepers, flags: %llx", declaration->flags);
+						reportError(declaration, "Argument type has sleepers, flags: %llx", declaration->flags);
 					}
 				}
 
 				for (auto declaration : job->function->arguments.declarations) {
 					if (declaration->sleepingOnMyValue.count) {
-						reportError(declaration, "Declaration value has sleepers, flags: %llx", declaration->flags);
+						reportError(declaration, "Argument value has sleepers, flags: %llx", declaration->flags);
 					}
 				}
 
 				for (auto declaration : job->function->returns.declarations) {
 					if (declaration->sleepingOnMyType.count) {
-						reportError(declaration, "Declaration type has sleepers, flags: %llx", declaration->flags);
+						reportError(declaration, "Return type has sleepers, flags: %llx", declaration->flags);
 					}
 				}
 
 				for (auto declaration : job->function->returns.declarations) {
 					if (declaration->sleepingOnMyValue.count) {
-						reportError(declaration, "Declaration value has sleepers, flags: %llx", declaration->flags);
+						reportError(declaration, "Return value has sleepers, flags: %llx", declaration->flags);
 					}
 				}
 			}
 
 #if BUILD_DEBUG
-			if (job->type.sleepCount) {
-				reportError("Type: %.*s", STRING_PRINTF(job->type.sleepReason));
+			if (job->header.sleepCount) {
+				reportError("Type: %.*s", STRING_PRINTF(job->header.sleepReason));
 			}
 
-			if (job->value.sleepCount) {
-				reportError("Value: %.*s", STRING_PRINTF(job->value.sleepReason));
+			if (job->body.sleepCount) {
+				reportError("Value: %.*s", STRING_PRINTF(job->body.sleepReason));
 			}
 #endif
 		}

@@ -41,6 +41,7 @@ enum class TypeFlavor : u8 {
 #define TYPE_STRUCT_IS_PACKED 0x40
 #define TYPE_ENUM_IS_FLAGS 0x80
 #define TYPE_FUNCTION_IS_C_CALL 0x100
+#define TYPE_USED_IN_OUTPUT 0x200
 
 struct Type {
 	u32 size;
@@ -127,6 +128,7 @@ inline Type TYPE_BOOL = { 1, 1, "bool", 47, 0, TypeFlavor::BOOL };
 inline Type TYPE_TYPE = { 8, 8, "type", 53, 0, TypeFlavor::TYPE };
 
 inline Type TYPE_AUTO_CAST = { 0, 0, "<auto cast>", 59, TYPE_IS_INTERNAL, TypeFlavor::AUTO_CAST };
+
 inline Type TYPE_MODULE = { 0, 0, "<module>", 59, TYPE_IS_INTERNAL, TypeFlavor::NAMESPACE };
 
 inline TypeStruct TYPE_STRING = { 16, 8, "string", 61, 0, TypeFlavor::STRING };
@@ -171,12 +173,6 @@ inline TypeTableEntry *typeTableEntries;
 inline u32 typeTableCapacity;
 
 // These structs are parallel to the ones defined in runtime.milo
-
-template<typename T> 
-struct MiloArray {
-	T *data;
-	u64 count;
-};
 
 struct Type_Info {
 	enum class Tag : u64 {

@@ -7,7 +7,6 @@
 #include "IrGenerator.h"
 #include "Error.h"
 
-static llvm::FunctionCallee llvmDebugDeclare;
 static llvm::Type *createLlvmType(llvm::LLVMContext &context, Type *type);
 
 static llvm::Type *getLlvmType(llvm::LLVMContext &context, Type *type) {
@@ -209,10 +208,8 @@ struct State {
 	llvm::LLVMContext &context;
 	llvm::IRBuilder<> &builder;
 	llvm::Module &module;
-	llvm::DIBuilder &debug;
 	llvm::Function *function;
 	llvm::BasicBlock *entryBlock;
-	llvm::DIFile *diFile; // @Incomplete: Dummy file info
 };
 
 llvm::Constant *createLlvmString(State *state, String string) {
@@ -366,7 +363,7 @@ static llvm::Constant *createConstant(State *state, Expr *expr) {
 
 
 			for (auto decl : struct_->members.declarations) {
-				if (decl->flags & DECLARATION_IS_CONSTANT) continue;
+				if (decl->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING)) continue;
 
 				assert(memberIndex < memberCount);
 
@@ -608,17 +605,6 @@ static Block externalsBlock;
 
 static llvm::Function *createLlvmFunction(State *state, ExprFunction *function) {
 	if (!function->llvmStorage) {
-		if (function->flags & EXPR_FUNCTION_IS_EXTERNAL) {
-			if (Declaration *declaration = findDeclarationNoYield(&externalsBlock, function->valueOfDeclaration->name)) {
-				function->llvmStorage = static_cast<ExprFunction *>(declaration->initialValue)->llvmStorage;
-
-				return function->llvmStorage;
-			}
-			else {
-				putDeclarationInBlock(&externalsBlock, function->valueOfDeclaration);
-			}
-		}
-
 		auto type = getLlvmType(state->context, function->type);
 
 		assert(type->isPointerTy());
@@ -631,8 +617,6 @@ static llvm::Function *createLlvmFunction(State *state, ExprFunction *function) 
 		}
 		else if (function->valueOfDeclaration) {
 			function->llvmStorage = llvm::Function::Create(functionType, function->valueOfDeclaration->enclosingScope->flavor == BlockFlavor::GLOBAL ? llvm::Function::ExternalLinkage : llvm::Function::PrivateLinkage, stringRef(function->valueOfDeclaration->name), state->module);
-
-
 		}
 		else {
 			function->llvmStorage = llvm::Function::Create(functionType, llvm::Function::PrivateLinkage, "", state->module);
@@ -2001,57 +1985,154 @@ static void addDiscriminatorsPass(const llvm::PassManagerBuilder &Builder, llvm:
 	PM.add(llvm::createAddDiscriminatorsPass());
 }
 
+static llvm::codegen::RegisterCodeGenFlags CGF;
+
+// General options for llc.  Other pass-specific options are specified
+// within the corresponding llc passes, and target-specific options
+// and back-end code generation options are specified with the target machine.
+//
+
+// Determine optimization level.
+static llvm::cl::opt<char>
+OptLevel("O",
+	llvm::cl::desc("Optimization level. [-O0, -O1, -O2, -O3, -Os or -Oz] "
+		"(default = '-O2')"),
+	llvm::cl::Prefix,
+	llvm::cl::ZeroOrMore,
+	llvm::cl::init(' '));
+
+static llvm::cl::opt<std::string>
+TargetTriple("mtriple", llvm::cl::desc("Override target triple for module"));
+
 void runLlvm() {
-	//Sleep(1000);
 
 	llvm::LLVMContext context;
 
+	llvm::InitializeAllTargets();
+	llvm::InitializeAllTargetMCs();
+	llvm::InitializeAllAsmPrinters();
+	llvm::InitializeAllAsmParsers();
+
+	llvm::PassRegistry &passRegistry = *llvm::PassRegistry::getPassRegistry();
+
+	llvm::initializeCore(passRegistry);
+	llvm::initializeCodeGen(passRegistry);
+	llvm::initializeLoopStrengthReducePass(passRegistry);
+	llvm::initializeLowerIntrinsicsPass(passRegistry);
+	llvm::initializeEntryExitInstrumenterPass(passRegistry);
+	llvm::initializePostInlineEntryExitInstrumenterPass(passRegistry);
+	llvm::initializeUnreachableBlockElimLegacyPassPass(passRegistry);
+	llvm::initializeConstantHoistingLegacyPassPass(passRegistry);
+	llvm::initializeScalarOpts(passRegistry);
+	llvm::initializeVectorization(passRegistry);
+	llvm::initializeScalarizeMaskedMemIntrinPass(passRegistry);
+	llvm::initializeExpandReductionsPass(passRegistry);
+	llvm::initializeHardwareLoopsPass(passRegistry);
+	llvm::initializeTransformUtils(passRegistry);
+	llvm::initializeScavengerTestPass(passRegistry);
+
+	llvm::cl::AddExtraVersionPrinter(llvm::TargetRegistry::printRegisteredTargetsForVersion);
+
+
+	const char **commandLineOptions = new const char *[1 + buildOptions.llvmOptions.count];
+
+	commandLineOptions[0] = ""; // The first argument is ignored by llvm since normally it would be the command used to invoke the compiler
+	
+	for (u64 i = 0; i < buildOptions.llvmOptions.count; i++) {
+		MiloString option = buildOptions.llvmOptions.data[i];
+		char *cString = (char *) malloc(option.count + 1);
+		memcpy(cString, option.data, option.count);
+		cString[option.count] = 0;
+
+		commandLineOptions[i + 1] = cString;
+	}
+
+	
+	if (!llvm::cl::ParseCommandLineOptions(1 + buildOptions.llvmOptions.count, commandLineOptions)) {
+		reportError("Error: Failed to parse LLVM options");
+		return;
+	}
+
+#if BUILD_DEBUG
+#else
+	context.setDiscardValueNames(true);
+#endif
+
+	llvm::Triple targetTriple;
+	std::string cpuStr = llvm::codegen::getCPUStr();
+	std::string featuresStr = llvm::codegen::getFeaturesStr();
+
+	auto mAttrs = llvm::codegen::getMAttrs();
+
+	// @Incomplete: Support Os, Oz
+	llvm::CodeGenOpt::Level optLevel = llvm::CodeGenOpt::Default;
+	u32 sizeLevel = 0;
+
+	switch (OptLevel) {
+	default:
+		reportError("Error: Invalid LLVM optimization level O%c", OptLevel.getValue());
+		return;
+	case '0': optLevel = llvm::CodeGenOpt::None; break;
+	case '1': optLevel = llvm::CodeGenOpt::Less; break;
+	case '2': optLevel = llvm::CodeGenOpt::Default; break;
+	case '3': optLevel = llvm::CodeGenOpt::Aggressive; break;
+	case 's': sizeLevel = 1;
+	case 'z': sizeLevel = 2;
+	case ' ': break;
+	}
+
+	llvm::Optional<llvm::Reloc::Model> relocModel = llvm::codegen::getExplicitRelocModel();
+
+	
+
+	const llvm::Target *target = nullptr;
+	llvm::TargetMachine *targetMachine = nullptr;
+
 	llvm::Module llvmModule("llvm_out", context);
+
+	llvm::Triple triple;
+
+	if (TargetTriple.empty()) {
+		triple.setTriple(llvm::sys::getDefaultTargetTriple());
+	}
+	else {
+		triple = llvm::Triple(llvm::Triple::normalize(TargetTriple));
+	}
+	
+	std::string errorString;
+	target = llvm::TargetRegistry::lookupTarget(llvm::codegen::getMArch(), triple, errorString);
+	if (!target) {
+		reportError("LLVM Error: %s", errorString.c_str());
+		return;
+	}
+
+	llvm::TargetOptions options = llvm::codegen::InitTargetOptionsFromCodeGenFlags(triple);
+
+	if (llvm::codegen::getFloatABIForCalls() != llvm::FloatABI::Default) {
+		options.FloatABIType = llvm::codegen::getFloatABIForCalls();
+	}
+
+	targetMachine = target->createTargetMachine(triple.getTriple(), cpuStr, featuresStr, options, relocModel, llvm::codegen::getExplicitCodeModel(), optLevel);
+
+	if (!targetMachine) {
+		reportError("LLVM Error: Failed to allocate target machine", errorString.c_str());
+		return;
+	}
+
 	llvm::IRBuilder<> builder(context);
 	llvm::DIBuilder debug(llvmModule);
 
-	State state{ context, builder, llvmModule, debug };
-
-	state.diFile = debug.createFile("incomplete", "incomplete");
+	State state{ context, builder, llvmModule };
 
 	std::error_code errorCode;
 	std::string verifyOutput;
 
 	llvm::raw_string_ostream verifyStream(verifyOutput);
 
-	llvm::InitializeNativeTarget();
-	llvm::InitializeNativeTargetAsmPrinter();
-	llvm::InitializeNativeTargetAsmParser();
-
-	auto targetTriple = llvm::sys::getDefaultTargetTriple();
-
-	std::string error;
-	auto target = llvm::TargetRegistry::lookupTarget(targetTriple, error);
-
-	llvm::TargetOptions options;
-
-
-	auto rm = llvm::Optional<llvm::Reloc::Model>();
-
-	auto cpu = "generic";
-	auto features = "";
-
-	if (!target) {
-		reportError("LLVM Error: %s", error.c_str());
-		goto error;
-
-	}
-
 	{
-		auto targetMachine = target->createTargetMachine(targetTriple, cpu, features, options, rm);
-
 		llvmModule.setDataLayout(targetMachine->createDataLayout());
 
-		auto metadata = llvm::Type::getMetadataTy(context);
-		auto metadataThree = new llvm::Type * [3]{ metadata, metadata, metadata };
-
-		llvmDebugDeclare = llvmModule.getOrInsertFunction("llvm.dbg.declare", llvm::FunctionType::get(llvm::Type::getVoidTy(context), llvm::ArrayRef(metadataThree, 3), false));
-
+	
 		while (true) {
 			auto job = coffWriterQueue.take();
 
@@ -2125,7 +2206,7 @@ void runLlvm() {
 						reportError("LLVM Error in %s: %s", function->valueOfDeclaration ? toCString(function->valueOfDeclaration->name) : "(function)", verifyOutput.c_str());
 						llvmFunction->print(llvm::errs());
 
-						goto error;
+						return;
 					}
 #endif
 				}
@@ -2436,30 +2517,35 @@ void runLlvm() {
 			llvm::raw_fd_ostream irOut("out2.ir", err);
 
 
-			llvm::raw_fd_ostream output("out.obj", err);
+			llvm::raw_fd_ostream output(objectFileName, err);
 
-			// Based on zig llvm pass manager https://github.com/ziglang/zig/blob/master/src/zig_llvm.cpp
-			bool optimize = true;
-			
-			if (optimize) {
-				targetMachine->setOptLevel(llvm::CodeGenOpt::Aggressive);
+			llvm::legacy::PassManager pass;
+
+			llvm::TargetLibraryInfoImpl tlii(llvm::Triple(llvmModule.getTargetTriple()));
+			tlii.disableAllFunctions();
+
+			pass.add(new llvm::TargetLibraryInfoWrapperPass(tlii));
+
+#if BUILD_DEBUG
+			if (llvm::verifyModule(llvmModule, &llvm::errs())) {
+				reportError("LLVM Error: Module verification failed");
+				return;
 			}
-			else {
-				targetMachine->setOptLevel(llvm::CodeGenOpt::None);
-				targetMachine->setO0WantsFastISel(true);
-			}
+#endif
+
+			llvm::codegen::setFunctionAttributes(cpuStr, featuresStr, llvmModule);
+
 
 			llvm::PassManagerBuilder *pmbuilder = new llvm::PassManagerBuilder;
 			pmbuilder->OptLevel = targetMachine->getOptLevel();
 			pmbuilder->SizeLevel = 0;
-			pmbuilder->DisableTailCalls = !optimize;
-			pmbuilder->DisableUnrollLoops = !optimize;
-			pmbuilder->SLPVectorize = optimize;
-			pmbuilder->LoopVectorize = optimize;
-			pmbuilder->LoopsInterleaved = !optimize;
-			pmbuilder->RerollLoops = optimize;
-			pmbuilder->DisableGVNLoadPRE = !optimize;
-			pmbuilder->MergeFunctions = optimize;
+			pmbuilder->DisableTailCalls = llvm::codegen::getDisableTailCalls();
+			pmbuilder->DisableUnrollLoops = pmbuilder->OptLevel == 0;
+			pmbuilder->SLPVectorize = pmbuilder->OptLevel > 1 && pmbuilder->SizeLevel < 2;
+			pmbuilder->LoopVectorize = pmbuilder->SLPVectorize;
+			pmbuilder->LoopsInterleaved = pmbuilder->LoopVectorize;
+			pmbuilder->DisableGVNLoadPRE = pmbuilder->OptLevel == 0;
+			pmbuilder->MergeFunctions = pmbuilder->OptLevel > 2 || pmbuilder->SizeLevel > 1;
 			pmbuilder->PrepareForLTO = false;
 			pmbuilder->PrepareForLTO = false;
 			pmbuilder->PerformThinLTO = false;
@@ -2472,19 +2558,17 @@ void runLlvm() {
 #endif
 			
 
-			llvm::TargetLibraryInfoImpl tlii(llvm::Triple(llvmModule.getTargetTriple()));
-			tlii.disableAllFunctions();
 
 			pmbuilder->LibraryInfo = &tlii;
 
-			if (optimize) {
+			if (pmbuilder->OptLevel < 2) {
 				pmbuilder->Inliner = llvm::createAlwaysInlinerLegacyPass(false);
 			}
 			else {
 				targetMachine->adjustPassManager(*pmbuilder);
 
 				pmbuilder->addExtension(llvm::PassManagerBuilder::EP_EarlyAsPossible, addDiscriminatorsPass);
-				pmbuilder->Inliner = llvm::createFunctionInliningPass(llvm::CodeGenOpt::Aggressive, 0, false);
+				pmbuilder->Inliner = llvm::createFunctionInliningPass(pmbuilder->OptLevel, pmbuilder->SizeLevel, false);
 			}
 
 			llvm::legacy::FunctionPassManager fpm(&llvmModule);
@@ -2497,7 +2581,6 @@ void runLlvm() {
 			
 			pmbuilder->populateFunctionPassManager(fpm);
 
-			llvm::legacy::PassManager pass;
 			pass.add(llvm::createTargetTransformInfoWrapperPass(targetMachine->getTargetIRAnalysis()));
 			pmbuilder->populateModulePassManager(pass);
 

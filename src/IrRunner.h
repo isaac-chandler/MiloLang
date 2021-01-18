@@ -16,4 +16,4 @@ void initVMState(VMState *state);
 
 void deinitVMState(VMState *state);
 
-Expr *runFunctionRoot(VMState *state, ExprFunction *expr, Module *module);
+Expr *runFunctionRoot(VMState *state, ExprRun *directive);

@@ -12,6 +12,7 @@
 void initPrinter();
 void reportError(struct Expr *location, CHECK_PRINTF const char *format, ...);
 void reportError(struct Declaration *location, CHECK_PRINTF const char *format, ...);
+void reportError(struct Ir *ir, CHECK_PRINTF const char *format, ...);
 void reportError(struct Token *location, CHECK_PRINTF const char *format, ...);
 void reportError(CodeLocation *location, CHECK_PRINTF const char *format, ...);
 void reportError(CodeLocation *start,  EndLocation *end, CHECK_PRINTF const char *format, ...);

@@ -6,11 +6,29 @@ enums
  - largest_value
  - smallest_value
 
-Make constexpr slices work
+Constexpr
+ - slices
+ - bitwise casts cast(T,bit)
+
+Make (#run foo()) && (#run bar()) behave as expected (currently both runs will execute)
 
 array literals
 
 struct literals
+
+Build options
+ - Custom linker command
+ - Disable linker (just output obj)
+ - Change output type (lib, exe, dll)
+ - Disable debug info
+ - Force unreferenced type info to be emitted
+ 
+
+Add separate workspaces so that code run at compile time doesn't get emitted to the binary
+ - Can set workspace options when creating a new workspace to give compile options that need to be known at infer time
+ 
+Workspace options
+ - Force type checking for unused declarations in modules (currently unused definitions are only checked for Runtime and the main module)
 
 Make how the infer phase being completed is checked better
 
@@ -155,6 +173,7 @@ predefined constant variables
 utf8 identifiers?
 
 Investigate LINK : fatal error LNK1285: corrupt PDB file
+ - I think the debug information outputted is invalid already and the incremental linking that can't be disabled for PDBs continues to corrupt it worse until it can no longer be read
 
 function polymorhpism
 struct polymorhpism

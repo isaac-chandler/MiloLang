@@ -1083,7 +1083,6 @@ PFNGLGETCOLORTABLEPARAMETERFVEXTPROC :: (target: u32, pname: u32, params: *f32) 
 	wglDeleteContext :: (Arg1: HGLRC) -> s32 #external "opengl32"
 
 	wglGetCurrentDC :: () -> HDC #external "opengl32"
-
 }
 
 load_gl_extensions :: () {

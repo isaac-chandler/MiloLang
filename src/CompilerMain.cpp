@@ -241,19 +241,32 @@ int main(int argc, char *argv[]) {
 #endif
 
 	char *input = nullptr;
-	bool useLlvm = false;
 
 	bool noThreads = false;
 
+	bool backendGiven = false;
+
+	int firstBuildArgument = argc;
+
 	for (int i = 1; i < argc; i++) {
 		if (strcmp("-llvm", argv[i]) == 0) {
-			if (useLlvm) {
-				reportError("Error: Cannot specify LLVM codegen more than once");
+			if (backendGiven) {
+				reportError("Error: Cannot specify backend more than once");
 				return 1;
 			}
 
-			useLlvm = true;
-		} 
+			buildOptions.backend = BuildOptions::Backend::LLVM;
+			backendGiven = true;
+		}
+		else if (strcmp("-x64", argv[i]) == 0) {
+			if (backendGiven) {
+				reportError("Error: Cannot specify backend more than once");
+				return 1;
+			}
+
+			buildOptions.backend = BuildOptions::Backend::X64;
+			backendGiven = true;
+		}
 		else if (strcmp("-no_threads", argv[i]) == 0) {
 			if (noThreads) {
 				reportError("Error: Cannot specify no threads more than once");
@@ -270,6 +283,10 @@ int main(int argc, char *argv[]) {
 
 			printDiagnostics = true;
 		}
+		else if (strcmp("--", argv[i]) == 0) {
+			firstBuildArgument = i + 1;
+			break;
+		}
 		else {
 			if (input) {
 				reportError("Error: Cannot more than one input file");
@@ -280,10 +297,43 @@ int main(int argc, char *argv[]) {
 		}
 	}
 
+	buildArguments.count = argc - firstBuildArgument;
+
+	buildArguments.data = new MiloString[buildArguments.count];
+
+	for (u64 i = 0; i < buildArguments.count; i++) {
+		buildArguments.data[i].data = (u8 *) argv[firstBuildArgument + i];
+		buildArguments.data[i].count = strlen(argv[firstBuildArgument + i]);
+	}
+
 	if (!input) {
 		reportError("Error: Expected name of input file");
 		reportError("Usage: %s <file>", argv[0]);
 	}
+
+	char *inputFile = input;
+	char *lastSlash = nullptr;
+	char *lastDot = nullptr;
+
+	while (char c = *inputFile) {
+		if (c == '\\' || c == '/')
+			lastSlash = inputFile;
+		else if (c == '.')
+			lastDot = inputFile;
+
+		inputFile++;
+	}
+
+
+	if (lastDot > lastSlash) {
+		buildOptions.outputName.count = lastDot - input;
+	}
+	else {
+		buildOptions.outputName.count = inputFile - input;
+	}
+
+	buildOptions.outputName.data = new u8[buildOptions.outputName.count];
+	memcpy(buildOptions.outputName.data, input, buildOptions.outputName.count);
 
 	auto start = high_resolution_clock::now();
 
@@ -316,41 +366,79 @@ int main(int argc, char *argv[]) {
 
 		reportInfo("Frontend Time: %.1fms", duration_cast<microseconds>(duration<double>(
 			high_resolution_clock::now() - start)).count() / 1000.0);
-	}
 
-
-	if (!hadError) {
-		u64 totalQueued = totalDeclarations + totalFunctions + totalTypesSized + totalImporters;
 
 		if (printDiagnostics) {
-			reportInfo(
-				"Total queued: %llu\n"
-				"  %llu declarations\n"
-				"  %llu functions\n"
-				"  %llu types\n"
-				"  %llu importers\n"
-				"Total infers: %llu, %.1f infers/queued, %.1f iterations/infer\n"
-				"Total sizes: %llu, %.1f sizes/type",
-				totalQueued, totalDeclarations, totalFunctions, totalTypesSized, totalImporters, totalInfers, static_cast<float>(totalInfers) / totalQueued, static_cast<float>(totalInferIterations) / totalInfers, totalSizes, static_cast<float>(totalSizes) / totalTypesSized);
+			u64 totalQueued = totalDeclarations + totalFunctions + totalSizes + totalImporters + totalRuns;
+			reportInfo("Total queued: %llu", totalQueued);
+			reportInfo("  %llu declarations (%llu skipped, %llu type infers, %llu value infers)", 
+				totalDeclarations, totalDeclarations - totalInferredDeclarations, totalInferDeclarationTypes, totalInferDeclarationValues);
+			reportInfo("  %llu functions (%llu header infers, %llu body infers)", totalFunctions, totalInferFunctionHeaders, totalInferFunctionBodies);
+			reportInfo("  %llu types (%llu struct sizes, %llu enum sizes, %llu array sizes)", totalSizes, totalInferStructSizes, totalInferEnumSizes, totalInferArraySizes);
+			reportInfo("  %llu importers (%llu infers)", totalImporters, totalInferImporters);
+			reportInfo("  %llu runs (%llu infers)", totalRuns, totalInferRuns);
+			reportInfo("Total infers: %llu, %.1f infers/queued, %.1f iterations/infer\n"
+				"Total types: %llu, %.1f sizes/type",
+				totalFlattenedInfers, static_cast<float>(totalFlattenedInfers) / totalQueued, static_cast<float>(totalInferIterations) / totalFlattenedInfers, totalSizes, 
+				static_cast<float>(totalSizes) / (totalInferStructSizes + totalInferEnumSizes + totalInferArraySizes));
+		}
+	}
+
+	String outputFileName;
+
+	if (!hadError && buildOptions.outputName.count) {
+#if BUILD_WINDOWS
+		MiloString output = buildOptions.outputName;
+		u8 *outputFile = output.data;
+		u64 outputCount = output.count;
+
+		u8 *lastSlash = nullptr;
+		u8 *lastDot = nullptr;
+
+		while (outputCount--) {
+			u8 c = *outputFile;
+
+			if (c == '\\' || c == '/')
+				lastSlash = outputFile;
+			else if (c == '.')
+				lastDot = outputFile;
+
+			outputFile++;
 		}
 
-		auto backendStart = high_resolution_clock::now();
-		if (useLlvm) {
-			runLlvm();
+
+		if (lastDot <= lastSlash) {
+			outputFileName.characters = mprintf("%.*s.exe", buildOptions.outputName.count, buildOptions.outputName.data);
+			outputFileName.length = strlen(outputFileName.characters);
 		}
 		else {
-			runCoffWriter();
+			outputFileName = { (char *)buildOptions.outputName.data, static_cast<u32>(buildOptions.outputName.count) };
 		}
 
-		reportInfo("%s Time: %.1fms", useLlvm ? "LLVM" : "Coff Writer", duration_cast<microseconds>(duration<double>(
-			high_resolution_clock::now() - backendStart)).count() / 1000.0);
+		objectFileName = mprintf("%.*s.obj", STRING_PRINTF(outputFileName));
+#endif
+
+		auto backendStart = high_resolution_clock::now();
+		if (buildOptions.backend == BuildOptions::Backend::LLVM) {
+			runLlvm();
+
+			reportInfo("LLVM Time: %.1fms", duration_cast<microseconds>(duration<double>(
+				high_resolution_clock::now() - backendStart)).count() / 1000.0);
+		}
+		else if (buildOptions.backend == BuildOptions::Backend::X64) {
+			runCoffWriter();
+
+			reportInfo("x64 Time: %.1fms", duration_cast<microseconds>(duration<double>(
+				high_resolution_clock::now() - backendStart)).count() / 1000.0);
+		}
+
 
 		reportInfo("Compiler Time: %.1fms", duration_cast<microseconds>(duration<double>(
 			high_resolution_clock::now() - start)).count() / 1000.0);
 	}
 
 #if BUILD_WINDOWS
-	if (!hadError) {
+	if (!hadError && buildOptions.outputName.count) {
 		auto linkerStart = high_resolution_clock::now();
 
 		wchar_t *linkerCommand;
@@ -504,8 +592,8 @@ int main(int argc, char *argv[]) {
 			}
 
 
-			linkerCommand = mprintf(L"\"%s\" out.obj __milo_chkstk.obj /debug /entry:main%S \"/libpath:%s\" \"/libpath:%s\" /incremental:no /nologo /natvis:milo.natvis",
-				linkerPath, libBuffer, windowsLibPath, crtLibPath);
+			linkerCommand = mprintf(L"\"%s\" %s /OUT:%s __milo_chkstk.obj /debug /entry:main%S \"/libpath:%s\" \"/libpath:%s\" /incremental:no /nologo /natvis:milo.natvis",
+				linkerPath, utf8ToWString(objectFileName), utf8ToWString(outputFileName), libBuffer, windowsLibPath, crtLibPath);
 		}
 
 
