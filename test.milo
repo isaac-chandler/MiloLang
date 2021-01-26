@@ -5,6 +5,7 @@
 #import "Bitmap"
 #import "Math"
 #import "File"
+#import "Sound"
 
 DEVELOPER :: true
 
@@ -595,6 +596,8 @@ intersect :: (bullet: *Bullet, b: *Entity) -> bool {
 gl_context: HGLRC
 
 main :: () {
+	defer exit(0)
+
 	rand_seed: s64
 	
 	QueryPerformanceCounter(*rand_seed)
@@ -858,7 +861,7 @@ main :: () {
 	
 	hex_texture := load_image("Invaders/Hex.bmp")
 	
-	for 15 create_enemy(hex_texture, enemy_mesh)
+	for 2000 create_enemy(hex_texture, enemy_mesh)
 	
 	glEnable(GL_BLEND)
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
@@ -871,6 +874,10 @@ main :: () {
 	QueryPerformanceCounter(*last_time)
 	
 	dummy_player: u64
+	
+	if !initialize_sound(window_handle) {
+		print("Failed to initialize sound")
+	}
 	
 	while !should_quit {
 		current_time: s64
@@ -1103,19 +1110,21 @@ main :: () {
 		glDisable(GL_TEXTURE_2D)
 		
 		
-		//if (delta > 1.0 / 55) {
+		if (delta > 1.0 / 55) {
 			print("%\n", delta)
-		//}
+		} else {
+			set_latency(1.0 / 30)
+		}
 		
 		// print(cast() (delta * 1000_000))
 		// print("\n")
+		
+		fill_sound()
 		
 		SwapBuffers(device_context)
 		
 		last_time = current_time
 	}
-	
-	exit(0)
 }
 
 #import "Compiler"

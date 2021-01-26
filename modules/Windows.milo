@@ -331,6 +331,9 @@ DestroyWindow :: (hWnd: HWND) -> s32 #external "user32"
 
 PostQuitMessage :: (nExitCode: s32) #external "user32"
 
+LoadLibraryA :: (lpLibFileName: *u8) -> HMODULE #external "kernel32"
+GetProcAddress :: (hModule: HMODULE, lpProcName: *u8) -> *void #external "kernel32"
+
 Peek_Message_Options :: enum u32 {
 	PM_NOREMOVE :: 0
 	PM_REMOVE   :: 1
@@ -539,3 +542,10 @@ Wait_Result :: enum u32 {
 using Wait_Result.members
 
 WaitForSingleObject :: (hHandle: HANDLE, dwMilliseconds: u32 = INFINITE) -> Wait_Result #external "kernel32"
+
+GUID :: struct {
+	Data1: u32
+	Data2: u16
+	Data3: u16
+	Data4: [8]u8
+}

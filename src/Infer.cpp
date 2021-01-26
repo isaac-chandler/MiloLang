@@ -114,7 +114,7 @@ struct SubJob {
 	JobFlavor flavor;
 
 #if BUILD_DEBUG
-	String sleepReason;
+	const char *sleepReason;
 #endif
 
 	SubJob(JobFlavor flavor, Array<Type *> *sizeDependencies) : flavor(flavor), sizeDependencies(sizeDependencies) {}
@@ -128,18 +128,27 @@ Expr **getHalt(SubJob *job) {
 	return job->flatteneds[job->flattenedCount - 1][job->indices[job->flattenedCount - 1]];
 }
 
-void goToSleep(SubJob *job, Array<SubJob *> *sleepingOnMe, String reason, String name = String(nullptr, 0u)) {
-	_ReadWriteBarrier();
-
-	if (job->sleepCount && job->sleepingOnName != name) {
-		job->sleepingOnName = "";
-	}
-	else {
-		job->sleepingOnName = name;
-	}
+void goToSleep(SubJob *job, Array<SubJob *> *sleepingOnMe, const char *reason, String name) {
+	assert(job->sleepCount == 0 || job->sleepingOnName == name);
+	
+	job->sleepingOnName = name;
 
 	job->sleepCount++;
 	
+	sleepingOnMe->add(job);
+
+#ifdef BUILD_DEBUG
+	job->sleepReason = reason;
+#endif
+}
+
+void goToSleep(SubJob *job, Array<SubJob *> *sleepingOnMe, const char *reason) {
+	assert(job->sleepCount == 0 || job->sleepingOnName == "");
+
+	job->sleepingOnName = { nullptr, 0u };
+
+	job->sleepCount++;
+
 	sleepingOnMe->add(job);
 
 #ifdef BUILD_DEBUG
@@ -262,6 +271,13 @@ inline void addSubJob(SubJob *job) {
 	
 	subJobs.add(job);
 }
+
+struct OverloadWaitingForLock {
+	Declaration *overloadSet;
+	SubJob *waiting;
+};
+
+Array<OverloadWaitingForLock> overloadsWaitingForLock;
 
 void forceAddDeclaration(Declaration *declaration);
 bool addDeclaration(Declaration *declaration, Module *members);
@@ -1277,11 +1293,17 @@ bool tryUsingConversion(SubJob *job, Type *correct, Expr **exprPointer) {
 				return true;
 			}
 
-			if (getDeclarationType(member) == correct) {
+			auto import = member;
+
+			while (import->flags & DECLARATION_IMPORTED_BY_USING) {
+				import = import->import;
+			}
+
+			if (getDeclarationType(import) == correct) {
 				found = member;
 				break;
 			}
-			else if (given->type->flavor == TypeFlavor::POINTER && !(member->flags & DECLARATION_IS_CONSTANT) && getPointer(getDeclarationType(member)) == correct) {
+			else if (given->type->flavor == TypeFlavor::POINTER && !(member->flags & DECLARATION_IS_CONSTANT) && getPointer(getDeclarationType(import)) == correct) {
 				found = member;
 				break;
 			}
@@ -2181,6 +2203,149 @@ Expr *getDefaultValue(SubJob *job, Type *type, bool *shouldYield) {
 	return type->defaultValue;
 }
 
+struct OverloadIterator {
+	ExprIdentifier *identifier;
+	Declaration *overload;
+
+
+	Declaration *next() {
+		while (overload) {
+			Declaration *result = overload;
+			overload = overload->nextOverload;
+
+			if (result->flags & DECLARATION_IMPORTED_BY_USING) {
+				if (result->enclosingScope->flavor == BlockFlavor::IMPERATIVE && result->serial >= identifier->serial) {
+					continue;
+				}
+
+				result = result->import;
+			}
+
+			return result;
+		}
+
+		return nullptr;
+	}
+};
+
+OverloadIterator overloads(ExprIdentifier *overload) {
+	return { overload, overload->declaration };
+}
+
+bool checkOverloadSet(SubJob *job, Declaration *firstOverload, bool *yield) {
+	bool sleep = false;
+
+	*yield = false;
+
+	for (auto overload = firstOverload; overload; overload = overload->nextOverload) {
+		auto declaration = overload;
+
+		if (declaration->flags & DECLARATION_IMPORTED_BY_USING) {
+			declaration = declaration->import;
+		}
+
+		assert(declaration->flags & DECLARATION_IS_CONSTANT);
+
+		if (!(declaration->flags & DECLARATION_TYPE_IS_READY)) {
+			goToSleep(job, &declaration->sleepingOnMyType, "Waiting for type of overloaded function");
+			sleep = true;
+
+			if (!declaration->inferJob)
+				forceAddDeclaration(declaration);
+		}
+		else {
+			if (getDeclarationType(declaration)->flavor != TypeFlavor::FUNCTION) {
+				reportError(declaration, "Error: Only functions can be overloaded");
+				return false;
+			}
+		}
+
+		if (!(declaration->flags & DECLARATION_VALUE_IS_READY)) {
+			goToSleep(job, &declaration->sleepingOnMyValue, "Waiting for value of overloaded function");
+			sleep = true;
+
+			if (!declaration->inferJob)
+				forceAddDeclaration(declaration);
+		}
+		else {
+			assert(declaration->initialValue);
+
+			if (declaration->initialValue->flavor != ExprFlavor::FUNCTION) {
+				reportError(declaration, "Error: Only functions can be overloaded");
+				return false;
+			}
+		}
+	}
+
+	if (sleep) {
+		*yield = true;
+		return false;
+	}
+
+	if (firstOverload->enclosingScope->module && !(firstOverload->flags & DECLARATION_OVERLOADS_LOCKED)) {
+		job->sleepCount = 1;
+
+#if BUILD_DEBUG
+		job->sleepReason = "Waiting for overload set to be locked";
+#endif
+
+		overloadsWaitingForLock.add({ firstOverload, job });
+
+		*yield = true;
+		return false;
+	}
+
+	return true;
+}
+
+bool inferOverloadSetForNonCall(SubJob *job, Type *correct, Expr *&given, bool *yield) {
+	assert(given->flavor == ExprFlavor::IDENTIFIER);
+	auto overload = static_cast<ExprIdentifier *>(given);
+
+	if (!checkOverloadSet(job, overload->declaration, yield))
+		return false;
+
+	auto it = overloads(overload);
+
+	bool reported = false;
+	Declaration *found = nullptr;
+
+	while (auto current = it.next()) {
+		if (getDeclarationType(current) == correct) {
+			if (found) {
+				if (!reported) {
+					reportError(given, "Error: Multiple overloads of %.*s match the type %.*s", STRING_PRINTF(overload->name), STRING_PRINTF(correct->name));
+					reportError(found, "");
+					reported = true;
+				}
+
+				reportError(current, "");
+			}
+
+			found = current;
+		}
+	}
+
+	if (reported) {
+		return false;
+	}
+	else if (found) {
+		given = found->initialValue;
+	}
+	else {
+		reportError(given, "Error: No overloads of %.*s match the type %.*s", STRING_PRINTF(overload->name), STRING_PRINTF(correct->name));
+		auto it = overloads(overload);
+
+		while (auto current = it.next()) {
+			reportError(current, "");
+		}
+
+		return false;
+	}
+
+	return true;
+}
+
 bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yield) {
 	*yield = false;
 	if (correct != given->type) {
@@ -2218,7 +2383,6 @@ bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yi
 			}
 			case TypeFlavor::FLOAT: {
 				if (given->type == &TYPE_FLOAT_LITERAL) {
-					given->type = correct;
 					given->type = correct;
 				}
 				else if (given->type->size < correct->size) {
@@ -2373,6 +2537,11 @@ bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yi
 				else if (correct->flavor == TypeFlavor::ENUM && (correct->flags & TYPE_ENUM_IS_FLAGS) &&
 					given->type->flavor == TypeFlavor::INTEGER && given->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(given)->unsignedValue == 0) {
 					insertImplicitCast(job->sizeDependencies, &given, correct);
+				}
+				else if (correct->flavor == TypeFlavor::FUNCTION && given->type == &TYPE_OVERLOAD_SET) {
+					if (!inferOverloadSetForNonCall(job, correct, given, yield)) {
+						return false;
+					}
 				}
 				else if (correct->flavor == TypeFlavor::POINTER && static_cast<TypePointer *>(correct)->pointerTo == &TYPE_U8 && given->flavor == ExprFlavor::STRING_LITERAL) {
 					auto identifier = INFER_NEW(ExprIdentifier);
@@ -2661,17 +2830,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 	assert(right);
 
 	if (left && right) {
-		if (left->type == right->type) {
-			if (left->type == &TYPE_AUTO_CAST) {
-				reportError(binary, "Error: Cannot infer the type of an expression when both sides are an auto cast");
-				return false;
-			}
-			else if (left->type == &TYPE_UNARY_DOT) {
-				reportError(binary, "Error: Cannot infer the type of an expression when both sides are a unary dot");
-				return false;
-			}
-		}
-		else if (left->type->flavor == right->type->flavor && left->type->flavor == TypeFlavor::AUTO_CAST) {
+		if (left->type->flavor == TypeFlavor::AUTO_CAST && right->type->flavor == TypeFlavor::AUTO_CAST) {
 			reportError(binary, "Error: Cannot infer the type of an expression when the sides are %.*s and %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
 			return false;
 		}
@@ -2797,17 +2956,10 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 			}
 			case TypeFlavor::FUNCTION: {
 				if (left->type != right->type) {
-					if (left->type == TYPE_VOID_POINTER) {
-						insertImplicitCast(job->sizeDependencies, &right, left->type);
-					}
-					else if (right->type == TYPE_VOID_POINTER) {
-						insertImplicitCast(job->sizeDependencies, &left, right->type);
-					}
-					else {
-						reportError(binary, "Error: Cannot compare %.*s to %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
-						return false;
-					}
+					reportError(binary, "Error: Cannot compare %.*s to %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
+					return false;
 				}
+				break;
 			}
 			case TypeFlavor::INTEGER: {
 				if (!binaryOpForInteger(job->sizeDependencies, exprPointer))
@@ -2877,6 +3029,22 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 			else if (right->type->flavor == TypeFlavor::ENUM && left->type == &TYPE_UNARY_DOT) {
 				if (!inferUnaryDot(job, static_cast<TypeEnum *>(left->type), &left)) {
 					return false;
+				}
+			}
+			else if (left->type->flavor == TypeFlavor::FUNCTION && right->type == TYPE_VOID_POINTER) {
+				insertImplicitCast(job->sizeDependencies, &right, left->type);
+			}
+			else if (left->type == TYPE_VOID_POINTER && right->type->flavor == TypeFlavor::FUNCTION) {
+				insertImplicitCast(job->sizeDependencies, &left, right->type);
+			}
+			else if (left->type->flavor == TypeFlavor::FUNCTION && right->type == &TYPE_OVERLOAD_SET) {
+				if (!inferOverloadSetForNonCall(job, left->type, right, yield)) {
+					return *yield;
+				}
+			}
+			else if (left->type == &TYPE_OVERLOAD_SET && right->type->flavor == TypeFlavor::FUNCTION) {
+				if (!inferOverloadSetForNonCall(job, right->type, left, yield)) {
+					return *yield;
 				}
 			}
 
@@ -3951,121 +4119,147 @@ bool inferFlattened(SubJob *job) {
 			if (!identifier->declaration)
 				return true;
 
-			if ((identifier->declaration->flags & DECLARATION_IMPORTED_BY_USING) && !(identifier->declaration->flags & DECLARATION_IS_CONSTANT)) {
-				assert(identifier->declaration->initialValue->flavor == ExprFlavor::IDENTIFIER);
+			if ((identifier->declaration->flags & DECLARATION_IS_CONSTANT)) {
 
-				auto accesses = static_cast<ExprIdentifier *>(identifier->declaration->initialValue);
-				auto result = INFER_NEW(ExprIdentifier);
-				auto current = result;
-
-				while (true) {
-					*current = *accesses;
-					current->start = identifier->start;
-					current->end = identifier->end;
-
-					if (!current->structAccess)
-						break;
-
-					bool onlyConstants;
-					addSizeDependency(job->sizeDependencies, getExpressionNamespace(current->structAccess, &onlyConstants, current->structAccess));
-
-					current->structAccess = INFER_NEW(ExprIdentifier);
-					current = static_cast<ExprIdentifier *>(current->structAccess);
-
-					assert(accesses->structAccess->flavor == ExprFlavor::IDENTIFIER);
-					accesses = static_cast<ExprIdentifier *>(accesses->structAccess);
-				}
-
-				current->structAccess = identifier->structAccess;
-				identifier->structAccess = result;
-				identifier->declaration = identifier->declaration->import;
-
-				pushFlatten(job, identifier);
-				continue;
-			}
-			else {
-				if (identifier->flags & EXPR_IDENTIFIER_IS_BREAK_OR_CONTINUE_LABEL) {
-					// We shouldn't bother resolving types they aren't needed
-					// Replacing a constant would mean we have to check if the label
-					// is still an identifier when we infer break/continue and if we did that it would be a bad error message
-					// so we are done
-
+				if (identifier->declaration->nextOverload) {
+					identifier->type = &TYPE_OVERLOAD_SET;
+					break;
 				}
 				else {
+					auto declaration = identifier->declaration;
 
-					if (identifier->declaration->flags & DECLARATION_IS_ITERATOR) {
-						auto loop = CAST_FROM_SUBSTRUCT(ExprLoop, iteratorBlock, identifier->declaration->enclosingScope);
-						assert(loop->flavor == ExprFlavor::WHILE || loop->flavor == ExprFlavor::FOR);
-
-						if (loop->flavor == ExprFlavor::WHILE) {
-							reportError(identifier, "Error: Cannot use while loop label as a variable, it has no storage");
-							reportError(identifier->declaration, "   ..: Here is the location of the loop");
-							return false;
-						}
+					if (declaration->flags & DECLARATION_IMPORTED_BY_USING) {
+						declaration = declaration->import;
 					}
 
-					if (identifier->declaration->flags & DECLARATION_TYPE_IS_READY) {
-						if (!identifier->type) {
-							identifier->type = getDeclarationType(identifier->declaration);
-							addSizeDependency(job->sizeDependencies, identifier->type);
-						}
+					if (!(declaration->flags & DECLARATION_VALUE_IS_READY)) {
+						goToSleep(job, &declaration->sleepingOnMyValue, "Identifier sleeping to see if constant is potentially overloaded function");
+
+						if (!declaration->inferJob)
+							forceAddDeclaration(declaration);
+						return true;
+					}
+					
+					if (declaration->initialValue->flavor == ExprFlavor::FUNCTION) {
+						identifier->type = &TYPE_OVERLOAD_SET;
+						break;
+					}
+				}
+			}
+
+			if ((identifier->declaration->flags & DECLARATION_IMPORTED_BY_USING)) {
+				if (!identifier->declaration->initialValue) {
+					identifier->declaration = identifier->declaration->import;
+				}
+				else {
+					assert(identifier->declaration->initialValue->flavor == ExprFlavor::IDENTIFIER);
+
+					auto accesses = static_cast<ExprIdentifier *>(identifier->declaration->initialValue);
+					auto result = INFER_NEW(ExprIdentifier);
+					auto current = result;
+
+					while (true) {
+						*current = *accesses;
+						current->start = identifier->start;
+						current->end = identifier->end;
+
+						if (!current->structAccess)
+							break;
+
+						bool onlyConstants;
+						addSizeDependency(job->sizeDependencies, getExpressionNamespace(current->structAccess, &onlyConstants, current->structAccess));
+
+						current->structAccess = INFER_NEW(ExprIdentifier);
+						current = static_cast<ExprIdentifier *>(current->structAccess);
+
+						assert(accesses->structAccess->flavor == ExprFlavor::IDENTIFIER);
+						accesses = static_cast<ExprIdentifier *>(accesses->structAccess);
+					}
+
+					current->structAccess = identifier->structAccess;
+					identifier->structAccess = result;
+					identifier->declaration = identifier->declaration->import;
+
+					pushFlatten(job, identifier);
+					continue;
+				}
+			}
+
+			if (!(identifier->flags & EXPR_IDENTIFIER_IS_BREAK_OR_CONTINUE_LABEL)) {
+				// We shouldn't bother resolving types for labels, they aren't needed
+				// Replacing a constant would mean we have to check if the label
+				// is still an identifier when we infer break/continue and if we did that it would be a bad error message
+				if (identifier->declaration->flags & DECLARATION_IS_ITERATOR) {
+					auto loop = CAST_FROM_SUBSTRUCT(ExprLoop, iteratorBlock, identifier->declaration->enclosingScope);
+					assert(loop->flavor == ExprFlavor::WHILE || loop->flavor == ExprFlavor::FOR);
+
+					if (loop->flavor == ExprFlavor::WHILE) {
+						reportError(identifier, "Error: Cannot use while loop label as a variable, it has no storage");
+						reportError(identifier->declaration, "   ..: Here is the location of the loop");
+						return false;
+					}
+				}
+
+				if (identifier->declaration->flags & DECLARATION_TYPE_IS_READY) {
+					if (!identifier->type) {
+						identifier->type = getDeclarationType(identifier->declaration);
+						addSizeDependency(job->sizeDependencies, identifier->type);
+					}
+				}
+				else {
+					goToSleep(job, &identifier->declaration->sleepingOnMyType, "Identifier type not ready");
+
+					if (!identifier->declaration->inferJob)
+						forceAddDeclaration(identifier->declaration);
+
+					return true;
+				}
+
+				if (identifier->declaration->flags & DECLARATION_IS_CONSTANT) {
+					if (identifier->declaration->flags & DECLARATION_VALUE_IS_READY) {
+						assert(identifier->declaration->flags & DECLARATION_TYPE_IS_READY);
+						copyLiteral(exprPointer, identifier->declaration->initialValue);
 					}
 					else {
-						goToSleep(job, &identifier->declaration->sleepingOnMyType, "Identifier type not ready");
+						goToSleep(job, &identifier->declaration->sleepingOnMyValue, "Identifier value not ready");
 
 						if (!identifier->declaration->inferJob)
 							forceAddDeclaration(identifier->declaration);
 
 						return true;
 					}
-
-					if (identifier->declaration->flags & DECLARATION_IS_CONSTANT) {
-						if (identifier->declaration->flags & DECLARATION_VALUE_IS_READY) {
-							assert(identifier->declaration->flags & DECLARATION_TYPE_IS_READY);
-							copyLiteral(exprPointer, identifier->declaration->initialValue);
+				}
+				else if (identifier->structAccess) {
+					if (identifier->structAccess->type->flags & TYPE_ARRAY_IS_FIXED) {
+						if (!isAddressable(identifier->structAccess)) {
+							reportError(identifier, "Error: Cannot get the data pointer of a fixed array that has no storage");
+							return false;
 						}
-						else {
-							goToSleep(job, &identifier->declaration->sleepingOnMyValue, "Identifier value not ready");
 
-							if (!identifier->declaration->inferJob)
-								forceAddDeclaration(identifier->declaration);
+						auto address = INFER_NEW(ExprUnaryOperator);
+						address->flavor = ExprFlavor::UNARY_OPERATOR;
+						address->op = TOKEN('*');
+						address->start = identifier->start;
+						address->end = identifier->end;
+						address->value = identifier->structAccess;
+						address->type = identifier->type;
 
-							return true;
-						}
+						*exprPointer = address;
 					}
-					else if (identifier->structAccess) {
-						if (identifier->structAccess->type->flags & TYPE_ARRAY_IS_FIXED) {
-							if (!isAddressable(identifier->structAccess)) {
-								reportError(identifier, "Error: Cannot get the data pointer of a fixed array that has no storage");
-								return false;
-							}
+					else if (identifier->structAccess->type->flavor == TypeFlavor::POINTER &&
+						(static_cast<TypePointer *>(identifier->structAccess->type)->pointerTo->flags & TYPE_ARRAY_IS_FIXED)) {
+						auto cast = INFER_NEW(ExprBinaryOperator);
+						cast->op = TokenT::CAST;
+						cast->start = identifier->start;
+						cast->end = identifier->end;
+						cast->right = identifier->structAccess;
+						cast->type = identifier->type;
+						cast->left = inferMakeTypeLiteral(cast->start, cast->end, cast->type);
 
-							auto address = INFER_NEW(ExprUnaryOperator);
-							address->flavor = ExprFlavor::UNARY_OPERATOR;
-							address->op = TOKEN('*');
-							address->start = identifier->start;
-							address->end = identifier->end;
-							address->value = identifier->structAccess;
-							address->type = identifier->type;
-
-							*exprPointer = address;
-						}
-						else if (identifier->structAccess->type->flavor == TypeFlavor::POINTER &&
-							(static_cast<TypePointer *>(identifier->structAccess->type)->pointerTo->flags & TYPE_ARRAY_IS_FIXED)) {
-							auto cast = INFER_NEW(ExprBinaryOperator);
-							cast->op = TokenT::CAST;
-							cast->start = identifier->start;
-							cast->end = identifier->end;
-							cast->right = identifier->structAccess;
-							cast->type = identifier->type;
-							cast->left = inferMakeTypeLiteral(cast->start, cast->end, cast->type);
-
-							*exprPointer = cast;
-						}
+						*exprPointer = cast;
 					}
 				}
 			}
-
 			break;
 		}
 		case ExprFlavor::FUNCTION: {
@@ -4738,6 +4932,31 @@ bool inferFlattened(SubJob *job) {
 		case ExprFlavor::FUNCTION_CALL: {
 			auto call = static_cast<ExprFunctionCall *>(expr);
 
+			if (call->function->type == &TYPE_OVERLOAD_SET) {
+				assert(call->function->flavor == ExprFlavor::IDENTIFIER);
+				auto overload = static_cast<ExprIdentifier *>(call->function);
+
+				bool yield;
+				if (!checkOverloadSet(job, overload->declaration, &yield)) {
+					return yield;
+				}
+
+				if (overload->declaration->nextOverload) {
+					// @Incomplete
+					reportError(call, "Error: Overload resoltion for calls is not implemented yet");
+					return false;
+				}
+				else {
+					auto declaration = overload->declaration;
+
+					if (declaration->flags & DECLARATION_IMPORTED_BY_USING)
+						declaration = declaration->import;
+
+					assert(declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::FUNCTION);
+
+					call->function = declaration->initialValue;
+				}
+			}
 			if (call->function->type->flavor != TypeFlavor::FUNCTION) {
 				reportError(call->function, "Error: Cannot call a %.*s", STRING_PRINTF(call->function->type->name));
 				return false;
@@ -5200,7 +5419,11 @@ bool inferFlattened(SubJob *job) {
 					return false;
 				}
 				else if (value->type == &TYPE_UNARY_DOT) {
-					reportError(value, "Error: Cannot take the type of a unary dot value");
+					reportError(value, "Error: Cannot take the type of an unary dot value");
+					return false;
+				}
+				else if (value->type == &TYPE_OVERLOAD_SET) {
+					reportError(value, "Error: Cannot take the type of an overload set");
 					return false;
 				}
 				else if (value->type->flavor == TypeFlavor::NAMESPACE) {
@@ -5685,24 +5908,47 @@ void addImporter(Importer *importer, Module *module) {
 	addSubJob(job);
 }
 
+bool importDeclarationIntoModule(Block *module, Declaration *declaration, Expr *using_) {
+	assert(!(declaration->flags & DECLARATION_IS_MODULE_SCOPE));
+	Declaration *potentialOverloadSet;
+
+	if (!checkForRedeclaration(module, declaration, &potentialOverloadSet, using_))
+		return false;
+
+	auto import = INFER_NEW(Declaration);
+	import->start = declaration->start;
+	import->end = declaration->end;
+	import->name = declaration->name;
+	import->flags = declaration->flags;
+
+	if (declaration->flags & DECLARATION_IMPORTED_BY_USING) {
+		import->import = declaration->import;
+	}
+	else {
+		import->import = declaration;
+	}
+	import->initialValue = nullptr;
+
+	import->flags |= DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_MODULE_SCOPE;
+
+	addDeclarationToBlockUnchecked(module, import, potentialOverloadSet, 0);
+
+	wakeUpSleepers(&module->sleepingOnMe, declaration->name);
+
+	return true;
+}
 
 bool maybeAddDeclarationToImports(Block *block, Declaration *declaration) {
+	assert(block->module);
+
 	if (declaration->flags & DECLARATION_IS_MODULE_SCOPE)
 		return true;
 
-	if (!block->module)
-		return true;
-	
 	auto module = CAST_FROM_SUBSTRUCT(Module, members, block);
 
 	for (auto import : module->imports) {
-		Declaration *overload;
-		if (!checkForRedeclaration(import->enclosingScope, declaration, import->import))
+		if (!importDeclarationIntoModule(import->enclosingScope, declaration, import->import))
 			return false;
-
-		putDeclarationInBlock(import->enclosingScope, declaration);
-
-		wakeUpSleepers(&import->enclosingScope->sleepingOnMe, declaration->name);
 	}
 
 	return true;
@@ -5979,13 +6225,13 @@ bool inferImporter(SubJob *subJob) {
 
 
 		for (auto member : import->module->members.declarations) {
-			if (member->enclosingScope == &import->module->members && !(member->flags & DECLARATION_IS_MODULE_SCOPE)) {
-				if (checkForRedeclaration(importer->enclosingScope, member, importer->import)) {
-					putDeclarationInBlock(importer->enclosingScope, member);
+			do {
+				if (member->flags & DECLARATION_IS_MODULE_SCOPE)
+					continue;
 
-					wakeUpSleepers(&importer->enclosingScope->sleepingOnMe, member->name);
-				}
-			}
+				if (!importDeclarationIntoModule(importer->enclosingScope, member, importer->import))
+					return false;
+			} while (member = member->nextOverload);
 		}
 	done:;
 	}
@@ -6025,10 +6271,11 @@ bool inferImporter(SubJob *subJob) {
 			block->importers.clear();
 
 			for (auto member : block->declarations) {
-				if (!checkForRedeclaration(importer->enclosingScope, member, importer->import))
+				Declaration *potentialOverloadSet;
+				if (!checkForRedeclaration(importer->enclosingScope, member, &potentialOverloadSet, importer->import))
 					return false;
 				
-				addDeclarationToBlockUnchecked(importer->enclosingScope, member, member->serial);
+				addDeclarationToBlockUnchecked(importer->enclosingScope, member, potentialOverloadSet, member->serial);
 
 				if (importer->enclosingScope->flavor == BlockFlavor::STRUCT) {
 					if (!(member->flags & DECLARATION_IS_CONSTANT)) {
@@ -6048,11 +6295,15 @@ bool inferImporter(SubJob *subJob) {
 
 				wakeUpSleepers(&importer->enclosingScope->sleepingOnMe, member->name);
 
-				if (!maybeAddDeclarationToImports(importer->enclosingScope, member))
-					return false;
+				do {
+					if (importer->enclosingScope->module) {
+						if (!maybeAddDeclarationToImports(importer->enclosingScope, member))
+							return false;
+					}
 
-				if (!addDeclaration(member, nullptr))
-					return false;
+					if (!addDeclaration(member, nullptr))
+						return false;
+				} while (member = member->nextOverload);
 			}
 
 			block->declarations.clear();
@@ -6069,47 +6320,61 @@ bool inferImporter(SubJob *subJob) {
 			}
 		}
 		else if (importer->import->flavor != ExprFlavor::LOAD) {
-			if (block->importers.count) {
-				goToSleep(job, &importer->enclosingScope->sleepingOnMe, "Importer waiting for importer");
-				job->sleepCount += block->importers.count - 1;
-				return true;
+			for (u32 i = 0; i < block->importers.count; i++) {
+				goToSleep(job, &block->sleepingOnMe, "Importer waiting for importer");
 			}
+
+			if (block->importers.count)
+				return true;
 
 			for (auto member : block->declarations) {
 				if (onlyConstants && !(member->flags & DECLARATION_IS_CONSTANT))
 					continue;
 
-				Declaration *overload;
-				if (!checkForRedeclaration(importer->enclosingScope, member, importer->import))
+				Declaration *potentialOverloadSet;
+
+				if (!checkForRedeclaration(importer->enclosingScope, member, &potentialOverloadSet, importer->import))
 					return false;
 
-				auto import = INFER_NEW(Declaration);
-				import->start = member->start;
-				import->end = member->end;
-				import->name = member->name;
-				import->flags = member->flags;
+				auto oldMember = member;
 
-				if (importer->moduleScope)
-					import->flags |= DECLARATION_IS_MODULE_SCOPE;
+				do {
+					auto import = INFER_NEW(Declaration);
+					import->start = member->start;
+					import->end = member->end;
+					import->name = member->name;
+					import->flags = member->flags;
 
-				if (member->flags & DECLARATION_IS_CONSTANT) {
-					import->type = member->type;
-					import->initialValue = member->initialValue;
-				}
-				else {
-					import->import = member;
-					import->initialValue = importer->import;
-				}
+					if (importer->moduleScope)
+						import->flags |= DECLARATION_IS_MODULE_SCOPE;
 
-				import->flags |= DECLARATION_IMPORTED_BY_USING;
 
-				addDeclarationToBlockUnchecked(importer->enclosingScope, import, importer->serial);
+					if (member->flags & DECLARATION_IS_CONSTANT) {
+						if (member->flags & DECLARATION_IMPORTED_BY_USING) {
+							import->import = member->import;
+						}
+						else {
+							import->import = member;
+						}
+						import->initialValue = nullptr;
+					}
+					else {
+						import->import = member;
+						import->initialValue = importer->import;
+					}
 
-				assert(import->name.length);
-				wakeUpSleepers(&importer->enclosingScope->sleepingOnMe, import->name);
+					import->flags |= DECLARATION_IMPORTED_BY_USING;
 
-				if (!maybeAddDeclarationToImports(importer->enclosingScope, import))
-					return false;
+					addDeclarationToBlockUnchecked(importer->enclosingScope, import, potentialOverloadSet, importer->serial);
+
+					assert(import->name.length);
+
+					if (importer->enclosingScope->module)
+						if (!maybeAddDeclarationToImports(importer->enclosingScope, import))
+							return false;
+				} while (member = member->nextOverload);
+
+				wakeUpSleepers(&importer->enclosingScope->sleepingOnMe, oldMember->name);
 			}
 		}
 	}
@@ -6226,6 +6491,8 @@ bool inferDeclarationValue(SubJob *subJob) {
 	++totalInferDeclarationValues;
 
 	auto declaration = job->declaration;
+
+	assert(declaration->initialValue);
 
 	if (declaration->type && declaration->initialValue) {
 		if (declaration->flags & DECLARATION_VALUE_IS_READY) return true;
@@ -6619,9 +6886,6 @@ bool inferSize(SubJob *subJob) {
 		if (job->sizingIndexInMembers == struct_->members.declarations.count) {
 			if (job->runningSize == 0) { // Empty structs are allowed, but we can't have size 0 types
 				struct_->alignment = 1;
-
-				_ReadWriteBarrier(); // Make sure we update the size after alignment, as having a non-zero size means that the size info is ready
-
 				struct_->size = 1;
 			}
 			else {
@@ -7329,6 +7593,66 @@ bool doJob(SubJob *job) {
 	return true;
 }
 
+bool doSubJobs(u64 *irGenerationPending) {
+	while (subJobs.count) {
+		auto job = subJobs.pop();
+
+		if (!doJob(job)) {
+			return false;
+		}
+	}
+
+	{
+		PROFILE_ZONE("Check size dependencies");
+
+		for (u32 i = 0; i < functionWaitingOnSize.count; i++) {
+			auto job = functionWaitingOnSize[i];
+
+			for (u32 j = 0; j < job->sizeDependencies.count; j++) {
+				auto depend = job->sizeDependencies[j];
+
+				if (depend->size) {
+					job->sizeDependencies.unordered_remove(j--);
+				}
+			}
+
+			if (job->sizeDependencies.count == 0) {
+				functionWaitingOnSize.unordered_remove(i--);
+
+				irGeneratorQueue.add(job->function);
+				(*irGenerationPending)++;
+
+				freeJob(job);
+			}
+		}
+
+		for (u32 i = 0; i < declarationWaitingOnSize.count; i++) {
+			auto job = declarationWaitingOnSize[i];
+
+			for (u32 j = 0; j < job->sizeDependencies.count; j++) {
+				auto depend = job->sizeDependencies[j];
+
+				if (depend->size) {
+					job->sizeDependencies.unordered_remove(j--);
+				}
+			}
+
+			if (job->sizeDependencies.count == 0) {
+				declarationWaitingOnSize.unordered_remove(i--);
+
+				CoffJob coffJob;
+				coffJob.declaration = job->declaration;
+				coffJob.flavor = CoffJobFlavor::GLOBAL_DECLARATION;
+				coffWriterQueue.add(coffJob);
+
+				freeJob(job);
+			}
+		}
+	}
+
+	return true;
+}
+
 void runInfer(String inputFile) {
 	PROFILE_FUNC();
 
@@ -7392,65 +7716,26 @@ void runInfer(String inputFile) {
 				wakeUpSleepers(&function->sleepingOnIr);
 			}
 
-			while (subJobs.count) {
-				auto job = subJobs.pop();
-
-				if (!doJob(job)) {
-					goto error;
-				}
-			}
-
-			{
-				PROFILE_ZONE("Check size dependencies");
-
-				for (u32 i = 0; i < functionWaitingOnSize.count; i++) {
-					auto job = functionWaitingOnSize[i];
-
-					for (u32 j = 0; j < job->sizeDependencies.count; j++) {
-						auto depend = job->sizeDependencies[j];
-
-						if (depend->size) {
-							job->sizeDependencies.unordered_remove(j--);
-						}
-					}
-
-					if (job->sizeDependencies.count == 0) {
-						functionWaitingOnSize.unordered_remove(i--);
-
-						irGeneratorQueue.add(job->function);
-						irGenerationPending++;
-
-						freeJob(job);
-					}
-				}
-
-				for (u32 i = 0; i < declarationWaitingOnSize.count; i++) {
-					auto job = declarationWaitingOnSize[i];
-
-					for (u32 j = 0; j < job->sizeDependencies.count; j++) {
-						auto depend = job->sizeDependencies[j];
-
-						if (depend->size) {
-							job->sizeDependencies.unordered_remove(j--);
-						}
-					}
-
-					if (job->sizeDependencies.count == 0) {
-						declarationWaitingOnSize.unordered_remove(i--);
-
-						CoffJob coffJob;
-						coffJob.declaration = job->declaration;
-						coffJob.flavor = CoffJobFlavor::GLOBAL_DECLARATION;
-						coffWriterQueue.add(coffJob);
-
-						freeJob(job);
-					}
-				}
-			}
+			if (!doSubJobs(&irGenerationPending))
+				goto error;
 		}
 
-		if (loadsPending == 0 && irGenerationPending == 0) {
-			break;
+		while (loadsPending == 0 && irGenerationPending == 0) {
+			if (overloadsWaitingForLock.count) {
+				for (auto waiting : overloadsWaitingForLock) {
+					waiting.overloadSet->flags |= DECLARATION_OVERLOADS_LOCKED;
+					waiting.waiting->sleepCount = 0;
+
+					subJobs.add(waiting.waiting);
+				}
+
+				overloadsWaitingForLock.clear();
+				if (!doSubJobs(&irGenerationPending))
+					goto error;
+			}
+			else {
+				goto outer;
+			}
 		}
 	}
 	outer:
@@ -7458,112 +7743,112 @@ void runInfer(String inputFile) {
 	if ((sizeJobs || functionJobs || declarationJobs || runJobs || importerJobs) && !hadError) { // We didn't complete type inference, check for undeclared identifiers or circular dependencies! If we already had an error don't spam more
 		// Check for undeclared identifiers
 
-		//for (auto job = functionJobs; job; job = job->next) {
-		//	if (!isDone(&job->type)) {
-		//		auto haltedOn = *getHalt(&job->type);
+		/*for (auto job = functionJobs; job; job = job->next) {
+			if (!isDone(&job->header)) {
+				auto haltedOn = *getHalt(&job->header);
 
-		//		if (checkForUndeclaredIdentifier(haltedOn)) {
-		//			goto error;
-		//		}
-		//	}
+				if (checkForUndeclaredIdentifier(haltedOn)) {
+					goto error;
+				}
+			}
 
-		//	if (!isDone(&job->value)) {
-		//		auto haltedOn = *getHalt(&job->value);
+			if (!isDone(&job->body)) {
+				auto haltedOn = *getHalt(&job->body);
 
-		//		if (checkForUndeclaredIdentifier(haltedOn)) {
-		//			goto error;
-		//		}
-		//	}
-		//}
+				if (checkForUndeclaredIdentifier(haltedOn)) {
+					goto error;
+				}
+			}
+		}
 
-		//for (auto job = declarationJobs; job; job = job->next) {
-		//	if (!isDone(&job->type)) {
-		//		auto haltedOn = *getHalt(&job->type);
+		for (auto job = declarationJobs; job; job = job->next) {
+			if (!isDone(&job->type)) {
+				auto haltedOn = *getHalt(&job->type);
 
-		//		if (checkForUndeclaredIdentifier(haltedOn)) {
-		//			goto error;
-		//		}
-		//	}
+				if (checkForUndeclaredIdentifier(haltedOn)) {
+					goto error;
+				}
+			}
 
-		//	if (!isDone(&job->value)) {
-		//		auto haltedOn = *getHalt(&job->value);
+			if (!isDone(&job->value)) {
+				auto haltedOn = *getHalt(&job->value);
 
-		//		if (checkForUndeclaredIdentifier(haltedOn)) {
-		//			goto error;
-		//		}
-		//	}
-		//}
+				if (checkForUndeclaredIdentifier(haltedOn)) {
+					goto error;
+				}
+			}
+		}
 
-		//for (auto job = importerJobs; job; job = job->next) {
-		//	if (!isDone(job)) {
-		//		auto haltedOn = *getHalt(job);
+		for (auto job = importerJobs; job; job = job->next) {
+			if (!isDone(job)) {
+				auto haltedOn = *getHalt(job);
 
-		//		if (checkForUndeclaredIdentifier(haltedOn)) {
-		//			goto error;
-		//		}
-		//	}
-		//}
+				if (checkForUndeclaredIdentifier(haltedOn)) {
+					goto error;
+				}
+			}
+		}
 
-		//for (auto job = sizeJobs; job; job = job->next) {
-		//	if (!isDone(job)) {
-		//		auto haltedOn = *getHalt(job);
+		for (auto job = sizeJobs; job; job = job->next) {
+			if (!isDone(job)) {
+				auto haltedOn = *getHalt(job);
 
-		//		if (checkForUndeclaredIdentifier(haltedOn)) {
-		//			goto error;
-		//		}
-		//	}
-		//}
+				if (checkForUndeclaredIdentifier(haltedOn)) {
+					goto error;
+				}
+			}
+		}
 
-		//for (auto job = runJobs; job; job = job->next) {
-		//	if (!isDone(job)) {
-		//		auto haltedOn = *getHalt(job);
+		for (auto job = runJobs; job; job = job->next) {
+			if (!isDone(job)) {
+				auto haltedOn = *getHalt(job);
 
-		//		if (checkForUndeclaredIdentifier(haltedOn)) {
-		//			goto error;
-		//		}
-		//	}
-		//}
+				if (checkForUndeclaredIdentifier(haltedOn)) {
+					goto error;
+				}
+			}
+		}*/
 
-		//// Check for circular dependencies
+		// Check for circular dependencies
 
-		//Array<Declaration *> loop;
+		/*Array<Declaration *> loop;
 
-		//for (auto job = declarationJobs; job; job = job->next) {
-		//	loop.clear();
+		for (auto job = declarationJobs; job; job = job->next) {
+			loop.clear();
 
-		//	s64 loopIndex = findLoop(loop, job->declaration);
+			s64 loopIndex = findLoop(loop, job->declaration);
 
-		//	if (loopIndex == -1) continue;
+			if (loopIndex == -1) continue;
 
-		//	reportError(loop[static_cast<u32>(loopIndex)], "Error: There were circular dependencies");
+			reportError(loop[static_cast<u32>(loopIndex)], "Error: There were circular dependencies");
 
-		//	if (loopIndex + 1 == loop.count) {
-		//		Expr *haltedOn;
-		//		bool typeDependece;
+			if (loopIndex + 1 == loop.count) {
+				Expr *haltedOn;
+				bool typeDependece;
 
 
-		//		auto declaration = loop[static_cast<u32>(loopIndex)];
+				auto declaration = loop[static_cast<u32>(loopIndex)];
 
-		//		getHaltStatus(declaration, declaration, &haltedOn, &typeDependece);
+				getHaltStatus(declaration, declaration, &haltedOn, &typeDependece);
 
-		//		reportError(haltedOn, "   ..: The %s of %.*s depends on itself", typeDependece ? "type" : "value", STRING_PRINTF(declaration->name));
-		//	}
-		//	else {
-		//		for (u32 i = static_cast<u32>(loopIndex); i < loop.count; i++) {
-		//			Expr *haltedOn;
-		//			bool typeDependece;
+				reportError(haltedOn, "   ..: The %s of %.*s depends on itself", typeDependece ? "type" : "value", STRING_PRINTF(declaration->name));
+			}
+			else {
+				for (u32 i = static_cast<u32>(loopIndex); i < loop.count; i++) {
+					Expr *haltedOn;
+					bool typeDependece;
 
-		//			auto declaration = loop[i];
-		//			auto next = loop[i + 1 == loop.count ? static_cast<u32>(loopIndex) : i + 1];
+					auto declaration = loop[i];
+					auto next = loop[i + 1 == loop.count ? static_cast<u32>(loopIndex) : i + 1];
 
-		//			getHaltStatus(declaration, next, &haltedOn, &typeDependece);
+					getHaltStatus(declaration, next, &haltedOn, &typeDependece);
 
-		//			reportError(haltedOn, "   ..: The %s of %.*s depends on %.*s", typeDependece ? "type" : "value", STRING_PRINTF(declaration->name), STRING_PRINTF(next->name));
-		//		}
-		//	}
+					reportError(haltedOn, "   ..: The %s of %.*s depends on %.*s", typeDependece ? "type" : "value", STRING_PRINTF(declaration->name), STRING_PRINTF(next->name));
+				}
+			}
 
-		//	goto error;
-		//}
+			goto error;
+		}*/
 
 		reportError("Internal Compiler Error: Inference got stuck but no undeclared identifiers or circular dependencies were detected");
 
@@ -7581,7 +7866,7 @@ void runInfer(String inputFile) {
 
 #if BUILD_DEBUG
 			if (job->sleepCount) {
-				reportError("%.*s", STRING_PRINTF(job->sleepReason));
+				reportError("%s", job->sleepReason);
 			}
 #endif
 		}
@@ -7591,7 +7876,7 @@ void runInfer(String inputFile) {
 
 #if BUILD_DEBUG
 			if (job->sleepCount) {
-				reportError("%.*s", STRING_PRINTF(job->sleepReason));
+				reportError("%s", job->sleepReason);
 			}
 #endif
 		}
@@ -7641,11 +7926,11 @@ void runInfer(String inputFile) {
 
 #if BUILD_DEBUG
 			if (job->header.sleepCount) {
-				reportError("Type: %.*s", STRING_PRINTF(job->header.sleepReason));
+				reportError("Type: %s", job->header.sleepReason);
 			}
 
 			if (job->body.sleepCount) {
-				reportError("Value: %.*s", STRING_PRINTF(job->body.sleepReason));
+				reportError("Value: %s", job->body.sleepReason);
 			}
 #endif
 		}
@@ -7675,11 +7960,11 @@ void runInfer(String inputFile) {
 
 #if BUILD_DEBUG
 			if (job->type.sleepCount) {
-				reportError("Type: %.*s", STRING_PRINTF(job->type.sleepReason));
+				reportError("Type: %s", job->type.sleepReason);
 			}
 
 			if (job->value.sleepCount) {
-				reportError("Value: %.*s", STRING_PRINTF(job->value.sleepReason));
+				reportError("Value: %s", job->value.sleepReason);
 			}
 #endif
 		}
@@ -7696,7 +7981,7 @@ void runInfer(String inputFile) {
 
 #if BUILD_DEBUG
 			if (job->sleepCount) {
-				reportError("%.*s", STRING_PRINTF(job->sleepReason));
+				reportError("%s", job->sleepReason);
 			}
 #endif
 		}

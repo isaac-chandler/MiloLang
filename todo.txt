@@ -10,7 +10,9 @@ Constexpr
  - slices
  - bitwise casts cast(T,bit)
 
-Make (#run foo()) && (#run bar()) behave as expected (currently both runs will execute)
+Ternary operator
+
+Maybe make (#run foo()) && (#run bar()) behave as expected (currently both runs will execute)
 
 array literals
 
@@ -35,8 +37,7 @@ Make how the infer phase being completed is checked better
 Make the error message when you try to using a #import that has been assigned to a constant show the correct location
 
 Give compile time execution new abilities
- - Add files/strings to compilation
- - Control build settings i.e. optimization, bounds checking
+ - Add strings to compilation
  - Receive information about program
  - Report errors and warnings
 
@@ -46,8 +47,14 @@ Allow c varargs for external (and maybe c_call) functions
 Move sleepingOnMe onto SubJob
 
 Move ir generation to infer thread?
+ - Could remove separate tracking of sizeDependencies for functions
+
+
+Custom for loop iterators
  
-Syntax for for loops to iterate in reverse
+Syntax for for loops to iterate in reverse?
+ - Maybe just use a custom iterator?
+
 
 Modules
  - Allow symbols to be locally scoped to a module
@@ -115,7 +122,11 @@ Rotate operators
 
 Allow logical shifting of signed values
 
+Macros
+
 C Varargs for external functions
+
+Allow default and named arguments with function pointers
 
 Make comma assignments work for things other than function calls
  - i.e. a, b = b, a to do a swap thats not gross
@@ -132,11 +143,9 @@ performance
  - Call infer fewer times -- significantly improved since todo orignally added but can still be better
    - graph theory
  - More fast paths for trival type inference
- - Allocator in Infer.cpp, TypeTable.cpp
- - Ensure sufficient space to write all instructions in coff writer so we don't do a bounds check for each byte written
  - Multithread ir generator
  - Multithread coff writer?
- - Multithread parser and lexer - Write obj faster (somehow)
+ - Write obj faster (somehow)
  - Get rid of linker
  - Multithread type inference (nightmare nightmare nightmare)
  
@@ -145,8 +154,6 @@ Memory usage
  - Where could memory be freed simply
  - Minimise wasted allocations if inference yields (i.e. function/return argument sorting)
 
-Allow #if to conditionally execute #load
- 
 debug info
  - emit S_UDT for constant type declarations
  - emit constants
@@ -169,6 +176,12 @@ predefined constant variables
  - Mark an if statement as #tag, if a struct member is compared to a type, the struct will imlicitly convert to that type in the if body
  - Make it work using box type
  - Work with switch if
+ 
+Only add top level declarations/importers as individual infer jobs? (local declarations/importers handled by inferFlattened)
+ - May allow serial and implicit imports to be removed
+ - Importers and Declarations must become Exprs
+ - Could merge #if, #load, #import handling split across inferFlattened and inferImporter
+ - Could remove implicit initializer expressions (ir generator just handles variable declarations)
  
 utf8 identifiers?
 

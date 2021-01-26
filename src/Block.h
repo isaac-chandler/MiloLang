@@ -47,6 +47,8 @@
 
 #define DECLARATION_IS_MODULE_SCOPE 0x4'0000
 
+#define DECLARATION_OVERLOADS_LOCKED 0x8'0000
+
 struct Declaration {
 	CodeLocation start;
 	EndLocation end;
@@ -63,6 +65,7 @@ struct Declaration {
 	u32 serial;
 
 	struct DeclarationJob *inferJob = nullptr;
+	Declaration *nextOverload = nullptr;
 
 	Array<struct SubJob *> sleepingOnMyType;
 	Array<struct SubJob *> sleepingOnMyValue;
@@ -144,21 +147,9 @@ inline Declaration *findDeclarationNoYield(Block *block, String name) {
 	return nullptr;
 }
 
-bool replaceInTable(Block *block, Declaration *old, Declaration *declaration);
-
-inline void replaceDeclaration(Block *block, Declaration *&old, Declaration *declaration) {
-	old = declaration;
-
-	if (block->table) {
-		replaceInTable(block, old, declaration);
-	}
-
-	declaration->enclosingScope = block;
-}
-
 void addImplicitImport(Block *block, struct ExprIdentifier *identifier);
 
-bool checkForRedeclaration(Block *block, Declaration *declaration, struct Expr *using_);
+bool checkForRedeclaration(Block *block, Declaration *declaration, Declaration **potentialOverloadSet, struct Expr *using_);
 
 void addToTable(Block *block, Declaration *declaration);
 void initTable(Block *block);
@@ -184,22 +175,30 @@ inline void putDeclarationInBlock(Block *block, Declaration *declaration) {
 	}
 }
 
-inline void addDeclarationToBlockUnchecked(Block *block, Declaration *declaration, u32 serial) {
-	assert(checkForRedeclaration(block, declaration, nullptr));
+void addToOverloads(Block *block, Declaration *overload, Declaration *add);
+
+inline void addDeclarationToBlockUnchecked(Block *block, Declaration *declaration, Declaration *overloadSet, u32 serial) {
+	assert(checkForRedeclaration(block, declaration, &overloadSet, nullptr));
 
 	declaration->serial = serial;
 
 	declaration->enclosingScope = block;
 	
-	putDeclarationInBlock(block, declaration);
+	if (overloadSet) {
+		addToOverloads(block, overloadSet, declaration);
+	}
+	else {
+		putDeclarationInBlock(block, declaration);
+	}
 }
 
 inline bool addDeclarationToBlock(Block *block, Declaration *declaration, u32 serial) {
-	if (!checkForRedeclaration(block, declaration, nullptr)) {
+	Declaration *potentialOverloadSet;
+	if (!checkForRedeclaration(block, declaration, &potentialOverloadSet, nullptr)) {
 		return false;
 	}
 
-	addDeclarationToBlockUnchecked(block, declaration, serial);
+	addDeclarationToBlockUnchecked(block, declaration, potentialOverloadSet, serial);
 
 	return true;
 }
@@ -207,14 +206,19 @@ inline bool addDeclarationToBlock(Block *block, Declaration *declaration, u32 se
 inline Declaration *findDeclaration(Block *block, String name, bool *yield, u32 usingYieldLimit = UINT32_MAX) {
 	PROFILE_FUNC();
 
-	for (auto importer : block->importers) {
-		if (importer->serial < usingYieldLimit) {
-			*yield = true;
-			return nullptr;
+	*yield = false;
+
+	auto declaration = findDeclarationNoYield(block, name);
+
+	if (!declaration) {
+		for (auto importer : block->importers) {
+			if (importer->serial < usingYieldLimit) {
+				*yield = true;
+				break;
+			}
 		}
 	}
 
-	*yield = false;
 
-	return findDeclarationNoYield(block, name);
+	return declaration;
 }

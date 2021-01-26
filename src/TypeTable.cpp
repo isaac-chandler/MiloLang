@@ -180,8 +180,8 @@ TypeArray *getArray(Type *type) {
 	result->count = 0;
 	result->flavor = TypeFlavor::ARRAY;
 	insertIntoTable(result, slot);
-	addDeclarationToBlockUnchecked(&result->members, createDataDeclaration(type), 0);
-	addDeclarationToBlockUnchecked(&result->members, countDeclaration, 0);
+	addDeclarationToBlockUnchecked(&result->members, createDataDeclaration(type), nullptr, 0);
+	addDeclarationToBlockUnchecked(&result->members, countDeclaration, nullptr, 0);
 
 	result->members.queued = true;
 	result->members.flavor = BlockFlavor::STRUCT;
@@ -225,9 +225,9 @@ TypeArray *getDynamicArray(Type *type) {
 	result->flavor = TypeFlavor::ARRAY;
 	result->flags |= TYPE_ARRAY_IS_DYNAMIC;
 	insertIntoTable(result, slot);
-	addDeclarationToBlockUnchecked(&result->members, createDataDeclaration(type), 0);
-	addDeclarationToBlockUnchecked(&result->members, countDeclaration, 0);
-	addDeclarationToBlockUnchecked(&result->members, capacityDeclaration, 0);
+	addDeclarationToBlockUnchecked(&result->members, createDataDeclaration(type), nullptr, 0);
+	addDeclarationToBlockUnchecked(&result->members, countDeclaration, nullptr, 0);
+	addDeclarationToBlockUnchecked(&result->members, capacityDeclaration, nullptr, 0);
 
 	result->members.queued = true;
 	result->members.flavor = BlockFlavor::STRUCT;
@@ -275,7 +275,7 @@ TypeArray *getStaticArray(Type *type, u32 count) {
 
 	insertIntoTable(result, slot);
 
-	addDeclarationToBlockUnchecked(&result->members, createDataDeclaration(type), 0);
+	addDeclarationToBlockUnchecked(&result->members, createDataDeclaration(type), nullptr, 0);
 
 	ExprLiteral *countLiteral = TYPE_NEW(ExprLiteral);
 	countLiteral->flavor = ExprFlavor::INT_LITERAL;
@@ -291,7 +291,7 @@ TypeArray *getStaticArray(Type *type, u32 count) {
 	countDeclaration->type = unsignedLiteralType;
 	countDeclaration->initialValue = countLiteral;
 	countDeclaration->flags |= DECLARATION_IS_CONSTANT | DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
-	addDeclarationToBlockUnchecked(&result->members, countDeclaration, 0);
+	addDeclarationToBlockUnchecked(&result->members, countDeclaration, nullptr, 0);
 
 	result->members.queued = true;
 	result->members.flavor = BlockFlavor::STRUCT;
@@ -562,8 +562,8 @@ void setupTypeTable() {
 	capacityDeclaration->physicalStorage = 16;
 	capacityDeclaration->flags |= DECLARATION_TYPE_IS_READY;
 
-	addDeclarationToBlockUnchecked(&TYPE_STRING.members, createDataDeclaration(&TYPE_U8), 0);
-	addDeclarationToBlockUnchecked(&TYPE_STRING.members, countDeclaration, 0);
+	addDeclarationToBlockUnchecked(&TYPE_STRING.members, createDataDeclaration(&TYPE_U8), nullptr, 0);
+	addDeclarationToBlockUnchecked(&TYPE_STRING.members, countDeclaration, nullptr, 0);
 
 	TYPE_VOID_POINTER = getPointer(&TYPE_VOID);
 	TYPE_U8_POINTER = getPointer(&TYPE_U8);

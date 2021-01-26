@@ -923,7 +923,7 @@ ExprBlock *parseBlock(LexerFile *lexer, bool isCase, ExprBlock *block) {
 
 			lexer->advance();
 			
-			defer->expr = parseExprStatemenet(lexer, false);
+			defer->expr = parseStatement(lexer, false);
 
 			if (!defer->expr) {
 				return nullptr;

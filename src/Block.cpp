@@ -94,26 +94,6 @@ Declaration *findInBlock(Block *block, String name) {
 	return nullptr;
 }
 
-bool replaceInTable(Block *block, Declaration *old, Declaration *declaration) {
-	assert(old->name == declaration->name);
-
-	u64 hash = doHash(old->name);
-	u64 slot = hash & (block->tableCapacity - 1);
-
-	u64 dist = 1;
-
-	while (block->table[slot].declaration) {
-		if (block->table[slot].declaration == old) {
-			block->table[slot].declaration = declaration;
-			return true;
-		}
-		slot += dist++;
-		slot &= block->tableCapacity - 1;
-	}
-
-	return false;
-}
-
 void rehash(Block *block) {
 	PROFILE_FUNC();
 
@@ -160,9 +140,7 @@ void initTable(Block *block) {
 
 void addImplicitImport(Block *block, ExprIdentifier *identifier) {
 	for (auto import : block->implicitImports) {
-		assert((import->declaration == identifier->declaration) == (import->name == identifier->name));
-
-		if (import->declaration == identifier->declaration) {
+		if (import->declaration->name == identifier->declaration->name) {
 			return;
 		}
 	}
@@ -170,15 +148,54 @@ void addImplicitImport(Block *block, ExprIdentifier *identifier) {
 	block->implicitImports.add(identifier);
 }
 
-bool checkForRedeclaration(Block *block, Declaration *declaration, Expr *using_) {
+void addToOverloads(Block *block, Declaration *overload, Declaration *add) {	
+	while (overload->nextOverload) {
+		overload = overload->nextOverload;
+	}
+
+	overload->nextOverload = add;
+}
+
+bool checkForRedeclaration(Block *block, Declaration *declaration, Declaration **potentialOverloadSet, Expr *using_) {
 	PROFILE_FUNC();
 	assert(block);
 	assert(declaration);
+
+	*potentialOverloadSet = nullptr;
 
 	if (declaration->name.length) { // Multiple zero length names are used in the arguments block for function prototypes with unnamed 
 		auto previous = findDeclarationNoYield(block, declaration->name);
 
 		if (previous) {
+			if ((previous->flags & declaration->flags & DECLARATION_IS_CONSTANT) && // Declarations must be a constant
+				!((previous->flags | declaration->flags) & DECLARATION_IS_ENUM_VALUE)) { // Enums use putDeclarationInBlock
+				if (previous->flags & DECLARATION_OVERLOADS_LOCKED) {
+					if (using_) {
+						reportError(declaration, "Error: Cannot import an overload into an overload set that has already been used", STRING_PRINTF(declaration->name));
+					}
+					else {
+						reportError(declaration, "Error: Cannot add an overload to an overload set that has already been used", STRING_PRINTF(declaration->name));
+					}
+
+					if (previous->nextOverload) {
+						reportError("   ..: Here are the other overloads");
+					}
+					else {
+						reportError("   ..: Here is the other overload");
+					}
+
+					do {
+						reportError(previous, "");
+					} while (previous = previous->nextOverload);
+
+					return false;
+				}
+
+				*potentialOverloadSet = previous;
+
+				return true;
+			}
+
 			if (using_) {
 				reportError(using_, "Error: Cannot import variable '%.*s' into scope, it already exists there", STRING_PRINTF(declaration->name));
 				reportError(previous, "   ..: Here is the location it was declared");

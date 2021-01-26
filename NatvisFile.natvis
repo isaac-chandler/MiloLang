@@ -49,6 +49,10 @@
     <DisplayString Condition="structAccess">{structAccess}.{name}</DisplayString>
     <DisplayString>{name}</DisplayString>
   </Type>
+
+  <Type Name="SubJob">
+    <DisplayString >{flavor,en} {sleepReason} {sleepingOnName}</DisplayString>
+  </Type>
   
 
   <Type Name="Ir">
