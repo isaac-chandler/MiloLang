@@ -226,6 +226,16 @@ bool compareNoCase(String a, String b) {
 	return a.length == b.length && _strnicmp(a.characters, b.characters, a.length) == 0;
 }
 
+static const char *getLibC() {
+	switch (buildOptions.c_runtime_library & ~Build_Options::C_Runtime_Library::FORCED) {
+	case Build_Options::C_Runtime_Library::STATIC:        return  "libcmt.lib libvcruntime.lib libucrt.lib kernel32.lib";
+	case Build_Options::C_Runtime_Library::STATIC_DEBUG:  return "libcmtd.lib libvcruntimed.lib libucrtd.lib kernel32.lib";
+	case Build_Options::C_Runtime_Library::DYNAMIC:       return  "msvcrt.lib vcruntime.lib ucrt.lib kernel32.lib";
+	case Build_Options::C_Runtime_Library::DYNAMIC_DEBUG: return "msvcrtd.lib vcruntimed.lib ucrtd.lib kernel32.lib";
+	default: assert(false); return "";
+	}
+}
+
 #if 1
 int main(int argc, char *argv[]) {
 	setlocale(LC_ALL, "");
@@ -590,24 +600,7 @@ int main(int argc, char *argv[]) {
 #if BUILD_WINDOWS
 					if (lib.name == "c") {
 						hadLibC = true;
-						switch (buildOptions.c_runtime_library & ~Build_Options::C_Runtime_Library::FORCED) {
-						case Build_Options::C_Runtime_Library::STATIC: {
-							libBuffer = mprintf("%s libcmt.lib libvcruntime.lib libucrt.lib kernel32.lib", oldLibBuffer);
-							break;
-						}
-						case Build_Options::C_Runtime_Library::STATIC_DEBUG: {
-							libBuffer = mprintf("%s libcmtd.lib libvcruntimed.lib libucrtd.lib kernel32.lib", oldLibBuffer);
-							break;
-						}
-						case Build_Options::C_Runtime_Library::DYNAMIC: {
-							libBuffer = mprintf("%s msvcrt.lib vcruntime.lib ucrt.lib kernel32.lib", oldLibBuffer);
-							break;
-						}
-						case Build_Options::C_Runtime_Library::DYNAMIC_DEBUG: {
-							libBuffer = mprintf("%s msvcrtd.lib vcruntimed.lib ucrtd.lib kernel32.lib", oldLibBuffer);
-							break;
-						}
-						}
+						libBuffer = mprintf("%s %s", oldLibBuffer, getLibC());
 					}
 					else
 #endif
@@ -618,24 +611,7 @@ int main(int argc, char *argv[]) {
 			}
 
 			if (!hadLibC && (buildOptions.c_runtime_library & Build_Options::C_Runtime_Library::FORCED)) {
-				switch (buildOptions.c_runtime_library & ~Build_Options::C_Runtime_Library::FORCED) {
-				case Build_Options::C_Runtime_Library::STATIC: {
-					libBuffer = mprintf("%s libcmt.lib libvcruntime.lib libucrt.lib kernel32.lib", libBuffer);
-					break;
-				}
-				case Build_Options::C_Runtime_Library::STATIC_DEBUG: {
-					libBuffer = mprintf("%s libcmtd.lib libvcruntimed.lib libucrtd.lib kernel32.lib", libBuffer);
-					break;
-				}
-				case Build_Options::C_Runtime_Library::DYNAMIC: {
-					libBuffer = mprintf("%s msvcrt.lib vcruntime.lib ucrt.lib kernel32.lib", libBuffer);
-					break;
-				}
-				case Build_Options::C_Runtime_Library::DYNAMIC_DEBUG: {
-					libBuffer = mprintf("%s msvcrtd.lib vcruntimed.lib ucrtd.lib kernel32.lib", libBuffer);
-					break;
-				}
-				}
+				libBuffer = mprintf("%s %s", libBuffer, getLibC());
 			}
 
 

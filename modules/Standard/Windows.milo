@@ -29,7 +29,8 @@ exit :: (code: u32 = 0) {
 // @Unicode
 print_buffer :: (buffer: []u8) {
 	if !std_out std_out = GetStdHandle(STD_OUTPUT_HANDLE)
-	WriteConsoleA(std_out, buffer.data, cast() buffer.count)
+	bytes_written: u32
+	WriteFile(std_out, buffer.data, cast() buffer.count, *bytes_written)
 }
 
 #scope_module
