@@ -948,9 +948,7 @@ struct DebugLeaf {
 
 #define DEBUG_LEAF DebugLeaf(debugTypes) + [&]()
 
-void addStructUniqueName(BucketedArenaAllocator *debugTypes, u32 name = debugTypeId) {
-	debugTypes->add1('@');
-
+void addStructUniqueNumber(BucketedArenaAllocator *debugTypes, u32 name = debugTypeId) {
 	char buffer[32];
 	
 	_itoa(static_cast<int>(name - 0x1000), buffer, 16);
@@ -991,6 +989,13 @@ bool appendCoffName(BucketedArenaAllocator *debugSymbols, Type *type) {
 			debugSymbols->add1('>');
 			return true;
 		}
+	}
+	else if (type->flags & TYPE_IS_ANONYMOUS) {
+		debugSymbols->addString("<unnamed-");
+		debugSymbols->addString(type->name);
+		debugSymbols->add1('-');
+		addStructUniqueNumber(debugSymbols, type->codeviewTypeIndex);
+		debugSymbols->add1('>');
 	}
 	else {
 		debugSymbols->addString(type->name);
@@ -1096,7 +1101,8 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 			debugTypes->add4Unchecked(0); // vtable
 			debugTypes->add2Unchecked(16);
 			debugTypes->addNullTerminatedString("string");
-			addStructUniqueName(debugTypes);
+			debugTypes->add1('@');
+			addStructUniqueNumber(debugTypes);
 		};
 	}
 	else if (type->flavor == TypeFlavor::ARRAY) {
@@ -1159,7 +1165,8 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 				debugTypes->add2Unchecked(array->size);
 				appendCoffName(debugTypes, array);
 				debugTypes->add1(0);
-				addStructUniqueName(debugTypes);
+				debugTypes->add1('@');
+				addStructUniqueNumber(debugTypes);
 			};
 		}
 	}
@@ -1278,7 +1285,8 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 				debugTypes->add4Unchecked(0); // vtable
 				debugTypes->add2Unchecked(enumeration->size);
 				debugTypes->addNullTerminatedString(enumeration->name);
-				addStructUniqueName(debugTypes);
+				debugTypes->add1('@');
+				addStructUniqueNumber(debugTypes);
 			};
 		}
 		else {
@@ -1307,7 +1315,8 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 				debugTypes->add4Unchecked(integerType);
 				debugTypes->add4Unchecked(fieldList);
 				debugTypes->addNullTerminatedString(enumeration->name);
-				addStructUniqueName(debugTypes);
+				debugTypes->add1('@');
+				addStructUniqueNumber(debugTypes);
 			};
 		}
 	}
@@ -1333,7 +1342,8 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 			debugTypes->add4Unchecked(0); // vtable
 			debugTypes->add2Unchecked(8);
 			debugTypes->addNullTerminatedString("type");
-			addStructUniqueName(debugTypes);
+			debugTypes->add1('@');
+			addStructUniqueNumber(debugTypes);
 		};
 	}
 	else if (type->flavor == TypeFlavor::STRUCT) {
@@ -1351,7 +1361,8 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 			debugTypes->add4Unchecked(0); // vtable
 			debugTypes->add2Unchecked(0); // size
 			debugTypes->addNullTerminatedString(structure->name);
-			addStructUniqueName(debugTypes);
+			debugTypes->add1('@');
+			addStructUniqueNumber(debugTypes);
 		};
 
 		for (auto member : structure->members.declarations) {
@@ -1398,7 +1409,8 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 			debugTypes->add4Unchecked(0); // vtable
 			debugTypes->add2Unchecked(structure->size);
 			debugTypes->addNullTerminatedString(structure->name);
-			addStructUniqueName(debugTypes, structure->codeviewTypeIndex); // Use the same unique name as the forward declaration
+			debugTypes->add1('@');
+			addStructUniqueNumber(debugTypes, structure->codeviewTypeIndex); // Use the same unique name as the forward declaration
 		};
 	}
 	
@@ -1634,13 +1646,18 @@ void runCoffWriter() {
 				auto symbol = function->symbol;
 
 				if (function->valueOfDeclaration) {
-					setSymbolName(&stringTable, &symbol->name, function->valueOfDeclaration->name);
-
-					if (function->valueOfDeclaration->enclosingScope->flavor == BlockFlavor::GLOBAL) {
+					if (function->valueOfDeclaration->enclosingScope->flavor == BlockFlavor::GLOBAL && function->valueOfDeclaration->name == "main") {
 						symbol->storageClass = IMAGE_SYM_CLASS_EXTERNAL;
+						if (linkLibC) {
+							setSymbolName(&stringTable, &symbol->name, "__main");
+						}
+						else {
+							setSymbolName(&stringTable, &symbol->name, "main");
+						}
 					}
 					else {
 						symbol->storageClass = IMAGE_SYM_CLASS_STATIC;
+						setSymbolName(&stringTable, &symbol->name, function->valueOfDeclaration->name);
 					}
 				}
 				else {
@@ -3752,11 +3769,25 @@ void runCoffWriter() {
 		}
 		*/
 
+		debugSymbols.ensure(8);
+
+		debugSymbols.add4Unchecked(0xF1);
+		u32 *subsectionSizePatch = debugSymbols.add4(0);
+
+		u32 previousSize = debugSymbols.totalSize;
+
 		for (u64 i = 0; i < typeTableCapacity; i++) {
 			auto entry = typeTableEntries[i];
 
 			if (entry.hash) {
 				auto type = entry.value;
+
+				if (type->codeviewTypeIndex) {
+					if (type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::ARRAY || type->flavor == TypeFlavor::ENUM) {
+						if (!(type->flags & (TYPE_ARRAY_IS_FIXED | TYPE_ENUM_IS_FLAGS)))
+							emitUDT(&debugSymbols, type);
+					}
+				}
 
 				if (!(type->flags & TYPE_USED_IN_OUTPUT))
 					continue;
@@ -4125,6 +4156,7 @@ void runCoffWriter() {
 			}
 		}
 
+		*subsectionSizePatch = debugSymbols.totalSize - previousSize;
 		alignAllocator(&debugSymbols, 4);
 	}
 

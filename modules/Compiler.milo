@@ -6,7 +6,18 @@ Build_Options :: struct {
 		LLVM :: 1
 	}
 	
+	C_Runtime_Library :: enum_flags u64 {
+		DYNAMIC :: 0x1
+		DEBUG   :: 0x2
+		FORCED  :: 0x4
+		
+		 STATIC       :: 0
+		 STATIC_DEBUG :: STATIC  | DEBUG
+		DYNAMIC_DEBUG :: DYNAMIC | DEBUG
+	}
+	
 	backend := Backend.X64
+	c_runtime_library := C_Runtime_Library.STATIC
 	llvm_options: []string
 	output_name: string
 }

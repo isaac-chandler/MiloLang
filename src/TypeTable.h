@@ -42,6 +42,7 @@ enum class TypeFlavor : u8 {
 #define TYPE_ENUM_IS_FLAGS 0x80
 #define TYPE_FUNCTION_IS_C_CALL 0x100
 #define TYPE_USED_IN_OUTPUT 0x200
+#define TYPE_IS_ANONYMOUS 0x400
 
 struct Type {
 	u32 size;
@@ -56,6 +57,7 @@ struct Type {
 	llvm::Type *llvmType = nullptr;
 
 	union Symbol *symbol = nullptr;
+	struct Block *enclosingScope; // This field is only used for debug info for struct, union, enum, enum_flags
 	u32 physicalStorage;
 	u32 codeviewTypeIndex = 0;
 

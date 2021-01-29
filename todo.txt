@@ -128,6 +128,8 @@ C Varargs for external functions
 
 Allow default and named arguments with function pointers
 
+Allow comma declarations (x, y, z: f32)
+
 Make comma assignments work for things other than function calls
  - i.e. a, b = b, a to do a swap thats not gross
  - Do we really need this, I can't think of any other use cases than a swap, if we really want this functionality, maybe just add a swap primitive i.e. #swap a, b

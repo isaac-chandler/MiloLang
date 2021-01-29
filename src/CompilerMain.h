@@ -8,19 +8,30 @@ inline volatile bool hadError = false;
 inline std::thread::id mainThread;
 
 
-struct BuildOptions {
+struct Build_Options {
 	enum class Backend : u64 {
 		X64 = 0,
 		LLVM = 1
 	};
 
+	struct C_Runtime_Library {
+		static const u64 DYNAMIC = 0x1;
+		static const u64 DEBUG   = 0x2;
+		static const u64 FORCED = 0x4;
+
+		static const u64  STATIC       = 0;
+		static const u64  STATIC_DEBUG = STATIC  | DEBUG;
+		static const u64 DYNAMIC_DEBUG = DYNAMIC | DEBUG;
+	};
+
 	Backend backend = Backend::X64;
-	MiloArray<MiloString> llvmOptions = { nullptr, 0 };
-	MiloString outputName;
+	u64 c_runtime_library = C_Runtime_Library::STATIC;
+	MiloArray<MiloString> llvm_options = { nullptr, 0 };
+	MiloString output_name;
 	
 };
 
-inline BuildOptions buildOptions;
+inline Build_Options buildOptions;
 inline MiloArray<MiloString> buildArguments;
 inline char *objectFileName;
 
@@ -56,6 +67,7 @@ inline struct Module *runtimeModule;
 inline struct Module *mainModule;
 
 inline bool printDiagnostics = false;
+inline bool noDce = false;
 
 inline u32 loadsPending = 0;
 
@@ -64,3 +76,5 @@ void loadNewFile(String file, struct Module *module);
 inline ArraySet<Library> libraries;
 
 String msprintf(const char *format, ...);
+
+inline bool linkLibC = true;

@@ -222,6 +222,10 @@ bool directoryExists(wchar_t *file) {
 		(attributes & FILE_ATTRIBUTE_DIRECTORY));
 }
 
+bool compareNoCase(String a, String b) {
+	return a.length == b.length && _strnicmp(a.characters, b.characters, a.length) == 0;
+}
+
 #if 1
 int main(int argc, char *argv[]) {
 	setlocale(LC_ALL, "");
@@ -255,7 +259,7 @@ int main(int argc, char *argv[]) {
 				return 1;
 			}
 
-			buildOptions.backend = BuildOptions::Backend::LLVM;
+			buildOptions.backend = Build_Options::Backend::LLVM;
 			backendGiven = true;
 		}
 		else if (strcmp("-x64", argv[i]) == 0) {
@@ -264,24 +268,17 @@ int main(int argc, char *argv[]) {
 				return 1;
 			}
 
-			buildOptions.backend = BuildOptions::Backend::X64;
+			buildOptions.backend = Build_Options::Backend::X64;
 			backendGiven = true;
 		}
 		else if (strcmp("-no_threads", argv[i]) == 0) {
-			if (noThreads) {
-				reportError("Error: Cannot specify no threads more than once");
-				return 1;
-			}
-
 			noThreads = true;
 		}
 		else if (strcmp("-diagnostic", argv[i]) == 0) {
-			if (printDiagnostics) {
-				reportError("Error: Cannot specify print diagnostics more than once");
-				return 1;
-			}
-
 			printDiagnostics = true;
+		}
+		else if (strcmp("-no_dce", argv[i]) == 0) {
+			noDce = true;
 		}
 		else if (strcmp("--", argv[i]) == 0) {
 			firstBuildArgument = i + 1;
@@ -326,14 +323,14 @@ int main(int argc, char *argv[]) {
 
 
 	if (lastDot > lastSlash) {
-		buildOptions.outputName.count = lastDot - input;
+		buildOptions.output_name.count = lastDot - input;
 	}
 	else {
-		buildOptions.outputName.count = inputFile - input;
+		buildOptions.output_name.count = inputFile - input;
 	}
 
-	buildOptions.outputName.data = new u8[buildOptions.outputName.count];
-	memcpy(buildOptions.outputName.data, input, buildOptions.outputName.count);
+	buildOptions.output_name.data = new u8[buildOptions.output_name.count];
+	memcpy(buildOptions.output_name.data, input, buildOptions.output_name.count);
 
 	auto start = high_resolution_clock::now();
 
@@ -386,9 +383,20 @@ int main(int argc, char *argv[]) {
 
 	String outputFileName;
 
-	if (!hadError && buildOptions.outputName.count) {
+	if (buildOptions.c_runtime_library & Build_Options::C_Runtime_Library::FORCED) {
+		linkLibC = true;
+	}
+	else {
+		for (auto library : libraries) {
+			if (library.name == "c") {
+				linkLibC = true;
+			}
+		}
+	}
+
+	if (!hadError && buildOptions.output_name.count) {
 #if BUILD_WINDOWS
-		MiloString output = buildOptions.outputName;
+		MiloString output = buildOptions.output_name;
 		u8 *outputFile = output.data;
 		u64 outputCount = output.count;
 
@@ -406,26 +414,25 @@ int main(int argc, char *argv[]) {
 			outputFile++;
 		}
 
-
 		if (lastDot <= lastSlash) {
-			outputFileName.characters = mprintf("%.*s.exe", buildOptions.outputName.count, buildOptions.outputName.data);
+			outputFileName.characters = mprintf("%.*s.exe", buildOptions.output_name.count, buildOptions.output_name.data);
 			outputFileName.length = strlen(outputFileName.characters);
 		}
 		else {
-			outputFileName = { (char *)buildOptions.outputName.data, static_cast<u32>(buildOptions.outputName.count) };
+			outputFileName = { (char *)buildOptions.output_name.data, static_cast<u32>(buildOptions.output_name.count) };
 		}
 
 		objectFileName = mprintf("%.*s.obj", STRING_PRINTF(outputFileName));
 #endif
 
 		auto backendStart = high_resolution_clock::now();
-		if (buildOptions.backend == BuildOptions::Backend::LLVM) {
+		if (buildOptions.backend == Build_Options::Backend::LLVM) {
 			runLlvm();
 
 			reportInfo("LLVM Time: %.1fms", duration_cast<microseconds>(duration<double>(
 				high_resolution_clock::now() - backendStart)).count() / 1000.0);
 		}
-		else if (buildOptions.backend == BuildOptions::Backend::X64) {
+		else if (buildOptions.backend == Build_Options::Backend::X64) {
 			runCoffWriter();
 
 			reportInfo("x64 Time: %.1fms", duration_cast<microseconds>(duration<double>(
@@ -438,7 +445,7 @@ int main(int argc, char *argv[]) {
 	}
 
 #if BUILD_WINDOWS
-	if (!hadError && buildOptions.outputName.count) {
+	if (!hadError && buildOptions.output_name.count) {
 		auto linkerStart = high_resolution_clock::now();
 
 		wchar_t *linkerCommand;
@@ -573,27 +580,67 @@ int main(int argc, char *argv[]) {
 				}
 			}
 
-			char libBuffer[1024]; // @Robustness
+			bool hadLibC = false;
 
+			char *libBuffer = mprintf("");
 			{
-				char *libOffset = libBuffer;
-
 				for (auto lib : libraries) {
-					*(libOffset++) = ' ';
-					memcpy(libOffset, lib.name.characters, lib.name.length);
-					libOffset += lib.name.length;
-					*(libOffset++) = '.';
-					*(libOffset++) = 'l';
-					*(libOffset++) = 'i';
-					*(libOffset++) = 'b';
-				}
+					char *oldLibBuffer = libBuffer;
 
-				*libOffset = 0;
+#if BUILD_WINDOWS
+					if (lib.name == "c") {
+						hadLibC = true;
+						switch (buildOptions.c_runtime_library & ~Build_Options::C_Runtime_Library::FORCED) {
+						case Build_Options::C_Runtime_Library::STATIC: {
+							libBuffer = mprintf("%s libcmt.lib libvcruntime.lib libucrt.lib kernel32.lib", oldLibBuffer);
+							break;
+						}
+						case Build_Options::C_Runtime_Library::STATIC_DEBUG: {
+							libBuffer = mprintf("%s libcmtd.lib libvcruntimed.lib libucrtd.lib kernel32.lib", oldLibBuffer);
+							break;
+						}
+						case Build_Options::C_Runtime_Library::DYNAMIC: {
+							libBuffer = mprintf("%s msvcrt.lib vcruntime.lib ucrt.lib kernel32.lib", oldLibBuffer);
+							break;
+						}
+						case Build_Options::C_Runtime_Library::DYNAMIC_DEBUG: {
+							libBuffer = mprintf("%s msvcrtd.lib vcruntimed.lib ucrtd.lib kernel32.lib", oldLibBuffer);
+							break;
+						}
+						}
+					}
+					else
+#endif
+						libBuffer = mprintf("%s %.*s.lib", oldLibBuffer, STRING_PRINTF(lib.name));
+
+					free(oldLibBuffer);
+				}
+			}
+
+			if (!hadLibC && (buildOptions.c_runtime_library & Build_Options::C_Runtime_Library::FORCED)) {
+				switch (buildOptions.c_runtime_library & ~Build_Options::C_Runtime_Library::FORCED) {
+				case Build_Options::C_Runtime_Library::STATIC: {
+					libBuffer = mprintf("%s libcmt.lib libvcruntime.lib libucrt.lib kernel32.lib", libBuffer);
+					break;
+				}
+				case Build_Options::C_Runtime_Library::STATIC_DEBUG: {
+					libBuffer = mprintf("%s libcmtd.lib libvcruntimed.lib libucrtd.lib kernel32.lib", libBuffer);
+					break;
+				}
+				case Build_Options::C_Runtime_Library::DYNAMIC: {
+					libBuffer = mprintf("%s msvcrt.lib vcruntime.lib ucrt.lib kernel32.lib", libBuffer);
+					break;
+				}
+				case Build_Options::C_Runtime_Library::DYNAMIC_DEBUG: {
+					libBuffer = mprintf("%s msvcrtd.lib vcruntimed.lib ucrtd.lib kernel32.lib", libBuffer);
+					break;
+				}
+				}
 			}
 
 
-			linkerCommand = mprintf(L"\"%s\" %s /OUT:%s __milo_chkstk.obj /debug /entry:main%S \"/libpath:%s\" \"/libpath:%s\" /incremental:no /nologo /natvis:milo.natvis",
-				linkerPath, utf8ToWString(objectFileName), utf8ToWString(outputFileName), libBuffer, windowsLibPath, crtLibPath);
+			linkerCommand = mprintf(L"\"%s\" %s -nodefaultlib -out:%s /debug %S %s \"-libpath:%s\" \"-libpath:%s\" -incremental:no -nologo -natvis:milo.natvis",
+				linkerPath, utf8ToWString(objectFileName), utf8ToWString(outputFileName), libBuffer, linkLibC ? L"__milo_cmain.obj" : L"__milo_chkstk.obj -entry:main", windowsLibPath, crtLibPath);
 		}
 
 

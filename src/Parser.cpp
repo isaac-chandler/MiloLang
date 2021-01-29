@@ -1479,9 +1479,9 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 
 	if (isFunctionOrFunctionType(lexer)) { // This is an argument declaration
 		auto function = parseFunctionOrFunctionType(lexer, true);
-		function->start = start;
 		if (!function)
 			return nullptr;
+		function->start = start;
 
 		expr = function;
 	}

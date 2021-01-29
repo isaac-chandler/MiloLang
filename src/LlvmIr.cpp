@@ -616,7 +616,17 @@ static llvm::Function *createLlvmFunction(State *state, ExprFunction *function) 
 			function->llvmStorage = llvm::Function::Create(functionType, llvm::Function::ExternalLinkage, stringRef(function->valueOfDeclaration->name), state->module);
 		}
 		else if (function->valueOfDeclaration) {
-			function->llvmStorage = llvm::Function::Create(functionType, function->valueOfDeclaration->enclosingScope->flavor == BlockFlavor::GLOBAL ? llvm::Function::ExternalLinkage : llvm::Function::PrivateLinkage, stringRef(function->valueOfDeclaration->name), state->module);
+			if (function->valueOfDeclaration->enclosingScope->flavor == BlockFlavor::GLOBAL && function->valueOfDeclaration->name == "main") {
+				if (linkLibC) {
+					function->llvmStorage = llvm::Function::Create(functionType, llvm::Function::ExternalLinkage, "__main", state->module);
+				}
+				else {
+					function->llvmStorage = llvm::Function::Create(functionType, llvm::Function::ExternalLinkage, "main", state->module);
+				}
+			}
+			else {
+				function->llvmStorage = llvm::Function::Create(functionType, llvm::Function::PrivateLinkage, stringRef(function->valueOfDeclaration->name), state->module);
+			}
 		}
 		else {
 			function->llvmStorage = llvm::Function::Create(functionType, llvm::Function::PrivateLinkage, "", state->module);
@@ -2034,12 +2044,12 @@ void runLlvm() {
 	llvm::cl::AddExtraVersionPrinter(llvm::TargetRegistry::printRegisteredTargetsForVersion);
 
 
-	const char **commandLineOptions = new const char *[1 + buildOptions.llvmOptions.count];
+	const char **commandLineOptions = new const char *[1 + buildOptions.llvm_options.count];
 
 	commandLineOptions[0] = ""; // The first argument is ignored by llvm since normally it would be the command used to invoke the compiler
 	
-	for (u64 i = 0; i < buildOptions.llvmOptions.count; i++) {
-		MiloString option = buildOptions.llvmOptions.data[i];
+	for (u64 i = 0; i < buildOptions.llvm_options.count; i++) {
+		MiloString option = buildOptions.llvm_options.data[i];
 		char *cString = (char *) malloc(option.count + 1);
 		memcpy(cString, option.data, option.count);
 		cString[option.count] = 0;
@@ -2048,7 +2058,7 @@ void runLlvm() {
 	}
 
 	
-	if (!llvm::cl::ParseCommandLineOptions(1 + buildOptions.llvmOptions.count, commandLineOptions)) {
+	if (!llvm::cl::ParseCommandLineOptions(1 + buildOptions.llvm_options.count, commandLineOptions)) {
 		reportError("Error: Failed to parse LLVM options");
 		return;
 	}
@@ -2522,7 +2532,9 @@ void runLlvm() {
 			llvm::legacy::PassManager pass;
 
 			llvm::TargetLibraryInfoImpl tlii(llvm::Triple(llvmModule.getTargetTriple()));
-			tlii.disableAllFunctions();
+
+			if (!linkLibC)
+				tlii.disableAllFunctions();
 
 			pass.add(new llvm::TargetLibraryInfoWrapperPass(tlii));
 

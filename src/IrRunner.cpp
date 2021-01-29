@@ -254,9 +254,9 @@ void runFunction(VMState *state, ExprFunction *expr, Ir *caller, DCArgs *dcArgs,
 			inferInput.add(InferQueueJob(import, runningDirective->module));
 		}
 		else if (expr->valueOfDeclaration->name == "set_build_options") {
-			auto options = *reinterpret_cast<BuildOptions *>(callerStack + caller->arguments->args[0].number);
+			auto options = *reinterpret_cast<Build_Options *>(callerStack + caller->arguments->args[0].number);
 
-			if (options.backend != BuildOptions::Backend::X64 && options.backend != BuildOptions::Backend::LLVM) {
+			if (options.backend != Build_Options::Backend::X64 && options.backend != Build_Options::Backend::LLVM) {
 				reportError(caller, "Error: Unrecognized backend %llu in set_build_options", options.backend);
 				reportError(runningDirective, "   ..: From #run directive");
 				return;
@@ -266,7 +266,7 @@ void runFunction(VMState *state, ExprFunction *expr, Ir *caller, DCArgs *dcArgs,
 		}
 		else if (expr->valueOfDeclaration->name == "get_build_options") {
 			if (caller->dest) {
-				*reinterpret_cast<BuildOptions *>(callerStack + caller->dest) = buildOptions;
+				*reinterpret_cast<Build_Options *>(callerStack + caller->dest) = buildOptions;
 			}
 		}
 		else if (expr->valueOfDeclaration->name == "get_build_arguments") {

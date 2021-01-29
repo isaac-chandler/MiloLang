@@ -372,7 +372,15 @@ void addTypeBlock(Expr *expr) {
 
 			job->type = type;
 
-			type->name = expr->valueOfDeclaration ? expr->valueOfDeclaration->name : (type->flags & TYPE_STRUCT_IS_UNION ? "(union)" : "(struct)");
+			if (expr->valueOfDeclaration && (expr->valueOfDeclaration->flags & DECLARATION_IS_CONSTANT)) {
+				type->name = expr->valueOfDeclaration->name;
+				type->enclosingScope = expr->valueOfDeclaration->enclosingScope;
+			}
+			else {
+				type->name = (type->flags & TYPE_STRUCT_IS_UNION) ? "union" : "struct";
+				type->enclosingScope = &runtimeModule->members;
+				type->flags |= TYPE_IS_ANONYMOUS;
+			}
 			addStruct(struct_);
 
 			type->sizeJob = job;
@@ -392,7 +400,15 @@ void addTypeBlock(Expr *expr) {
 
 			job->type = type;
 
-			type->name = expr->valueOfDeclaration ? expr->valueOfDeclaration->name : (type->flags & TYPE_ENUM_IS_FLAGS ? "(enum_flags)" : "(enum)");
+			if (expr->valueOfDeclaration && (expr->valueOfDeclaration->flags & DECLARATION_IS_CONSTANT)) {
+				type->name = expr->valueOfDeclaration->name;
+				type->enclosingScope = expr->valueOfDeclaration->enclosingScope;
+			}
+			else {
+				type->name = (type->flags & TYPE_ENUM_IS_FLAGS) ? "enum_flags" : "enum";
+				type->enclosingScope = &runtimeModule->members;
+				type->flags |= TYPE_IS_ANONYMOUS;
+			}
 			addStruct(enum_);
 
 			beginFlatten(job, &CAST_FROM_SUBSTRUCT(ExprEnum, struct_, enum_)->integerType);
@@ -1079,7 +1095,7 @@ void doConstantCast(Expr **cast) {
 
 			*cast = createIntLiteral(binary->start, expr->end, castTo, value ? 1 : 0);
 		}
-		else if (castTo->flavor == TypeFlavor::POINTER) {
+		else if (castTo->flavor == TypeFlavor::POINTER || castTo->flavor == TypeFlavor::FUNCTION) {
 			*cast = createIntLiteral(binary->start, expr->end, castTo, old->unsignedValue);
 		}
 	}
@@ -1196,7 +1212,8 @@ void copyLiteral(Expr **exprPointer, Expr *expr) {
 	case ExprFlavor::IMPORT: // No reason to duplicate imports
 	case ExprFlavor::STRUCT_DEFAULT: // Struct defaults have no mutable data
 	case ExprFlavor::STRING_LITERAL: // Don't duplicate string literals this will bloat the binary
-	case ExprFlavor::ARRAY: { // Don't duplicate array literals this will bloat the binary
+	case ExprFlavor::ARRAY: // Don't duplicate array literals this will bloat the binary
+	case ExprFlavor::IDENTIFIER: { // An identifier can be on a constant if it is an overload set
 		*exprPointer = expr;
 		break;
 	}
@@ -2298,34 +2315,85 @@ bool checkOverloadSet(SubJob *job, Declaration *firstOverload, bool *yield) {
 	return true;
 }
 
+
+void collectBlockOverloads(ArraySet<Declaration *> *overloadList, ExprIdentifier *overload, Block *block) {
+	auto declaration = findDeclarationNoYield(block, overload->name);
+
+	if (declaration && (declaration->flags & DECLARATION_IS_CONSTANT)) {
+		auto imported = declaration;
+
+		if (declaration->flags & DECLARATION_IMPORTED_BY_USING) {
+			imported = imported->import;
+		}
+
+		assert(imported->flags & DECLARATION_VALUE_IS_READY);
+		assert(imported->initialValue);
+
+		if (declaration->nextOverload || imported->initialValue->flavor == ExprFlavor::FUNCTION) {
+			overload->declaration = declaration;
+
+			auto it = overloads(overload);
+
+			while (auto current = it.next()) {
+				overloadList->add(current);
+			}
+		}
+	}
+}
+
+void collectAllOverloads(ArraySet<Declaration *> *overloadList, ExprIdentifier *overload) {
+	if (!overload->enclosingScope || overload->structAccess) {
+		assert(overload->declaration);
+
+		auto it = overloads(overload);
+
+		while (auto current = it.next()) {
+			overloadList->add(current);
+		}
+	}
+	else {
+		auto block = overload->enclosingScope;
+
+		while (block) {
+			collectBlockOverloads(overloadList, overload, block);
+			
+			block = block->parentBlock;
+		}
+
+		collectBlockOverloads(overloadList, overload, &overload->module->members);
+	}
+}
+
 bool inferOverloadSetForNonCall(SubJob *job, Type *correct, Expr *&given, bool *yield) {
 	assert(given->flavor == ExprFlavor::IDENTIFIER);
 	auto overload = static_cast<ExprIdentifier *>(given);
 
-	if (!checkOverloadSet(job, overload->declaration, yield))
-		return false;
-
-	auto it = overloads(overload);
-
 	bool reported = false;
 	Declaration *found = nullptr;
 
-	while (auto current = it.next()) {
-		if (getDeclarationType(current) == correct) {
-			if (found) {
-				if (!reported) {
-					reportError(given, "Error: Multiple overloads of %.*s match the type %.*s", STRING_PRINTF(overload->name), STRING_PRINTF(correct->name));
-					reportError(found, "");
-					reported = true;
+	if (overload->declaration) {
+		if (!checkOverloadSet(job, overload->declaration, yield))
+			return false;
+
+		auto it = overloads(overload);
+
+		while (auto current = it.next()) {
+			if (getDeclarationType(current) == correct) {
+				if (found) {
+					if (!reported) {
+						reportError(given, "Error: Multiple overloads of %.*s match the type %.*s", STRING_PRINTF(overload->name), STRING_PRINTF(correct->name));
+						reportError(found, "");
+						reported = true;
+					}
+
+					reportError(current, "");
 				}
 
-				reportError(current, "");
+				found = current;
 			}
-
-			found = current;
 		}
-	}
 
+	}
 	if (reported) {
 		return false;
 	}
@@ -2333,11 +2401,31 @@ bool inferOverloadSetForNonCall(SubJob *job, Type *correct, Expr *&given, bool *
 		given = found->initialValue;
 	}
 	else {
-		reportError(given, "Error: No overloads of %.*s match the type %.*s", STRING_PRINTF(overload->name), STRING_PRINTF(correct->name));
-		auto it = overloads(overload);
 
-		while (auto current = it.next()) {
-			reportError(current, "");
+		if (overload->resolveFrom && !overload->structAccess) {
+			overload->declaration = nullptr;
+			overload->resolveFrom = overload->resolveFrom->parentBlock;
+
+			beginFlatten(job, &given);
+			*yield = true;
+
+			subJobs.add(job);
+			return false;
+		}
+		else {
+			ArraySet<Declaration *> overloads;
+			collectAllOverloads(&overloads, overload);
+
+			if (overloads.size() == 1) {
+				reportError(given, "Error: Could not convert from %.*s to  %.*s", STRING_PRINTF(getDeclarationType(overloads[0])->name), STRING_PRINTF(correct->name));
+			}
+			else {
+				reportError(given, "Error: No overloads of %.*s match the type %.*s", STRING_PRINTF(overload->name), STRING_PRINTF(correct->name));
+
+				for (auto overload : overloads) {
+					reportError(overload, "");
+				}
+			}
 		}
 
 		return false;
@@ -2746,10 +2834,7 @@ bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char 
 
 				if (argument->initialValue) {
 					if (argument->flags & DECLARATION_VALUE_IS_READY) {
-						if (!isLiteral(argument->initialValue)) {
-							reportError(argument, "Error: Default %ss must be a constant value", message);
-							return false;
-						}
+						assert(isLiteral(argument->initialValue));
 
 						sortedArguments[i] = argument->initialValue;
 						addSizeDependency(job->sizeDependencies, argument->initialValue->type);
@@ -4119,33 +4204,8 @@ bool inferFlattened(SubJob *job) {
 			if (!identifier->declaration)
 				return true;
 
-			if ((identifier->declaration->flags & DECLARATION_IS_CONSTANT)) {
+			auto unimportedDeclaration = identifier->declaration;
 
-				if (identifier->declaration->nextOverload) {
-					identifier->type = &TYPE_OVERLOAD_SET;
-					break;
-				}
-				else {
-					auto declaration = identifier->declaration;
-
-					if (declaration->flags & DECLARATION_IMPORTED_BY_USING) {
-						declaration = declaration->import;
-					}
-
-					if (!(declaration->flags & DECLARATION_VALUE_IS_READY)) {
-						goToSleep(job, &declaration->sleepingOnMyValue, "Identifier sleeping to see if constant is potentially overloaded function");
-
-						if (!declaration->inferJob)
-							forceAddDeclaration(declaration);
-						return true;
-					}
-					
-					if (declaration->initialValue->flavor == ExprFlavor::FUNCTION) {
-						identifier->type = &TYPE_OVERLOAD_SET;
-						break;
-					}
-				}
-			}
 
 			if ((identifier->declaration->flags & DECLARATION_IMPORTED_BY_USING)) {
 				if (!identifier->declaration->initialValue) {
@@ -4185,6 +4245,51 @@ bool inferFlattened(SubJob *job) {
 				}
 			}
 
+			if ((identifier->declaration->flags & DECLARATION_IS_CONSTANT)) {
+
+				if (unimportedDeclaration->nextOverload) {
+					identifier->type = &TYPE_OVERLOAD_SET;
+					break;
+				}
+				else {
+					if (!(identifier->declaration->flags & DECLARATION_VALUE_IS_READY)) {
+						goToSleep(job, &identifier->declaration->sleepingOnMyValue, "Identifier sleeping to see if constant is potentially overloaded function");
+
+						if (!identifier->declaration->inferJob)
+							forceAddDeclaration(identifier->declaration);
+						return true;
+					}
+					
+					if (identifier->declaration->initialValue->flavor == ExprFlavor::FUNCTION) {
+						identifier->type = &TYPE_OVERLOAD_SET;
+						break;
+					}
+				}
+			}
+
+
+			if (identifier->type == &TYPE_OVERLOAD_SET) {
+				// This was an overload set where the identifier is being re-resolved since none of the overloads in the first scope 
+				// matched so the parent scopes must be searched
+				// If we get here, the new declaration is not a function or overload set so skip it and move on to the outer scope
+
+				identifier->declaration = nullptr;
+
+				if (identifier->resolveFrom && !identifier->structAccess) {
+					identifier->resolveFrom = identifier->resolveFrom->parentBlock;
+
+					// Go back to the top and continue resolving this identifier
+					continue;
+
+				}
+				else {
+					// If there are no more outer scopes to search, none of the overloads matched
+					// Give the caller a TYPE_OVERLOAD_SET with a declaration of nullptr so they know
+					// to report an error (report it at use site instead of here to give a better error message)
+					break;
+				}
+			}
+
 			if (!(identifier->flags & EXPR_IDENTIFIER_IS_BREAK_OR_CONTINUE_LABEL)) {
 				// We shouldn't bother resolving types for labels, they aren't needed
 				// Replacing a constant would mean we have to check if the label
@@ -4219,6 +4324,8 @@ bool inferFlattened(SubJob *job) {
 					if (identifier->declaration->flags & DECLARATION_VALUE_IS_READY) {
 						assert(identifier->declaration->flags & DECLARATION_TYPE_IS_READY);
 						copyLiteral(exprPointer, identifier->declaration->initialValue);
+
+
 					}
 					else {
 						goToSleep(job, &identifier->declaration->sleepingOnMyValue, "Identifier value not ready");
@@ -6059,7 +6166,7 @@ bool addDeclaration(Declaration *declaration, Module *module) {
 		return false;
 	}
 	
-	if (declaration->enclosingScope->flavor != BlockFlavor::GLOBAL || declaration->enclosingScope == &mainModule->members || declaration->enclosingScope == &runtimeModule->members)
+	if (noDce || declaration->enclosingScope->flavor != BlockFlavor::GLOBAL || declaration->enclosingScope == &mainModule->members || declaration->enclosingScope == &runtimeModule->members)
 		forceAddDeclaration(declaration);
 
 	return true;
@@ -6533,6 +6640,7 @@ bool inferDeclarationValue(SubJob *subJob) {
 			return yield;
 		}
 
+		if ((declaration->flags & DECLARATION_IS_CONSTANT) )
 		if ((declaration->flags & DECLARATION_IS_CONSTANT) || declaration->enclosingScope->flavor != BlockFlavor::IMPERATIVE) {
 			if (!isLiteral(declaration->initialValue)) {
 				reportError(declaration->type, "Error: Declaration value must be a constant");
@@ -6575,15 +6683,52 @@ bool inferDeclarationValue(SubJob *subJob) {
 					return false;
 				}
 			}
-
-			declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, declaration->initialValue->type);
+			else if (declaration->initialValue->type->flavor == TypeFlavor::NAMESPACE) {
+				if (!(declaration->flags & DECLARATION_IS_CONSTANT) || declaration->initialValue->type != &TYPE_MODULE) {
+					reportError(declaration, "Error: Declaration type cannot be a namespace");
+					return false;
+				}
+			}
 
 			if ((declaration->flags & DECLARATION_IS_CONSTANT) || declaration->enclosingScope->flavor != BlockFlavor::IMPERATIVE) {
-				if (!(declaration->flags & DECLARATION_IS_RUN_RETURN) && !isLiteral(declaration->initialValue)) {
+				if ((declaration->flags & DECLARATION_IS_CONSTANT) && declaration->initialValue->type == &TYPE_OVERLOAD_SET) {
+
+				}
+				else if (!(declaration->flags & DECLARATION_IS_RUN_RETURN) && !isLiteral(declaration->initialValue)) {
 					reportError(declaration->type, "Error: Declaration value must be a constant");
 					return false;
 				}
 			}
+
+			if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->initialValue->type == &TYPE_OVERLOAD_SET) {
+				assert(declaration->initialValue->flavor == ExprFlavor::IDENTIFIER);
+				auto overload = static_cast<ExprIdentifier *>(declaration->initialValue);
+
+				
+
+				bool yield;
+
+				if (!checkOverloadSet(&job->value, overload->declaration, &yield)) {
+					return yield;
+				}
+
+				if (overload->declaration->nextOverload) {
+					reportError(declaration, "Error: Declaration type cannot be an overload set");
+					return false;
+				}
+				else {
+					auto overloadDecl = overload->declaration;
+
+					if (overloadDecl->flags & DECLARATION_IMPORTED_BY_USING) {
+						overloadDecl = overloadDecl->import;
+					}
+
+					assert(overloadDecl->initialValue && overloadDecl->initialValue->flavor == ExprFlavor::FUNCTION);
+					declaration->initialValue = overloadDecl->initialValue;
+				}
+			}
+
+			declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, declaration->initialValue->type);
 
 			removeJob(&declarationJobs, job);
 
@@ -7465,7 +7610,20 @@ bool inferRun(SubJob *subJob) {
 				assert(lib);
 
 				if (!lib->handle) {
-					lib->handle = LoadLibraryA(toCString(functionLibrary)); // @Leak
+#if BUILD_WINDOWS
+					if (lib->name == "c") {
+						if (buildOptions.c_runtime_library & Build_Options::C_Runtime_Library::DEBUG) {
+							lib->handle = LoadLibraryA("ucrtbased");
+						}
+						else {
+							lib->handle = LoadLibraryA("ucrtbase");
+
+						}
+					} 
+					else
+#endif
+						lib->handle = LoadLibraryA(toCString(functionLibrary)); // @Leak
+					
 					if (!lib->handle) {
 						reportError(function->body, "Error: Failed to load library %.*s", STRING_PRINTF(functionLibrary));
 						return false;

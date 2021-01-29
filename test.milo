@@ -861,7 +861,7 @@ main :: () {
 	
 	hex_texture := load_image("Invaders/Hex.bmp")
 	
-	for 2000 create_enemy(hex_texture, enemy_mesh)
+	for 15 create_enemy(hex_texture, enemy_mesh)
 	
 	glEnable(GL_BLEND)
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
