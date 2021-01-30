@@ -30,8 +30,30 @@ enum class TypeFlavor : u8 {
 	ARRAY, 
 	STRUCT, 
 	ENUM, 
-	NAMESPACE
+	NAMESPACE, 
+
+	MAX
 };
+
+constexpr const char *TYPE_FLAVOR_NAMES[] = {
+	"void",
+	"integer",
+	"float",
+	"pointer",
+	"bool",
+	"function",
+	"type",
+	"auto cast", 
+	"string", 
+	"array", 
+	"struct", 
+	"enum", 
+	"namespace"
+};
+
+#define TYPE_FLAVOR_NAME(x) (TYPE_FLAVOR_NAMES[static_cast<u8>(x)])
+
+static_assert(sizeof(TYPE_FLAVOR_NAMES) / sizeof(const char *) == static_cast<u8>(TypeFlavor::MAX));
 
 #define TYPE_INTEGER_IS_SIGNED 0x2
 #define TYPE_IS_INTERNAL      0x4 // This means that this type should never be accessible to the user, i.e. integer literals, which is special to give it casting properties, but the program should never be able to reference it

@@ -293,6 +293,8 @@ TypeArray *getStaticArray(Type *type, u32 count) {
 	countDeclaration->flags |= DECLARATION_IS_CONSTANT | DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
 	addDeclarationToBlockUnchecked(&result->members, countDeclaration, nullptr, 0);
 
+	assert(countDeclaration->type);
+
 	result->members.queued = true;
 	result->members.flavor = BlockFlavor::STRUCT;
 
@@ -537,7 +539,7 @@ void setupTypeTable() {
 	u64Type->type = &TYPE_TYPE;
 	u64Type->typeValue = &TYPE_U64;
 
-	auto unsignedLiteralType = TYPE_NEW(ExprLiteral);
+	unsignedLiteralType = TYPE_NEW(ExprLiteral);
 	unsignedLiteralType->flavor = ExprFlavor::TYPE_LITERAL;
 	unsignedLiteralType->start = {};
 	unsignedLiteralType->end = {};

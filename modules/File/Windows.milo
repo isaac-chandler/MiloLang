@@ -6,7 +6,7 @@ read_entire_file :: (file: string) -> (#must result: []u8, success := true) {
 	
 	filename := create_wide_string(file)
 	
-	handle := CreateFileW(filename, GENERIC_READ, 0, null, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN)
+	handle := CreateFileW(filename, GENERIC_READ, FILE_SHARE_READ, null, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN)
 	
 	deallocate(filename)
 	

@@ -463,6 +463,7 @@ int main(int argc, char *argv[]) {
 		wchar_t *linkerPath;
 		wchar_t *windowsLibPath;
 		wchar_t *crtLibPath;
+		wchar_t *ucrtLibPath;
 
 
 		{
@@ -522,6 +523,20 @@ int main(int argc, char *argv[]) {
 					goto linkerCacheFail;
 				}
 
+				if (!read(&length, 1)) {
+					reportInfo("Failed to read linker cache");
+					fclose(cache);
+					goto linkerCacheFail;
+				}
+
+				ucrtLibPath = new wchar_t[length];
+
+				if (!read(ucrtLibPath, length)) {
+					reportInfo("Failed to read linker cache");
+					fclose(cache);
+					goto linkerCacheFail;
+				}
+
 				fclose(cache);
 
 				if (!fileExists(linkerPath)) {
@@ -535,6 +550,11 @@ int main(int argc, char *argv[]) {
 				}
 
 				if (!directoryExists(crtLibPath)) {
+					reportInfo("Linker cache had invalid library path");
+					goto linkerCacheFail;
+				}
+
+				if (!directoryExists(ucrtLibPath)) {
 					reportInfo("Linker cache had invalid library path");
 					goto linkerCacheFail;
 				}
@@ -565,6 +585,7 @@ int main(int argc, char *argv[]) {
 				linkerPath = mprintf(L"%s\\%s", result.vs_exe_path, L"link.exe");
 				windowsLibPath = result.windows_sdk_um_library_path;
 				crtLibPath = result.vs_library_path;
+				ucrtLibPath = result.windows_sdk_ucrt_library_path;
 
 				if (FILE *cache = _wfopen(cacheFile, L"wb")) {
 					u16 length = lstrlenW(linkerPath) + 1;
@@ -585,6 +606,12 @@ int main(int argc, char *argv[]) {
 
 					write(&length, 1);
 					write(crtLibPath, length);
+
+
+					length = lstrlenW(ucrtLibPath) + 1;
+
+					write(&length, 1);
+					write(ucrtLibPath, length);
 
 					fclose(cache);
 				}
@@ -615,8 +642,8 @@ int main(int argc, char *argv[]) {
 			}
 
 
-			linkerCommand = mprintf(L"\"%s\" %s -nodefaultlib -out:%s /debug %S %s \"-libpath:%s\" \"-libpath:%s\" -incremental:no -nologo -natvis:milo.natvis",
-				linkerPath, utf8ToWString(objectFileName), utf8ToWString(outputFileName), libBuffer, linkLibC ? L"__milo_cmain.obj" : L"__milo_chkstk.obj -entry:main", windowsLibPath, crtLibPath);
+			linkerCommand = mprintf(L"\"%s\" %s -nodefaultlib -out:%s /debug %S %s \"-libpath:%s\" \"-libpath:%s\" \"-libpath:%s\" -incremental:no -nologo -natvis:milo.natvis",
+				linkerPath, utf8ToWString(objectFileName), utf8ToWString(outputFileName), libBuffer, linkLibC ? L"__milo_cmain.obj" : L"__milo_chkstk.obj -entry:main", windowsLibPath, crtLibPath, ucrtLibPath);
 		}
 
 
