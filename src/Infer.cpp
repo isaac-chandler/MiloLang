@@ -2072,6 +2072,11 @@ bool checkOverloadSet(SubJob *job, Declaration *firstOverload, bool *yield) {
 				reportError(declaration, "Error: Only functions can be overloaded");
 				return false;
 			}
+
+			if (declaration->initialValue->flags & EXPR_FUNCTION_IS_C_CALL) {
+				reportError(declaration, "Error: #c_call functions cannot be overloaded");
+				return false;
+			}
 		}
 	}
 
@@ -2118,7 +2123,7 @@ bool declarationIsOverloadSet(SubJob *job, Declaration *declaration, bool *yield
 		return false;
 	}
 
-	if (declaration->initialValue->flavor == ExprFlavor::FUNCTION)
+	if (declaration->initialValue->flavor == ExprFlavor::FUNCTION && (!declaration->initialValue->flags & EXPR_FUNCTION_IS_C_CALL))
 		return true;
 
 	return false;
