@@ -98,7 +98,7 @@ struct TypeStruct : Type {
 
 struct TypeEnum : TypeStruct {
 	Type *integerType;
-	Block *values;
+	Block *values; // Does not contain other fields i.e. integer_type
 };
 
 struct TypeArray : TypeStruct {

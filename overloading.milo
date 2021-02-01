@@ -1,0 +1,38 @@
+#import "Standard"
+#import "Compiler"
+
+print :: (value: any) {
+	print("any print - %\n", value)
+}
+
+print :: (value: u64) {
+	print("u64 print - %\n", value)
+}
+
+print :: (value: u8) {
+	print("u8 print - %\n", value)
+}
+
+main :: () {
+	
+	print("Hello World\n")
+	
+	print(4)
+	
+	{
+		print := 10
+		{
+			print(10)
+			print(1.5)
+			
+			print :: (value: f32) {
+				print("f32 print - %\n", value)
+			}
+		}
+	}
+}
+
+#run {
+	//print("Adding file...\n")
+	//add_build_file("overloading2.milo")
+}

@@ -717,25 +717,28 @@ void trySolidifyNumericLiteralToDefault(Expr *expr) {
 	expr->type = getTypeForExpr(expr);
 }
 
-bool boundsCheckImplicitConversion(Expr *location, Type *convertTo, ExprLiteral *convertFrom) {
+bool boundsCheckImplicitConversion(Expr *location, Type *convertTo, ExprLiteral *convertFrom, bool silentCheck = false) {
 	if (convertTo->flags & TYPE_INTEGER_IS_SIGNED) {
 		s64 max = static_cast<s64>((1ULL << (convertTo->size * 8 - 1)) - 1);
 		s64 min = -static_cast<s64>(max) - 1;
 
 		if (convertFrom->flags & TYPE_INTEGER_IS_SIGNED) {
 			if (convertFrom->signedValue > max) {
-				reportError(location, "Error: Integer literal too large for %.*s (max: %" PRIi64 ", given: %" PRIi64 ")", STRING_PRINTF(convertTo->name), max, convertFrom->signedValue);
+				if (!silentCheck) 
+					reportError(location, "Error: Integer literal too large for %.*s (max: %" PRIi64 ", given: %" PRIi64 ")", STRING_PRINTF(convertTo->name), max, convertFrom->signedValue);
 				return false;
 			}
 
 			if (convertFrom->signedValue < min) {
-				reportError(location, "Error: Integer literal too small for %.*s (min: %" PRIi64 ", given: %" PRIi64 ")", STRING_PRINTF(convertTo->name), min, convertFrom->signedValue);
+				if (!silentCheck)
+					reportError(location, "Error: Integer literal too small for %.*s (min: %" PRIi64 ", given: %" PRIi64 ")", STRING_PRINTF(convertTo->name), min, convertFrom->signedValue);
 				return false;
 			}
 		}
 		else {
 			if (convertFrom->unsignedValue > static_cast<u64>(max)) {
-				reportError(location, "Error: Integer literal too large for %.*s (max: %" PRIi64 ", given: %" PRIu64 ")", STRING_PRINTF(convertTo->name), max, convertFrom->unsignedValue);
+				if (!silentCheck)
+					reportError(location, "Error: Integer literal too large for %.*s (max: %" PRIi64 ", given: %" PRIu64 ")", STRING_PRINTF(convertTo->name), max, convertFrom->unsignedValue);
 				return false;
 			}
 		}
@@ -745,13 +748,15 @@ bool boundsCheckImplicitConversion(Expr *location, Type *convertTo, ExprLiteral 
 
 		if ((convertFrom->flags & TYPE_INTEGER_IS_SIGNED) && convertFrom->signedValue < 0) {
 			if (convertFrom->signedValue < 0) {
-				reportError(location, "Error: Integer literal too small for %.*s (min: 0, given: %" PRIi64 ")", STRING_PRINTF(convertTo->name), convertFrom->signedValue);
+				if (!silentCheck)
+					reportError(location, "Error: Integer literal too small for %.*s (min: 0, given: %" PRIi64 ")", STRING_PRINTF(convertTo->name), convertFrom->signedValue);
 				return false;
 			}
 		}
 
 		if (convertFrom->unsignedValue > max) {
-			reportError(location, "Error: Integer literal too large for %.*s (max: %" PRIu64 ", given: %" PRIu64 ")", STRING_PRINTF(convertTo->name), max, convertFrom->unsignedValue);
+			if (!silentCheck)
+				reportError(location, "Error: Integer literal too large for %.*s (max: %" PRIu64 ", given: %" PRIu64 ")", STRING_PRINTF(convertTo->name), max, convertFrom->unsignedValue);
 			return false;
 		}
 	}
@@ -1264,24 +1269,65 @@ bool switchCasesAreSame(Expr *a, Expr *b) {
 	}
 }
 
-bool inferUnaryDot(SubJob *job, TypeEnum *enum_, Expr **exprPointer) {
+bool inferUnaryDot(SubJob *job, TypeEnum *enum_, Expr **exprPointer, bool silentCheck = false) {
 	auto identifier = static_cast<ExprIdentifier *>(*exprPointer);
 	assert(identifier->flavor == ExprFlavor::IDENTIFIER);
 
-	auto member = findDeclarationNoYield(&enum_->members, identifier->name);
+	auto member = findDeclarationNoYield(enum_->values, identifier->name);
 
 	if (!member) {
-		reportError(identifier, "Error: %.*s does not have member %.*s", STRING_PRINTF(enum_->name), STRING_PRINTF(identifier->name));
+		if (!silentCheck)
+			reportError(identifier, "Error: %.*s does not have member %.*s", STRING_PRINTF(enum_->name), STRING_PRINTF(identifier->name));
 		return false;
 	}
-	else if (!(member->flags & DECLARATION_IS_CONSTANT)) {
-		reportError(identifier, "Error: Can only access constant members of %.*s from a unary dot", STRING_PRINTF(enum_->name));
-		return false;
-	}
+	assert(member->flags & DECLARATION_IS_CONSTANT); // All enum members should be constants
 
-	copyLiteral(exprPointer, member->initialValue);
+	if (!silentCheck)
+		copyLiteral(exprPointer, member->initialValue);
 
 	return true;
+}
+
+bool usingConversionIsValid(SubJob *job, Type *correct, Expr *given, bool *yield) {
+	assert(correct != given->type);
+
+	bool onlyConstants = false;
+	auto struct_ = getExpressionNamespace(given, &onlyConstants, nullptr);
+
+	if (!struct_)
+		return false;
+
+	if (struct_->members.importers.count) {
+		goToSleep(job, &struct_->members.sleepingOnMe, "Using conversion waiting on importer");
+		job->sleepCount += struct_->members.importers.count - 1;
+		*yield = true;
+		return false;
+	}
+
+	for (auto member : struct_->members.declarations) {
+		if (member->flags & DECLARATION_MARKED_AS_USING) {
+			if (!(member->flags & DECLARATION_TYPE_IS_READY)) {
+				goToSleep(job, &member->sleepingOnMyType, "Using conversion waiting on declaration type");
+				*yield = true;
+				return false;
+			}
+
+			auto import = member;
+
+			while (import->flags & DECLARATION_IMPORTED_BY_USING) {
+				import = import->import;
+			}
+
+			if (getDeclarationType(import) == correct) {
+				return true;
+			}
+			else if (given->type->flavor == TypeFlavor::POINTER && !(member->flags & DECLARATION_IS_CONSTANT) && getPointer(getDeclarationType(import)) == correct) {
+				return true;
+			}
+		}
+	}
+
+	return false;
 }
 
 bool tryUsingConversion(SubJob *job, Type *correct, Expr **exprPointer) {
@@ -1953,9 +1999,8 @@ Expr *getDefaultValue(SubJob *job, Type *type, bool *shouldYield) {
 }
 
 struct OverloadIterator {
-	ExprIdentifier *identifier;
 	Declaration *overload;
-
+	u32 serial;
 
 	Declaration *next() {
 		while (overload) {
@@ -1963,7 +2008,7 @@ struct OverloadIterator {
 			overload = overload->nextOverload;
 
 			if (result->flags & DECLARATION_IMPORTED_BY_USING) {
-				if (result->enclosingScope->flavor == BlockFlavor::IMPERATIVE && result->serial >= identifier->serial) {
+				if (result->enclosingScope->flavor == BlockFlavor::IMPERATIVE && result->serial >= serial) {
 					continue;
 				}
 
@@ -1975,10 +2020,14 @@ struct OverloadIterator {
 
 		return nullptr;
 	}
+
+	operator bool() {
+		return overload != nullptr;
+	}
 };
 
-OverloadIterator overloads(ExprIdentifier *overload) {
-	return { overload, overload->declaration };
+OverloadIterator overloads(ExprOverloadSet *overload) {
+	return { overload->currentOverload, overload->serial };
 }
 
 bool checkOverloadSet(SubJob *job, Declaration *firstOverload, bool *yield) {
@@ -2047,73 +2096,137 @@ bool checkOverloadSet(SubJob *job, Declaration *firstOverload, bool *yield) {
 	return true;
 }
 
+bool declarationIsOverloadSet(SubJob *job, Declaration *declaration, bool *yield) {
+	*yield = false;
 
-void collectBlockOverloads(ArraySet<Declaration *> *overloadList, ExprIdentifier *overload, Block *block) {
-	auto declaration = findDeclarationNoYield(block, overload->name);
+	if (!(declaration->flags & DECLARATION_IS_CONSTANT))
+		return false;
 
-	if (declaration && (declaration->flags & DECLARATION_IS_CONSTANT)) {
-		auto imported = declaration;
+	if (declaration->nextOverload)
+		return true;
 
-		if (declaration->flags & DECLARATION_IMPORTED_BY_USING) {
-			imported = imported->import;
-		}
+	if (declaration->flags & DECLARATION_IMPORTED_BY_USING)
+		declaration = declaration->import;
 
-		assert(imported->flags & DECLARATION_VALUE_IS_READY);
-		assert(imported->initialValue);
+	if (!(declaration->flags & DECLARATION_VALUE_IS_READY)) {
+		goToSleep(job, &declaration->sleepingOnMyValue, "Identifier sleeping to see if constant is potentially overloaded function");
 
-		if (declaration->nextOverload || imported->initialValue->flavor == ExprFlavor::FUNCTION) {
-			overload->declaration = declaration;
+		if (!declaration->inferJob)
+			forceAddDeclaration(declaration);
 
-			auto it = overloads(overload);
-
-			while (auto current = it.next()) {
-				overloadList->add(current);
-			}
-		}
+		*yield = true;
+		return false;
 	}
+
+	if (declaration->initialValue->flavor == ExprFlavor::FUNCTION)
+		return true;
+
+	return false;
 }
 
-void collectAllOverloads(ArraySet<Declaration *> *overloadList, ExprIdentifier *overload) {
-	if (!overload->enclosingScope || overload->structAccess) {
-		assert(overload->declaration);
+struct OverloadSetIterator {
+	ExprOverloadSet *overload;
+	bool done = false;
 
-		auto it = overloads(overload);
+	OverloadIterator next(bool *yield) {
+		if (done) return { nullptr, 0 };
 
+		*yield = false;
+
+		if (overload->identifier->structAccess) {
+			done = true;
+			return overloads(overload);
+		}
+
+		while (overload->block) {
+			if (!overload->currentOverload) {
+				overload->currentOverload = findDeclaration(overload->block, overload->identifier->name, yield, overload->serial);
+				if (!overload && *yield)
+					return { nullptr, 0 };
+				overload->serial = overload->block->serial;
+				overload->block = overload->block->parentBlock;
+				overload->currentOverload = nullptr;
+				continue;
+			}
+
+			bool yield;
+			if (!declarationIsOverloadSet(nullptr, overload->currentOverload, &yield)) {
+				if (yield)
+					return { nullptr, 0 };
+				overload->serial = overload->block->serial;
+				overload->block = overload->block->parentBlock;
+				overload->currentOverload = nullptr;
+				continue;
+			}
+
+			auto result = overloads(overload);
+
+			overload->serial = overload->block->serial;
+			overload->block = overload->block->parentBlock;
+			overload->currentOverload = nullptr;
+			return result;
+		}
+
+		if (!overload->currentOverload)
+			overload->currentOverload = findDeclarationNoYield(&overload->identifier->module->members, overload->identifier->name);
+
+
+		if (overload->currentOverload)
+			if (!declarationIsOverloadSet(nullptr, overload->currentOverload, yield))
+				return { nullptr, 0 };
+
+		auto result = overloads(overload);
+
+		overload->currentOverload = overload->identifier->declaration;
+		overload->block = overload->identifier->enclosingScope;
+		overload->serial = overload->identifier->serial;
+
+		done = true;
+
+		return result;
+	}
+};
+
+OverloadSetIterator overloadSets(ExprOverloadSet *overload) {
+	return { overload };
+}
+
+void collectAllOverloads(ArraySet<Declaration *> *overloadList, ExprOverloadSet *overload) {
+	assert(overload->currentOverload == overload->identifier->declaration);
+	assert(overload->serial == overload->identifier->serial);
+	assert(overload->block == overload->identifier->enclosingScope);
+
+	auto overloadIt = overloadSets(overload);
+
+	bool yield;
+	while (auto it = overloadIt.next(&yield)) {
 		while (auto current = it.next()) {
 			overloadList->add(current);
 		}
 	}
-	else {
-		auto block = overload->enclosingScope;
 
-		while (block) {
-			collectBlockOverloads(overloadList, overload, block);
-			
-			block = block->parentBlock;
-		}
-
-		collectBlockOverloads(overloadList, overload, &overload->module->members);
-	}
+	assert(!yield);
 }
 
-bool inferOverloadSetForNonCall(SubJob *job, Type *correct, Expr *&given, bool *yield) {
-	assert(given->flavor == ExprFlavor::IDENTIFIER);
-	auto overload = static_cast<ExprIdentifier *>(given);
+bool inferOverloadSetForNonCall(SubJob *job, Type *correct, Expr *&given, bool *yield, bool silentCheck = false) {
+	assert(given->flavor == ExprFlavor::OVERLOAD_SET);
+	auto overload = static_cast<ExprOverloadSet *>(given);
 
-	bool reported = false;
 	Declaration *found = nullptr;
 
-	if (overload->declaration) {
-		if (!checkOverloadSet(job, overload->declaration, yield))
+	auto overloadIt = overloadSets(overload);
+
+	while (auto it = overloadIt.next(yield)) {
+		bool reported = false;
+		
+		if (!checkOverloadSet(job, it.overload, yield))
 			return false;
 
-		auto it = overloads(overload);
-
 		while (auto current = it.next()) {
-			if (getDeclarationType(current) == correct) {
-				if (found) {
+			if (getDeclarationType(current) != correct) {
+				if (!silentCheck && found) {
 					if (!reported) {
-						reportError(given, "Error: Multiple overloads of %.*s match the type %.*s", STRING_PRINTF(overload->name), STRING_PRINTF(correct->name));
+						reportError(overload, "Error: Multiple overloads of %.*s match the type %.*s", STRING_PRINTF(overload->identifier->name), STRING_PRINTF(correct->name));
 						reportError(found, "");
 						reported = true;
 					}
@@ -2125,26 +2238,24 @@ bool inferOverloadSetForNonCall(SubJob *job, Type *correct, Expr *&given, bool *
 			}
 		}
 
+		if (reported)
+			return false;
+
+		if (found)
+			break;
 	}
-	if (reported) {
+
+	if (*yield)
 		return false;
-	}
-	else if (found) {
-		given = found->initialValue;
+
+	if (found) {
+		if (!silentCheck)
+			given = found->initialValue;
+
+		return true;
 	}
 	else {
-
-		if (overload->resolveFrom && !overload->structAccess) {
-			overload->declaration = nullptr;
-			overload->resolveFrom = overload->resolveFrom->parentBlock;
-
-			beginFlatten(job, &given);
-			*yield = true;
-
-			subJobs.add(job);
-			return false;
-		}
-		else {
+		if (!silentCheck) {
 			ArraySet<Declaration *> overloads;
 			collectAllOverloads(&overloads, overload);
 
@@ -2152,7 +2263,7 @@ bool inferOverloadSetForNonCall(SubJob *job, Type *correct, Expr *&given, bool *
 				reportError(given, "Error: Could not convert from %.*s to  %.*s", STRING_PRINTF(getDeclarationType(overloads[0])->name), STRING_PRINTF(correct->name));
 			}
 			else {
-				reportError(given, "Error: No overloads of %.*s match the type %.*s", STRING_PRINTF(overload->name), STRING_PRINTF(correct->name));
+				reportError(given, "Error: No overloads of %.*s match the type %.*s", STRING_PRINTF(overload->identifier->name), STRING_PRINTF(correct->name));
 
 				for (auto overload : overloads) {
 					reportError(overload, "");
@@ -2162,8 +2273,6 @@ bool inferOverloadSetForNonCall(SubJob *job, Type *correct, Expr *&given, bool *
 
 		return false;
 	}
-
-	return true;
 }
 
 bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yield) {
@@ -2213,18 +2322,6 @@ bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yi
 				break;
 			}
 			case TypeFlavor::FUNCTION: {
-				auto a = static_cast<TypeFunction *>(correct);
-				auto b = static_cast<TypeFunction *>(given->type);
-
-				if (a->isVarargs != b->isVarargs && a->argumentCount == b->argumentCount && a->returnCount == b->returnCount) {
-					// @Incomplete Should this check recursively if function pointers are varargs convertible
-					for (u64 i = 0; i < a->argumentCount; i++) {
-						if (a->argumentTypes[i] != b->argumentTypes[i]) return false;
-						if (a->returnTypes[i] != b->returnTypes[i]) return false;
-					}
-					insertImplicitCast(job->sizeDependencies, &given, correct);
-				}
-
 				if (correct != given->type) {
 					reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
 					return false;
@@ -2333,82 +2430,287 @@ bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yi
 					return false;
 				}
 			}
-			else {
-				if (correct->flavor == TypeFlavor::FLOAT && given->type == &TYPE_UNSIGNED_INT_LITERAL) {
-					auto literal = static_cast<ExprLiteral *>(given);
+			else if (correct->flavor == TypeFlavor::FLOAT && given->type == &TYPE_UNSIGNED_INT_LITERAL) {
+				auto literal = static_cast<ExprLiteral *>(given);
 
-					literal->flavor = ExprFlavor::FLOAT_LITERAL;
-					literal->floatValue = static_cast<double>(literal->unsignedValue);
-					literal->type = correct;
+				literal->flavor = ExprFlavor::FLOAT_LITERAL;
+				literal->floatValue = static_cast<double>(literal->unsignedValue);
+				literal->type = correct;
+			}
+			else if (correct->flavor == TypeFlavor::ENUM && (correct->flags & TYPE_ENUM_IS_FLAGS) &&
+				given->type->flavor == TypeFlavor::INTEGER && given->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(given)->unsignedValue == 0) {
+				insertImplicitCast(job->sizeDependencies, &given, correct);
+			}
+			else if (correct->flavor == TypeFlavor::FUNCTION && given->type == &TYPE_OVERLOAD_SET) {
+				if (!inferOverloadSetForNonCall(job, correct, given, yield)) {
+					return false;
 				}
-				else if (correct->flavor == TypeFlavor::INTEGER && given->type->flavor == TypeFlavor::ENUM && given->flavor == ExprFlavor::INT_LITERAL) {
-					if (!boundsCheckImplicitConversion(location, correct, static_cast<ExprLiteral *>(given))) {
-						return false;
+			}
+			else if (correct->flavor == TypeFlavor::POINTER && static_cast<TypePointer *>(correct)->pointerTo == &TYPE_U8 && given->flavor == ExprFlavor::STRING_LITERAL) {
+				auto identifier = INFER_NEW(ExprIdentifier);
+				identifier->start = given->start;
+				identifier->end = given->end;
+				identifier->flavor = ExprFlavor::IDENTIFIER;
+				identifier->name = "data";
+				identifier->resolveFrom = nullptr;
+				identifier->enclosingScope = nullptr;
+				identifier->structAccess = given;
+				identifier->serial = 0;
+				identifier->declaration = TYPE_STRING.members.declarations[0];
+				identifier->type = correct;
+
+				given = identifier;
+			}
+			else if (correct->flavor == TypeFlavor::FLOAT && given->type == &TYPE_SIGNED_INT_LITERAL) {
+				auto literal = static_cast<ExprLiteral *>(given);
+
+				literal->flavor = ExprFlavor::FLOAT_LITERAL;
+				literal->floatValue = static_cast<double>(literal->signedValue);
+				literal->type = correct;
+			}
+			else if (correct == TYPE_VOID_POINTER && given->type->flavor == TypeFlavor::FUNCTION) {
+				insertImplicitCast(job->sizeDependencies, &given, correct);
+			}
+			else if (given->type == TYPE_VOID_POINTER && correct->flavor == TypeFlavor::FUNCTION) {
+				insertImplicitCast(job->sizeDependencies, &given, correct);
+			}
+			else if (correct->flavor == TypeFlavor::ENUM && given->type == &TYPE_UNARY_DOT) {
+				if (!inferUnaryDot(job, static_cast<TypeEnum *>(correct), &given)) {
+					return false;
+				}
+			}
+
+
+			if (correct != given->type) {
+				if (tryUsingConversion(job, correct, &given)) {
+					*yield = true;
+					return false;
+				} else {
+					if (correct == TYPE_ANY && given->type != TYPE_ANY) {
+						trySolidifyNumericLiteralToDefault(given);
+						insertImplicitCast(job->sizeDependencies, &given, TYPE_ANY);
+						return true;
 					}
 
-					insertImplicitCast(job->sizeDependencies, &given, correct);
-				}
-				else if (correct->flavor == TypeFlavor::ENUM && (correct->flags & TYPE_ENUM_IS_FLAGS) &&
-					given->type->flavor == TypeFlavor::INTEGER && given->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(given)->unsignedValue == 0) {
-					insertImplicitCast(job->sizeDependencies, &given, correct);
-				}
-				else if (correct->flavor == TypeFlavor::FUNCTION && given->type == &TYPE_OVERLOAD_SET) {
-					if (!inferOverloadSetForNonCall(job, correct, given, yield)) {
-						return false;
-					}
-				}
-				else if (correct->flavor == TypeFlavor::POINTER && static_cast<TypePointer *>(correct)->pointerTo == &TYPE_U8 && given->flavor == ExprFlavor::STRING_LITERAL) {
-					auto identifier = INFER_NEW(ExprIdentifier);
-					identifier->start = given->start;
-					identifier->end = given->end;
-					identifier->flavor = ExprFlavor::IDENTIFIER;
-					identifier->name = "data";
-					identifier->resolveFrom = nullptr;
-					identifier->enclosingScope = nullptr;
-					identifier->structAccess = given;
-					identifier->serial = 0;
-					identifier->declaration = TYPE_STRING.members.declarations[0];
-					identifier->type = correct;
-
-					given = identifier;
-				}
-				else if (correct->flavor == TypeFlavor::FLOAT && given->type == &TYPE_SIGNED_INT_LITERAL) {
-					auto literal = static_cast<ExprLiteral *>(given);
-
-					literal->flavor = ExprFlavor::FLOAT_LITERAL;
-					literal->floatValue = static_cast<double>(literal->signedValue);
-					literal->type = correct;
-				}
-				else if ((given->type == TYPE_VOID_POINTER && correct->flavor == TypeFlavor::FUNCTION) || (given->type->flavor == TypeFlavor::FUNCTION && correct == TYPE_VOID_POINTER)) {
-					insertImplicitCast(job->sizeDependencies, &given, correct);
-				}
-				else if (correct->flavor == TypeFlavor::ENUM && given->type == &TYPE_UNARY_DOT) {
-					if (!inferUnaryDot(job, static_cast<TypeEnum *>(correct), &given)) {
-						return false;
-					}
-				}
-
-
-				if (correct != given->type) {
-					if (tryUsingConversion(job, correct, &given)) {
-						*yield = true;
-						return false;
-					} else {
-						if (correct == TYPE_ANY && given->type != TYPE_ANY) {
-							trySolidifyNumericLiteralToDefault(given);
-							insertImplicitCast(job->sizeDependencies, &given, TYPE_ANY);
-							return true;
-						}
-
-						reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
-						return false;
-					}
+					reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
+					return false;
 				}
 			}
 		}
 	}
 
 	return true;
+}
+
+namespace ConversionCost {
+	enum Conversion : u8 {
+		EXACT_MATCH,
+		EXTEND_INT_TO_INT8, // Used for int literals that fit in s8/u8
+		EXTEND_INT_TO_INT16,
+		EXTEND_INT_TO_INT32,
+		EXTEND_INT_TO_INT64,
+		INT_LITERAL_TO_FLOAT,  // Used when an int literal converts to float (normally int->float is illegal)
+		CONVERSION,
+		ANY,
+
+		MAX_VALID,
+
+		CANNOT_CONVERT
+	};
+};
+
+typedef ConversionCost::Conversion Conversion;
+
+Conversion getIntExtendCost(Type *type) {
+	switch (type->size) {
+	case 1:  return ConversionCost::EXTEND_INT_TO_INT8;
+	case 2:  return ConversionCost::EXTEND_INT_TO_INT16;
+	case 4:  return ConversionCost::EXTEND_INT_TO_INT32;
+	case 8:  return ConversionCost::EXTEND_INT_TO_INT64;
+	default: assert(false); return ConversionCost::CANNOT_CONVERT;
+	}
+}
+
+Conversion getConversionCost(SubJob *job, Expr *location, Type *correct, Expr *given, bool *yield) {
+	*yield = false;
+	if (correct == given->type)
+		return ConversionCost::EXACT_MATCH;
+
+	if (correct->flavor == given->type->flavor) {
+		switch (correct->flavor) {
+		case TypeFlavor::BOOL:
+		case TypeFlavor::STRING:
+		case TypeFlavor::TYPE: {
+			assert(false); //bool, type and string should be handled by correct == given->type
+			return ConversionCost::CANNOT_CONVERT;
+		}
+		case TypeFlavor::ARRAY: {
+			// Array conversions must be [N] -> [] or [..] to []
+			if (!(given->type->flags & (TYPE_ARRAY_IS_DYNAMIC | TYPE_ARRAY_IS_FIXED)))
+				return ConversionCost::CANNOT_CONVERT;
+
+			if (correct->flags & (TYPE_ARRAY_IS_DYNAMIC | TYPE_ARRAY_IS_FIXED))
+				return ConversionCost::CANNOT_CONVERT;
+
+			if (static_cast<TypeArray *>(given->type)->arrayOf != static_cast<TypeArray *>(correct)->arrayOf)
+				return ConversionCost::CANNOT_CONVERT;
+			
+
+			return ConversionCost::CONVERSION;
+		}
+		case TypeFlavor::FLOAT: {
+			if (given->type == &TYPE_FLOAT_LITERAL)
+				return ConversionCost::EXACT_MATCH;
+			else
+				return ConversionCost::CANNOT_CONVERT;
+		}
+		case TypeFlavor::FUNCTION: {
+			// Allow convsersions like (int..) -> void to ([]int) -> void
+
+			auto a = static_cast<TypeFunction *>(correct);
+			auto b = static_cast<TypeFunction *>(given->type);
+
+			if (a->isVarargs == b->isVarargs || a->argumentCount != b->argumentCount || a->returnCount != b->returnCount)
+				return ConversionCost::CANNOT_CONVERT;
+
+			if ((a->flags & TYPE_FUNCTION_IS_C_CALL) != (b->flags & TYPE_FUNCTION_IS_C_CALL))
+				return ConversionCost::CANNOT_CONVERT;
+
+			for (u64 i = 0; i < a->argumentCount; i++) {
+				if (a->argumentTypes[i] != b->argumentTypes[i]) return ConversionCost::CANNOT_CONVERT;
+				if (a->returnTypes[i] != b->returnTypes[i]) return ConversionCost::CANNOT_CONVERT;
+			}
+
+			return ConversionCost::CONVERSION;
+		}
+		case TypeFlavor::INTEGER: {
+			if ((correct->flags & TYPE_INTEGER_IS_SIGNED) == (given->type->flags & TYPE_INTEGER_IS_SIGNED)) {
+				if (given->type == &TYPE_UNSIGNED_INT_LITERAL || given->type == &TYPE_SIGNED_INT_LITERAL) {
+					if (!boundsCheckImplicitConversion(location, correct, static_cast<ExprLiteral *>(given)))
+						return ConversionCost::CANNOT_CONVERT;
+				}
+				else if (correct->size < given->type->size) {
+					return ConversionCost::CANNOT_CONVERT;
+				}
+			}
+			else {
+				if (given->type != &TYPE_UNSIGNED_INT_LITERAL)
+					return ConversionCost::CANNOT_CONVERT;
+
+				if (!boundsCheckImplicitConversion(location, correct, static_cast<ExprLiteral *>(given)))
+					return ConversionCost::CANNOT_CONVERT;
+			}
+
+			return getIntExtendCost(correct);
+		}
+		case TypeFlavor::POINTER: {
+			if (correct == TYPE_VOID_POINTER)
+				return ConversionCost::CONVERSION;
+
+			if (given->type == TYPE_VOID_POINTER)
+				return ConversionCost::CONVERSION;
+
+			auto givenPointer = static_cast<TypePointer *>(given->type)->pointerTo;
+			auto correctPointer = static_cast<TypePointer *>(correct)->pointerTo;
+				
+			if (givenPointer->flavor == TypeFlavor::ARRAY && correctPointer->flavor == TypeFlavor::ARRAY &&
+				(givenPointer->flags & TYPE_ARRAY_IS_DYNAMIC) && !(correctPointer->flags & (TYPE_ARRAY_IS_FIXED | TYPE_ARRAY_IS_DYNAMIC))) {
+				if (static_cast<TypeArray *>(givenPointer)->arrayOf == static_cast<TypeArray *>(correctPointer)->arrayOf) {
+					return ConversionCost::CONVERSION;
+				}
+			}
+				
+			if (usingConversionIsValid(job, correct, given, yield))
+				return ConversionCost::CONVERSION;
+
+			return ConversionCost::CANNOT_CONVERT;
+		}
+		case TypeFlavor::STRUCT: {
+			if (usingConversionIsValid(job, correct, given, yield))
+				return ConversionCost::CONVERSION;
+			else if (*yield)
+				return ConversionCost::CANNOT_CONVERT;
+
+			if (correct == TYPE_ANY)
+				return ConversionCost::ANY;
+
+			return ConversionCost::CANNOT_CONVERT;
+		}
+		case TypeFlavor::ENUM: {
+			return ConversionCost::CANNOT_CONVERT; // Legal case handled by correct == given->type
+		}
+		default:
+			assert(false);
+			return ConversionCost::CANNOT_CONVERT;
+		}
+	}
+	else {
+		if (given->type == &TYPE_AUTO_CAST) {
+			auto right = static_cast<ExprBinaryOperator *>(given)->right;
+
+			if (right->type == correct)
+				return ConversionCost::EXACT_MATCH;
+
+			if (usingConversionIsValid(job, correct, right, yield))
+				return ConversionCost::EXACT_MATCH;
+			else if (*yield)
+				return ConversionCost::CANNOT_CONVERT;
+
+
+			if (isValidCast(correct, getTypeForExpr(right)))
+				return ConversionCost::EXACT_MATCH;
+			else
+				return ConversionCost::CANNOT_CONVERT;
+		}
+		
+		if (correct->flavor == TypeFlavor::FLOAT && (given->type == &TYPE_UNSIGNED_INT_LITERAL || given->type == &TYPE_SIGNED_INT_LITERAL)) {
+			return ConversionCost::INT_LITERAL_TO_FLOAT;
+		}
+
+		if (correct->flavor == TypeFlavor::ENUM && (correct->flags & TYPE_ENUM_IS_FLAGS) &&
+			given->type->flavor == TypeFlavor::INTEGER && given->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(given)->unsignedValue == 0) {
+			return ConversionCost::CONVERSION;
+		}
+
+		if (correct->flavor == TypeFlavor::FUNCTION && given->type == &TYPE_OVERLOAD_SET) {
+			if (!inferOverloadSetForNonCall(job, correct, given, yield, true)) {
+				return ConversionCost::CANNOT_CONVERT;
+			}
+
+			return ConversionCost::EXACT_MATCH;
+		}
+
+		if (correct->flavor == TypeFlavor::POINTER && static_cast<TypePointer *>(correct)->pointerTo == &TYPE_U8 && given->flavor == ExprFlavor::STRING_LITERAL) {
+			return ConversionCost::CONVERSION;
+		}
+		
+		if (given->type->flavor == TypeFlavor::FUNCTION && correct == TYPE_VOID_POINTER) {
+			return ConversionCost::CONVERSION;
+		}
+
+		if (correct->flavor == TypeFlavor::FUNCTION && given->type == TYPE_VOID_POINTER) {
+			return ConversionCost::CONVERSION;
+		}
+		
+		if (correct->flavor == TypeFlavor::ENUM && given->type == &TYPE_UNARY_DOT) {
+			if (!inferUnaryDot(job, static_cast<TypeEnum *>(correct), &given, true)) {
+				return ConversionCost::CANNOT_CONVERT;
+			}
+
+			return ConversionCost::EXACT_MATCH;
+		}
+
+
+		if (usingConversionIsValid(job, correct, given, yield))
+			return ConversionCost::CONVERSION;
+		else if (*yield)
+				return ConversionCost::CANNOT_CONVERT;
+
+		if (correct == TYPE_ANY)
+			return ConversionCost::ANY;
+
+		return ConversionCost::CANNOT_CONVERT;
+	}
 }
 
 bool isAddressable(Expr *expr) {
@@ -2598,6 +2900,98 @@ bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char 
 		Type *correct = getDeclarationType(block->declarations[i]);
 
 		if (!assignOp(job, arguments->values[i], correct, arguments->values[i], yield)) { // @Incomplete: Give function call specific error messages instead of general type conversion errors
+			return false;
+		}
+	}
+
+	return true;
+}
+
+bool checkArgumentsForOverload(SubJob *job, Arguments *arguments, Block *block, ExprFunction *function, u32 *conversions, bool *yield) {
+	*yield = false;
+
+#if BUILD_DEBUG
+	for (u32 i = 0; i < block->declarations.count; i++) {
+		assert(block->declarations[i]->serial == i);
+	}
+#endif
+
+	auto sortedArguments = new bool[block->declarations.count]{};
+
+	at_exit{
+		delete[] sortedArguments;
+	};
+
+	for (u32 i = 0; i < arguments->count; i++) {
+		Declaration *argument;
+
+		u32 argIndex = i;
+		if (arguments->names && arguments->names[i].length) {
+			argument = findDeclarationNoYield(block, arguments->names[i]);
+		}
+		else {
+			if (i >= block->declarations.count) {
+				return false;
+			}
+
+			argument = block->declarations[i];
+		}
+
+		if (!argument) {
+			return false;
+		}
+
+		argIndex = argument->serial;
+		assert(!(argument->flags & DECLARATION_IMPORTED_BY_USING));
+
+		if (sortedArguments[argIndex]) {
+			return false;
+		}
+
+		if ((argument->flags & DECLARATION_IS_VARARGS) && !(arguments->values[i]->flags & EXPR_IS_SPREAD)) {
+			Type *varargsType = static_cast<TypeArray *>(getDeclarationType(argument))->arrayOf;
+
+			for (; i < arguments->count; i++) {
+				if (arguments->names && arguments->names[i].length) {
+					i--; // i will be incremented in the outer loop
+					break;
+				}
+
+				auto cost = getConversionCost(job, arguments->values[i], varargsType, arguments->values[i], yield);
+
+				if (cost == ConversionCost::CANNOT_CONVERT) {
+					return false;
+				}
+
+				conversions[cost]++;
+			}
+
+			sortedArguments[argIndex] = true;
+		}
+		else {
+			if (!(argument->flags & DECLARATION_IS_VARARGS) && (arguments->values[i]->flags & EXPR_IS_SPREAD)) {
+				return false;
+			}
+
+			auto cost = getConversionCost(job, arguments->values[i], getDeclarationType(argument), arguments->values[i], yield);
+
+			if (cost == ConversionCost::CANNOT_CONVERT) {
+				return false;
+			}
+
+			conversions[cost]++;
+
+			sortedArguments[argIndex] = true;
+		}
+	}
+
+	for (u32 i = 0; i < block->declarations.count; i++) {
+		if (sortedArguments[i])
+			continue;
+
+		auto argument = block->declarations[i];
+
+		if (!argument->initialValue && !(argument->flags & DECLARATION_IS_VARARGS)) {
 			return false;
 		}
 	}
@@ -2826,14 +3220,14 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 						right->type = &TYPE_SIGNED_INT_LITERAL;
 					}
 					else if ((left->type->flags & TYPE_INTEGER_IS_SIGNED) == (right->type->flags & TYPE_INTEGER_IS_SIGNED)) {
-						if (left->flavor == ExprFlavor::INT_LITERAL) {
+						if (left->type == &TYPE_UNSIGNED_INT_LITERAL || left->type == &TYPE_SIGNED_INT_LITERAL) {
 							if (!boundsCheckImplicitConversion(binary, right->type, static_cast<ExprLiteral *>(left))) {
 								return false;
 							}
 
 							left->type = right->type;
 						}
-						else if (right->flavor == ExprFlavor::INT_LITERAL) {
+						else if (right->type == &TYPE_UNSIGNED_INT_LITERAL || right->type == &TYPE_SIGNED_INT_LITERAL) {
 							if (!boundsCheckImplicitConversion(binary, left->type, static_cast<ExprLiteral *>(right))) {
 								return false;
 							}
@@ -2936,7 +3330,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 
 				if (left->type->flavor == TypeFlavor::INTEGER && right->type->flavor == TypeFlavor::INTEGER) {
 					if ((left->type->flags & TYPE_INTEGER_IS_SIGNED) == (right->type->flags & TYPE_INTEGER_IS_SIGNED)) {
-						if (right->flavor == ExprFlavor::INT_LITERAL) {
+						if (right->type == &TYPE_UNSIGNED_INT_LITERAL || right->type == &TYPE_SIGNED_INT_LITERAL) {
 							if (!boundsCheckImplicitConversion(binary, left->type, static_cast<ExprLiteral *>(right))) {
 								return false;
 							}
@@ -2982,6 +3376,9 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 						reportError(binary, "Error: Cannot convert between %.*s and %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
 						return false;
 					}
+				}
+				else if (left->type == TYPE_VOID_POINTER && (right->type->flavor == TypeFlavor::POINTER || right->type->flavor == TypeFlavor::FUNCTION)) {
+					insertImplicitCast(job->sizeDependencies, &right, left->type);
 				}
 				else if (right->type == TYPE_VOID_POINTER && (left->type->flavor == TypeFlavor::POINTER || left->type->flavor == TypeFlavor::FUNCTION)) {
 					insertImplicitCast(job->sizeDependencies, &right, left->type);
@@ -3335,17 +3732,14 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 		break;
 	}
 	case TOKEN('='): {
-		if (!right) {
-			assert(false);
-		}
-		else {
-			if (!assignOp(job, binary, left->type, binary->right, yield)) {
-				if (yield) {
-					return true;
-				}
-				else {
-					return false;
-				}
+		assert(right);
+
+		if (!assignOp(job, binary, left->type, binary->right, yield)) {
+			if (*yield) {
+				return true;
+			}
+			else {
+				return false;
 			}
 		}
 
@@ -3627,26 +4021,24 @@ bool inferFlattened(SubJob *job) {
 						bool yield;
 
 						if (Declaration *declaration = findDeclaration(identifier->resolveFrom, identifier->name, &yield, identifier->serial)) {
-							if ((declaration->flags & DECLARATION_IS_CONSTANT) && !(declaration->flags & DECLARATION_IMPORTED_BY_USING)) {
+							if (declaration->flags & DECLARATION_IS_CONSTANT) {
 								identifier->declaration = declaration;
 								break;
 							}
-							else {
-								if (identifier->flags & EXPR_IDENTIFIER_RESOLVING_ONLY_CONSTANTS) {
-									reportError(identifier, "Error: Cannot refer to variable from outside function or struct, capture is not supported");
-									return false;
-								}
 
-								if (declaration->enclosingScope->flavor != BlockFlavor::IMPERATIVE || declaration->serial < identifier->serial) {
-									identifier->declaration = declaration;
-									break;
-								}
-								else {
-									reportError(identifier, "Error: Cannot refer to variable '%.*s' before it was declared", STRING_PRINTF(identifier->name));
-									reportError(declaration, "   ..: Here is the location of the declaration");
-									return false;
-								}
+							if (identifier->flags & EXPR_IDENTIFIER_RESOLVING_ONLY_CONSTANTS) {
+								reportError(identifier, "Error: Cannot refer to variable from outside function or struct, capture is not supported");
+								return false;
 							}
+
+							if (declaration->enclosingScope->flavor != BlockFlavor::IMPERATIVE || declaration->serial < identifier->serial) {
+								identifier->declaration = declaration;
+								break;
+							}
+
+							reportError(identifier, "Error: Cannot refer to variable '%.*s' before it was declared", STRING_PRINTF(identifier->name));
+							reportError(declaration, "   ..: Here is the location of the declaration");
+							return false;
 						}
 						else if (yield) {
 							goToSleep(job, &identifier->resolveFrom->sleepingOnMe, "Identifier scope has importers", identifier->name);
@@ -3722,48 +4114,32 @@ bool inferFlattened(SubJob *job) {
 				}
 			}
 
-			if ((identifier->declaration->flags & DECLARATION_IS_CONSTANT)) {
+			bool yield;
+			if (declarationIsOverloadSet(job, unimportedDeclaration, &yield)) {
+				auto overloadSet = INFER_NEW(ExprOverloadSet);
+				overloadSet->flavor = ExprFlavor::OVERLOAD_SET;
+				overloadSet->start = identifier->start;
+				overloadSet->end = identifier->end;
+				overloadSet->identifier = identifier;
+				overloadSet->currentOverload = identifier->declaration;
+				overloadSet->serial = identifier->serial;
+				overloadSet->block = identifier->enclosingScope;
 
-				if (unimportedDeclaration->nextOverload) {
-					identifier->type = &TYPE_OVERLOAD_SET;
-					break;
-				}
-				else {
-					if (!(identifier->declaration->flags & DECLARATION_VALUE_IS_READY)) {
-						goToSleep(job, &identifier->declaration->sleepingOnMyValue, "Identifier sleeping to see if constant is potentially overloaded function");
+				overloadSet->type = &TYPE_OVERLOAD_SET;
 
-						if (!identifier->declaration->inferJob)
-							forceAddDeclaration(identifier->declaration);
-						return true;
-					}
-					
-					if (identifier->declaration->initialValue->flavor == ExprFlavor::FUNCTION) {
-						identifier->type = &TYPE_OVERLOAD_SET;
-						break;
-					}
-				}
+				*exprPointer = overloadSet;
+				break;
 			}
+			else if (yield) {
+				return true;
+			}
+			
 
-
-			if (identifier->type == &TYPE_OVERLOAD_SET) {
-				// This was an overload set where the identifier is being re-resolved since none of the overloads in the first scope 
-				// matched so the parent scopes must be searched
-				// If we get here, the new declaration is not a function or overload set so skip it and move on to the outer scope
-
-				identifier->declaration = nullptr;
-
-				if (identifier->resolveFrom && !identifier->structAccess) {
-					identifier->resolveFrom = identifier->resolveFrom->parentBlock;
-
-					// Go back to the top and continue resolving this identifier
-					continue;
-
-				}
-				else {
-					// If there are no more outer scopes to search, none of the overloads matched
-					// Give the caller a TYPE_OVERLOAD_SET with a declaration of nullptr so they know
-					// to report an error (report it at use site instead of here to give a better error message)
-					break;
+			if (unimportedDeclaration->flags & DECLARATION_IMPORTED_BY_USING) {
+				if (unimportedDeclaration->enclosingScope->flavor == BlockFlavor::IMPERATIVE && unimportedDeclaration->serial >= identifier->serial) {
+					reportError(identifier, "Error: Cannot refer to variable '%.*s' before it was declared", STRING_PRINTF(identifier->name));
+					reportError(unimportedDeclaration, "   ..: Here is the location of the declaration");
+					return false;
 				}
 			}
 
@@ -4517,30 +4893,98 @@ bool inferFlattened(SubJob *job) {
 			auto call = static_cast<ExprFunctionCall *>(expr);
 
 			if (call->function->type == &TYPE_OVERLOAD_SET) {
-				assert(call->function->flavor == ExprFlavor::IDENTIFIER);
-				auto overload = static_cast<ExprIdentifier *>(call->function);
+				assert(call->function->flavor == ExprFlavor::OVERLOAD_SET);
+				auto overload = static_cast<ExprOverloadSet *>(call->function);
+
+				auto overloadsIt = overloadSets(overload);
 
 				bool yield;
-				if (!checkOverloadSet(job, overload->declaration, &yield)) {
-					return yield;
+				while (auto it = overloadsIt.next(&yield)) {
+					if (!checkOverloadSet(job, it.overload, &yield))
+						return yield;
+
+					struct OverloadMatchCost {
+						Declaration *declaration;
+						u32 argumentCount[ConversionCost::MAX_VALID];
+					};
+
+					Array<OverloadMatchCost> matches;
+					at_exit{
+						matches.free();
+					};
+
+					while (Declaration *declaration = it.next()) {
+						assert(declaration->initialValue->flavor == ExprFlavor::FUNCTION);
+
+						OverloadMatchCost conversions { declaration };
+
+						auto function = static_cast<ExprFunction *>(declaration->initialValue);
+
+						if (!checkArgumentsForOverload(job, &call->arguments, &function->arguments, function, conversions.argumentCount, &yield)) {
+							if (yield)
+								return true;
+							else
+								continue;
+						}
+
+						if (matches.count) {
+							for (u32 i = 0; i < ConversionCost::MAX_VALID; i++) {
+								if (conversions.argumentCount[i] < matches[0].argumentCount[i]) {
+									goto skip;
+								}
+								else if (conversions.argumentCount[i] > matches[0].argumentCount[i]) {
+									matches.clear();
+									break;
+								}
+							}
+
+							matches.add(conversions);
+						skip:;
+						}
+						else {
+							matches.add(conversions);
+						}
+					}
+
+					if (matches.count > 1) {
+						reportError(call, "Error: Multiple overloads of match the given arguments");
+
+						for (auto match : matches) {
+							reportError(match.declaration, "");
+						}
+
+						return false;
+					}
+					else if (matches.count == 1) {
+						call->function = matches[0].declaration->initialValue;
+						break;
+					}
 				}
 
-				if (overload->declaration->nextOverload) {
-					// @Incomplete
-					reportError(call, "Error: Overload resoltion for calls is not implemented yet");
-					return false;
-				}
-				else {
-					auto declaration = overload->declaration;
+				if (yield)
+					return true;
 
-					if (declaration->flags & DECLARATION_IMPORTED_BY_USING)
-						declaration = declaration->import;
+				if (call->function->flavor == ExprFlavor::OVERLOAD_SET) {
+					ArraySet<Declaration *> overloads;
 
-					assert(declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::FUNCTION);
+					collectAllOverloads(&overloads, overload);
 
-					call->function = declaration->initialValue;
+					if (overloads.size() == 1) {
+						// If there is only one overload go to the normal call handling code to report a specific error
+						call->function = overloads[0]->initialValue;
+					}
+					else {
+						reportError(call, "Error: No overloads match the type given arguments");
+
+						for (auto overload : overloads) {
+							reportError(overload, "");
+						}
+
+						return false;
+					}
 				}
 			}
+
 			if (call->function->type->flavor != TypeFlavor::FUNCTION) {
 				reportError(call->function, "Error: Cannot call a %.*s", STRING_PRINTF(call->function->type->name));
 				return false;
@@ -6566,8 +7010,8 @@ bool inferSize(SubJob *subJob) {
 			reportError(enum_->integerType, "Error: enum type must be an integer");
 			return false;
 		}
-		else if ((static_cast<ExprLiteral *>(enum_->integerType)->typeValue->flags & TYPE_INTEGER_IS_SIGNED) && (enum_->struct_.flags & TYPE_ENUM_IS_FLAGS)) {
-			reportError(enum_->integerType, "Error: enum_flags cannot have a signed type");
+		else if (static_cast<ExprLiteral *>(enum_->integerType)->typeValue->flags & TYPE_INTEGER_IS_SIGNED) {
+			reportError(enum_->integerType, "Error: enums cannot have a signed type");
 			return false;
 		}
 

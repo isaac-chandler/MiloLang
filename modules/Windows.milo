@@ -168,7 +168,7 @@ Window_Style_Ex :: enum_flags u32 {
 
 using Window_Style_Ex.members
 
-Show_Window_Command :: enum s32 {
+Show_Window_Command :: enum u32 {
 	SW_HIDE            ::  0
 	SW_SHOWNORMAL      ::  1
 	SW_NORMAL          ::  1
@@ -275,7 +275,7 @@ WHITENESS :: 0x00FF_0062
 
 GetStockObject :: (i: Stock_Object) -> HGDIOBJ #external "gdi32"
 
-Stock_Object :: enum s32 {
+Stock_Object :: enum u32 {
 	WHITE_BRUSH         ::  0
 	LTGRAY_BRUSH        ::  1
 	GRAY_BRUSH          ::  2

@@ -618,7 +618,7 @@ main :: () {
 	
 	GetStartupInfoW(*startup_info)
 	
-	show_command: u16 = SW_SHOWDEFAULT
+	show_command : = SW_SHOWDEFAULT
 	
 	enemy_mesh: [4][3]Vector2
 	
@@ -651,7 +651,7 @@ main :: () {
 	enemy_mesh[3][2].y = 24
 	
 	if startup_info.dwFlags & STARTF_USESHOWWINDOW {
-		show_command = startup_info.wShowWindow
+		show_command = cast() startup_info.wShowWindow
 	}
 	
 	instance := GetModuleHandleW(null)
@@ -866,7 +866,7 @@ main :: () {
 	glEnable(GL_BLEND)
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 	
-	ShowWindow(window_handle, cast() show_command)
+	ShowWindow(window_handle, show_command)
 	
 	last_time: s64
 

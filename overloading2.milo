@@ -1,0 +1,3 @@
+print :: (value: bool) {
+	print("bool print - %\n", value)
+}

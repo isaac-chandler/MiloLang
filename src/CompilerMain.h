@@ -77,4 +77,4 @@ inline ArraySet<Library> libraries;
 
 String msprintf(const char *format, ...);
 
-inline bool linkLibC = true;
+inline bool linkLibC = false;

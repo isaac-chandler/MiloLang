@@ -176,7 +176,9 @@ enum class ExprFlavor : u8 {
 	RUN, 
 
 	LOAD, 
-	IMPORT
+	IMPORT, 
+
+	OVERLOAD_SET
 };
 
 struct Declaration;
@@ -195,6 +197,14 @@ struct Expr {
 #if BUILD_DEBUG // So I don't have to cast it to view the actual expression type in the debugger
 	virtual ~Expr() {}
 #endif
+};
+
+struct ExprOverloadSet : Expr {
+	ExprIdentifier *identifier;
+	
+	Declaration *currentOverload;
+	Block *block;
+	u32 serial;
 };
 
 struct ExprSlice : Expr {
