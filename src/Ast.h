@@ -288,6 +288,8 @@ struct ExprDefer : Expr {
 
 #define EXPR_IMPORT_IS_EXPR 0x80'0000
 
+#define EXPR_IDENTIER_DEFINES_POLYMORPH_VARIABLE 0x100'0000
+
 struct ExprLoad : Expr {
 	Expr *file;
 	struct Module *module;
@@ -381,6 +383,7 @@ struct ExprBlock : Expr {
 };
 
 struct ExprFunction : Expr {
+	Block constants;
 	Block arguments;
 	Block returns;
 	IrState state;

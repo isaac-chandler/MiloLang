@@ -161,6 +161,11 @@ public:
 		return storage[index];
 	}
 
+	T &peek() {
+		assert(count);
+		return storage[count - 1];
+	}
+
 	T *begin() const {
 		return storage;
 	}

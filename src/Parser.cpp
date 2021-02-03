@@ -1321,17 +1321,26 @@ bool parseArgumentList(LexerFile *lexer, ExprFunction *function, bool arguments,
 	return true;
 }
 
-ExprFunction *parseFunctionOrFunctionType(LexerFile *lexer, bool allowBody) {
+static ExprFunction *currentFunction = nullptr;
+
+ExprFunction *parseFunctionOrFunctionType(LexerFile *lexer, CodeLocation start, bool allowBody) {
 	PROFILE_FUNC();
 	ExprFunction *function = PARSER_NEW(ExprFunction);
+	function->constants.flavor = BlockFlavor::CONSTANTS;
 	function->arguments.flavor = BlockFlavor::ARGUMENTS;
 	function->returns.flavor = BlockFlavor::RETURNS;
+	function->start = start;
 
 	ExprBlock *usingBlock = nullptr;
 
 	pushBlock(lexer, &function->arguments);
+
+	lexer->functionHeaderStack.add(function);
+
 	if (!parseArgumentList(lexer, function, true, &usingBlock))
 		return nullptr;
+
+	lexer->functionHeaderStack.pop();
 
 	bool hadReturnType = true;
 
@@ -1342,8 +1351,7 @@ ExprFunction *parseFunctionOrFunctionType(LexerFile *lexer, bool allowBody) {
 
 		if (expectAndConsume(lexer, '(')) {
 			if (isFunctionType(lexer)) {
-				function->start = start;
-				auto function = parseFunctionOrFunctionType(lexer, false);
+				auto function = parseFunctionOrFunctionType(lexer, start, false);
 				if (!function)
 					return nullptr;
 
@@ -1395,6 +1403,10 @@ ExprFunction *parseFunctionOrFunctionType(LexerFile *lexer, bool allowBody) {
 		}
 	}
 	else if (allowBody && lexer->token.type == TokenT::EXTERNAL) {
+		if (function->constants.declarations.count) {
+			reportError(function, "Error: External functions cannot be polymorphic");
+			return nullptr;
+		}
 		function->flags |= EXPR_FUNCTION_IS_C_CALL;
 		lexer->advance();
 
@@ -1422,6 +1434,30 @@ ExprFunction *parseFunctionOrFunctionType(LexerFile *lexer, bool allowBody) {
 		if (!hadReturnType) {
 			reportError(function, "Error: A function prototype must have a return type");
 			return nullptr;
+		}
+
+		if (function->constants.declarations.count) {
+			if (lexer->functionHeaderStack.count) {
+				if (lexer->currentBlock->flavor != BlockFlavor::ARGUMENTS && lexer->currentBlock->flavor != BlockFlavor::RETURNS) {
+					reportError(function->constants.declarations[0], "Error: Cannot have a polymorph variable declartion outside a function header");
+					return nullptr;
+				}
+
+				auto outerFunction = lexer->functionHeaderStack.peek();
+
+
+				for (auto declaration : function->constants.declarations) {
+					if (!addDeclarationToBlock(&outerFunction->constants, declaration, lexer->identifierSerial++)) {
+						return nullptr;
+					}
+				}
+
+				function->constants.declarations.clear();
+			}
+			else {
+				reportError(function->constants.declarations[0], "Error: Cannot have a polymorph variable declartion outside a function header");
+				return nullptr;
+			}
 		}
 
 		function->flavor = ExprFlavor::FUNCTION_PROTOTYPE;
@@ -1478,10 +1514,9 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 	Expr *expr = nullptr;
 
 	if (isFunctionOrFunctionType(lexer)) { // This is an argument declaration
-		auto function = parseFunctionOrFunctionType(lexer, true);
+		auto function = parseFunctionOrFunctionType(lexer, start, true);
 		if (!function)
 			return nullptr;
-		function->start = start;
 
 		expr = function;
 	}
@@ -1602,6 +1637,58 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		expr = identifier;
 
 		lexer->advance();
+	}
+	else if (expectAndConsume(lexer, '$')) {
+		if (lexer->token.type != TokenT::IDENTIFIER) {
+			reportExpectedError(&lexer->token, "Error: Expected polymorph variable name after '$'");
+			return nullptr;
+		}
+
+		auto declaration = PARSER_NEW(Declaration);
+		declaration->type = parserMakeTypeLiteral(lexer, start, lexer->token.end, &TYPE_TYPE);
+		declaration->flags |= DECLARATION_IS_CONSTANT | DECLARATION_TYPE_IS_READY;
+		declaration->start = start;
+		declaration->end = lexer->token.end;
+		declaration->initialValue = nullptr;
+
+		if (!lexer->functionHeaderStack.count) {
+			reportError(declaration, "Error: Cannot have a polymorph variable declartion outside a function header");
+			return nullptr;
+		}
+
+		assert(lexer->currentBlock);
+
+		if (lexer->currentBlock->flavor != BlockFlavor::ARGUMENTS && lexer->currentBlock->flavor != BlockFlavor::RETURNS) {
+			reportError(declaration, "Error: Cannot have a polymorph variable declartion outside a function header");
+			return nullptr;
+		}
+
+		if (!addDeclarationToBlock(&lexer->functionHeaderStack.peek()->constants, declaration, lexer->identifierSerial++)) {
+			return nullptr;
+		}
+
+		ExprIdentifier *identifier = PARSER_NEW(ExprIdentifier);
+		identifier->start = start;
+		identifier->end = end;
+		identifier->name = lexer->token.text;
+		identifier->flavor = ExprFlavor::IDENTIFIER;
+		identifier->resolveFrom = lexer->currentBlock;
+		identifier->module = lexer->module;
+		identifier->enclosingScope = lexer->currentBlock;
+		identifier->declaration = declaration;
+		identifier->structAccess = nullptr;
+		identifier->flags |= EXPR_IDENTIER_DEFINES_POLYMORPH_VARIABLE;
+
+		if (lexer->currentBlock) {
+			identifier->serial = lexer->identifierSerial++;
+		}
+		else {
+			identifier->serial = 0;
+		}
+
+		lexer->advance();
+
+		expr = identifier;
 	}
 	else if (lexer->token.type == TokenT::IDENTIFIER) {
 		ExprIdentifier *identifier = PARSER_NEW(ExprIdentifier);
@@ -2193,6 +2280,10 @@ Expr *parseUnaryExpr(LexerFile *lexer, CodeLocation plusStart) {
 		auto function = PARSER_NEW(ExprFunction);
 		function->start = lexer->token.start;
 		function->flavor = ExprFlavor::FUNCTION;
+
+		function->constants.flavor = BlockFlavor::CONSTANTS;
+		pushBlock(lexer, &function->constants);
+
 		function->arguments.flavor = BlockFlavor::ARGUMENTS;
 		pushBlock(lexer, &function->arguments);
 
@@ -2232,6 +2323,7 @@ Expr *parseUnaryExpr(LexerFile *lexer, CodeLocation plusStart) {
 		}
 
 		popBlock(lexer, &function->arguments);
+		popBlock(lexer, &function->constants);
 
 		function->end = lexer->previousTokenEnd;
 		run->function = function;
@@ -2476,6 +2568,9 @@ Expr *parseExpr(LexerFile *lexer) {
 	return parseBinaryOperator(lexer);
 }
 
+u32 getPolymorphCount(LexerFile *lexer) {
+	return lexer->functionHeaderStack.count ? lexer->functionHeaderStack.peek()->constants.declarations.count : 0;
+}
 
 Declaration *parseDeclaration(LexerFile *lexer) {
 	PROFILE_FUNC();
@@ -2530,6 +2625,7 @@ Declaration *parseDeclaration(LexerFile *lexer) {
 		declaration->end = lexer->previousTokenEnd;
 	}
 	else if (expectAndConsume(lexer, '=')) {
+		u32 initialPolymorphCount = getPolymorphCount(lexer);
 		declaration->type = nullptr;
 
 		if (lexer->token.type == TokenT::DOUBLE_DASH) {
@@ -2552,11 +2648,21 @@ Declaration *parseDeclaration(LexerFile *lexer) {
 		declaration->initialValue->valueOfDeclaration = declaration;
 
 		declaration->end = lexer->previousTokenEnd;
+
+		if (getPolymorphCount(lexer) != initialPolymorphCount) {
+			reportError(declaration->initialValue, "Error: Polymorph variables cannot be defined in an argument value");
+			return nullptr;
+		}
 	}
 	else {
+		u32 initialPolymorphCount = getPolymorphCount(lexer);
 		declaration->type = parseExpr(lexer);
 		if (!declaration->type) {
 			return nullptr;
+		}
+
+		if (getPolymorphCount(lexer) != initialPolymorphCount) {
+			declaration->flags |= DECLARATION_DEFINES_POLYMORPH_VARIABLE;
 		}
 
 		if (expectAndConsume(lexer, '=')) {
@@ -2569,6 +2675,7 @@ Declaration *parseDeclaration(LexerFile *lexer) {
 				declaration->initialValue = nullptr;
 			}
 			else {
+				u32 initialPolymorphCount = getPolymorphCount(lexer);
 				declaration->initialValue = parseExpr(lexer);
 
 				if (!declaration->initialValue) {
@@ -2576,6 +2683,11 @@ Declaration *parseDeclaration(LexerFile *lexer) {
 				}
 
 				declaration->initialValue->valueOfDeclaration = declaration;
+
+				if (getPolymorphCount(lexer) != initialPolymorphCount) {
+					reportError(declaration->initialValue, "Error: Polymorph variables cannot be defined in an argument value");
+					return nullptr;
+				}
 			}
 
 			declaration->end = lexer->previousTokenEnd;

@@ -335,6 +335,7 @@ whitespace:
 			goto zero;
 		case '?':
 		case ':':
+		case '$':
 		case ';':
 		case '(':
 		case ')':
@@ -1080,6 +1081,7 @@ whitespaceAlreadyRead:
 			goto zero;
 		case '?':
 		case ':':
+		case '$':
 		case ';':
 		case '(':
 		case ')':

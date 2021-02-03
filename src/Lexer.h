@@ -161,6 +161,7 @@ struct LexerSave {
 struct LexerFile {
 	BucketedArenaAllocator parserArena;
 	Block *currentBlock;
+	Array<struct ExprFunction *> functionHeaderStack;
 	struct Module *module;
 	u32 identifierSerial;
 	bool moduleScope;

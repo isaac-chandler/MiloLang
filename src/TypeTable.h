@@ -161,6 +161,8 @@ inline Type TYPE_UNARY_DOT = { 0, 0, "<unary dot>", 67, TYPE_IS_INTERNAL, TypeFl
 
 inline Type TYPE_OVERLOAD_SET = { 0, 0, "<overload set>", 71, TYPE_IS_INTERNAL, TypeFlavor::AUTO_CAST };
 
+inline Type TYPE_POLYMORPHIC_FUNCTION = { 0, 0, "<polymorhpic function>", 73, TYPE_IS_INTERNAL, TypeFlavor::AUTO_CAST };
+
 inline Type *TYPE_VOID_POINTER;
 inline Type *TYPE_U8_POINTER;
 inline Type *TYPE_U8_ARRAY;

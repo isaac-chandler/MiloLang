@@ -343,15 +343,17 @@ void addFunction(ExprFunction *function) {
 
 	job->function = function;
 
-	addBlock(&function->arguments);
-	addBlock(&function->returns);
+	if (!function->constants.declarations.count) {
+		addBlock(&function->arguments);
+		addBlock(&function->returns);
 
-	assert(function->body);
-	beginFlatten(&job->body, &function->body);
+		assert(function->body);
+		beginFlatten(&job->body, &function->body);
+
+		addSubJob(&job->body);
+	}
 
 	addSubJob(&job->header);
-
-	addSubJob(&job->body);
 
 
 	++totalFunctions;
@@ -2053,7 +2055,9 @@ bool checkOverloadSet(SubJob *job, Declaration *firstOverload, bool *yield) {
 				forceAddDeclaration(declaration);
 		}
 		else {
-			if (getDeclarationType(declaration)->flavor != TypeFlavor::FUNCTION) {
+			auto type = getDeclarationType(declaration);
+
+			if (type != &TYPE_POLYMORPHIC_FUNCTION && type->flavor != TypeFlavor::FUNCTION) {
 				reportError(declaration, "Error: Only functions can be overloaded");
 				return false;
 			}
@@ -2275,6 +2279,10 @@ bool inferOverloadSetForNonCall(SubJob *job, Type *correct, Expr *&given, bool *
 
 		return false;
 	}
+}
+
+bool inferPolymorphicFunctionForNonCall(Type *correct, ExprFunction *given) {
+	return false;
 }
 
 bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yield) {
@@ -5454,6 +5462,10 @@ bool inferFlattened(SubJob *job) {
 					reportError(value, "Error: Cannot take the type of an overload set");
 					return false;
 				}
+				else if (value->type == &TYPE_POLYMORPHIC_FUNCTION) {
+					reportError(value, "Error: Cannot take the type of a polymorphic function");
+					return false;
+				}
 				else if (value->type->flavor == TypeFlavor::NAMESPACE) {
 					reportError(value, "Error: Cannot take the type of a namespace");
 					return false;
@@ -6625,8 +6637,6 @@ bool inferDeclarationValue(SubJob *subJob) {
 				assert(declaration->initialValue->flavor == ExprFlavor::IDENTIFIER);
 				auto overload = static_cast<ExprIdentifier *>(declaration->initialValue);
 
-				
-
 				bool yield;
 
 				if (!checkOverloadSet(&job->value, overload->declaration, &yield)) {
@@ -6647,6 +6657,11 @@ bool inferDeclarationValue(SubJob *subJob) {
 					assert(overloadDecl->initialValue && overloadDecl->initialValue->flavor == ExprFlavor::FUNCTION);
 					declaration->initialValue = overloadDecl->initialValue;
 				}
+			}
+
+			if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->initialValue->type == &TYPE_POLYMORPHIC_FUNCTION) {
+				reportError(declaration, "Error: A polymorphic function cannot be assigned to a variable");
+				return false;
 			}
 
 			declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, declaration->initialValue->type);
@@ -6731,39 +6746,44 @@ bool inferFunctionHeader(SubJob *subJob) {
 
 	auto function = job->function;
 
-	bool sleep = false;
-
-	for (auto argument : function->arguments.declarations) {
-		assert(argument);
-
-		if (!(argument->flags & DECLARATION_TYPE_IS_READY)) {
-			goToSleep(&job->header, &argument->sleepingOnMyType, "Function argument type not ready");
-
-			sleep = true;
-		}
+	if (function->constants.declarations.count) {
+		function->type = &TYPE_POLYMORPHIC_FUNCTION;
 	}
+	else {
+		bool sleep = false;
 
+		for (auto argument : function->arguments.declarations) {
+			assert(argument);
 
+			if (!(argument->flags & DECLARATION_TYPE_IS_READY)) {
+				goToSleep(&job->header, &argument->sleepingOnMyType, "Function argument type not ready");
 
-	for (auto return_ : function->returns.declarations) {
-		assert(return_);
-
-		if (!(return_->flags & DECLARATION_TYPE_IS_READY)) {
-			goToSleep(&job->header, &return_->sleepingOnMyType, "Funtion return type not ready");
-
-			sleep = true;
+				sleep = true;
+			}
 		}
-		else if (getDeclarationType(return_) == &TYPE_VOID && function->returns.declarations.count != 1) {
-			reportError(return_, "Error: Functions with multiple return values cannot return a void value");
-			return false;
+
+
+
+		for (auto return_ : function->returns.declarations) {
+			assert(return_);
+
+			if (!(return_->flags & DECLARATION_TYPE_IS_READY)) {
+				goToSleep(&job->header, &return_->sleepingOnMyType, "Funtion return type not ready");
+
+				sleep = true;
+			}
+			else if (getDeclarationType(return_) == &TYPE_VOID && function->returns.declarations.count != 1) {
+				reportError(return_, "Error: Functions with multiple return values cannot return a void value");
+				return false;
+			}
 		}
+
+
+		if (sleep)
+			return true;
+
+		function->type = getFunctionType(function);
 	}
-
-
-	if (sleep)
-		return true;
-
-	function->type = getFunctionType(function);
 
 	wakeUpSleepers(&function->sleepingOnInfer);
 
@@ -6776,12 +6796,14 @@ bool inferFunctionHeader(SubJob *subJob) {
 		function->valueOfDeclaration->sleepingOnMyValue.free();
 	}
 
-	for (auto argument : function->arguments.declarations) {
-		addSizeDependency(&job->sizeDependencies, getDeclarationType(argument));
-	}
+	if (!function->constants.declarations.count) {
+		for (auto argument : function->arguments.declarations) {
+			addSizeDependency(&job->sizeDependencies, getDeclarationType(argument));
+		}
 
-	for (auto return_ : function->returns.declarations) {
-		addSizeDependency(&job->sizeDependencies, getDeclarationType(return_));
+		for (auto return_ : function->returns.declarations) {
+			addSizeDependency(&job->sizeDependencies, getDeclarationType(return_));
+		}
 	}
 
 	return true;

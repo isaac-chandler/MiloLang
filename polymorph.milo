@@ -1,0 +1,10 @@
+main :: () {
+	x: [..]s64
+	
+	array_add(*x, 4)
+}
+
+array_add :: (array: *[..]$T, value: T) {
+
+}
+

@@ -167,7 +167,8 @@ bool checkForRedeclaration(Block *block, Declaration *declaration, Declaration *
 		auto previous = findDeclarationNoYield(block, declaration->name);
 
 		if (previous) {
-			if ((previous->flags & declaration->flags & DECLARATION_IS_CONSTANT) && // Declarations must be a constant
+			if (block->flavor != BlockFlavor::CONSTANTS &&                               // Polymorph variables cannot be overloaded
+				(previous->flags & declaration->flags & DECLARATION_IS_CONSTANT) &&      // Declarations must be a constant
 				!((previous->flags | declaration->flags) & DECLARATION_IS_ENUM_VALUE)) { // Enums use putDeclarationInBlock
 				if (previous->flags & DECLARATION_OVERLOADS_LOCKED) {
 					if (using_) {

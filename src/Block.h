@@ -49,6 +49,8 @@
 
 #define DECLARATION_OVERLOADS_LOCKED 0x8'0000
 
+#define DECLARATION_DEFINES_POLYMORPH_VARIABLE 0x10'0000
+
 struct Declaration {
 	CodeLocation start;
 	EndLocation end;
@@ -98,6 +100,7 @@ struct Importer {
 
 enum class BlockFlavor : u8 {
 	IMPERATIVE,
+	CONSTANTS, 
 	ARGUMENTS,
 	RETURNS,
 	STRUCT,
