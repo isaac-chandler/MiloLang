@@ -958,6 +958,15 @@ void addStructUniqueNumber(BucketedArenaAllocator *debugTypes, u32 name = debugT
 
 
 bool appendCoffName(BucketedArenaAllocator *debugSymbols, Type *type) {
+	if (type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::ENUM) {
+		auto structure = static_cast<TypeStruct *>(type);
+
+		if (structure->enclosingScope->flavor == BlockFlavor::STRUCT) {
+			appendCoffName(debugSymbols, CAST_FROM_SUBSTRUCT(TypeStruct, members, structure->enclosingScope));
+			debugSymbols->addString("::");
+		}
+	}
+
 	if (type->flavor == TypeFlavor::ARRAY) {
 		auto array = static_cast<TypeArray *>(type);
 
@@ -1232,6 +1241,8 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 		if (enumeration->flags & TYPE_ENUM_IS_FLAGS) {
 			u32 firstFlag = debugTypeId;
 
+			u16 nested = enumeration->enclosingScope->flavor == BlockFlavor::STRUCT ? 8 : 0;
+
 			for (auto declaration : enumeration->values->declarations) {
 				assert(declaration->initialValue->flavor == ExprFlavor::INT_LITERAL);
 				assert(!(declaration->initialValue->type->flags & TYPE_INTEGER_IS_SIGNED));
@@ -1279,12 +1290,13 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 				debugTypes->ensure(20);
 				debugTypes->add2Unchecked(0x1505); // LF_STRUCTURE
 				debugTypes->add2Unchecked(flagCount);
-				debugTypes->add2Unchecked(0x200); // Has a unique name
+				debugTypes->add2Unchecked(0x200 | nested); // Has a unique name
 				debugTypes->add4Unchecked(fieldList); // field list
 				debugTypes->add4Unchecked(0); // super class
 				debugTypes->add4Unchecked(0); // vtable
 				debugTypes->add2Unchecked(enumeration->size);
-				debugTypes->addNullTerminatedString(enumeration->name);
+				appendCoffName(debugTypes, enumeration);
+				debugTypes->add1(0);
 				debugTypes->add1('@');
 				addStructUniqueNumber(debugTypes);
 			};
@@ -1314,7 +1326,8 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 				debugTypes->add2Unchecked(0x200); // Has a unique name
 				debugTypes->add4Unchecked(integerType);
 				debugTypes->add4Unchecked(fieldList);
-				debugTypes->addNullTerminatedString(enumeration->name);
+				appendCoffName(debugTypes, enumeration);
+				debugTypes->add1(0);
 				debugTypes->add1('@');
 				addStructUniqueNumber(debugTypes);
 			};
@@ -1350,67 +1363,22 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 		auto structure = static_cast<TypeStruct *>(type);
 
 		u16 packed = structure->flags & TYPE_STRUCT_IS_PACKED ? 1 : 0;
+		u16 nested = structure->enclosingScope->flavor == BlockFlavor::STRUCT ? 8 : 0;
 
-		structure->codeviewTypeIndex = DEBUG_LEAF{
+		return DEBUG_LEAF{
 			debugTypes->ensure(20);
 			debugTypes->add2Unchecked(0x1505); // LF_STRUCTURE
-			debugTypes->add2Unchecked(0); // 1 member
-			debugTypes->add2Unchecked(0x280 | packed); // Has a unique name and is a forward declaration
+			debugTypes->add2Unchecked(0);
+
+			debugTypes->add2Unchecked(0x280 | packed | nested); // Has a unique name and is a forward declaration
 			debugTypes->add4Unchecked(0); // field list
 			debugTypes->add4Unchecked(0); // super class
 			debugTypes->add4Unchecked(0); // vtable
 			debugTypes->add2Unchecked(0); // size
-			debugTypes->addNullTerminatedString(structure->name);
+			appendCoffName(debugTypes, structure);
+			debugTypes->add1(0);
 			debugTypes->add1('@');
 			addStructUniqueNumber(debugTypes);
-		};
-
-		for (auto member : structure->members.declarations) {
-			if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING)) continue;
-
-			auto type = getDeclarationType(member);
-
-			getCoffTypeIndex(debugTypes, type);
-		}
-
-		u32 memberCount = 0;
-
-		u32 fieldList = DEBUG_LEAF{
-			debugTypes->add2(0x1203); // LF_FIELDLIST
-
-			auto struct_ = static_cast<TypeStruct *>(type);
-
-			for (auto member : struct_->members.declarations) {
-				if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING)) continue;
-
-				auto type = getDeclarationType(member);
-
-				alignDebugTypes(debugTypes);
-				debugTypes->ensure(10);
-				debugTypes->add2Unchecked(0x150D); // LF_MEMBER
-				debugTypes->add2Unchecked(0x3); // public
-				debugTypes->add4Unchecked(type->codeviewTypeIndex);
-				debugTypes->add2Unchecked(member->physicalStorage); // offset
-				debugTypes->addNullTerminatedString(member->name);
-
-				memberCount++;
-			}
-		};
-
-		bool isUnion = structure->flags & TYPE_STRUCT_IS_UNION ? true : false;
-
-		return DEBUG_LEAF{
-			debugTypes->ensure(20);
-			debugTypes->add2Unchecked(isUnion ? 0x1506 : 0x1505); //LF_UNION : LF_STRUCTURE
-			debugTypes->add2Unchecked(memberCount);
-			debugTypes->add2Unchecked(0x200 | packed); // Has a unique name
-			debugTypes->add4Unchecked(fieldList); // field list
-			debugTypes->add4Unchecked(0); // super class
-			debugTypes->add4Unchecked(0); // vtable
-			debugTypes->add2Unchecked(structure->size);
-			debugTypes->addNullTerminatedString(structure->name);
-			debugTypes->add1('@');
-			addStructUniqueNumber(debugTypes, structure->codeviewTypeIndex); // Use the same unique name as the forward declaration
 		};
 	}
 	
@@ -3784,6 +3752,92 @@ void runCoffWriter() {
 
 				if (type->codeviewTypeIndex) {
 					if (type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::ARRAY || type->flavor == TypeFlavor::ENUM) {
+						if (type->flavor == TypeFlavor::STRUCT) {
+							auto structure = static_cast<TypeStruct *>(type);
+
+							u32 memberCount = 0;
+
+							for (auto member : structure->members.declarations) {
+								if (member->flags & DECLARATION_IMPORTED_BY_USING) continue;
+
+								auto type = getDeclarationType(member);
+
+								if (member->flags & DECLARATION_IS_CONSTANT) {
+									if (type != &TYPE_TYPE)
+										continue;
+
+									auto nestType = static_cast<ExprLiteral *>(member->initialValue)->typeValue;
+
+									getCoffTypeIndex(&debugTypes, nestType);
+								}
+								else {
+									getCoffTypeIndex(&debugTypes, type);
+
+								}
+							}
+
+							u32 fieldList = DEBUG_LEAF{
+								debugTypes.add2(0x1203); // LF_FIELDLIST
+
+								auto struct_ = static_cast<TypeStruct *>(type);
+
+								u16 hasNested = 0;
+
+								for (auto member : struct_->members.declarations) {
+									if (member->flags & DECLARATION_IMPORTED_BY_USING) continue;
+
+									auto type = getDeclarationType(member);
+
+									if (member->flags & DECLARATION_IS_CONSTANT) {
+										if (type != &TYPE_TYPE)
+											continue;
+
+										auto nestType = static_cast<ExprLiteral *>(member->initialValue)->typeValue;
+
+										alignDebugTypes(&debugTypes);
+										debugTypes.ensure(6);
+										debugTypes.add2(0x1510); // LF_NESTTYPE
+										debugTypes.add2(0);
+										debugTypes.add4(nestType->codeviewTypeIndex);
+										debugTypes.addNullTerminatedString(member->name);
+										hasNested = 0x10;
+										memberCount++;
+									}
+									else {
+										alignDebugTypes(&debugTypes);
+										debugTypes.ensure(10);
+										debugTypes.add2Unchecked(0x150D); // LF_MEMBER
+										debugTypes.add2Unchecked(0x3); // public
+										debugTypes.add4Unchecked(type->codeviewTypeIndex);
+										debugTypes.add2Unchecked(member->physicalStorage); // offset
+										debugTypes.addNullTerminatedString(member->name);
+										memberCount++;
+
+									}
+								}
+							};
+
+							bool isUnion = structure->flags & TYPE_STRUCT_IS_UNION ? true : false;
+
+							u16 packed = structure->flags & TYPE_STRUCT_IS_PACKED ? 1 : 0;
+							u16 nested = structure->enclosingScope->flavor == BlockFlavor::STRUCT ? 8 : 0;
+
+							DEBUG_LEAF{
+								debugTypes.ensure(20);
+								debugTypes.add2Unchecked(isUnion ? 0x1506 : 0x1505); //LF_UNION : LF_STRUCTURE
+								debugTypes.add2Unchecked(memberCount);
+								debugTypes.add2Unchecked(0x200 | packed); // Has a unique name
+								debugTypes.add4Unchecked(fieldList); // field list
+								debugTypes.add4Unchecked(0); // super class
+								debugTypes.add4Unchecked(0); // vtable
+								debugTypes.add2Unchecked(structure->size);
+								appendCoffName(&debugTypes, structure);
+								debugTypes.add1(0);
+								debugTypes.add1('@');
+								addStructUniqueNumber(&debugTypes, structure->codeviewTypeIndex); // Use the same unique name as the forward declaration
+							};
+						}
+
 						if (!(type->flags & (TYPE_ARRAY_IS_FIXED | TYPE_ENUM_IS_FLAGS)))
 							emitUDT(&debugSymbols, type);
 					}

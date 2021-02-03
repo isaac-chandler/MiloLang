@@ -42,7 +42,7 @@ static const Keyword keywords[] = {
 	{"#external", TokenT::EXTERNAL}, 
 	{"#load", TokenT::LOAD}, 
 	{"union", TokenT::UNION}, 
-	{"or", TokenT::COMPLETED},  // @Incomplete Change this keyword because people will almost certainly want to call a variable completed
+	{"or", TokenT::COMPLETED},  // Still not happy with this keyword
 	{"remove", TokenT::REMOVE}, 
 	{"#pack", TokenT::PACK}, 
 	{"using", TokenT::USING},
@@ -60,7 +60,8 @@ static const Keyword keywords[] = {
 	{"#compiler", TokenT::COMPILER}, 
 	{"#import", TokenT::IMPORT}, 
 	{"#scope_module", TokenT::SCOPE_MODULE}, 
-	{"#scope_export", TokenT::SCOPE_EXPORT}
+	{"#scope_export", TokenT::SCOPE_EXPORT}, 
+	{"#c_varargs", TokenT::C_VARARGS}
 };
 
 void BigInt::zero() {

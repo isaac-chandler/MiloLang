@@ -384,10 +384,8 @@ int main(int argc, char *argv[]) {
 			reportInfo("  %llu types (%llu struct sizes, %llu enum sizes, %llu array sizes)", totalSizes, totalInferStructSizes, totalInferEnumSizes, totalInferArraySizes);
 			reportInfo("  %llu importers (%llu infers)", totalImporters, totalInferImporters);
 			reportInfo("  %llu runs (%llu infers)", totalRuns, totalInferRuns);
-			reportInfo("Total infers: %llu, %.1f infers/queued, %.1f iterations/infer\n"
-				"Total types: %llu, %.1f sizes/type",
-				totalFlattenedInfers, static_cast<float>(totalFlattenedInfers) / totalQueued, static_cast<float>(totalInferIterations) / totalFlattenedInfers, totalSizes, 
-				static_cast<float>(totalSizes) / (totalInferStructSizes + totalInferEnumSizes + totalInferArraySizes));
+			reportInfo("Total infers: %llu, %.1f infers/queued, %.1f iterations/infer", totalFlattenedInfers, static_cast<float>(totalFlattenedInfers) / totalQueued, static_cast<float>(totalInferIterations) / totalFlattenedInfers);
+			reportInfo("Total types: %llu, %.1f sizes/type", totalSizes, static_cast<float>(totalInferStructSizes + totalInferEnumSizes + totalInferArraySizes) / totalSizes);
 		}
 	}
 

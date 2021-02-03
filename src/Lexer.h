@@ -117,7 +117,9 @@ enum class TokenT : u8 {
 	C_CALL, 
 	COMPILER, 
 	IMPORT, 
-	SCOPE_MODULE, SCOPE_EXPORT
+	SCOPE_MODULE, 
+	SCOPE_EXPORT, 
+	C_VARARGS
 };
 
 struct Token {

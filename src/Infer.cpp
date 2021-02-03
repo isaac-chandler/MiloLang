@@ -374,11 +374,11 @@ void addTypeBlock(Expr *expr) {
 
 			if (expr->valueOfDeclaration && (expr->valueOfDeclaration->flags & DECLARATION_IS_CONSTANT)) {
 				type->name = expr->valueOfDeclaration->name;
-				type->enclosingScope = expr->valueOfDeclaration->enclosingScope;
+				struct_->enclosingScope = expr->valueOfDeclaration->enclosingScope;
 			}
 			else {
 				type->name = (type->flags & TYPE_STRUCT_IS_UNION) ? "union" : "struct";
-				type->enclosingScope = &runtimeModule->members;
+				struct_->enclosingScope = &runtimeModule->members;
 				type->flags |= TYPE_IS_ANONYMOUS;
 			}
 			addStruct(struct_);
@@ -402,11 +402,11 @@ void addTypeBlock(Expr *expr) {
 
 			if (expr->valueOfDeclaration && (expr->valueOfDeclaration->flags & DECLARATION_IS_CONSTANT)) {
 				type->name = expr->valueOfDeclaration->name;
-				type->enclosingScope = expr->valueOfDeclaration->enclosingScope;
+				enum_->enclosingScope = expr->valueOfDeclaration->enclosingScope;
 			}
 			else {
 				type->name = (type->flags & TYPE_ENUM_IS_FLAGS) ? "enum_flags" : "enum";
-				type->enclosingScope = &runtimeModule->members;
+				enum_->enclosingScope = &runtimeModule->members;
 				type->flags |= TYPE_IS_ANONYMOUS;
 			}
 			addStruct(enum_);
@@ -2027,10 +2027,11 @@ struct OverloadIterator {
 };
 
 OverloadIterator overloads(ExprOverloadSet *overload) {
-	return { overload->currentOverload, overload->serial };
+	return { overload->currentOverload, overload->identifier->serial };
 }
 
 bool checkOverloadSet(SubJob *job, Declaration *firstOverload, bool *yield) {
+	PROFILE_FUNC();
 	bool sleep = false;
 
 	*yield = false;
@@ -2123,112 +2124,108 @@ bool declarationIsOverloadSet(SubJob *job, Declaration *declaration, bool *yield
 		return false;
 	}
 
-	if (declaration->initialValue->flavor == ExprFlavor::FUNCTION && (!declaration->initialValue->flags & EXPR_FUNCTION_IS_C_CALL))
+	if (declaration->initialValue->flavor == ExprFlavor::FUNCTION && !(declaration->initialValue->flags & EXPR_FUNCTION_IS_C_CALL))
 		return true;
 
 	return false;
 }
 
-struct OverloadSetIterator {
-	ExprOverloadSet *overload;
-	bool done = false;
+bool nextOverloadSet(SubJob *job, ExprOverloadSet *overload, bool *yield) {
+	*yield = false;
 
-	OverloadIterator next(bool *yield) {
-		if (done) return { nullptr, 0 };
+	if (overload->identifier->structAccess)
+		return false;
 
-		*yield = false;
-
-		if (overload->identifier->structAccess) {
-			done = true;
-			return overloads(overload);
-		}
-
-		while (overload->block) {
-			if (!overload->currentOverload) {
-				overload->currentOverload = findDeclaration(overload->block, overload->identifier->name, yield, overload->serial);
-				if (!overload && *yield)
-					return { nullptr, 0 };
-				overload->serial = overload->block->serial;
-				overload->block = overload->block->parentBlock;
-				overload->currentOverload = nullptr;
-				continue;
-			}
-
-			bool yield;
-			if (!declarationIsOverloadSet(nullptr, overload->currentOverload, &yield)) {
-				if (yield)
-					return { nullptr, 0 };
-				overload->serial = overload->block->serial;
-				overload->block = overload->block->parentBlock;
-				overload->currentOverload = nullptr;
-				continue;
-			}
-
-			auto result = overloads(overload);
-
-			overload->serial = overload->block->serial;
-			overload->block = overload->block->parentBlock;
-			overload->currentOverload = nullptr;
-			return result;
-		}
-
-		if (!overload->currentOverload)
-			overload->currentOverload = findDeclarationNoYield(&overload->identifier->module->members, overload->identifier->name);
-
-
-		if (overload->currentOverload)
-			if (!declarationIsOverloadSet(nullptr, overload->currentOverload, yield))
-				return { nullptr, 0 };
-
-		auto result = overloads(overload);
-
+	if (overload->block->module) {
+		overload->block = overload->identifier->declaration->enclosingScope;
 		overload->currentOverload = overload->identifier->declaration;
-		overload->block = overload->identifier->enclosingScope;
-		overload->serial = overload->identifier->serial;
-
-		done = true;
-
-		return result;
+		return false;
 	}
-};
 
-OverloadSetIterator overloadSets(ExprOverloadSet *overload) {
-	return { overload };
+	while (overload->block->parentBlock) {
+		overload->currentOverload = findDeclaration(overload->block->parentBlock, overload->identifier->name, yield, overload->identifier->serial);
+		if (!overload->currentOverload) {
+			if (*yield) {
+				return false;
+			}
+			else {
+				overload->block = overload->block->parentBlock;
+				continue;
+			}
+		}
+
+		if (!declarationIsOverloadSet(job, overload->currentOverload, yield)) {
+			if (*yield) {
+				return false;
+			}
+			else {
+				overload->block = overload->block->parentBlock;
+				continue;
+			}
+		}
+
+		overload->block = overload->block->parentBlock;
+		return true;
+	}
+
+	overload->currentOverload = findDeclarationNoYield(&overload->identifier->module->members, overload->identifier->name);
+
+	if (!overload->currentOverload) {
+		overload->currentOverload = overload->identifier->declaration;
+		overload->block = overload->identifier->declaration->enclosingScope;
+		
+		return false;
+	}
+
+	if (!declarationIsOverloadSet(job, overload->currentOverload, yield)) {
+		if (*yield) {
+			return false;
+		}
+		else {
+			overload->currentOverload = overload->identifier->declaration;
+			overload->block = overload->identifier->declaration->enclosingScope;
+
+			return false;
+		}
+	}
+
+	overload->block = &overload->identifier->module->members;
+
+	return true;
 }
 
 void collectAllOverloads(ArraySet<Declaration *> *overloadList, ExprOverloadSet *overload) {
 	assert(overload->currentOverload == overload->identifier->declaration);
-	assert(overload->serial == overload->identifier->serial);
-	assert(overload->block == overload->identifier->enclosingScope);
-
-	auto overloadIt = overloadSets(overload);
+	assert(overload->block == overload->identifier->declaration->enclosingScope);
 
 	bool yield;
-	while (auto it = overloadIt.next(&yield)) {
+	do {
+		auto it = overloads(overload);
+
 		while (auto current = it.next()) {
 			overloadList->add(current);
 		}
-	}
+	} while (nextOverloadSet(nullptr, overload, &yield));
 
 	assert(!yield);
 }
 
 bool inferOverloadSetForNonCall(SubJob *job, Type *correct, Expr *&given, bool *yield, bool silentCheck = false) {
+	PROFILE_FUNC();
 	assert(given->flavor == ExprFlavor::OVERLOAD_SET);
 	auto overload = static_cast<ExprOverloadSet *>(given);
 
 	Declaration *found = nullptr;
 
-	auto overloadIt = overloadSets(overload);
-
-	while (auto it = overloadIt.next(yield)) {
+	do {
+		auto it = overloads(overload);
 		bool reported = false;
 		
 		if (!checkOverloadSet(job, it.overload, yield))
 			return false;
 
 		while (auto current = it.next()) {
-			if (getDeclarationType(current) != correct) {
+			if (getDeclarationType(current) == correct) {
 				if (!silentCheck && found) {
 					if (!reported) {
 						reportError(overload, "Error: Multiple overloads of %.*s match the type %.*s", STRING_PRINTF(overload->identifier->name), STRING_PRINTF(correct->name));
@@ -2248,7 +2245,7 @@ bool inferOverloadSetForNonCall(SubJob *job, Type *correct, Expr *&given, bool *
 
 		if (found)
 			break;
-	}
+	} while (nextOverloadSet(job, overload, yield));
 
 	if (*yield)
 		return false;
@@ -4051,8 +4048,6 @@ bool inferFlattened(SubJob *job) {
 							return true;
 						}
 
-						identifier->serial = identifier->resolveFrom->serial;
-
 						if (identifier->resolveFrom->flavor != BlockFlavor::IMPERATIVE)
 							identifier->flags |= EXPR_IDENTIFIER_RESOLVING_ONLY_CONSTANTS;
 					}
@@ -4127,8 +4122,7 @@ bool inferFlattened(SubJob *job) {
 				overloadSet->end = identifier->end;
 				overloadSet->identifier = identifier;
 				overloadSet->currentOverload = identifier->declaration;
-				overloadSet->serial = identifier->serial;
-				overloadSet->block = identifier->enclosingScope;
+				overloadSet->block = identifier->declaration->enclosingScope;
 
 				overloadSet->type = &TYPE_OVERLOAD_SET;
 
@@ -4901,11 +4895,10 @@ bool inferFlattened(SubJob *job) {
 				assert(call->function->flavor == ExprFlavor::OVERLOAD_SET);
 				auto overload = static_cast<ExprOverloadSet *>(call->function);
 
-				auto overloadsIt = overloadSets(overload);
-
 				bool yield;
-				while (auto it = overloadsIt.next(&yield)) {
-					if (!checkOverloadSet(job, it.overload, &yield))
+				do {
+
+					if (!checkOverloadSet(job, overload->currentOverload, &yield))
 						return yield;
 
 					struct OverloadMatchCost {
@@ -4917,6 +4910,8 @@ bool inferFlattened(SubJob *job) {
 					at_exit{
 						matches.free();
 					};
+
+					auto it = overloads(overload);
 
 					while (Declaration *declaration = it.next()) {
 						assert(declaration->initialValue->flavor == ExprFlavor::FUNCTION);
@@ -4964,7 +4959,7 @@ bool inferFlattened(SubJob *job) {
 						call->function = matches[0].declaration->initialValue;
 						break;
 					}
-				}
+				} while (nextOverloadSet(job, overload, &yield));
 
 				if (yield)
 					return true;

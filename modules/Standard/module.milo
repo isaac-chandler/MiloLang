@@ -144,8 +144,10 @@ panic :: () {
 }
 
 assert :: (value: bool) {
-	if !value
-		panic()
+	if !value {
+		print("Assertion failed!")
+		exit(1)
+	}
 }
 
 array_remove_generic_by_pointer :: (array: *[]u8, value: *void, size: u64) {

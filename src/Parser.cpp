@@ -1458,7 +1458,7 @@ ExprFunction *parseFunctionOrFunctionType(LexerFile *lexer, bool allowBody) {
 	if (function->flags & EXPR_FUNCTION_IS_C_CALL) {
 		if (function->flags & EXPR_FUNCTION_HAS_VARARGS) {
 			// @Incomplete allow c style varargs for external functions
-			reportError(function, "Error: C call functions cannot have varargs");
+			reportError(function, "Error: C call functions cannot have array varargs");
 			return nullptr;
 		}
 

@@ -79,7 +79,6 @@ struct Type {
 	llvm::Type *llvmType = nullptr;
 
 	union Symbol *symbol = nullptr;
-	struct Block *enclosingScope; // This field is only used for debug info for struct, union, enum, enum_flags
 	u32 physicalStorage;
 	u32 codeviewTypeIndex = 0;
 
@@ -93,6 +92,7 @@ struct TypePointer : Type {
 };
 
 struct TypeStruct : Type {
+	struct Block *enclosingScope; // This field is only used for debug info for struct, union, enum, enum_flags	
 	Block members;
 };
 

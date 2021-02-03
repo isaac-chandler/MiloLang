@@ -56,21 +56,6 @@ Type_Info_Array :: struct {
 	count: u64
 }
 
-
-Type_Info_Struct_Member :: struct {
-	Flags :: enum_flags u64 {
-		UNINITIALIZED :: 0x1
-		CONSTANT      :: 0x2
-		USING         :: 0x4
-	}
-
-	name: string
-	offset: u64
-	member_type: *Type_Info
-	initial_value: *void
-	flags: Flags
-}
-
 Type_Info_Struct :: struct {
 	using base: Type_Info
 	
@@ -80,23 +65,36 @@ Type_Info_Struct :: struct {
 		PACKED :: 0x2
 	}
 	
+	Member :: struct {
+		Flags :: enum_flags u64 {
+			UNINITIALIZED :: 0x1
+			CONSTANT      :: 0x2
+			USING         :: 0x4
+		}
+
+		name: string
+		offset: u64
+		member_type: *Type_Info
+		initial_value: *void
+		flags: Flags
+	}
+	
 	flags: Flags
-	members: []Type_Info_Struct_Member
-}
-
-
-Type_Info_Enum_Value :: struct {
-	name: string
-	value: u64
+	members: []Member
 }
 
 Type_Info_Enum :: struct {
 	using base: Type_Info
 	
+	Value :: struct {
+		name: string
+		value: u64
+	}
+	
 	
 	base_type: *Type_Info_Integer
 	is_flags: bool
-	values: []Type_Info_Enum_Value
+	values: []Value
 }
 
 

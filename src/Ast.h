@@ -204,7 +204,6 @@ struct ExprOverloadSet : Expr {
 	
 	Declaration *currentOverload;
 	Block *block;
-	u32 serial;
 };
 
 struct ExprSlice : Expr {
