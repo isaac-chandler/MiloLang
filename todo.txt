@@ -194,4 +194,10 @@ Investigate LINK : fatal error LNK1285: corrupt PDB file
  - I think the debug information outputted is invalid already and the incremental linking that can't be disabled for PDBs continues to corrupt it worse until it can no longer be read
 
 function polymorhpism
+ - Allow overloaded functions to be passed to a polymorphic function with pattern matching for a function type
+ - Allow polymorphic functions to be passed to a polymorphic function with pattern matching for a function type
+ - Allow polymorphic functions to be overloaded
+ - Allow function arguments to be baked
+ - Allow fixed array length to be polymorphic
+ 
 struct polymorhpism
