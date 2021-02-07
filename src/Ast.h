@@ -290,6 +290,8 @@ struct ExprDefer : Expr {
 
 #define EXPR_IDENTIER_DEFINES_POLYMORPH_VARIABLE 0x100'0000
 
+#define EXPR_FUNCTION_IS_POLYMORPHIC 0x200'0000
+
 struct ExprLoad : Expr {
 	Expr *file;
 	struct Module *module;
@@ -389,7 +391,8 @@ struct ExprFunction : Expr {
 	IrState state;
 
 	Expr *body;
-
+	
+	Array<ExprFunction *> polymorphs;
 	Array<struct SubJob *> sleepingOnInfer;
 	Array<struct SubJob *> sleepingOnIr;
 
@@ -444,7 +447,6 @@ struct ExprIf : Expr {
 
 struct ExprEnum : Expr {
 	TypeEnum struct_;
-	Expr *integerType;
 };
 
 struct ExprCommaAssignment : Expr {

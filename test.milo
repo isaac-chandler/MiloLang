@@ -165,7 +165,7 @@ create_particle :: (using particle_system: *Particle_System) {
 	
 	particle.lifetime = spawn_lifetime
 	
-	array_add(cast() *particles, particle)
+	array_add(*particles, particle)
 }
 
 sub_vector2 :: (a: Vector2, b: Vector2) -> Vector2 {
@@ -259,7 +259,7 @@ create_explosion_particle :: (using particle_system: *Particle_System) {
 	
 	particle.lifetime = spawn_lifetime
 	
-	array_add(cast() *particles, particle)
+	array_add(*particles, particle)
 }
 
 update_particle :: (using particle: *Particle, delta: f32) {
@@ -348,7 +348,7 @@ add_entity :: (entity: *Entity) -> u64 {
 		}
 	}
 	
-	array_add(cast() *entities, <<entity)
+	array_add(*entities, <<entity)
 	entities[entities.count - 1].occupied = true
 	
 	return entities.count - 1
@@ -372,7 +372,7 @@ add_particle_system :: (particle_system: *Particle_System) -> u64 {
 		}
 	}
 	
-	array_add(cast() *particle_systems, <<particle_system)
+	array_add(*particle_systems, <<particle_system)
 	particle_systems[particle_systems.count - 1].occupied = true
 	
 	return particle_systems.count - 1
@@ -505,7 +505,7 @@ create_bullet :: (x: f32, y: f32, vy: f32, color: Vector4, enemy: bool) {
 	
 	
 	
-	array_add(cast() *bullets, bullet)
+	array_add(*bullets, bullet)
 }
 
 ENEMY_FIRE_SPEED :: 1.6
@@ -532,7 +532,7 @@ create_enemy :: (texture_handle: u32, mesh: [][3]Vector2) {
 	
 	enemy.entity = add_entity(*entity)
 	
-	array_add(cast() *enemies, enemy)
+	array_add(*enemies, enemy)
 }
 
 create_explosion :: (x: f32, y: f32) {
@@ -556,7 +556,7 @@ create_explosion :: (x: f32, y: f32) {
 		
 	explosion.particle_system = add_particle_system(*particles)
 	
-	array_add(cast() *explosions, explosion)
+	array_add(*explosions, explosion)
 }
 
 

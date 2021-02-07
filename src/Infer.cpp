@@ -9,6 +9,7 @@
 #include "TypeTable.h"
 #include "ArraySet.h"
 #include "Error.h"
+#include "Polymorph.h"
 
 BucketedArenaAllocator inferArena(1024 * 1024);
 
@@ -343,7 +344,7 @@ void addFunction(ExprFunction *function) {
 
 	job->function = function;
 
-	if (!function->constants.declarations.count) {
+	if (!(function->flags & EXPR_FUNCTION_IS_POLYMORPHIC)) {
 		addBlock(&function->arguments);
 		addBlock(&function->returns);
 
@@ -392,6 +393,10 @@ void addTypeBlock(Expr *expr) {
 			addSubJob(job);
 		}
 	}
+	else if (type->flavor == TypeFlavor::NAMESPACE) {
+		auto struct_ = static_cast<TypeStruct *>(type);
+		addBlock(&struct_->members);
+	}
 	else if (type->flavor == TypeFlavor::ENUM) {
 		if (!type->sizeJob) {
 			auto enum_ = static_cast<TypeEnum *>(type);
@@ -413,8 +418,6 @@ void addTypeBlock(Expr *expr) {
 			}
 			addStruct(enum_);
 
-			beginFlatten(job, &CAST_FROM_SUBSTRUCT(ExprEnum, struct_, enum_)->integerType);
-
 			type->sizeJob = job;
 			++totalSizes;
 
@@ -434,6 +437,8 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 
 		if (identifier->type == &TYPE_UNARY_DOT)
 			return;
+
+		assert(!identifier->resolveFrom || identifier->resolveFrom->flavor != BlockFlavor::ARGUMENTS || !(CAST_FROM_SUBSTRUCT(ExprFunction, arguments, identifier->resolveFrom)->flags & EXPR_FUNCTION_IS_POLYMORPHIC));
 
 		if (identifier->structAccess) {
 			flatten(flattenTo, &identifier->structAccess);
@@ -536,7 +541,7 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 	case ExprFlavor::COMMA_ASSIGNMENT: {
 		auto comma = static_cast<ExprCommaAssignment *>(*expr);
 
-		if (!((*expr)->flags & EXPR_COMMA_ASSIGNMENT_IS_DECLARATION)) {
+		if (!(comma->flags & EXPR_COMMA_ASSIGNMENT_IS_DECLARATION)) {
 
 			for (u64 i = 0; i < comma->exprCount; i++) {
 				flatten(flattenTo, &comma->left[i]);
@@ -574,6 +579,8 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 	}
 	case ExprFlavor::BINARY_OPERATOR: {
 		ExprBinaryOperator *binary = static_cast<ExprBinaryOperator *>(*expr);
+
+		assert(!(binary->flags &EXPR_EQUALS_IS_IMPLICIT_SWITCH) || binary->op == TokenT::EQUAL);
 
 		if (binary->left && !(binary->flags & EXPR_EQUALS_IS_IMPLICIT_SWITCH)) {
 			flatten(flattenTo, &binary->left);
@@ -724,7 +731,7 @@ bool boundsCheckImplicitConversion(Expr *location, Type *convertTo, ExprLiteral 
 		s64 max = static_cast<s64>((1ULL << (convertTo->size * 8 - 1)) - 1);
 		s64 min = -static_cast<s64>(max) - 1;
 
-		if (convertFrom->flags & TYPE_INTEGER_IS_SIGNED) {
+		if (convertFrom->type->flags & TYPE_INTEGER_IS_SIGNED) {
 			if (convertFrom->signedValue > max) {
 				if (!silentCheck) 
 					reportError(location, "Error: Integer literal too large for %.*s (max: %" PRIi64 ", given: %" PRIi64 ")", STRING_PRINTF(convertTo->name), max, convertFrom->signedValue);
@@ -748,7 +755,7 @@ bool boundsCheckImplicitConversion(Expr *location, Type *convertTo, ExprLiteral 
 	else {
 		u64 max = convertTo == &TYPE_U64 ? UINT64_MAX : (1ULL << (convertTo->size * 8)) - 1;
 
-		if ((convertFrom->flags & TYPE_INTEGER_IS_SIGNED) && convertFrom->signedValue < 0) {
+		if ((convertFrom->type->flags & TYPE_INTEGER_IS_SIGNED) && convertFrom->signedValue < 0) {
 			if (convertFrom->signedValue < 0) {
 				if (!silentCheck)
 					reportError(location, "Error: Integer literal too small for %.*s (min: 0, given: %" PRIi64 ")", STRING_PRINTF(convertTo->name), convertFrom->signedValue);
@@ -788,19 +795,6 @@ bool solidifyOneLiteral(ExprBinaryOperator *binary) {
 
 			auto literal = static_cast<ExprLiteral *>(left);
 
-			if (right->type->size == 4) {
-				if (literal->unsignedValue > 1ULL << (FLT_MANT_DIG + 1ULL)) {
-					reportError(right, "Error: Cannot implicitly convert %" PRIu64 " to f32, precision would be lost. The maximum exact integer for an f32 is %" PRIu64, literal->unsignedValue, 1ULL << (FLT_MANT_DIG + 1ULL));
-					return false;
-				}
-			}
-			else if (right->type->size == 8) {
-				if (literal->unsignedValue > 1ULL << (DBL_MANT_DIG + 1ULL)) {
-					reportError(right, "Error: Cannot implicitly convert %" PRIu64 " to f64, precision would be lost. The maximum exact integer for an f64 is %" PRIu64, literal->unsignedValue, 1ULL << (DBL_MANT_DIG + 1ULL));
-					return false;
-				}
-			}
-
 			if (literal->flags & EXPR_INTEGER_LITERAL_IS_NEGATIVE_ZERO && literal->unsignedValue == 0) {
 				literal->floatValue = -0.0;
 			}
@@ -832,18 +826,6 @@ bool solidifyOneLiteral(ExprBinaryOperator *binary) {
 
 			auto literal = static_cast<ExprLiteral *>(left);
 
-			if (right->type->size == 4) {
-				if (std::abs(literal->signedValue) > 1LL << (FLT_MANT_DIG + 1LL)) {
-					reportError(right, "Error: Cannot implicitly convert %" PRIi64 " to f32, precision would be lost. The maximum exact integer for an f32 is %" PRIi64, literal->signedValue, 1LL << (FLT_MANT_DIG + 1LL));
-					return false;
-				}
-			}
-			else if (right->type->size == 8) {
-				if (std::abs(literal->signedValue) > 1LL << (DBL_MANT_DIG + 1LL)) {
-					reportError(right, "Error: Cannot implicitly convert %" PRIi64 " to f64, precision would be lost. The maximum exact integer for an f64 is %" PRIi64, literal->signedValue, 1LL << (DBL_MANT_DIG + 1LL));
-					return false;
-				}
-			}
 
 			if (literal->flags & EXPR_INTEGER_LITERAL_IS_NEGATIVE_ZERO && literal->signedValue == 0) {
 				literal->floatValue = -0.0;
@@ -872,19 +854,6 @@ bool solidifyOneLiteral(ExprBinaryOperator *binary) {
 			assert(left->type->flavor == TypeFlavor::FLOAT);
 
 			auto literal = static_cast<ExprLiteral *>(right);
-
-			if (left->type->size == 4) {
-				if (literal->unsignedValue > 1ULL << (FLT_MANT_DIG + 1ULL)) {
-					reportError(left, "Error: Cannot implicitly convert %" PRIu64 " to f32, precision would be lost. The maximum exact integer for an f32 is %" PRIu64, literal->unsignedValue, 1ULL << (FLT_MANT_DIG + 1ULL));
-					return false;
-				}
-			}
-			else if (left->type->size == 8) {
-				if (literal->unsignedValue > 1ULL << (DBL_MANT_DIG + 1ULL)) {
-					reportError(left, "Error: Cannot implicitly convert %" PRIu64 " to f64, precision would be lost. The maximum exact integer for an f64 is %" PRIu64, literal->unsignedValue, 1ULL << (DBL_MANT_DIG + 1ULL));
-					return false;
-				}
-			}
 
 			if (literal->flags & EXPR_INTEGER_LITERAL_IS_NEGATIVE_ZERO && literal->unsignedValue == 0) {
 				literal->floatValue = -0.0;
@@ -916,19 +885,6 @@ bool solidifyOneLiteral(ExprBinaryOperator *binary) {
 			assert(left->type->flavor == TypeFlavor::FLOAT);
 
 			auto literal = static_cast<ExprLiteral *>(right);
-
-			if (left->type->size == 4) {
-				if (std::abs(literal->signedValue) > 1LL << (FLT_MANT_DIG + 1LL)) {
-					reportError(left, "Error: Cannot implicitly convert %" PRIi64 " to f32, precision would be lost. The maximum exact integer for an f32 is %" PRIi64, literal->signedValue, 1LL << (FLT_MANT_DIG + 1LL));
-					return false;
-				}
-			}
-			else if (left->type->size == 8) {
-				if (std::abs(literal->signedValue) > 1LL << (DBL_MANT_DIG + 1LL)) {
-					reportError(left, "Error: Cannot implicitly convert %" PRIi64 " to f64, precision would be lost. The maximum exact integer for an f64 is %" PRIi64, literal->signedValue, 1LL << (DBL_MANT_DIG + 1LL));
-					return false;
-				}
-			}
 
 			if (literal->flags & EXPR_INTEGER_LITERAL_IS_NEGATIVE_ZERO && literal->signedValue == 0) {
 				literal->floatValue = -0.0;
@@ -1159,12 +1115,13 @@ void insertImplicitCast(Array<Type *> *sizeDependencies, Expr **castFrom, Type *
 
 	if (cast->right->flags & EXPR_IS_SPREAD) cast->flags |= EXPR_IS_SPREAD;
 
+
 	*castFrom = cast;
 
 	addSizeDependency(sizeDependencies, castTo);
 
-	assert(isValidCast(castTo, cast->right->type));
 
+	assert(isValidCast(castTo, cast->right->type));
 	doConstantCast(castFrom);
 }
 
@@ -1275,7 +1232,7 @@ bool inferUnaryDot(SubJob *job, TypeEnum *enum_, Expr **exprPointer, bool silent
 	auto identifier = static_cast<ExprIdentifier *>(*exprPointer);
 	assert(identifier->flavor == ExprFlavor::IDENTIFIER);
 
-	auto member = findDeclarationNoYield(enum_->values, identifier->name);
+	auto member = findDeclarationNoYield(&enum_->values.members, identifier->name);
 
 	if (!member) {
 		if (!silentCheck)
@@ -1457,7 +1414,6 @@ bool tryAutoCast(SubJob *job, Expr **cast, Type *castTo, bool *yield) {
 
 bool evaluateConstantBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 	auto binary = static_cast<ExprBinaryOperator *>(*exprPointer);
-
 	auto left = static_cast<ExprLiteral *>(binary->left);
 	auto right = static_cast<ExprLiteral *>(binary->right);
 
@@ -1473,21 +1429,20 @@ bool evaluateConstantBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 		if (right->flavor != ExprFlavor::INT_LITERAL)
 			break;
 
-		if (binary->left->type->flavor == TypeFlavor::ARRAY && 
-			(binary->left->type->flags & TYPE_ARRAY_IS_FIXED) && 
-			(binary->left->flavor == ExprFlavor::ARRAY || binary->left->flavor == ExprFlavor::INT_LITERAL)) {
-			auto arrayType = static_cast<TypeArray *>(binary->left->type);
+		if (left->type->flavor == TypeFlavor::ARRAY && 
+			(left->type->flags & TYPE_ARRAY_IS_FIXED)) {
+			auto arrayType = static_cast<TypeArray *>(left->type);
 
 			if ((right->type->flags & TYPE_INTEGER_IS_SIGNED) && right->signedValue < 0) {
-				reportError(binary, "Error: Out of bounds index of array constant, Length: %" PRIu64 ", Index: %" PRIi64, arrayType->count, right->signedValue);
+				reportError(binary, "Error: Out of bounds index of array, Length: %" PRIu64 ", Index: %" PRIi64, arrayType->count, right->signedValue);
 				return false;
 			}
 			else if (right->unsignedValue >= arrayType->count) {
-				reportError(binary, "Error: Out of bounds index of array constant, Length: %" PRIu64 ", Index: %" PRIu64, arrayType->count, right->unsignedValue);
+				reportError(binary, "Error: Out of bounds index of array, Length: %" PRIu64 ", Index: %" PRIu64, arrayType->count, right->unsignedValue);
 				return false;
 			}
 			else {
-				if (binary->left->flavor == ExprFlavor::ARRAY) {
+				if (left->flavor == ExprFlavor::ARRAY) {
 					auto array = static_cast<ExprArray *>(binary->left);
 					// @Speed We can't just look up the index directly since in order to save memory when compiling, 
 					// if the array contains the same value repeated to the end, only the first repeat will be stored, and the a null element
@@ -1498,124 +1453,128 @@ bool evaluateConstantBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 						}
 					}
 				}
-				else {
-					return createIntLiteral(binary->start, binary->end, arrayType->arrayOf, 0);
+				else if (left->flavor == ExprFlavor::INT_LITERAL) {
+					*exprPointer = createIntLiteral(binary->start, binary->end, arrayType->arrayOf, 0);
 				}
 			}
 		}
-		else if (binary->left->flavor == ExprFlavor::STRING_LITERAL) {
-			auto string = static_cast<ExprStringLiteral *>(binary->left);
-
-			if ((right->type->flags & TYPE_INTEGER_IS_SIGNED) && right->signedValue < 0) {
-				reportError(binary, "Error: Out of bounds index of string constant, Length: %" PRIu64 ", Index: %" PRIi64, string->string.length, right->signedValue);
-				return false;
+		else if (left->type == &TYPE_STRING) {
+			if (left->flavor == ExprFlavor::STRING_LITERAL) {
+				if ((right->type->flags & TYPE_INTEGER_IS_SIGNED) && right->signedValue < 0) {
+					reportError(binary, "Error: Out of bounds index of string constant, Length: %" PRIu64 ", Index: %" PRIi64, stringLeft->string.length, right->signedValue);
+					return false;
+				}
+				else if (right->unsignedValue >= stringLeft->string.length) {
+					reportError(binary, "Error: Out of bounds index of string constant, Length: %" PRIu64 ", Index: %" PRIu64, stringLeft->string.length, right->unsignedValue);
+					return false;
+				}
+				else {
+					*exprPointer = createIntLiteral(binary->start, binary->end, &TYPE_U8, stringLeft->string.characters[right->unsignedValue]);
+				}
 			}
-			else if (right->unsignedValue >= string->string.length) {
-				reportError(binary, "Error: Out of bounds index of array constant, Length: %" PRIu64 ", Index: %" PRIu64, string->string.length, right->unsignedValue);
+			else if (left->flavor == ExprFlavor::INT_LITERAL) {
+				reportError(binary, "Error: Out of bounds index of string constant, Length: 0, Index: %" PRIu64, right->unsignedValue);
 				return false;
-			}
-			else {
-				return createIntLiteral(binary->start, binary->end, &TYPE_U8, string->string.characters[right->unsignedValue]);
 			}
 		}
 
 		break;
 	}
 	case TokenT::NOT_EQUAL: {
-		if (binary->left->flavor != binary->right->flavor)
+		if (left->flavor != right->flavor)
 			break;
 
-		if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
+		if (left->flavor == ExprFlavor::INT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->unsignedValue != right->unsignedValue);
 		}
-		else if (binary->left->flavor == ExprFlavor::FLOAT_LITERAL) {
+		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->floatValue != right->floatValue);
 		}
-		else if (binary->left->flavor == ExprFlavor::STRING_LITERAL) {
+		else if (left->flavor == ExprFlavor::STRING_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(stringLeft->start, stringRight->end, &TYPE_BOOL, stringLeft->string != stringRight->string);
 		}
 		break;
 	}
 	case TokenT::EQUAL: {
-		if (binary->left->flavor != binary->right->flavor)
+		if (left->flavor != right->flavor)
 			break;
 
-		if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
+		if (left->flavor == ExprFlavor::INT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->unsignedValue == right->unsignedValue);
 		}
-		else if (binary->left->flavor == ExprFlavor::FLOAT_LITERAL) {
+		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->floatValue == right->floatValue);
 		}
-		else if (binary->left->flavor == ExprFlavor::STRING_LITERAL) {
+		else if (left->flavor == ExprFlavor::STRING_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(stringLeft->start, stringRight->end, &TYPE_BOOL, stringLeft->string == stringRight->string);
 		}
 		break;
 	}
 	case TokenT::GREATER_EQUAL: {
-		if (binary->left->flavor != binary->right->flavor)
+		if (left->flavor != right->flavor)
 			break;
 
-		if (binary->left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
+		if (left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->signedValue >= right->signedValue);
 		}
-		else if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
+		else if (left->flavor == ExprFlavor::INT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->unsignedValue >= right->unsignedValue);
 		}
-		else if (binary->left->flavor == ExprFlavor::FLOAT_LITERAL) {
+		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->floatValue >= right->floatValue);
 		}
 		break;
 	}
 	case TokenT::LESS_EQUAL: {
-		if (binary->left->flavor != binary->right->flavor)
+		if (left->flavor != right->flavor)
 			break;
 
-		if (binary->left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
+		if (left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->signedValue <= right->signedValue);
 		}
-		else if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
+		else if (left->flavor == ExprFlavor::INT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->unsignedValue <= right->unsignedValue);
 		}
-		else if (binary->left->flavor == ExprFlavor::FLOAT_LITERAL) {
+		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->floatValue <= right->floatValue);
 		}
 		break;
 	}
 	case TOKEN('>'): {
-		if (binary->left->flavor != binary->right->flavor)
+		if (left->flavor != right->flavor)
 			break;
 
-		if (binary->left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
+		if (left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->signedValue > right->signedValue);
 		}
-		else if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
+		else if (left->flavor == ExprFlavor::INT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->unsignedValue > right->unsignedValue);
 		}
-		else if (binary->left->flavor == ExprFlavor::FLOAT_LITERAL) {
+		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->floatValue > right->floatValue);
 		}
 		break;
 	}
 	case TOKEN('<'): {
-		if (binary->left->flavor != binary->right->flavor)
+		if (left->flavor != right->flavor)
 			break;
 
-		if (binary->left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
+		if (left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->signedValue < right->signedValue);
 		}
-		else if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
+		else if (left->flavor == ExprFlavor::INT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->unsignedValue < right->unsignedValue);
 		}
-		else if (binary->left->flavor == ExprFlavor::FLOAT_LITERAL) {
+		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->floatValue < right->floatValue);
 		}
 		break;
 	}
 	case TOKEN('+'): {
-		if (binary->left->flavor != binary->right->flavor)
+		if (left->flavor != right->flavor)
 			break;
 
-		if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
+		if (left->flavor == ExprFlavor::INT_LITERAL) {
 			if (left->type->flavor == TypeFlavor::INTEGER) {
 				auto literal = createInBoundsIntLiteral(left->start, right->end, left->type, left->signedValue + right->signedValue);
 
@@ -1639,16 +1598,16 @@ bool evaluateConstantBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 				*exprPointer = createIntLiteral(left->start, right->end, left->type, left->unsignedValue + right->unsignedValue * pointerTo->size);
 			}
 		}
-		else if (binary->left->flavor == ExprFlavor::FLOAT_LITERAL) {
+		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
 			*exprPointer = createFloatLiteral(left->start, right->end, left->type, left->floatValue < right->floatValue);
 		}
 		break;
 	}
 	case TOKEN('-'): {
-		if (binary->left->flavor != binary->right->flavor)
+		if (left->flavor != right->flavor)
 			break;
 
-		if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
+		if (left->flavor == ExprFlavor::INT_LITERAL) {
 			if (left->type->flavor == TypeFlavor::INTEGER) {
 				auto literal = createInBoundsIntLiteral(left->start, right->end, left->type, left->signedValue - right->signedValue);
 
@@ -1680,64 +1639,64 @@ bool evaluateConstantBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 				}
 			}
 		}
-		else if (binary->left->flavor == ExprFlavor::FLOAT_LITERAL) {
+		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
 			*exprPointer = createFloatLiteral(left->start, right->end, left->type, left->floatValue < right->floatValue);
 		}
 		break;
 	}
 	case TOKEN('&'): {
-		if (binary->left->flavor != binary->right->flavor)
+		if (left->flavor != right->flavor)
 			break;
 
-		if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
+		if (left->flavor == ExprFlavor::INT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, left->type, left->unsignedValue & right->unsignedValue);
 		}
 		break;
 	}
 	case TOKEN('|'): {
-		if (binary->left->flavor != binary->right->flavor)
+		if (left->flavor != right->flavor)
 			break;
 
-		if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
+		if (left->flavor == ExprFlavor::INT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, left->type, left->unsignedValue | right->unsignedValue);
 		}
 		break;
 	}
 	case TOKEN('^'): {
-		if (binary->left->flavor != binary->right->flavor)
+		if (left->flavor != right->flavor)
 			break;
 
-		if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
+		if (left->flavor == ExprFlavor::INT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, left->type, left->unsignedValue ^ right->unsignedValue);
 		}
 		break;
 	}
 	case TokenT::SHIFT_LEFT: {
-		if (binary->left->flavor != binary->right->flavor)
+		if (left->flavor != right->flavor)
 			break;
 
-		if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
+		if (left->flavor == ExprFlavor::INT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, left->type, left->unsignedValue << right->unsignedValue);
 		}
 		break;
 	}
 	case TokenT::SHIFT_RIGHT: {
-		if (binary->left->flavor != binary->right->flavor)
+		if (left->flavor != right->flavor)
 			break;
 
-		if (binary->left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
+		if (left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, left->type, left->signedValue >> right->signedValue);
 		}
-		else if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
+		else if (left->flavor == ExprFlavor::INT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, left->type, left->unsignedValue >> right->unsignedValue);
 		}
 		break;
 	}
 	case TOKEN('*'): {
-		if (binary->left->flavor != binary->right->flavor)
+		if (left->flavor != right->flavor)
 			break;
 
-		if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
+		if (left->flavor == ExprFlavor::INT_LITERAL) {
 			auto literal = createInBoundsIntLiteral(left->start, right->end, left->type, left->unsignedValue * right->unsignedValue);
 
 			if (left->type == &TYPE_SIGNED_INT_LITERAL && literal->signedValue >= 0) {
@@ -1746,16 +1705,16 @@ bool evaluateConstantBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 
 			*exprPointer = literal;
 		}
-		else if (binary->left->flavor == ExprFlavor::FLOAT_LITERAL) {
+		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
 			*exprPointer = createFloatLiteral(left->start, right->end, left->type, left->floatValue * right->floatValue);
 		}
 		break;
 	}
 	case TOKEN('/'): {
-		if (binary->left->flavor != binary->right->flavor)
+		if (left->flavor != right->flavor)
 			break;
 
-		if (binary->left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
+		if (left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
 			auto literal = createInBoundsIntLiteral(left->start, right->end, left->type, left->signedValue / right->signedValue);
 
 			if (left->type == &TYPE_SIGNED_INT_LITERAL && literal->signedValue >= 0) {
@@ -1764,19 +1723,19 @@ bool evaluateConstantBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 
 			*exprPointer = literal;
 		}
-		else if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
+		else if (left->flavor == ExprFlavor::INT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, left->type, left->unsignedValue / right->unsignedValue);
 		}
-		else if (binary->left->flavor == ExprFlavor::FLOAT_LITERAL) {
+		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
 			*exprPointer = createFloatLiteral(left->start, right->end, left->type, left->floatValue / right->floatValue);
 		}
 		break;
 	}
 	case TOKEN('%'): {
-		if (binary->left->flavor != binary->right->flavor)
+		if (left->flavor != right->flavor)
 			break;
 
-		if (binary->left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
+		if (left->flavor == ExprFlavor::INT_LITERAL && (left->type->flags & TYPE_INTEGER_IS_SIGNED)) {
 			auto literal = createInBoundsIntLiteral(left->start, right->end, left->type, left->signedValue % right->signedValue);
 
 			if (left->type == &TYPE_SIGNED_INT_LITERAL && literal->signedValue >= 0) {
@@ -1785,28 +1744,28 @@ bool evaluateConstantBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 
 			*exprPointer = literal;
 		}
-		else if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
+		else if (left->flavor == ExprFlavor::INT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, left->type, left->unsignedValue % right->unsignedValue);
 		}
-		else if (binary->left->flavor == ExprFlavor::FLOAT_LITERAL) {
+		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
 			*exprPointer = createFloatLiteral(left->start, right->end, left->type, fmod(left->floatValue, right->floatValue));
 		}
 		break;
 	}
 	case TokenT::LOGIC_AND: {
-		if (binary->left->flavor != binary->right->flavor)
+		if (left->flavor != right->flavor)
 			break;
 
-		if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
+		if (left->flavor == ExprFlavor::INT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, left->type, left->unsignedValue != 0 && right->unsignedValue != 0);
 		}
 		break;
 	}
 	case TokenT::LOGIC_OR: {
-		if (binary->left->flavor != binary->right->flavor)
+		if (left->flavor != right->flavor)
 			break;
 
-		if (binary->left->flavor == ExprFlavor::INT_LITERAL) {
+		if (left->flavor == ExprFlavor::INT_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(left->start, right->end, left->type, left->unsignedValue != 0 || right->unsignedValue != 0);
 		}
 		break;
@@ -1882,8 +1841,10 @@ bool defaultValueIsZero(SubJob *job, Type *type, bool *yield) {
 
 			assert(member->initialValue);
 
-			if ((member->initialValue->flavor == ExprFlavor::INT_LITERAL || member->initialValue->flavor == ExprFlavor::FLOAT_LITERAL)
-				&& static_cast<ExprLiteral *>(member->initialValue)->unsignedValue == 0) { // Check against unsignedValue even for float literals so if the user explicitly 
+			auto initialValue = member->initialValue;
+
+			if ((initialValue->flavor == ExprFlavor::INT_LITERAL || initialValue->flavor == ExprFlavor::FLOAT_LITERAL)
+				&& static_cast<ExprLiteral *>(initialValue)->unsignedValue == 0) { // Check against unsignedValue even for float literals so if the user explicitly 
 																						   // sets the default value to -0, they will actually get -0, not 0
 			}
 			else {
@@ -1968,7 +1929,7 @@ Expr *createDefaultValue(SubJob *job, Type *type, bool *shouldYield) {
 	}
 	case TypeFlavor::ENUM: {
 		assert(!(type->flags & TYPE_ENUM_IS_FLAGS)); // The default value for a flags enum is 0
-		auto first = static_cast<TypeEnum *>(type)->values->declarations[0];
+		auto first = static_cast<TypeEnum *>(type)->values.members.declarations[0];
 
 		if ((first->flags & DECLARATION_VALUE_IS_READY)) {
 			return first->initialValue;
@@ -2057,7 +2018,12 @@ bool checkOverloadSet(SubJob *job, Declaration *firstOverload, bool *yield) {
 		else {
 			auto type = getDeclarationType(declaration);
 
-			if (type != &TYPE_POLYMORPHIC_FUNCTION && type->flavor != TypeFlavor::FUNCTION) {
+			if (type == &TYPE_POLYMORPHIC_FUNCTION) {
+				reportError(declaration, "Error: Polymorphic functions cannot be overloaded");
+				return false;
+			}
+
+			if (type->flavor != TypeFlavor::FUNCTION) {
 				reportError(declaration, "Error: Only functions can be overloaded");
 				return false;
 			}
@@ -2073,12 +2039,14 @@ bool checkOverloadSet(SubJob *job, Declaration *firstOverload, bool *yield) {
 		else {
 			assert(declaration->initialValue);
 
-			if (declaration->initialValue->flavor != ExprFlavor::FUNCTION) {
+			auto initialValue = declaration->initialValue;
+
+			if (initialValue->flavor != ExprFlavor::FUNCTION) {
 				reportError(declaration, "Error: Only functions can be overloaded");
 				return false;
 			}
 
-			if (declaration->initialValue->flags & EXPR_FUNCTION_IS_C_CALL) {
+			if (initialValue->flags & EXPR_FUNCTION_IS_C_CALL) {
 				reportError(declaration, "Error: #c_call functions cannot be overloaded");
 				return false;
 			}
@@ -2128,7 +2096,11 @@ bool declarationIsOverloadSet(SubJob *job, Declaration *declaration, bool *yield
 		return false;
 	}
 
-	if (declaration->initialValue->flavor == ExprFlavor::FUNCTION && !(declaration->initialValue->flags & EXPR_FUNCTION_IS_C_CALL))
+	assert(declaration->initialValue);
+
+	auto initialValue = declaration->initialValue;
+
+	if (initialValue->flavor == ExprFlavor::FUNCTION && !(initialValue->flags & EXPR_FUNCTION_IS_C_CALL) && initialValue->type != &TYPE_POLYMORPHIC_FUNCTION)
 		return true;
 
 	return false;
@@ -2954,10 +2926,6 @@ bool checkArgumentsForOverload(SubJob *job, Arguments *arguments, Block *block, 
 		argIndex = argument->serial;
 		assert(!(argument->flags & DECLARATION_IMPORTED_BY_USING));
 
-		if (sortedArguments[argIndex]) {
-			return false;
-		}
-
 		if ((argument->flags & DECLARATION_IS_VARARGS) && !(arguments->values[i]->flags & EXPR_IS_SPREAD)) {
 			Type *varargsType = static_cast<TypeArray *>(getDeclarationType(argument))->arrayOf;
 
@@ -3002,6 +2970,203 @@ bool checkArgumentsForOverload(SubJob *job, Arguments *arguments, Block *block, 
 		auto argument = block->declarations[i];
 
 		if (!argument->initialValue && !(argument->flags & DECLARATION_IS_VARARGS)) {
+			return false;
+		}
+	}
+
+	return true;
+}
+
+bool matchPolymorphArgument(Expr *polymorphExpression, Type *type, Expr *location) {
+	if (polymorphExpression->flavor == ExprFlavor::IDENTIFIER && (polymorphExpression->flags & EXPR_IDENTIER_DEFINES_POLYMORPH_VARIABLE)) {
+		auto identifier = static_cast<ExprIdentifier *>(polymorphExpression);
+
+		assert(identifier->declaration);
+		assert(identifier->declaration->flags & DECLARATION_IS_CONSTANT);
+		assert(identifier->declaration->enclosingScope->flavor == BlockFlavor::CONSTANTS);
+		assert(!identifier->declaration->initialValue);
+
+		identifier->declaration->initialValue = inferMakeTypeLiteral(location->start, location->end, type);
+
+		//reportInfo("%.*s Polymorph type matched %.*s", STRING_PRINTF(identifier->name), STRING_PRINTF(type->name));
+		return true;
+	}
+	else if (polymorphExpression->flavor == ExprFlavor::UNARY_OPERATOR) {
+		auto unary = static_cast<ExprUnaryOperator *>(polymorphExpression);
+
+		if (unary->op == TOKEN('*')) {
+			if (type->flavor != TypeFlavor::POINTER) {
+				reportError(location, "Error: Could not match polymorph pattern, %.*s is not a pointer", STRING_PRINTF(type->name));
+				reportError(polymorphExpression, "   ..: Here is the polymorph argument");
+				return false;
+			}
+
+			return matchPolymorphArgument(unary->value, static_cast<TypePointer *>(type)->pointerTo, location);
+		}
+
+	}
+	else if (polymorphExpression->flavor == ExprFlavor::BINARY_OPERATOR) {
+		auto binary = static_cast<ExprBinaryOperator *>(polymorphExpression);
+
+		if (binary->op == TokenT::ARRAY_TYPE) {
+			if (type->flavor != TypeFlavor::ARRAY) {
+				reportError(location, "Error: Could not match polymorph pattern, %.*s is not an array", STRING_PRINTF(type->name));
+				reportError(polymorphExpression, "   ..: Here is the polymorph argument");
+				return false;
+			}
+
+			auto array = static_cast<TypeArray *>(type);
+
+			if (binary->left) {
+				if (!(array->flags & TYPE_ARRAY_IS_FIXED)) {
+					reportError(location, "Error: Could not match polymorph pattern, %.*s is not a fixed array", STRING_PRINTF(type->name));
+					reportError(polymorphExpression, "   ..: Here is the polymorph argument");
+					return false;
+				}
+			}
+			else if (binary->flags & EXPR_ARRAY_IS_DYNAMIC) {
+				if (!(array->flags & TYPE_ARRAY_IS_DYNAMIC)) {
+					reportError(location, "Error: Could not match polymorph pattern, %.*s is not a dynamic array", STRING_PRINTF(type->name));
+					reportError(polymorphExpression, "   ..: Here is the polymorph argument");
+					return false;
+				}
+			}
+
+			return matchPolymorphArgument(binary->right, array->arrayOf, location);
+		}
+	}
+	else if (polymorphExpression->flavor == ExprFlavor::FUNCTION_PROTOTYPE) {
+		auto function = static_cast<ExprFunction *>(polymorphExpression);
+		
+		if (type->flavor != TypeFlavor::FUNCTION) {
+			reportError(location, "Error: Could not match polymorph pattern, %.*s is not a function", STRING_PRINTF(type->name));
+			reportError(polymorphExpression, "   ..: Here is the polymorph argument");
+			return false;
+		}
+
+		auto functionType = static_cast<TypeFunction *>(type);
+
+		if (function->arguments.declarations.count != functionType->argumentCount) {
+			reportError(location, "Error: Could not match polymorph pattern, function argument counts mismatched for %.*s (%u arguments)", 
+				STRING_PRINTF(functionType->name), functionType->argumentCount);
+			reportError(polymorphExpression, "   ..: Wanted %u arguments", function->arguments.declarations.count);
+			return false;
+		}
+
+		if (function->returns.declarations.count != functionType->returnCount) {
+			reportError(location, "Error: Could not match polymorph pattern, function return counts mismatched for %.*s (%u returns)",
+				STRING_PRINTF(functionType->name), functionType->returnCount);
+			reportError(polymorphExpression, "   ..: Wanted %u returns", function->returns.declarations.count);
+			return false;
+		}
+
+		if ((function->flags & EXPR_FUNCTION_HAS_VARARGS) && !functionType->isVarargs) {
+			reportError(location, "Error: Could not match polymorph pattern, wanted a varargs function but given %.*s", 
+				STRING_PRINTF(functionType->name));
+			reportError(polymorphExpression, "   ..: Here is the polymorph argument");
+			return false;
+		}
+
+		if (((function->flags & EXPR_FUNCTION_IS_C_CALL) != 0) != ((functionType->flags & TYPE_FUNCTION_IS_C_CALL) != 0)) {
+			reportError(location, "Error: Could not match polymorph pattern #c_call specifiers do not match for function type %.*s", 
+				STRING_PRINTF(functionType->name));
+			reportError(polymorphExpression, "   ..: Here is the polymorph argument");
+			return false;
+		}
+
+		for (auto argument : function->arguments.declarations) {
+			if (argument->flags & DECLARATION_DEFINES_POLYMORPH_VARIABLE) {
+				assert(argument->type);
+
+				if (!matchPolymorphArgument(argument->type, functionType->argumentTypes[argument->serial], location))
+					return false;
+			}
+		}
+
+		for (auto return_ : function->returns.declarations) {
+			if (return_->flags & DECLARATION_DEFINES_POLYMORPH_VARIABLE) {
+				assert(return_->type);
+
+				if (!matchPolymorphArgument(return_->type, functionType->returnTypes[return_->serial], location))
+					return false;
+			}
+		}
+
+		return true;
+	}
+
+	reportError(polymorphExpression, "Error: Could not match polymorphic argument pattern");
+	return false;
+}
+
+bool doPolymorphMatchingForCall(Arguments *arguments, ExprFunction *function) {
+	for (u32 i = 0; i < arguments->count; i++) {
+		Declaration *argument;
+
+		auto argumentType = arguments->values[i]->type;
+
+		if (arguments->names && arguments->names[i].length) {
+			argument = findDeclarationNoYield(&function->arguments, arguments->names[i]);
+		}
+		else {
+			if (i >= function->arguments.declarations.count) {
+				return false;
+			}
+
+			argument = function->arguments.declarations[i];
+		}
+
+		if (!argument) {
+			return false;
+		}
+
+		assert(!(argument->flags & DECLARATION_IMPORTED_BY_USING));
+		
+		if (argument->flags & DECLARATION_DEFINES_POLYMORPH_VARIABLE) {
+			auto typeExpr = argument->type;
+			auto argumentExpr = arguments->values[i];
+			assert(typeExpr);
+
+			if ((argument->flags & DECLARATION_IS_VARARGS) && !(argumentExpr->flags & EXPR_IS_SPREAD)) {
+				assert(typeExpr->flavor == ExprFlavor::BINARY_OPERATOR);
+				auto arrayType = static_cast<ExprBinaryOperator *>(typeExpr);
+				assert(arrayType->op == TokenT::ARRAY_TYPE);
+
+				typeExpr = arrayType->right;
+
+				for (; i < arguments->count; i++) {
+					if (arguments->names && arguments->names[i].length) {
+						i--; // i will be incremented in the outer loop
+						break;
+					}
+				}
+			}
+
+			if ((argument->flags & EXPR_IS_SPREAD) && !(argument->flags & DECLARATION_IS_VARARGS)) {
+				return false;
+			}
+
+			if (!matchPolymorphArgument(typeExpr, getTypeForExpr(argumentExpr), argumentExpr))
+				return false;
+		}
+		
+	}
+
+	return true;
+}
+
+bool constantsBlockMatches(Block *original, Block *polymorph) {
+	assert(original->declarations.count == polymorph->declarations.count);
+
+	for (u64 i = 0; i < original->declarations.count; i++) {
+		auto originalDeclaration = original->declarations[i];
+		auto polymorphDeclaration = polymorph->declarations[i];
+
+		assert(originalDeclaration->name == polymorphDeclaration->name);
+		assert(originalDeclaration->initialValue && originalDeclaration->initialValue->flavor == ExprFlavor::TYPE_LITERAL);
+		assert(polymorphDeclaration->initialValue && polymorphDeclaration->initialValue->flavor == ExprFlavor::TYPE_LITERAL);
+
+		if (static_cast<ExprLiteral *>(originalDeclaration->initialValue)->typeValue != static_cast<ExprLiteral *>(polymorphDeclaration->initialValue)->typeValue) {
 			return false;
 		}
 	}
@@ -4543,7 +4708,7 @@ bool inferFlattened(SubJob *job) {
 
 				bool sleep = true;
 
-				for (auto member : enum_->values->declarations) {
+				for (auto member : enum_->values.members.declarations) {
 					if (!(member->flags & DECLARATION_VALUE_IS_READY)) {
 						goToSleep(job, &member->sleepingOnMyValue, "Complete switch enum value not ready");
 						sleep = true;
@@ -4555,7 +4720,7 @@ bool inferFlattened(SubJob *job) {
 
 				bool failed = false;
 
-				for (auto member : enum_->values->declarations) {
+				for (auto member : enum_->values.members.declarations) {
 					assert(member->initialValue->flavor == ExprFlavor::INT_LITERAL);
 
 					u64 value = static_cast<ExprLiteral *>(member->initialValue)->unsignedValue;
@@ -4586,7 +4751,7 @@ bool inferFlattened(SubJob *job) {
 				if (failed) {
 					reportError(switch_, "Error: Switch if that was marked as #complete does not handle all values");
 
-					for (auto member : enum_->values->declarations) {
+					for (auto member : enum_->values.members.declarations) {
 						assert(member->initialValue->flavor == ExprFlavor::INT_LITERAL);
 
 						u64 value = static_cast<ExprLiteral *>(member->initialValue)->unsignedValue;
@@ -4928,6 +5093,8 @@ bool inferFlattened(SubJob *job) {
 
 						auto function = static_cast<ExprFunction *>(declaration->initialValue);
 
+						assert(function->type != &TYPE_POLYMORPHIC_FUNCTION);
+
 						if (!checkArgumentsForOverload(job, &call->arguments, &function->arguments, function, conversions.argumentCount, &yield)) {
 							if (yield)
 								return true;
@@ -4991,6 +5158,53 @@ bool inferFlattened(SubJob *job) {
 						return false;
 					}
 				}
+			}
+
+			if (call->function->type == &TYPE_POLYMORPHIC_FUNCTION) {
+				assert(call->function->flavor == ExprFlavor::FUNCTION);
+
+				auto function = static_cast<ExprFunction *>(call->function);
+
+				if (!doPolymorphMatchingForCall(&call->arguments, function))
+					return false;
+
+#if BUILD_DEBUG
+				for (auto constant : function->constants.declarations) {
+					assert(constant->initialValue);
+					assert(constant->initialValue->flavor == ExprFlavor::TYPE_LITERAL);
+				}
+#endif
+
+				ExprFunction *existingPolymorph = nullptr;
+
+				for (auto polymorph : function->polymorphs) {
+					if (constantsBlockMatches(&function->constants, &polymorph->constants)) {
+						existingPolymorph = polymorph;
+						break;
+					}
+				}
+
+				if (!existingPolymorph) {
+					auto newFunction = polymorph(function);
+					function->polymorphs.add(newFunction);
+
+					addFunction(newFunction);
+
+					for (auto constant : function->constants.declarations) {
+						constant->initialValue = nullptr;
+					}
+
+					call->function = newFunction;
+
+					beginFlatten(job, &call->function);
+					continue;
+				}
+
+				for (auto constant : function->constants.declarations) {
+					constant->initialValue = nullptr;
+				}
+
+				call->function = existingPolymorph;
 			}
 
 			if (call->function->type->flavor != TypeFlavor::FUNCTION) {
@@ -6559,7 +6773,7 @@ bool inferDeclarationValue(SubJob *subJob) {
 				}
 
 				if (!boundsCheckImplicitConversion(declaration->initialValue, static_cast<TypeEnum *>(correct)->integerType, static_cast<ExprLiteral *>(declaration->initialValue))) {
-					reportError(CAST_FROM_SUBSTRUCT(ExprEnum, struct_, static_cast<TypeEnum *>(correct))->integerType, "   ..: Here is the enum type declaration");
+					reportError(CAST_FROM_SUBSTRUCT(ExprEnum, struct_, static_cast<TypeEnum *>(correct)), "   ..: Here is the enum declaration");
 
 					return false;
 				}
@@ -6746,8 +6960,12 @@ bool inferFunctionHeader(SubJob *subJob) {
 
 	auto function = job->function;
 
-	if (function->constants.declarations.count) {
+	if (function->flags & EXPR_FUNCTION_IS_POLYMORPHIC) {
 		function->type = &TYPE_POLYMORPHIC_FUNCTION;
+
+		removeJob(&functionJobs, job);
+		function->sleepingOnInfer.free();
+		freeJob(job);
 	}
 	else {
 		bool sleep = false;
@@ -7020,25 +7238,47 @@ bool inferSize(SubJob *subJob) {
 
 		auto enum_ = CAST_FROM_SUBSTRUCT(ExprEnum, struct_, struct_);
 
-		if (enum_->integerType->type != &TYPE_TYPE) {
-			reportError(enum_->integerType, "Error: enum type must be a type");
+		assert(enum_->struct_.members.declarations.count >= 2);
+		auto integerType = enum_->struct_.members.declarations[1];
+		assert(integerType->name == "integer");
+		
+
+		if (!(integerType->flags & DECLARATION_TYPE_IS_READY)) {
+			goToSleep(job, &integerType->sleepingOnMyType, "Enum waiting for type type");
+			return true;
+		}
+
+		auto typeType = getDeclarationType(integerType);
+
+		if (typeType != &TYPE_TYPE) {
+			reportError(integerType, "Error: enum type must be a type");
 			return false;
 		}
-		else if (enum_->integerType->flavor != ExprFlavor::TYPE_LITERAL) {
-			reportError(enum_->integerType, "Error: enum type must be a constant");
-			return false;
+
+		if (!(integerType->flags & DECLARATION_VALUE_IS_READY)) {
+			goToSleep(job, &integerType->sleepingOnMyType, "Enum waiting for type value");
+			return true;
 		}
-		else if (static_cast<ExprLiteral *>(enum_->integerType)->typeValue->flavor != TypeFlavor::INTEGER) {
-			reportError(enum_->integerType, "Error: enum type must be an integer");
-			return false;
-		}
-		else if (static_cast<ExprLiteral *>(enum_->integerType)->typeValue->flags & TYPE_INTEGER_IS_SIGNED) {
-			reportError(enum_->integerType, "Error: enums cannot have a signed type");
+
+		if (integerType->initialValue->flavor != ExprFlavor::TYPE_LITERAL) {
+			reportError(integerType, "Error: enum type must be a constant");
 			return false;
 		}
 
 
-		enum_->struct_.integerType = static_cast<ExprLiteral *>(enum_->integerType)->typeValue;
+		auto type = static_cast<ExprLiteral *>(integerType->initialValue)->typeValue;
+
+		if (type->flavor != TypeFlavor::INTEGER) {
+			reportError(integerType, "Error: enum type must be an integer");
+			return false;
+		}
+		else if (type->flags & TYPE_INTEGER_IS_SIGNED) {
+			reportError(integerType, "Error: enums cannot have a signed type");
+			return false;
+		}
+
+
+		enum_->struct_.integerType = type;
 		enum_->struct_.alignment = enum_->struct_.integerType->alignment;
 		enum_->struct_.size = enum_->struct_.integerType->size;
 		enum_->struct_.flags |= enum_->struct_.integerType->flags & TYPE_INTEGER_IS_SIGNED;
@@ -7191,7 +7431,7 @@ bool findTypeInfoRecurse(RunJob *job, ArraySet<Type *> *types, Type *type) {
 	case TypeFlavor::ENUM: {
 		auto enum_ = static_cast<TypeEnum *>(type);
 
-		for (auto member : enum_->values->declarations) {
+		for (auto member : enum_->values.members.declarations) {
 			if (!(member->flags & DECLARATION_VALUE_IS_READY)) {
 				goToSleep(job, &member->sleepingOnMyValue, "Find type info enum value not ready");
 				return false;
@@ -7325,12 +7565,14 @@ void fillTypeInfo(Type *type) {
 
 		enumInfo->is_flags = enum_->flags & TYPE_ENUM_IS_FLAGS ? true : false;
 
-		enumInfo->values.count = enum_->values->declarations.count;
-		enumInfo->values.data = INFER_NEW_ARRAY(Type_Info_Enum::Value, enum_->values->declarations.count);
+		auto values = &enum_->values.members;
 
-		for (u32 i = 0; i < enum_->values->declarations.count; i++) {
-			enumInfo->values.data[i].name = enum_->values->declarations[i]->name;
-			enumInfo->values.data[i].value = static_cast<ExprLiteral *>(enum_->values->declarations[i]->initialValue)->unsignedValue;
+		enumInfo->values.count = values->declarations.count;
+		enumInfo->values.data = INFER_NEW_ARRAY(Type_Info_Enum::Value, values->declarations.count);
+
+		for (u32 i = 0; i < values->declarations.count; i++) {
+			enumInfo->values.data[i].name = values->declarations[i]->name;
+			enumInfo->values.data[i].value = static_cast<ExprLiteral *>(values->declarations[i]->initialValue)->unsignedValue;
 		}
 
 		break;

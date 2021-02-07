@@ -2479,13 +2479,13 @@ void runLlvm() {
 						auto enumValue = GET_STRUCT(TYPE_TYPE_INFO_ENUM_VALUE);
 						auto enumValuePtr = llvm::PointerType::getUnqual(enumValue);
 
-						const auto count = enum_->values->declarations.count;
+						const auto count = enum_->values.members.declarations.count;
 
 						auto valuesVariable = createUnnnamedConstant(&state, llvm::ArrayType::get(enumValue, count));
 						auto values = new llvm::Constant * [count];
 
 						for (u32 i = 0; i < count; i++) {
-							auto value = enum_->values->declarations[i];
+							auto value = enum_->values.members.declarations[i];
 
 							auto valueName = createLlvmString(&state, value->name);
 							auto valueValue = llvm::ConstantInt::get(int64, static_cast<ExprLiteral *>(value->initialValue)->unsignedValue);

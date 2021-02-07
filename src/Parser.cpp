@@ -1333,6 +1333,7 @@ ExprFunction *parseFunctionOrFunctionType(LexerFile *lexer, CodeLocation start, 
 
 	ExprBlock *usingBlock = nullptr;
 
+	pushBlock(lexer, &function->constants);
 	pushBlock(lexer, &function->arguments);
 
 	lexer->functionHeaderStack.add(function);
@@ -1390,6 +1391,11 @@ ExprFunction *parseFunctionOrFunctionType(LexerFile *lexer, CodeLocation start, 
 	function->end = lexer->previousTokenEnd;
 
 	if (allowBody && lexer->token.type == TOKEN('{')) {
+		if (function->constants.declarations.count) {
+			function->flags |= EXPR_FUNCTION_IS_POLYMORPHIC;
+		}
+
+
 		if (function->arguments.declarations.count && function->arguments.declarations[0]->name.length == 0) {
 			reportError(function->arguments.declarations[0], "Error: Non-external functions cannot have anonymous parameters");
 			return nullptr;
@@ -1447,7 +1453,7 @@ ExprFunction *parseFunctionOrFunctionType(LexerFile *lexer, CodeLocation start, 
 
 
 				for (auto declaration : function->constants.declarations) {
-					if (!addDeclarationToBlock(&outerFunction->constants, declaration, lexer->identifierSerial++)) {
+					if (!addDeclarationToBlock(&outerFunction->constants, declaration, outerFunction->constants.declarations.count)) {
 						return nullptr;
 					}
 				}
@@ -1505,6 +1511,7 @@ ExprFunction *parseFunctionOrFunctionType(LexerFile *lexer, CodeLocation start, 
 	}
 
 	popBlock(lexer, &function->arguments);
+	popBlock(lexer, &function->constants);
 
 	return function;
 }
@@ -1646,8 +1653,9 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 		auto declaration = PARSER_NEW(Declaration);
 		declaration->type = parserMakeTypeLiteral(lexer, start, lexer->token.end, &TYPE_TYPE);
-		declaration->flags |= DECLARATION_IS_CONSTANT | DECLARATION_TYPE_IS_READY;
+		declaration->flags |= DECLARATION_IS_CONSTANT | DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
 		declaration->start = start;
+		declaration->name = lexer->token.text;
 		declaration->end = lexer->token.end;
 		declaration->initialValue = nullptr;
 
@@ -1663,7 +1671,9 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 			return nullptr;
 		}
 
-		if (!addDeclarationToBlock(&lexer->functionHeaderStack.peek()->constants, declaration, lexer->identifierSerial++)) {
+		auto function = lexer->functionHeaderStack.peek();
+
+		if (!addDeclarationToBlock(&function->constants, declaration, function->constants.declarations.count)) {
 			return nullptr;
 		}
 
@@ -1938,28 +1948,28 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 		lexer->advance();
 
-		if (lexer->token.type != TOKEN('{')) {
-			enum_->integerType = parseExpr(lexer);
+		Expr *integerType;
 
-			if (!enum_->integerType) {
+		if (lexer->token.type != TOKEN('{')) {
+			integerType = parseExpr(lexer);
+
+			if (!integerType) {
 				return nullptr;
 			}
 		}
 		else {
-			enum_->integerType = parserMakeTypeLiteral(lexer, start, end, &TYPE_U64); // @Incomplete is u64 the correct default
+			integerType = parserMakeTypeLiteral(lexer, start, end, &TYPE_U64); // @Incomplete is u64 the correct default
 		}
 
 		pushBlock(lexer, &enum_->struct_.members);
 
-		auto members = PARSER_NEW(TypeStruct);
+		auto members = &enum_->struct_.values;
 		members->flavor = TypeFlavor::NAMESPACE;
 		members->size = 0;
 		members->alignment = 0;
 		members->flags |= TYPE_IS_INTERNAL;
 		members->name = "members";
 		members->members.flavor = BlockFlavor::STRUCT;
-
-		enum_->struct_.values = &members->members;
 
 		auto membersDeclaration = PARSER_NEW(Declaration);
 		membersDeclaration->start = lexer->token.start;
@@ -1977,8 +1987,8 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		integer->name = "integer";
 		integer->start = lexer->token.start;
 		integer->end = lexer->token.end;
-		integer->type = parserMakeTypeLiteral(lexer, lexer->token.start, lexer->token.end, &TYPE_TYPE);
-		integer->initialValue = enum_->integerType;
+		integer->type = nullptr;
+		integer->initialValue = integerType;
 		integer->flags |= DECLARATION_IS_CONSTANT;
 		integer->inferJob = nullptr;
 
@@ -2054,8 +2064,6 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 				if (!addDeclarationToBlock(lexer->currentBlock, declaration, lexer->identifierSerial++)) {
 					return nullptr;
 				}
-
-				putDeclarationInBlock(&enum_->struct_.members, declaration);
 			}
 			else {
 				reportExpectedError(&lexer->token, "Error: Expected enum declaration name");
@@ -2068,6 +2076,9 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		enum_->end = lexer->previousTokenEnd;
 
 		popBlock(lexer, &enum_->struct_.members);
+
+		auto importer = PARSER_NEW(Importer);
+		addImporterToBlock(&enum_->struct_.members, createImporterForUsing(lexer, membersDeclaration), lexer->identifierSerial++);
 
 
 		if (members->members.declarations.count == 0) {

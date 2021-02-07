@@ -1,6 +1,6 @@
-#load "standard.milo"
-#load "random/random.milo"
-#load "math.milo"
+#import "Standard"
+#import "Random"
+#import "Math"
 
 ListNode :: struct {
 	value: string
@@ -46,10 +46,7 @@ Person :: struct {
 }
 
 print_job :: (job: *Job) {
-	print_string(job.title)
-	print_string(", ")
-	print_u64(job.experience)
-	print_string(" years experience")
+	print("%, % years experience", job.title, job.experience)
 }
 
 using_test :: () {

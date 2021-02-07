@@ -1243,7 +1243,7 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 
 			u16 nested = enumeration->enclosingScope->flavor == BlockFlavor::STRUCT ? 8 : 0;
 
-			for (auto declaration : enumeration->values->declarations) {
+			for (auto declaration : enumeration->values.members.declarations) {
 				assert(declaration->initialValue->flavor == ExprFlavor::INT_LITERAL);
 				assert(!(declaration->initialValue->type->flags & TYPE_INTEGER_IS_SIGNED));
 				
@@ -1269,7 +1269,7 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 			u32 fieldList = DEBUG_LEAF{
 				debugTypes->add2(0x1203); // LF_FIELDLIST
 
-				for (auto declaration : enumeration->values->declarations) {
+				for (auto declaration : enumeration->values.members.declarations) {
 
 					u64 value = static_cast<ExprLiteral *>(declaration->initialValue)->unsignedValue;
 
@@ -1305,7 +1305,7 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 			u32 fieldList = DEBUG_LEAF {
 				debugTypes->add4(0x1203); // LF_FIELDLIST
 
-				for (auto declaration : enumeration->values->declarations) {
+				for (auto declaration : enumeration->values.members.declarations) {
 					assert(declaration->initialValue->flavor == ExprFlavor::INT_LITERAL);
 					assert(!(declaration->initialValue->type->flags & TYPE_INTEGER_IS_SIGNED));
 
@@ -1322,7 +1322,7 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 			return DEBUG_LEAF{
 				debugTypes->ensure(14);
 				debugTypes->add2Unchecked(0x1507); // LF_ENUM
-				debugTypes->add2Unchecked(static_cast<u16>(enumeration->values->declarations.count));
+				debugTypes->add2Unchecked(static_cast<u16>(enumeration->values.members.declarations.count));
 				debugTypes->add2Unchecked(0x200); // Has a unique name
 				debugTypes->add4Unchecked(integerType);
 				debugTypes->add4Unchecked(fieldList);
@@ -4158,7 +4158,7 @@ void runCoffWriter() {
 
 					u32 names = symbols.count();
 
-					for (auto member : enum_->values->declarations) {
+					for (auto member : enum_->values.members.declarations) {
 						createRdataPointer(&stringTable, &symbols, &rdata);
 						rdata.addNullTerminatedString(member->name);
 					}
@@ -4166,8 +4166,8 @@ void runCoffWriter() {
 					rdata.allocateUnaligned(AlignPO2(rdata.totalSize, 8) - rdata.totalSize);
 					u32 values = createRdataPointer(&stringTable, &symbols, &rdata);
 
-					for (u32 i = 0; i < enum_->values->declarations.count; i++) {
-						auto member = enum_->values->declarations[i];
+					for (u32 i = 0; i < enum_->values.members.declarations.count; i++) {
+						auto member = enum_->values.members.declarations[i];
 
 						Type_Info_Enum::Value data;
 
@@ -4191,7 +4191,7 @@ void runCoffWriter() {
 					info.is_flags = enum_->flags & TYPE_ENUM_IS_FLAGS ? true : false;
 				
 					info.values.data = nullptr;
-					info.values.count = enum_->values->declarations.count;
+					info.values.count = enum_->values.members.declarations.count;
 
 					if (name)
 						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);

@@ -101,40 +101,15 @@ memory_copy :: (dst: *void, src: *void, count: u64) {
 	}
 }
 
-get_array_pointer :: (data: *u8, index: u64, size: u64) -> *void {
-	return data + index * size
-}
-
-array_add :: (array: *[..]u8, value: any) -> *void {
-	size := value.value_type.size
-
+array_add :: (array: *[..]$T, value: T) {
 	if array.count >= array.capacity {
 		array.capacity = max(array.count * 2, 4)
 		
-		array.data = reallocate(array.data, array.capacity * size)
+		array.data = reallocate(array.data, array.capacity * size_of(T))
 	}
 	
-	dest := get_array_pointer(array.data, array.count, size)
-	
-	memory_copy(dest, value.value_pointer, size)
-	array.count += 1
-	
-	return dest
-}
-
-array_add_generic :: (array: *[..]u8, value: *void, size: u64) -> *void {
-	if array.count >= array.capacity {
-		array.capacity = max(array.count * 2, 4)
-		
-		array.data = reallocate(array.data, array.capacity * size)
-	}
-	
-	dest := get_array_pointer(array.data, array.count, size)
-	
-	memory_copy(dest, value, size)
-	array.count += 1
-	
-	return dest
+	array.count += 1;
+	(<<array)[array.count - 1] = value
 }
 
 panic :: () {
@@ -150,24 +125,16 @@ assert :: (value: bool) {
 	}
 }
 
-array_remove_generic_by_pointer :: (array: *[]u8, value: *void, size: u64) {
+array_remove_by_pointer :: (array: *[]$T, value: *T) {
 	assert(value >= array.data)
-	assert(value < get_array_pointer(array.data, array.count, size))
-	assert(cast() (value - cast() array.data) % size == 0)
+	assert(value < array.data + array.count)
 	
-	array.count -= 1
+	end := array.data + array.count
 	
-	end := get_array_pointer(array.data, array.count, size)
-	
-	if value != end
-		memory_copy(value, end, size)
-	
+	if value != end {
+		<<value = <<end
+	}	
 }
-
-array_remove_string_by_pointer :: (array: *[]string, value: *string) {
-	array_remove_generic_by_pointer(cast() array, value, size_of(string))
-}
-
 
 // @Incomplete, only converts ascii to UTF16, not UTF8
 create_wide_string :: (s: string) -> #must *u16 {
