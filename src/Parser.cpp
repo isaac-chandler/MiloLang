@@ -24,8 +24,8 @@ static const BinaryOperator binaryOpPrecedences[] = {
 	{{TokenT::LOGIC_OR, TokenT::LOGIC_AND}},
 	{{TokenT::EQUAL, TokenT::NOT_EQUAL}},
 	{{TOKEN('|'), TOKEN('^'), TOKEN('&')}},
-	{{TOKEN('>'), TokenT::LESS_EQUAL, TOKEN('<'), TokenT::GREATER_EQUAL}},
 	{{TokenT::SHIFT_LEFT, TokenT::SHIFT_RIGHT}},
+	{{TOKEN('>'), TokenT::LESS_EQUAL, TOKEN('<'), TokenT::GREATER_EQUAL}},
 	{{TOKEN('+'), TOKEN('-')}},
 	{{TOKEN('*'), TOKEN('/'), TOKEN('%')}},
 };
@@ -497,6 +497,7 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 			loop->forEnd = nullptr;
 		}
 
+		pushBlock(lexer, &loop->iteratorBlock);
 		if (expectAndConsume(lexer, ';')) {
 			loop->body = nullptr;
 
@@ -506,15 +507,14 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 		else {
 			loop->end = lexer->previousTokenEnd;
 
-			pushBlock(lexer, &loop->iteratorBlock);
 			loop->body = parseStatement(lexer, false);
 
 			if (!loop->body)
 				return nullptr;
 
-			popBlock(lexer, &loop->iteratorBlock);
 
 		}
+		popBlock(lexer, &loop->iteratorBlock);
 
 		// A completed block is executed if the loop finishes without a break statement or a continue to an outer loop
 		if (expectAndConsume(lexer, TokenT::COMPLETED)) {
@@ -573,6 +573,7 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 		if (!loop->whileCondition)
 			return nullptr;
 
+		pushBlock(lexer, &loop->iteratorBlock);
 		if (expectAndConsume(lexer, ';')) {
 			loop->body = nullptr;
 
@@ -582,15 +583,13 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 		else {
 			loop->end = lexer->previousTokenEnd;
 
-			pushBlock(lexer, &loop->iteratorBlock);
 			loop->body = parseStatement(lexer, false);
 
 			if (!loop->body)
 				return nullptr;
 
-			popBlock(lexer, &loop->iteratorBlock);
-
 		}
+		popBlock(lexer, &loop->iteratorBlock);
 
 		// A completed block is executed if the loop finishes without a break statement or a continue to an outer loop
 		if (expectAndConsume(lexer, TokenT::COMPLETED)) {
@@ -1608,6 +1607,111 @@ bool parseArguments(LexerFile *lexer, Arguments *args, const char *message) {
 	return true;
 }
 
+bool parseArrayLiteral(LexerFile *lexer, ExprArrayLiteral *literal) {
+	if (lexer->token.type == TOKEN(']')) {
+		literal->end = lexer->token.end;
+		reportError(literal, "Error: Cannot have an empty array literal");
+		return false;
+	}
+
+	Array<Expr *> values;
+
+	do {
+		auto value = parseExpr(lexer);
+
+		if (!value)
+			return false;
+
+		values.add(value);
+	} while (expectAndConsume(lexer, ','));
+
+	if (!expectAndConsume(lexer, ']')) {
+		reportExpectedError(&lexer->token, "Error: Expected ] or , in array literal");
+		return false;
+	}
+
+	literal->count = values.count;
+	literal->values = values.storage;
+	literal->end = lexer->previousTokenEnd;
+
+	return true;
+}
+
+bool parseStructLiteral(LexerFile *lexer, ExprStructLiteral *literal) {
+	Array<Expr *> initializers;
+	Array<String> names;
+
+	do {
+		String name = { nullptr, 0u };
+
+		if (lexer->token.type == TokenT::IDENTIFIER) {
+			TokenT peek;
+
+			lexer->peekTokenTypes(1, &peek);
+
+			if (peek == TOKEN('=')) {
+				name = lexer->token.text;
+
+				lexer->advance();
+
+				assert(lexer->token.type == TOKEN('='));
+
+				lexer->advance();
+			}
+			else {
+				goto unnamed;
+			}
+		}
+		else if (expectAndConsume(lexer, TokenT::DOUBLE_DASH)) {
+			literal->flags |= EXPR_STRUCT_LITERAL_UNSPECIFIED_MEMBERS_UNINITIALZIED;
+
+			lexer->advance();
+
+			if (lexer->token.type == TOKEN(',')) {
+				reportError(&lexer->token, "Error: Cannot specify more intializers after marking the literal uninitialized");
+				return false;
+			}
+			break;
+		}
+		else {
+		unnamed:
+
+			if (names.count) {
+				reportError(&lexer->token, "Error: Cannot have unnamed initializers after named intializers");
+				return false;
+			}
+
+
+			Expr *argument = parseExpr(lexer);
+
+			if (!argument)
+				return false;
+
+			initializers.add(argument);
+
+			if (name.length) {
+				for (u64 i = names.count + 1; i < initializers.count; i++) {
+					names.add("");
+				}
+
+				names.add(name);
+			}
+		}
+	} while (expectAndConsume(lexer, ','));
+
+	if (!expectAndConsume(lexer, '}')) {
+		reportExpectedError(&lexer->token, "Error: Expected , or } in struct literal");
+		return false;
+	}
+
+	literal->end = lexer->previousTokenEnd;
+	literal->initializers.values = initializers.storage;
+	literal->initializers.names = names.storage;
+	literal->initializers.count = initializers.count;
+
+	return true;
+}
+
 Expr *parsePrimaryExpr(LexerFile *lexer) {
 	CodeLocation start = lexer->token.start;
 	EndLocation end = lexer->token.end;
@@ -1621,29 +1725,54 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 			return nullptr;
 	}
 	else if (expectAndConsume(lexer, '.')) {
-		if (lexer->token.type != TokenT::IDENTIFIER) {
-			reportExpectedError(&lexer->token, "Error: Expected identifier after unary '.'");
+		if (expectAndConsume(lexer, '[')) {
+			auto literal = PARSER_NEW(ExprArrayLiteral);
+			literal->flavor = ExprFlavor::ARRAY_LITERAL;
+			literal->start = start;
+			literal->typeValue = nullptr;
+			literal->type = &TYPE_ARRAY_LITERAL;
+			
+			if (!parseArrayLiteral(lexer, literal))
+				return nullptr;
+
+			expr = literal;
+		}
+		else if (expectAndConsume(lexer, '{')) {
+			auto literal = PARSER_NEW(ExprStructLiteral);
+			literal->flavor = ExprFlavor::STRUCT_LITERAL;
+			literal->start = start;
+			literal->typeValue = nullptr;
+			literal->type = &TYPE_STRUCT_LITERAL;
+
+			if (!parseStructLiteral(lexer, literal))
+				return nullptr;
+
+			expr = literal;
+		}
+		else if (lexer->token.type == TokenT::IDENTIFIER) {
+			ExprIdentifier *identifier = PARSER_NEW(ExprIdentifier);
+			identifier->start = start;
+			identifier->end = lexer->token.end;
+			identifier->name = lexer->token.text;
+			identifier->flavor = ExprFlavor::IDENTIFIER;
+
+
+			identifier->resolveFrom = nullptr;
+			identifier->enclosingScope = nullptr;
+			identifier->declaration = nullptr;
+			identifier->structAccess = nullptr;
+			identifier->type = &TYPE_UNARY_DOT;
+
+			identifier->serial = 0;
+
+			expr = identifier;
+
+			lexer->advance();
+		}
+		else {
+			reportExpectedError(&lexer->token, "Error: Expected identifier, or struct/array literal after unary '.'");
 			return nullptr;
 		}
-
-		ExprIdentifier *identifier = PARSER_NEW(ExprIdentifier);
-		identifier->start = start;
-		identifier->end = lexer->token.end;
-		identifier->name = lexer->token.text;
-		identifier->flavor = ExprFlavor::IDENTIFIER;
-
-
-		identifier->resolveFrom = nullptr;
-		identifier->enclosingScope = nullptr;
-		identifier->declaration = nullptr;
-		identifier->structAccess = nullptr;
-		identifier->type = &TYPE_UNARY_DOT;
-
-		identifier->serial = 0;
-
-		expr = identifier;
-
-		lexer->advance();
 	}
 	else if (expectAndConsume(lexer, '$')) {
 		if (lexer->token.type != TokenT::IDENTIFIER) {
@@ -1938,7 +2067,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		enum_->struct_.size = 0;
 		enum_->struct_.alignment = 0;
 		enum_->struct_.flavor = TypeFlavor::ENUM;
-		enum_->struct_.members.flavor = BlockFlavor::STRUCT;
+		enum_->struct_.members.flavor = BlockFlavor::ENUM;
 		enum_->struct_.integerType = nullptr;
 		enum_->struct_.hash = 0;
 
@@ -1963,40 +2092,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 		pushBlock(lexer, &enum_->struct_.members);
 
-		auto members = &enum_->struct_.values;
-		members->flavor = TypeFlavor::NAMESPACE;
-		members->size = 0;
-		members->alignment = 0;
-		members->flags |= TYPE_IS_INTERNAL;
-		members->name = "members";
-		members->members.flavor = BlockFlavor::STRUCT;
-
-		auto membersDeclaration = PARSER_NEW(Declaration);
-		membersDeclaration->start = lexer->token.start;
-		membersDeclaration->end = lexer->token.end;
-		membersDeclaration->name = "members";
-		membersDeclaration->type = parserMakeTypeLiteral(lexer, lexer->token.start, lexer->token.end, &TYPE_TYPE);
-		membersDeclaration->initialValue = parserMakeTypeLiteral(lexer, lexer->token.start, lexer->token.end, members);
-		membersDeclaration->flags |= DECLARATION_IS_CONSTANT;
-		membersDeclaration->inferJob = nullptr;
-
-		addDeclarationToBlock(lexer->currentBlock, membersDeclaration, lexer->identifierSerial++);
-
-
-		auto integer = PARSER_NEW(Declaration);
-		integer->name = "integer";
-		integer->start = lexer->token.start;
-		integer->end = lexer->token.end;
-		integer->type = nullptr;
-		integer->initialValue = integerType;
-		integer->flags |= DECLARATION_IS_CONSTANT;
-		integer->inferJob = nullptr;
-
-		addDeclarationToBlock(lexer->currentBlock, integer, lexer->identifierSerial++);
-
 		auto typeLiteral = parserMakeTypeLiteral(lexer, enum_->start, enum_->end, &enum_->struct_);
-
-		pushBlock(lexer, &members->members);
 
 
 		if (!expectAndConsume(lexer, TOKEN('{'))) {
@@ -2021,7 +2117,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 				declaration->inferJob = nullptr;
 				declaration->flags |= DECLARATION_IS_CONSTANT | DECLARATION_IS_ENUM_VALUE;
 
-				if (declaration->name == "members" || declaration->name == "integer") {
+				if (declaration->name == "integer") {
 					reportError(&lexer->token, "Error: enum name conflicts with enum data declaration '%.*s'", STRING_PRINTF(declaration->name));
 					return nullptr;
 				}
@@ -2070,18 +2166,27 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 				return nullptr;
 			}
 		}
-		popBlock(lexer, &members->members);
 
 
 		enum_->end = lexer->previousTokenEnd;
 
+
+		auto integer = PARSER_NEW(Declaration);
+		integer->name = "integer";
+		integer->start = integerType->start;
+		integer->end = integerType->end;
+		integer->type = nullptr;
+		integer->initialValue = integerType;
+		integer->flags |= DECLARATION_IS_CONSTANT;
+		integer->inferJob = nullptr;
+
+		addDeclarationToBlock(lexer->currentBlock, integer, lexer->identifierSerial++);
+
+		assert(ENUM_SPECIAL_MEMBER_COUNT == 1);
+
 		popBlock(lexer, &enum_->struct_.members);
 
-		auto importer = PARSER_NEW(Importer);
-		addImporterToBlock(&enum_->struct_.members, createImporterForUsing(lexer, membersDeclaration), lexer->identifierSerial++);
-
-
-		if (members->members.declarations.count == 0) {
+		if (enum_->struct_.members.declarations.count <= ENUM_SPECIAL_MEMBER_COUNT) {
 			reportError(enum_, "Error: Cannot have an enum with no values");
 		}
 
@@ -2210,24 +2315,54 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 			}
 		}
 		else if (expectAndConsume(lexer, '.')) {
-			auto access = PARSER_NEW(ExprIdentifier);
-			access->start = start;
-			access->structAccess = expr;
-			access->flavor = ExprFlavor::IDENTIFIER;
-			access->declaration = nullptr;
-			access->resolveFrom = nullptr;
-			access->enclosingScope = nullptr;
-			access->serial = 0;
+			if (expectAndConsume(lexer, '[')) {
+				auto literal = PARSER_NEW(ExprArrayLiteral);
+				literal->flavor = ExprFlavor::ARRAY_LITERAL;
+				literal->start = start;
+				literal->typeValue = expr;
+				literal->type = nullptr;
 
-			if (lexer->token.type != TokenT::IDENTIFIER) {
-				reportExpectedError(&lexer->token, "Error: Expected member name on right of struct access");
+				if (!parseArrayLiteral(lexer, literal))
+					return nullptr;
+
+				expr = literal;
+			}
+			else if (expectAndConsume(lexer, '{')) {
+				auto literal = PARSER_NEW(ExprStructLiteral);
+				literal->flavor = ExprFlavor::STRUCT_LITERAL;
+				literal->start = start;
+				literal->typeValue = expr;
+				literal->type = nullptr;
+
+				if (!parseStructLiteral(lexer, literal))
+					return nullptr;
+
+				expr = literal;
+			}
+			else if (lexer->token.type == TokenT::IDENTIFIER) {
+				auto access = PARSER_NEW(ExprIdentifier);
+				access->start = start;
+				access->structAccess = expr;
+				access->flavor = ExprFlavor::IDENTIFIER;
+				access->declaration = nullptr;
+				access->resolveFrom = nullptr;
+				access->enclosingScope = nullptr;
+				access->serial = 0;
+
+				if (lexer->token.type != TokenT::IDENTIFIER) {
+					reportExpectedError(&lexer->token, "Error: Expected member name on right of struct access");
+					return nullptr;
+				}
+
+				access->end = lexer->token.end;
+				access->name = lexer->token.text;
+				lexer->advance();
+				expr = access;
+			}
+			else {
+				reportExpectedError(&lexer->token, "Error: Expected identifier, or struct/array literal after '.'");
 				return nullptr;
 			}
-
-			access->end = lexer->token.end;
-			access->name = lexer->token.text;
-			lexer->advance();
-			expr = access;
 		}
 		else {
 			return expr;
@@ -2789,6 +2924,9 @@ void runParser() {
 
 					if (!declaration)
 						break;
+
+					declaration->enclosingScope = nullptr;
+					declaration->serial = 0;
 
 					_ReadWriteBarrier();
 

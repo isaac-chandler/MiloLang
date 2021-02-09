@@ -9,10 +9,10 @@ ITERATIONS :: 256
 width :: 4096
 height :: 4096
 
-x_min :: -0.77
-x_max :: -0.702
-y_min :: 0.184
-y_max :: 0.252
+x_min :: -2
+x_max :: 2
+y_min :: -2
+y_max :: 2
 
 mandelbrot:: (c_re: f32, c_im: f32) -> #must u64 {
 	z_re := c_re
@@ -97,7 +97,7 @@ main :: () {
 	
 	
 	for * jobs {
-		it.start_row = height / THREAD_COUNT * cast()it_index
+		it.start_row = height / THREAD_COUNT * cast() it_index
 		it.end_row = height / THREAD_COUNT * cast()(it_index + 1)
 		
 		it.data = image.data + it.start_row * width * 3

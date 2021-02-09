@@ -104,6 +104,7 @@ enum class BlockFlavor : u8 {
 	ARGUMENTS,
 	RETURNS,
 	STRUCT,
+	ENUM, 
 	GLOBAL
 };
 

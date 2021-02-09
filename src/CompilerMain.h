@@ -78,3 +78,5 @@ inline ArraySet<Library> libraries;
 String msprintf(const char *format, ...);
 
 inline bool linkLibC = false;
+
+inline char modulePath[1024];

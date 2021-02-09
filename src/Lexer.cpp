@@ -1924,14 +1924,14 @@ bool LexerFile::open(FileInfo *file) {
 
 	if (file->module->name.length) {
 		if (file->path.length) {
-			file->path = msprintf("modules\\%.*s\\%.*s", STRING_PRINTF(file->module->name), STRING_PRINTF(file->path));
+			file->path = msprintf("%smodules\\%.*s\\%.*s", modulePath, STRING_PRINTF(file->module->name), STRING_PRINTF(file->path));
 		}
 		else {
-			if (PathIsDirectoryW(utf8ToWString(msprintf("modules\\%.*s", STRING_PRINTF(file->module->name))))) {
-				file->path = msprintf("modules\\%.*s\\module.milo", STRING_PRINTF(file->module->name));
+			if (PathIsDirectoryW(utf8ToWString(msprintf("%smodules\\%.*s", modulePath, STRING_PRINTF(file->module->name))))) {
+				file->path = msprintf("%smodules\\%.*s\\module.milo", modulePath, STRING_PRINTF(file->module->name));
 			}
 			else {
-				file->path = msprintf("modules\\%.*s.milo", STRING_PRINTF(file->module->name));
+				file->path = msprintf("%smodules\\%.*s.milo", modulePath, STRING_PRINTF(file->module->name));
 			}
 		}
 	}

@@ -236,6 +236,8 @@ static const char *getLibC() {
 	}
 }
 
+
+
 #if 1
 int main(int argc, char *argv[]) {
 	setlocale(LC_ALL, "");
@@ -261,6 +263,28 @@ int main(int argc, char *argv[]) {
 	bool backendGiven = false;
 
 	int firstBuildArgument = argc;
+
+	{
+		GetModuleFileNameA(nullptr, modulePath, sizeof(modulePath));
+		char *lastBackslash = strrchr(modulePath, '\\');
+
+		if (lastBackslash) {
+			*lastBackslash = 0;
+
+			lastBackslash = strrchr(modulePath, '\\');
+
+			if (lastBackslash) {
+				lastBackslash[1] = 0;
+			}
+			else {
+				modulePath[0] = 0;
+			}
+		}
+		else {
+			modulePath[0] = 0;
+		}
+	}
+
 
 	for (int i = 1; i < argc; i++) {
 		if (strcmp("-llvm", argv[i]) == 0) {

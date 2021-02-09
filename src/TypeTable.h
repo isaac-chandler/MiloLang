@@ -30,7 +30,7 @@ enum class TypeFlavor : u8 {
 	ARRAY, 
 	STRUCT, 
 	ENUM, 
-	NAMESPACE, 
+	MODULE, 
 
 	MAX
 };
@@ -48,7 +48,7 @@ constexpr const char *TYPE_FLAVOR_NAMES[] = {
 	"array", 
 	"struct", 
 	"enum", 
-	"namespace"
+	"module"
 };
 
 #define TYPE_FLAVOR_NAME(x) (TYPE_FLAVOR_NAMES[static_cast<u8>(x)])
@@ -98,7 +98,6 @@ struct TypeStruct : Type {
 
 struct TypeEnum : TypeStruct {
 	Type *integerType;
-	TypeStruct values; // Does not contain other fields i.e. integer_type
 };
 
 struct TypeArray : TypeStruct {
@@ -151,17 +150,18 @@ inline Type TYPE_BOOL = { 1, 1, "bool", 47, 0, TypeFlavor::BOOL };
 
 inline Type TYPE_TYPE = { 8, 8, "type", 53, 0, TypeFlavor::TYPE };
 
-inline Type TYPE_AUTO_CAST = { 0, 0, "<auto cast>", 59, TYPE_IS_INTERNAL, TypeFlavor::AUTO_CAST };
 
-inline Type TYPE_MODULE = { 0, 0, "<module>", 59, TYPE_IS_INTERNAL, TypeFlavor::NAMESPACE };
+inline Type TYPE_MODULE = { 0, 0, "<module>", 59, TYPE_IS_INTERNAL, TypeFlavor::MODULE };
 
 inline TypeStruct TYPE_STRING = { 16, 8, "string", 61, 0, TypeFlavor::STRING };
 
-inline Type TYPE_UNARY_DOT = { 0, 0, "<unary dot>", 67, TYPE_IS_INTERNAL, TypeFlavor::AUTO_CAST };
+inline Type TYPE_AUTO_CAST            = { 0, 0, "<auto cast>",            67, TYPE_IS_INTERNAL, TypeFlavor::AUTO_CAST };
+inline Type TYPE_UNARY_DOT            = { 0, 0, "<unary dot>",            71, TYPE_IS_INTERNAL, TypeFlavor::AUTO_CAST };
+inline Type TYPE_ARRAY_LITERAL        = { 0, 0, "<array literal>",        73, TYPE_IS_INTERNAL, TypeFlavor::AUTO_CAST };
+inline Type TYPE_STRUCT_LITERAL       = { 0, 0, "<struct literal>" ,      79, TYPE_IS_INTERNAL, TypeFlavor::AUTO_CAST };
+inline Type TYPE_OVERLOAD_SET         = { 0, 0, "<overload set>",         83, TYPE_IS_INTERNAL, TypeFlavor::AUTO_CAST };
+inline Type TYPE_POLYMORPHIC_FUNCTION = { 0, 0, "<polymorhpic function>", 89, TYPE_IS_INTERNAL, TypeFlavor::AUTO_CAST };
 
-inline Type TYPE_OVERLOAD_SET = { 0, 0, "<overload set>", 71, TYPE_IS_INTERNAL, TypeFlavor::AUTO_CAST };
-
-inline Type TYPE_POLYMORPHIC_FUNCTION = { 0, 0, "<polymorhpic function>", 73, TYPE_IS_INTERNAL, TypeFlavor::AUTO_CAST };
 
 inline Type *TYPE_VOID_POINTER;
 inline Type *TYPE_U8_POINTER;

@@ -380,20 +380,20 @@ static llvm::Constant *createConstant(State *state, Expr *expr) {
 			return llvm::ConstantStruct::get(llvmType, llvm::ArrayRef(values, memberCount));
 		}
 	}
-	case ExprFlavor::ARRAY: {
-		assert(expr->type->flags & TYPE_ARRAY_IS_FIXED);
+	case ExprFlavor::ARRAY_LITERAL: {
 
-		auto literal = static_cast<ExprArray *>(expr);
+		auto array = static_cast<ExprArrayLiteral *>(expr);
 
-		auto array = static_cast<TypeArray *>(expr->type);
+		auto arrayType = static_cast<TypeArray *>(array->type);
+		assert(arrayType->flags &TYPE_ARRAY_IS_FIXED);
 
-		llvm::Constant **values = new llvm::Constant * [array->count];
+		llvm::Constant **values = new llvm::Constant * [arrayType->count];
 
-		for (u64 i = 0; i < array->count; i++) {
-			auto value = createConstant(state, literal->storage[i]);
+		for (u64 i = 0; i < arrayType->count; i++) {
+			auto value = createConstant(state, array->values[i]);
 			values[i] = value;
-			
-			if (i + 1 < array->count && literal->storage[i + 1] == nullptr) {
+
+			if (i + 1 == array->count && arrayType->count > array->count) {
 				for (u64 j = i + 1; j < array->count; j++) {
 					values[j] = value;
 				}
@@ -402,7 +402,7 @@ static llvm::Constant *createConstant(State *state, Expr *expr) {
 			}
 		}
 
-		return llvm::ConstantArray::get(static_cast<llvm::ArrayType *>(getLlvmType(state->context, array)), llvm::ArrayRef(values, array->count));
+		return llvm::ConstantArray::get(static_cast<llvm::ArrayType *>(getLlvmType(state->context, arrayType)), llvm::ArrayRef(values, array->count));
 	}
 	}
 
@@ -1873,8 +1873,8 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 	case ExprFlavor::TYPE_LITERAL: {
 		auto type = static_cast<ExprLiteral *>(expr)->typeValue;
 
-		if (type->flavor == TypeFlavor::NAMESPACE) {
-			reportError(expr, "Error: Cannot operate on a namespace");
+		if (type->flavor == TypeFlavor::MODULE) {
+			reportError(expr, "Error: Cannot operate on a module");
 			return nullptr;
 		}
 
@@ -1958,24 +1958,44 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 
 		return nullptr;
 	}
-	case ExprFlavor::ARRAY: {
-		auto array = static_cast<ExprArray *>(expr);
+	case ExprFlavor::ARRAY_LITERAL: {
+		auto array = static_cast<ExprArrayLiteral *>(expr);
 
-		assert(array->type->flags & TYPE_ARRAY_IS_FIXED);
+
+		auto arrayType = static_cast<TypeArray *>(array->type);
+		assert(arrayType->flags & TYPE_ARRAY_IS_FIXED);
 
 		auto storage = allocateType(state, array->type);
 
-		for (u64 i = 0; i < array->count; i++) {
-			auto value = generateIrAndLoadIfStoredByPointer(state, array->storage[i]);
+		for (u64 i = 0; i < arrayType->count; i++) {
+			auto value = generateIrAndLoadIfStoredByPointer(state, array->values[i]);
 
-			state->builder.CreateStore(value, state->builder.CreateConstGEP2_64(storage, 0, i));
+			if (i + 1 == array->count && arrayType->count > array->count) {
+				auto preBlock = state->builder.GetInsertBlock();
 
-			if (i + 1 < array->count && array->storage[i + 1] == nullptr) {
-				for (; i < array->count; i++) {
-					state->builder.CreateStore(value, state->builder.CreateConstGEP2_64(storage, 0, i));
-				}
+				auto loopBlock = llvm::BasicBlock::Create(state->context, "array.fill.loop", state->function);
+				auto postBlock = llvm::BasicBlock::Create(state->context, "array.fill.post", state->function);
 
+				state->builder.CreateBr(loopBlock);
+
+				auto i64 = llvm::Type::getInt64Ty(state->context);
+
+				state->builder.SetInsertPoint(loopBlock);
+				auto phi = state->builder.CreatePHI(llvm::Type::getInt64Ty(state->context), 2);
+				phi->addIncoming(llvm::ConstantInt::get(i64, arrayType->count - i), preBlock);
+
+				state->builder.CreateStore(value, state->builder.CreateGEP(storage, { llvm::ConstantInt::get(i64, 0), phi }));
+
+				auto sub = state->builder.CreateSub(phi, llvm::ConstantInt::get(i64, 1));
+				phi->addIncoming(sub, loopBlock);
+
+				state->builder.CreateCondBr(state->builder.CreateICmpNE(sub, llvm::ConstantInt::get(i64, 0)), loopBlock, postBlock);
+
+				state->builder.SetInsertPoint(postBlock);
 				break;
+			}
+			else {
+				state->builder.CreateStore(value, state->builder.CreateConstGEP2_64(storage, 0, i));
 			}
 		}
 
@@ -2426,7 +2446,7 @@ void runLlvm() {
 
 							llvm::Constant *initial_value;
 
-							if (member->initialValue && (member->initialValue->flavor != ExprFlavor::TYPE_LITERAL || static_cast<ExprLiteral *>(member->initialValue)->typeValue->flavor != TypeFlavor::NAMESPACE)) {
+							if (member->initialValue && (member->initialValue->flavor != ExprFlavor::TYPE_LITERAL || static_cast<ExprLiteral *>(member->initialValue)->typeValue->flavor != TypeFlavor::MODULE)) {
 								auto variable = createUnnnamedConstant(&state, getLlvmType(context, member->initialValue->type));
 								variable->setInitializer(createConstant(&state, member->initialValue));
 								initial_value = llvm::ConstantExpr::getBitCast(variable, llvm::Type::getInt8PtrTy(context));
@@ -2479,14 +2499,15 @@ void runLlvm() {
 						auto enumValue = GET_STRUCT(TYPE_TYPE_INFO_ENUM_VALUE);
 						auto enumValuePtr = llvm::PointerType::getUnqual(enumValue);
 
-						const auto count = enum_->values.members.declarations.count;
+						const auto count = enum_->members.declarations.count - ENUM_SPECIAL_MEMBER_COUNT;
 
 						auto valuesVariable = createUnnnamedConstant(&state, llvm::ArrayType::get(enumValue, count));
 						auto values = new llvm::Constant * [count];
 
 						for (u32 i = 0; i < count; i++) {
-							auto value = enum_->values.members.declarations[i];
-
+							auto value = enum_->members.declarations[i];
+							assert(value->flags & DECLARATION_IS_ENUM_VALUE);
+								
 							auto valueName = createLlvmString(&state, value->name);
 							auto valueValue = llvm::ConstantInt::get(int64, static_cast<ExprLiteral *>(value->initialValue)->unsignedValue);
 

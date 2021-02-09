@@ -1960,7 +1960,7 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 			return dest;
 		}
 		case ExprFlavor::IMPORT: {
-			reportError(expr, "Error: Cannot operate on a namespace");
+			reportError(expr, "Error: Cannot operate on a module");
 
 			return dest;
 		}
@@ -1969,8 +1969,8 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 
 			auto type = static_cast<ExprLiteral *>(expr)->typeValue;
 
-			if (type->flavor == TypeFlavor::NAMESPACE) {
-				reportError(expr, "Error: Cannot operate on a namespace");
+			if (type->flavor == TypeFlavor::MODULE) {
+				reportError(expr, "Error: Cannot operate on a module");
 				return dest;
 			}
 
@@ -2096,92 +2096,82 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 
 			return DEST_NONE;
 		}
-		case ExprFlavor::ARRAY: {
+		case ExprFlavor::ARRAY_LITERAL: {
 			if (dest == DEST_NONE) return DEST_NONE;
 
-			auto array = static_cast<ExprArray *>(expr);
+			auto array = static_cast<ExprArrayLiteral *>(expr);
 
-			if (array->type->flags & TYPE_ARRAY_IS_FIXED) {
-				auto elementType = static_cast<TypeArray *>(array->type)->arrayOf;
+			assert(array->type->flags & TYPE_ARRAY_IS_FIXED);
 
-				u32 addressReg = state->nextRegister++;
-				u32 valueReg = allocateSpaceForType(state, elementType);
-				for (u32 i = 0; i < array->count; i++) {
-					if (i + 1 < array->count && array->storage[i + 1] == nullptr) {
-						u32 countReg = state->nextRegister++;
-						Ir &count = state->ir.add();
-						count.op = IrOp::IMMEDIATE;
-						count.dest = countReg;
-						count.immediate = array->count - i;
-						count.opSize = 8;
-						
-						Ir &address = state->ir.add();
-						address.op = IrOp::ADDRESS_OF_LOCAL;
-						address.dest = addressReg;
-						address.a = dest;
-						address.immediate = dest + i * elementType->size;
-						address.opSize = 8;
+			auto arrayType = static_cast<TypeArray *>(array->type);
 
-						u32 patch = state->ir.count;
+			u32 addressReg = state->nextRegister++;
+			u32 valueReg = allocateSpaceForType(state, arrayType->arrayOf);
 
-						generateIrForceDest(state, array->storage[i], valueReg);
+			for (u32 i = 0; i < arrayType->count; i++) {
+				if (i + 1 == array->count && arrayType->count > array->count) {
+					u32 countReg = state->nextRegister++;
+					Ir &count = state->ir.add();
+					count.op = IrOp::IMMEDIATE;
+					count.dest = countReg;
+					count.immediate = arrayType->count - i;
+					count.opSize = 8;
 
-						Ir &write = state->ir.add();
-						write.op = IrOp::WRITE;
-						write.a = addressReg;
-						write.b = valueReg;
-						write.opSize = elementType->size;
+					Ir &address = state->ir.add();
+					address.op = IrOp::ADDRESS_OF_LOCAL;
+					address.dest = addressReg;
+					address.a = dest;
+					address.immediate = i * arrayType->arrayOf->size;
+					address.opSize = 8;
 
-						Ir &add = state->ir.add();
-						add.op = IrOp::ADD_CONSTANT;
-						add.dest = addressReg;
-						add.a = addressReg;
-						add.immediate = elementType->size;
-						add.opSize = 8;
+					generateIrForceDest(state, array->values[i], valueReg);
 
-						Ir &dec = state->ir.add();
-						dec.op = IrOp::ADD_CONSTANT;
-						dec.dest = countReg;
-						dec.a = countReg;
-						dec.immediate = static_cast<u64>(-1LL);
-						dec.opSize = 8;
+					u32 patch = state->ir.count;
 
-						Ir &branch = state->ir.add();
-						branch.op = IrOp::IF_NZ_GOTO;
-						branch.a = countReg;
-						branch.b = patch;
-						branch.opSize = 8;
+					Ir &write = state->ir.add();
+					write.op = IrOp::WRITE;
+					write.a = addressReg;
+					write.b = valueReg;
+					write.opSize = arrayType->arrayOf->size;
 
-						break;
-					}
-					else {
-						Ir &address = state->ir.add();
-						address.op = IrOp::ADDRESS_OF_LOCAL;
-						address.dest = addressReg;
-						address.a = dest;
-						address.immediate = i * elementType->size;
-						address.opSize = 8;
+					Ir &add = state->ir.add();
+					add.op = IrOp::ADD_CONSTANT;
+					add.dest = addressReg;
+					add.a = addressReg;
+					add.immediate = arrayType->arrayOf->size;
+					add.opSize = 8;
 
-						generateIrForceDest(state, array->storage[i], valueReg);
+					Ir &dec = state->ir.add();
+					dec.op = IrOp::ADD_CONSTANT;
+					dec.dest = countReg;
+					dec.a = countReg;
+					dec.immediate = static_cast<u64>(-1LL);
+					dec.opSize = 8;
 
-						Ir &write = state->ir.add();
-						write.op = IrOp::WRITE;
-						write.a = addressReg;
-						write.b = valueReg;
-						write.opSize = elementType->size;
-					}
+					Ir &branch = state->ir.add();
+					branch.op = IrOp::IF_NZ_GOTO;
+					branch.a = countReg;
+					branch.b = patch;
+					branch.opSize = 8;
+
+					break;
 				}
-			}
-			else {
-				// The only time an array literal should have a type other than fixed is the compiler generated default empty array value
-				assert(array->count == 0);
+				else {
+					Ir &address = state->ir.add();
+					address.op = IrOp::ADDRESS_OF_LOCAL;
+					address.dest = addressReg;
+					address.a = dest;
+					address.immediate = i * arrayType->arrayOf->size;
+					address.opSize = 8;
 
-				Ir &set = state->ir.add();
-				set.op = IrOp::SET;
-				set.dest = dest;
-				set.a = 0;
-				set.opSize = array->type->size;
-				set.destSize = set.opSize;
+					generateIrForceDest(state, array->values[i], valueReg);
+
+					Ir &write = state->ir.add();
+					write.op = IrOp::WRITE;
+					write.a = addressReg;
+					write.b = valueReg;
+					write.opSize = arrayType->arrayOf->size;
+				}
 			}
 
 			return dest;

@@ -60,7 +60,7 @@ WNDCLASSW :: struct {
 	}
 }
 
-using WNDCLASSW.Style.members
+using WNDCLASSW.Style
 
 STARTUPINFOW :: struct {
 	cb: u32
@@ -95,9 +95,9 @@ STARTUPINFOW :: struct {
 	}
 
 }
-using STARTUPINFOW.Flags.members
+using STARTUPINFOW.Flags
 
-Window_Style :: enum_flags u32 {
+using Window_Style :: enum_flags u32 {
 	WS_OVERLAPPED   :: 0x0000_0000
 	WS_POPUP        :: 0x8000_0000
 	WS_CHILD        :: 0x4000_0000
@@ -131,11 +131,7 @@ Window_Style :: enum_flags u32 {
 	WS_CHILDWINDOW :: WS_CHILD
 }
 
-using Window_Style.members
-
-
-
-Window_Style_Ex :: enum_flags u32 {
+using Window_Style_Ex :: enum_flags u32 {
 	WS_EX_DLGMODALFRAME       :: 0x0000_0001
 	WS_EX_NOPARENTNOTIFY      :: 0x0000_0004
 	WS_EX_TOPMOST             :: 0x0000_0008
@@ -166,9 +162,7 @@ Window_Style_Ex :: enum_flags u32 {
 	WS_EX_PALETTE_WINDOW   :: WS_EX_WINDOWEDGE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST
 }
 
-using Window_Style_Ex.members
-
-Show_Window_Command :: enum u32 {
+using Show_Window_Command :: enum u32 {
 	SW_HIDE            ::  0
 	SW_SHOWNORMAL      ::  1
 	SW_NORMAL          ::  1
@@ -185,9 +179,6 @@ Show_Window_Command :: enum u32 {
 	SW_FORCEMINIMIZE   ::  11
 	SW_MAX             ::  11
 }
-
-using Show_Window_Command.members
-
 
 POINT :: struct {
 	x: s32
@@ -242,7 +233,7 @@ MSG :: struct {
 	}
 }
 
-using MSG.Message.members
+using MSG.Message
 
 
 CW_USEDEFAULT :: cast(s32) 0x80000000
@@ -275,7 +266,7 @@ WHITENESS :: 0x00FF_0062
 
 GetStockObject :: (i: Stock_Object) -> HGDIOBJ #external "gdi32"
 
-Stock_Object :: enum u32 {
+using Stock_Object :: enum u32 {
 	WHITE_BRUSH         ::  0
 	LTGRAY_BRUSH        ::  1
 	GRAY_BRUSH          ::  2
@@ -297,8 +288,6 @@ Stock_Object :: enum u32 {
 	DC_BRUSH            ::  18
 	DC_PEN              ::  19
 }
-
-using Stock_Object.members
 
 GetClientRect :: (hWnd: HWND, lpRect: *RECT) -> s32 #external "user32"
 
@@ -334,14 +323,11 @@ PostQuitMessage :: (nExitCode: s32) #external "user32"
 LoadLibraryA :: (lpLibFileName: *u8) -> HMODULE #external "kernel32"
 GetProcAddress :: (hModule: HMODULE, lpProcName: *u8) -> *void #external "kernel32"
 
-Peek_Message_Options :: enum u32 {
+using Peek_Message_Options :: enum u32 {
 	PM_NOREMOVE :: 0
 	PM_REMOVE   :: 1
 	PM_NOYIELD  :: 2
 }
-
-using Peek_Message_Options.members
-
 
 GetCommandLineA :: () -> *u8 #external "kernel32"
 
@@ -412,9 +398,9 @@ PIXELFORMATDESCRIPTOR :: struct {
 	}
 }
 
-using PIXELFORMATDESCRIPTOR.Flags.members
-using PIXELFORMATDESCRIPTOR.Pixel_Type.members
-using PIXELFORMATDESCRIPTOR.Plane.members
+using PIXELFORMATDESCRIPTOR.Flags
+using PIXELFORMATDESCRIPTOR.Pixel_Type
+using PIXELFORMATDESCRIPTOR.Plane
 
 ChoosePixelFormat :: (hdc: HDC, ppfd: *PIXELFORMATDESCRIPTOR) -> s32 #external "gdi32"
 
@@ -460,24 +446,20 @@ WriteFile :: (hFile: HANDLE, lpBuffer: *void, nNumberOfBytesToWrite: u32, lpNumb
 
 INVALID_HANDLE_VALUE :: cast(HANDLE) -1
 
-Access_Flags :: enum_flags u32 {
+using Access_Flags :: enum_flags u32 {
 	GENERIC_READ    :: 0x8000_0000
 	GENERIC_WRITE   :: 0x4000_0000
 	GENERIC_EXECUTE :: 0x2000_0000
 	GENERIC_ALL     :: 0x1000_0000
 }
 
-using Access_Flags.members
-
-File_Share_Flag :: enum_flags u32 {
+using File_Share_Flag :: enum_flags u32 {
 	FILE_SHARE_DELETE :: 0x4
 	FILE_SHARE_READ   :: 0x2
 	FILE_SHARE_WRITE  :: 0x1
 }
 
-using File_Share_Flag.members
-
-File_Create_Option :: enum u32 {
+using File_Create_Option :: enum u32 {
 	CREATE_NEW        :: 1
 	CREATE_ALWAYS     :: 2
 	OPEN_EXISTING     :: 3
@@ -485,9 +467,7 @@ File_Create_Option :: enum u32 {
 	TRUNCATE_EXISTING :: 5
 }
 
-using File_Create_Option.members
-
-File_Flag :: enum_flags u32 {
+using File_Flag :: enum_flags u32 {
 	FILE_ATTRIBUTE_READONLY  :: 0x0000_0001
 	FILE_ATTRIBUTE_HIDDEN    :: 0x0000_0002
 	FILE_ATTRIBUTE_SYSTEM    :: 0x0000_0004
@@ -510,8 +490,6 @@ File_Flag :: enum_flags u32 {
 	FILE_FLAG_WRITETHROUGH       :: 0x8000_0000
 }
 
-using File_Flag.members
-
 WriteConsoleA :: (hConsoleOutput: HANDLE, lpBuffer: *void, nNumberOfCharactersToWrite: u32, lpNumberOfCharactersWritten: *u32 = null, lpReserved := null) -> s32 #external "kernel32"
 ExitProcess :: (uExitCode: u32) #external "kernel32"
 ExitThread :: (uExitCode: u32) #external "kernel32"
@@ -519,27 +497,21 @@ HeapAlloc :: (hHeap: HANDLE, dwFlags: u32, dwBytes: u64) -> *void #external "ker
 HeapReAlloc :: (hHeap: HANDLE, dwFlags: u32, lpMem: *void, dwBytes: u64) -> *void #external "kernel32"
 HeapFree :: (hHeap: HANDLE, dwFlags: u32, lpMem: *void) -> s32 #external "kernel32"
 
-Create_Thread_Flags :: enum_flags u32 {
+using Create_Thread_Flags :: enum_flags u32 {
 	CREATE_SUSPENDED :: 0x4
 	STACK_SIZE_PARAM_IS_A_RESERVATION :: 0x1_0000
 }
-
-using Create_Thread_Flags.members
-
-
 
 CreateThread :: (lpThreadAttributes: *SECURITY_ATTRIBUTES = null, dwStackSize: u64 = 0, lpStartAddress: (*void) -> u32 #c_call, lpParameter := null, dwCreationFlags: Create_Thread_Flags = 0, lpThreadId: *u32 = null) -> HANDLE #external "kernel32"
 
 INFINITE :: 0xFFFF_FFFF
 
-Wait_Result :: enum u32 {
+using Wait_Result :: enum u32 {
 	WAIT_ABANDONED :: 0x80
 	WAIT_OBJECT_0 :: 0
 	WAIT_TIMEOUT :: 0x102
 	WAIT_FAILED :: 0xFFFF_FFFF
 }
-
-using Wait_Result.members
 
 WaitForSingleObject :: (hHandle: HANDLE, dwMilliseconds: u32 = INFINITE) -> Wait_Result #external "kernel32"
 

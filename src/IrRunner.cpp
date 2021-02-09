@@ -166,18 +166,18 @@ void createRuntimeValue(Expr *value, void *dest) {
 			createRuntimeValue(member->initialValue, static_cast<u8 *>(dest) + member->physicalStorage);
 		}
 	}
-	else if (value->flavor == ExprFlavor::ARRAY) {
-		auto array = static_cast<ExprArray *>(value);
+	else if (value->flavor == ExprFlavor::ARRAY_LITERAL) {
+		auto array = static_cast<ExprArrayLiteral *>(value);
 
-		auto arrayOf = static_cast<TypeArray *>(value->type)->arrayOf;
+		auto arrayType = static_cast<TypeArray *>(value->type);
 		auto store = static_cast<u8 *>(dest);
 
-		for (u32 i = 0; i < array->count; i++) {
-			createRuntimeValue(array->storage[i], store + i * arrayOf->size);
+		for (u32 i = 0; i < arrayType->count; i++) {
+			createRuntimeValue(array->values[i], store + i * arrayType->arrayOf->size);
 
-			if (i + 1 != array->count && array->storage[i + 1] == nullptr) {
+			if (i + 1 == array->count && arrayType->count > array->count) {
 				for (u32 j = i + 1; j < array->count; j++) {
-					createRuntimeValue(array->storage[i], store + j * arrayOf->size);
+					memcpy(store + j * arrayType->arrayOf->size, store + i * arrayType->arrayOf->size, arrayType->arrayOf->size);
 				}
 
 				break;
@@ -402,7 +402,7 @@ if (op.flags & IR_FLOAT_OP) {\
 			break;
 		}
 		case IrOp::ADD_CONSTANT: {
-			u64 result = A + op.b;
+			u64 result = A + op.immediate;
 			stack[op.dest] = result & opMask;
 			break;
 		}
@@ -894,18 +894,18 @@ Expr *getReturnValueFromBytes(CodeLocation start, EndLocation end, Type *type, v
 		if (type->flags & TYPE_ARRAY_IS_FIXED) {
 			auto arrayType = static_cast<TypeArray *>(type);
 
-			auto array = new ExprArray;
-			array->flavor = ExprFlavor::ARRAY;
+			auto array = new ExprArrayLiteral;
+			array->flavor = ExprFlavor::ARRAY_LITERAL;
 			array->start = start;
 			array->end = end;
-			array->storage = new Expr * [arrayType->count];
+			array->values = new Expr * [arrayType->count];
 			array->count = arrayType->count;
 			array->type = type;
 
 			u8 *storage = static_cast<u8 *>(bytes);
 
 			for (u64 i = 0; i < arrayType->count; i++) {
-				array->storage[i] = getReturnValueFromBytes(start, end, arrayType->arrayOf, storage);
+				array->values[i] = getReturnValueFromBytes(start, end, arrayType->arrayOf, storage);
 
 				storage += arrayType->arrayOf->size;
 			}

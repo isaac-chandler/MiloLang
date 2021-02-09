@@ -191,12 +191,13 @@ Only add top level declarations/importers as individual infer jobs? (local decla
 utf8 identifiers?
 
 Investigate LINK : fatal error LNK1285: corrupt PDB file
- - I think the debug information outputted is invalid already and the incremental linking that can't be disabled for PDBs continues to corrupt it worse until it can no longer be read
+ - This may have been eliminated by emitting proper info for nested structs/enums (or it may now be much less common)
 
 function polymorhpism
  - Allow overloaded functions to be passed to a polymorphic function with pattern matching for a function type
  - Allow polymorphic functions to be passed to a polymorphic function with pattern matching for a function type
  - Allow polymorphic functions to be overloaded
+ - Allow $T/type to only match the polymorph if T is convertible to type
  - Allow function arguments to be baked
  - Allow fixed array length to be polymorphic
  

@@ -139,27 +139,6 @@ Expr *copyExpr(Expr *srcExpr) {
 		return nullptr;
 
 	switch (srcExpr->flavor) {
-	case ExprFlavor::ARRAY: {
-		c(ExprArray);
-
-		copy(count);
-		u64 count = src->count;
-
-		for (u64 i = 0; i < src->count; i++) {
-			if (!src->storage[i]) {
-				count = i + 1;
-				break;
-			}
-		}
-
-		dest->storage = POLYMORPH_NEW_ARRAY(Expr *, count);
-
-		for (u64 i = 0; i < count; i++) {
-			copy_expr(storage[i]);
-		}
-
-		return dest;
-	}
 	case ExprFlavor::BINARY_OPERATOR: {
 		c(ExprBinaryOperator);
 
@@ -228,16 +207,6 @@ Expr *copyExpr(Expr *srcExpr) {
 		copyBlock(&dest->struct_.members, &src->struct_.members);
 		copy(struct_.integerType);
 
-		copy(struct_.values.size);
-		copy(struct_.values.alignment);
-		copy(struct_.values.name);
-		dest->struct_.values.hash = 0;
-		copy(struct_.values.flags);
-		copy(struct_.values.flavor);
-		copyingBlocks.add({ &dest->struct_.values.members, &src->struct_.values.members });
-		copyBlock(&dest->struct_.values.members, &src->struct_.values.members);
-
-		copyingBlocks.pop();
 		copyingBlocks.pop();
 
 		return dest;
@@ -256,6 +225,34 @@ Expr *copyExpr(Expr *srcExpr) {
 
 		return dest;
 	}
+	case ExprFlavor::ARRAY_LITERAL: {
+		c(ExprArrayLiteral);
+
+		copy_expr(typeValue);
+		copy(count);
+		dest->values = POLYMORPH_NEW_ARRAY(Expr *, src->count);
+
+		for (u32 i = 0; i < src->count; i++) {
+			copy_expr(values[i]);
+		}
+
+		return dest;
+	}
+	case ExprFlavor::STRUCT_LITERAL: {
+		c(ExprStructLiteral);
+
+		copy_expr(typeValue);
+		copy(initializers.names);
+		copy(initializers.count);
+
+		dest->initializers.values = POLYMORPH_NEW_ARRAY(Expr *, src->initializers.count);
+
+		for (u32 i = 0; i < src->initializers.count; i++) {
+			copy_expr(initializers.values[i]);
+		}
+
+		return dest;
+	}
 	case ExprFlavor::FOR: {
 		c(ExprLoop);
 
@@ -268,6 +265,8 @@ Expr *copyExpr(Expr *srcExpr) {
 		copy_expr(body);
 		
 		copyingBlocks.pop();
+
+		copy_expr(completedBody);
 
 		return dest;
 	}
@@ -436,6 +435,8 @@ Expr *copyExpr(Expr *srcExpr) {
 		copy_expr(body);
 
 		copyingBlocks.pop();
+
+		copy_expr(completedBody);
 
 		return dest;
 	}

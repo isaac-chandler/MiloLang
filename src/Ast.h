@@ -142,7 +142,6 @@ enum class ExprFlavor : u8 {
 	FLOAT_LITERAL, 
 	STRING_LITERAL,
 	TYPE_LITERAL,
-	ARRAY, 
 	IDENTIFIER, 
 
 	UNARY_OPERATOR, 
@@ -178,7 +177,10 @@ enum class ExprFlavor : u8 {
 	LOAD, 
 	IMPORT, 
 
-	OVERLOAD_SET
+	OVERLOAD_SET, 
+
+	ARRAY_LITERAL, 
+	STRUCT_LITERAL
 };
 
 struct Declaration;
@@ -292,6 +294,10 @@ struct ExprDefer : Expr {
 
 #define EXPR_FUNCTION_IS_POLYMORPHIC 0x200'0000
 
+#define EXPR_STRUCT_LITERAL_UNSPECIFIED_MEMBERS_UNINITIALZIED 0x400'0000
+
+#define ENUM_SPECIAL_MEMBER_COUNT 1
+
 struct ExprLoad : Expr {
 	Expr *file;
 	struct Module *module;
@@ -329,11 +335,6 @@ struct ExprStringLiteral : Expr {
 
 	union Symbol *symbol;
 	u32 physicalStorage;
-};
-
-struct ExprArray : Expr {
-	Expr **storage;
-	u32 count;
 };
 
 struct ExprBinaryOperator : Expr {
@@ -382,6 +383,17 @@ struct ExprBlock : Expr {
 	Block declarations;
 
 	Array<Expr *> exprs;
+};
+
+struct ExprArrayLiteral : Expr {
+	Expr *typeValue;
+	Expr **values;
+	u32 count;
+};
+
+struct ExprStructLiteral : Expr {
+	Expr *typeValue;
+	Arguments initializers;
 };
 
 struct ExprFunction : Expr {

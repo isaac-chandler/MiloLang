@@ -246,7 +246,7 @@ create_explosion_particle :: (using particle_system: *Particle_System) {
 	
 	particle.x = x + spawn_distance * xDir
 	particle.y = y + spawn_distance * yDir
-	particle.width = spawn_size
+	particle.width  = spawn_size
 	particle.height = spawn_size
 	
 	spawn_velocity := spawn_mean_velocity.x + random_bilateral(*rng) * spawn_velocity_range.x
@@ -264,7 +264,6 @@ create_explosion_particle :: (using particle_system: *Particle_System) {
 
 update_particle :: (using particle: *Particle, delta: f32) {
 	lifetime -= delta
-
 	
 	x      += delta * location_step.x
 	y      += delta * location_step.y

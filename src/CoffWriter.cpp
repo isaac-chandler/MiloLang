@@ -604,14 +604,11 @@ void markUsedTypeInfoInType(BucketArray<Symbol> *symbols, Type *type);
 
 void markUsedTypeInfoInExpr(BucketArray<Symbol> *symbols, Expr *expr) {
 	switch (expr->flavor) {
-	case ExprFlavor::ARRAY: {
-		auto array = static_cast<ExprArray *>(expr);
+	case ExprFlavor::ARRAY_LITERAL: {
+		auto array = static_cast<ExprArrayLiteral *>(expr);
 
 		for (u64 i = 0; i < array->count; i++) {
-			if (!array->storage[i])
-				break;
-
-			markUsedTypeInfoInExpr(symbols, array->storage[i]);
+			markUsedTypeInfoInExpr(symbols, array->values[i] );
 		}
 		break;
 	}
@@ -647,7 +644,7 @@ void markUsedTypeInfoInType(BucketArray<Symbol> *symbols, Type *type) {
 	if (type->flags & TYPE_USED_IN_OUTPUT)
 		return;
 
-	if (type->flavor == TypeFlavor::NAMESPACE) // @Incomplete Output type info for namespaces
+	if (type->flavor == TypeFlavor::MODULE) // @Incomplete Output type info for namespaces
 		return;
 
 	type->flags |= TYPE_USED_IN_OUTPUT;
@@ -745,7 +742,7 @@ void writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataRelocations,
 		value->flavor == ExprFlavor::INT_LITERAL ||
 		value->flavor == ExprFlavor::FUNCTION ||
 		value->flavor == ExprFlavor::STRING_LITERAL ||
-		value->flavor == ExprFlavor::ARRAY ||
+		value->flavor == ExprFlavor::ARRAY_LITERAL ||
 		value->flavor == ExprFlavor::TYPE_LITERAL || 
 		value->flavor == ExprFlavor::STRUCT_DEFAULT);
 
@@ -773,34 +770,30 @@ void writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataRelocations,
 		reinterpret_cast<u64 *>(data)[0] = 0;
 		reinterpret_cast<u64 *>(data)[1] = static_cast<ExprStringLiteral *>(value)->string.length;
 	}
-	else if (value->flavor == ExprFlavor::ARRAY) {
-		auto array = static_cast<ExprArray *>(value);
+	else if (value->flavor == ExprFlavor::ARRAY_LITERAL) {
+		auto array = static_cast<ExprArrayLiteral *>(value);
+		auto arrayType = static_cast<TypeArray *>(value->type);
 
-		if (value->type->flags & TYPE_ARRAY_IS_FIXED) {
-			auto elementSize = static_cast<TypeArray *>(type)->arrayOf->size;
-			
-			for (u64 i = 0; i < array->count; i++) {
-				writeValue(dataSize, data, dataRelocations, symbols, stringTable, array->storage[i], emptyStringSymbolIndex, rdata);
-				
-				if (i + 1 < array->count && array->storage[i + 1] == nullptr) {
-					for (u64 j = i + 1; j < array->count; j++) {
-						writeValue(dataSize, data, dataRelocations, symbols, stringTable, array->storage[i], emptyStringSymbolIndex, rdata);
+		assert(arrayType->flags & TYPE_ARRAY_IS_FIXED);
+		auto elementSize = arrayType->arrayOf->size;
 
-						dataSize += elementSize;
-						data += elementSize;
-					}
+		for (u64 i = 0; i < arrayType->count; i++) {
+			writeValue(dataSize, data, dataRelocations, symbols, stringTable, array->values[i], emptyStringSymbolIndex, rdata);
 
-					break;
+			auto oldData = data;
+
+			dataSize += elementSize;
+			data += elementSize;
+
+			if (i + 1 == array->count && arrayType->count > array->count) {
+				for (u64 j = i + 1; j < arrayType->count; j++) {
+					memcpy(data, oldData, elementSize);
+					dataSize += elementSize;
+					data += elementSize;
 				}
 
-				dataSize += elementSize;
-				data += elementSize;
+				break;
 			}
-		}
-		else {
-			assert(array->count == 0);
-
-			memset(data, 0, type->size);
 		}
 	}
 	else if (value->flavor == ExprFlavor::FLOAT_LITERAL) {
@@ -1243,7 +1236,10 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 
 			u16 nested = enumeration->enclosingScope->flavor == BlockFlavor::STRUCT ? 8 : 0;
 
-			for (auto declaration : enumeration->values.members.declarations) {
+			for (auto declaration : enumeration->members.declarations) {
+				if (!(declaration->flags & DECLARATION_IS_ENUM_VALUE))
+					continue;
+
 				assert(declaration->initialValue->flavor == ExprFlavor::INT_LITERAL);
 				assert(!(declaration->initialValue->type->flags & TYPE_INTEGER_IS_SIGNED));
 				
@@ -1269,8 +1265,10 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 			u32 fieldList = DEBUG_LEAF{
 				debugTypes->add2(0x1203); // LF_FIELDLIST
 
-				for (auto declaration : enumeration->values.members.declarations) {
-
+				for (auto declaration : enumeration->members.declarations) {
+					if (!(declaration->flags & DECLARATION_IS_ENUM_VALUE))
+						continue;
+					
 					u64 value = static_cast<ExprLiteral *>(declaration->initialValue)->unsignedValue;
 
 					if (value && !(value & value - 1)) { // If exactly one bit is set
@@ -1305,7 +1303,10 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 			u32 fieldList = DEBUG_LEAF {
 				debugTypes->add4(0x1203); // LF_FIELDLIST
 
-				for (auto declaration : enumeration->values.members.declarations) {
+				for (auto declaration : enumeration->members.declarations) {
+					if (!(declaration->flags & DECLARATION_IS_ENUM_VALUE))
+						continue;
+
 					assert(declaration->initialValue->flavor == ExprFlavor::INT_LITERAL);
 					assert(!(declaration->initialValue->type->flags & TYPE_INTEGER_IS_SIGNED));
 
@@ -1322,7 +1323,7 @@ u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
 			return DEBUG_LEAF{
 				debugTypes->ensure(14);
 				debugTypes->add2Unchecked(0x1507); // LF_ENUM
-				debugTypes->add2Unchecked(static_cast<u16>(enumeration->values.members.declarations.count));
+				debugTypes->add2Unchecked(static_cast<u16>(enumeration->members.declarations.count - ENUM_SPECIAL_MEMBER_COUNT));
 				debugTypes->add2Unchecked(0x200); // Has a unique name
 				debugTypes->add4Unchecked(integerType);
 				debugTypes->add4Unchecked(fieldList);
@@ -4069,7 +4070,7 @@ void runCoffWriter() {
 
 						auto type = getTypeForExpr(member->initialValue);
 
-						if (member->initialValue->flavor == ExprFlavor::TYPE_LITERAL && static_cast<ExprLiteral *>(member->initialValue)->typeValue->flavor == TypeFlavor::NAMESPACE)
+						if (member->initialValue->flavor == ExprFlavor::TYPE_LITERAL && static_cast<ExprLiteral *>(member->initialValue)->typeValue->flavor == TypeFlavor::MODULE)
 							continue;
 
 						rdata.allocateUnaligned(AlignPO2(rdata.totalSize, type->alignment) - rdata.totalSize);
@@ -4117,7 +4118,7 @@ void runCoffWriter() {
 						}
 
 						if (member->initialValue) { // @Incomplete: Export info for namespaces
-							if (member->initialValue->flavor != ExprFlavor::TYPE_LITERAL || static_cast<ExprLiteral *>(member->initialValue)->typeValue->flavor != TypeFlavor::NAMESPACE) {
+							if (member->initialValue->flavor != ExprFlavor::TYPE_LITERAL || static_cast<ExprLiteral *>(member->initialValue)->typeValue->flavor != TypeFlavor::MODULE) {
 								addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), initial_value), values + valueCount);
 								++valueCount;
 							}
@@ -4158,7 +4159,9 @@ void runCoffWriter() {
 
 					u32 names = symbols.count();
 
-					for (auto member : enum_->values.members.declarations) {
+					for (auto member : enum_->members.declarations) {
+						if (!(member->flags & DECLARATION_IS_ENUM_VALUE))
+							continue;
 						createRdataPointer(&stringTable, &symbols, &rdata);
 						rdata.addNullTerminatedString(member->name);
 					}
@@ -4166,8 +4169,10 @@ void runCoffWriter() {
 					rdata.allocateUnaligned(AlignPO2(rdata.totalSize, 8) - rdata.totalSize);
 					u32 values = createRdataPointer(&stringTable, &symbols, &rdata);
 
-					for (u32 i = 0; i < enum_->values.members.declarations.count; i++) {
-						auto member = enum_->values.members.declarations[i];
+					for (u32 i = 0; i < enum_->members.declarations.count; i++) {
+						auto member = enum_->members.declarations[i];
+						if (!(member->flags & DECLARATION_IS_ENUM_VALUE))
+							continue;
 
 						Type_Info_Enum::Value data;
 
@@ -4191,7 +4196,7 @@ void runCoffWriter() {
 					info.is_flags = enum_->flags & TYPE_ENUM_IS_FLAGS ? true : false;
 				
 					info.values.data = nullptr;
-					info.values.count = enum_->values.members.declarations.count;
+					info.values.count = enum_->members.declarations.count - ENUM_SPECIAL_MEMBER_COUNT;
 
 					if (name)
 						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
