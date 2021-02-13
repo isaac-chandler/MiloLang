@@ -156,23 +156,6 @@ void createRuntimeValue(Expr *value, void *dest) {
 			memcpy(dest, &function, function->type->size);
 		}
 	}
-	else if (value->flavor == ExprFlavor::STRUCT_DEFAULT) {
-		auto struct_ = static_cast<TypeStruct *>(value->type);
-
-		for (auto member : struct_->members.declarations) {
-			if (member->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING)) continue;
-
-
-			createRuntimeValue(member->initialValue, static_cast<u8 *>(dest) + member->physicalStorage);
-		}
-	}
-	else if (value->flavor == ExprFlavor::STRUCT_LITERAL) {
-		auto literal = static_cast<ExprStructLiteral *>(value);
-
-		for (u32 i = 0; i < literal->initializers.count; i++) {
-			createRuntimeValue(literal->initializers.values[i], static_cast<u8 *>(dest) + literal->initializers.declarations[i]->physicalStorage);
-		}
-	}
 	else if (value->flavor == ExprFlavor::ARRAY_LITERAL) {
 		auto array = static_cast<ExprArrayLiteral *>(value);
 

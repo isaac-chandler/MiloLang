@@ -160,7 +160,6 @@ enum class ExprFlavor : u8 {
 	IF, 
 
 	FUNCTION_PROTOTYPE, 
-	STRUCT_DEFAULT, 
 	ENUM, 
 	ENUM_INCREMENT, 
 

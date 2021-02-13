@@ -309,77 +309,6 @@ static llvm::Constant *createConstant(State *state, Expr *expr) {
 	case ExprFlavor::TYPE_LITERAL: {
 		return static_cast<llvm::Constant *>(generateLlvmIr(state, expr));
 	}
-	case ExprFlavor::STRUCT_DEFAULT: {
-		auto struct_ = static_cast<TypeStruct *>(expr->type);
-
-		auto llvmType = static_cast<llvm::StructType *>(getLlvmType(state->context, struct_));
-
-		if (struct_->flags & TYPE_STRUCT_IS_UNION) {
-			Expr *default_ = nullptr;
-
-			for (auto decl : struct_->members.declarations) {
-				if (decl->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING)) continue;
-
-				if (decl->initialValue) {
-					default_ = decl->initialValue;
-					break;
-				}
-			}
-
-			if (!default_) {
-				return llvm::UndefValue::get(llvmType);
-			}
-			else {
-				if (getLlvmType(state->context, default_->type) == llvmType->getStructElementType(0)) {
-					if (llvmType->getStructNumElements() == 1) {
-						return llvm::ConstantStruct::get(llvmType, createConstant(state, default_));
-					}
-					else {
-						return llvm::ConstantStruct::get(llvmType, createConstant(state, default_), llvm::UndefValue::get(llvmType->getStructElementType(1)));
-					}
-				}
-				else {
-					auto memberType = getLlvmType(state->context, default_->type);
-					auto arrayType = llvm::ArrayType::get(llvm::Type::getInt8Ty(state->context), struct_->size - default_->type->size);
-
-					auto tempType = llvm::StructType::get(memberType, arrayType);
-
-					return llvm::ConstantExpr::getBitCast(llvm::ConstantStruct::get(tempType, createConstant(state, default_), llvm::UndefValue::get(arrayType)), llvmType);
-				}
-			}
-		}
-		else {
-			u64 memberCount = 0;
-
-			for (auto decl : struct_->members.declarations) {
-				if (decl->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING)) continue;
-
-				++memberCount;
-			}
-
-			llvm::Constant **values = new llvm::Constant * [memberCount];
-
-			u32 memberIndex = 0;
-
-
-			for (auto decl : struct_->members.declarations) {
-				if (decl->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING)) continue;
-
-				assert(memberIndex < memberCount);
-
-				if (decl->flags & DECLARATION_IS_UNINITIALIZED) {
-					values[memberIndex] = llvm::UndefValue::get(llvmType->getStructElementType(memberIndex));
-				}
-				else {
-					values[memberIndex] = createConstant(state, decl->initialValue);
-				}
-
-				++memberIndex;
-			}
-
-			return llvm::ConstantStruct::get(llvmType, llvm::ArrayRef(values, memberCount));
-		}
-	}
 	case ExprFlavor::STRUCT_LITERAL: {
 		auto literal = static_cast<ExprStructLiteral *>(expr);
 		auto struct_ = static_cast<TypeStruct *>(literal->type);
@@ -1897,22 +1826,17 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 
 		return nullptr;
 	}
-	case ExprFlavor::STRUCT_DEFAULT: {
-		auto store = allocateType(state, expr->type);
-
-		state->builder.CreateStore(createConstant(state, expr), store);
-
-		return store;
-	}
 	case ExprFlavor::STRUCT_LITERAL: {
 		auto literal = static_cast<ExprStructLiteral *>(expr);
 
 		auto store = allocateType(state, literal->type);
 
 		for (u32 i = 0; i < literal->initializers.count; i++) {
-			auto value = generateLlvmIr(state, literal->initializers.values[i]);
+			auto value = generateIrAndLoadIfStoredByPointer(state, literal->initializers.values[i]);
 
 			state->builder.CreateStore(value, createGEPForStruct(state, store, static_cast<TypeStruct *>(literal->type), literal->initializers.declarations[i]));
+
+			bool visualStudioSucks = true;
 		}
 
 		return store;

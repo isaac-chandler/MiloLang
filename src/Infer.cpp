@@ -1202,7 +1202,6 @@ void copyLiteral(Expr **exprPointer, Expr *expr) {
 	switch (expr->flavor) {
 	case ExprFlavor::FUNCTION: // Functions are unique
 	case ExprFlavor::IMPORT: // No reason to duplicate imports
-	case ExprFlavor::STRUCT_DEFAULT: // Struct defaults have no mutable data
 	case ExprFlavor::STRING_LITERAL: // Don't duplicate string literals this will bloat the binary
 	case ExprFlavor::IDENTIFIER: { // An identifier can be on a constant if it is an overload set
 		*exprPointer = expr;
@@ -1873,15 +1872,14 @@ bool structIsLiteral(ExprStructLiteral *struct_) {
 }
 
 bool isLiteral(Expr *expr) {
-	return expr->flavor == ExprFlavor::INT_LITERAL || 
-		expr->flavor == ExprFlavor::FLOAT_LITERAL || 
-		expr->flavor == ExprFlavor::TYPE_LITERAL || 
-		expr->flavor == ExprFlavor::STRING_LITERAL || 
-		expr->flavor == ExprFlavor::FUNCTION || 
-		expr->flavor == ExprFlavor::IMPORT || 
+	return expr->flavor == ExprFlavor::INT_LITERAL ||
+		expr->flavor == ExprFlavor::FLOAT_LITERAL ||
+		expr->flavor == ExprFlavor::TYPE_LITERAL ||
+		expr->flavor == ExprFlavor::STRING_LITERAL ||
+		expr->flavor == ExprFlavor::FUNCTION ||
+		expr->flavor == ExprFlavor::IMPORT ||
 		(expr->flavor == ExprFlavor::ARRAY_LITERAL && arrayIsLiteral(static_cast<ExprArrayLiteral *>(expr))) ||
-		(expr->flavor == ExprFlavor::STRING_LITERAL && structIsLiteral(static_cast<ExprStructLiteral *>(expr))) ||
-		expr->flavor == ExprFlavor::STRUCT_DEFAULT;
+		(expr->flavor == ExprFlavor::STRING_LITERAL && structIsLiteral(static_cast<ExprStructLiteral *>(expr)));
 }
 
 bool defaultValueIsZero(SubJob *job, Type *type, bool *yield) {
@@ -2009,24 +2007,51 @@ Expr *createDefaultValue(SubJob *job, Type *type, bool *shouldYield) {
 		return nullptr;
 	}
 	case TypeFlavor::STRUCT: {
-		Expr *literal = INFER_NEW(Expr);
-		literal->flavor = ExprFlavor::STRUCT_DEFAULT;
+		u32 initializerCount = 0;
+
+		auto block = &static_cast<TypeStruct *>(type)->members;
+
+		for (auto declaration : block->declarations) {
+			if (declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_UNINITIALIZED))
+				continue;
+
+			if (!(declaration->flags & DECLARATION_VALUE_IS_READY)) {
+				*shouldYield = true;
+				goToSleep(job, &declaration->sleepingOnMyValue, "Struct default value waiting for member value");
+			}
+
+			initializerCount++;
+		}
+
+		if (*shouldYield)
+			return nullptr;
+
+		auto literal = INFER_NEW(ExprStructLiteral);
+
+		literal->flavor = ExprFlavor::STRUCT_LITERAL;
 		literal->type = type;
+
+		literal->initializers.names = nullptr;
+		literal->initializers.count = 0;
+		literal->initializers.values = INFER_NEW_ARRAY(Expr *, initializerCount);
+		literal->initializers.declarations = INFER_NEW_ARRAY(Declaration *, initializerCount);
+
+		for (auto declaration : block->declarations) {
+			if (declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_UNINITIALIZED))
+				continue;
+
+			literal->initializers.declarations[literal->initializers.count] = declaration;
+			literal->initializers.values[literal->initializers.count] = declaration->initialValue;
+
+			literal->initializers.count++;
+		}
+
+		assert(literal->initializers.count == initializerCount);
 
 		return literal;
 	}
 	case TypeFlavor::ARRAY: {
-		auto defaults = INFER_NEW(ExprArrayLiteral);
-		defaults->flavor = ExprFlavor::ARRAY_LITERAL;
-		defaults->type = type;
-
-		assert(type->flags & TYPE_ARRAY_IS_FIXED);
-
 		auto array = static_cast<TypeArray *>(type);
-		defaults->count = 1;
-
-
-		defaults->values = INFER_NEW(Expr *);
 			
 		Expr *value = getDefaultValue(job, array->arrayOf, &yield);
 
@@ -2038,6 +2063,17 @@ Expr *createDefaultValue(SubJob *job, Type *type, bool *shouldYield) {
 		if (!value) {
 			return nullptr;
 		}
+
+		auto defaults = INFER_NEW(ExprArrayLiteral);
+		defaults->flavor = ExprFlavor::ARRAY_LITERAL;
+		defaults->type = type;
+
+		assert(type->flags &TYPE_ARRAY_IS_FIXED);
+
+		defaults->count = 1;
+
+
+		defaults->values = INFER_NEW(Expr *);
 
 		defaults->values[0] = value;
 
@@ -7985,26 +8021,6 @@ bool findTypeInfoInExprRecurse(RunJob *job, ArraySet<Type *> *types, Expr *expr)
 		if (pushFunctionToRunCheck(job, static_cast<ExprFunction *>(expr))) {
 			subJobs.add(job);
 			return false;
-		}
-
-		return true;
-	}
-	case ExprFlavor::STRUCT_DEFAULT: {
-		if (types->contains(expr->type)) // Optimisation since if we have already emitted the Type_Info for a struct type, it's default value has been outputted
-			return true;
-
-		auto struct_ = static_cast<TypeStruct *>(expr->type);
-
-		for (auto member : struct_->members.declarations) {
-			if (member->flags & (DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_CONSTANT | DECLARATION_IS_UNINITIALIZED)) continue;
-
-			if (!(member->flags & DECLARATION_TYPE_IS_READY)) {
-				goToSleep(job, &member->sleepingOnMyValue, "Find type info expr struct member type not ready");
-				return false;
-			}
-
-			if (!findTypeInfoInExprRecurse(job, types, member->initialValue))
-				return false;
 		}
 
 		return true;

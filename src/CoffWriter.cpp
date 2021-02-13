@@ -624,22 +624,6 @@ void markUsedTypeInfoInExpr(BucketArray<Symbol> *symbols, Expr *expr) {
 		markUsedTypeInfoInType(symbols, static_cast<ExprLiteral *>(expr)->typeValue);
 		break;
 	}
-	case ExprFlavor::STRUCT_DEFAULT: {
-		if (expr->type->flags & TYPE_USED_IN_OUTPUT) // Optimisation since if we have already emitted the Type_Info for a struct type, it's default value has been outputted
-			return;
-
-		auto struct_ = static_cast<TypeStruct *>(expr->type);
-
-		for (auto member : struct_->members.declarations) {
-			if (member->flags & (DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_CONSTANT | DECLARATION_IS_UNINITIALIZED)) continue;
-
-			assert(member->flags & DECLARATION_TYPE_IS_READY);
-
-			markUsedTypeInfoInExpr(symbols, member->initialValue);
-		}
-
-		break;
-	}
 	}
 }
 
@@ -752,7 +736,6 @@ void writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataRelocations,
 		value->flavor == ExprFlavor::STRING_LITERAL ||
 		value->flavor == ExprFlavor::ARRAY_LITERAL ||
 		value->flavor == ExprFlavor::TYPE_LITERAL || 
-		value->flavor == ExprFlavor::STRUCT_DEFAULT ||
 		value->flavor == ExprFlavor::STRUCT_LITERAL);
 
 	if (value->flavor == ExprFlavor::FUNCTION) {
@@ -834,17 +817,6 @@ void writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataRelocations,
 		dataRelocations->add2Unchecked(IMAGE_REL_AMD64_ADDR64);
 
 		*reinterpret_cast<u64 *>(data) = 0;
-	}
-	else if (value->flavor == ExprFlavor::STRUCT_DEFAULT) {
-		auto struct_ = static_cast<TypeStruct *>(type);
-
-		for (auto member : struct_->members.declarations) {
-			if (member->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING)) continue;
-
-
-			writeValue(dataSize + member->physicalStorage, data + member->physicalStorage, dataRelocations, symbols, stringTable,
-				member->initialValue, emptyStringSymbolIndex, rdata);
-		}
 	}
 	else if (value->flavor == ExprFlavor::STRUCT_LITERAL) {
 		auto literal = static_cast<ExprStructLiteral *>(value);

@@ -1914,51 +1914,6 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 
 			return DEST_NONE;
 		}
-		case ExprFlavor::STRUCT_DEFAULT: {
-			if (dest == DEST_NONE) return DEST_NONE;
-
-			u32 memberSize = 0;
-
-			auto struct_ = static_cast<TypeStruct *>(expr->type);
-
-			for (auto decl : struct_->members.declarations) {
-				if (decl->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING)) continue;
-
-				if (decl->physicalStorage & 7) {
-					memberSize = my_max(getDeclarationType(decl)->size, memberSize);
-				}
-			}
-
-			u32 addressReg = state->nextRegister++;
-			u32 memberTemp = state->nextRegister;
-			state->nextRegister += (memberSize + 7) / 8;
-
-			for (auto decl : struct_->members.declarations) {
-				if (decl->flags & (DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING)) continue;
-
-				if (decl->physicalStorage & 7) {
-					generateIrForceDest(state, decl->initialValue, memberTemp);
-
-					Ir &address = state->ir.add();
-					address.op = IrOp::ADDRESS_OF_LOCAL;
-					address.a = dest;
-					address.immediate = decl->physicalStorage;
-					address.dest = addressReg;
-					address.opSize = 8;
-
-					Ir &write = state->ir.add();
-					write.op = IrOp::WRITE;
-					write.a = addressReg;
-					write.b = memberTemp;
-					write.opSize = getDeclarationType(decl)->size;
-				}
-				else {
-					generateIrForceDest(state, decl->initialValue, dest + decl->physicalStorage / 8);
-				}
-			}
-
-			return dest;
-		}
 		case ExprFlavor::STRUCT_LITERAL: {
 			if (dest == DEST_NONE) return DEST_NONE;
 

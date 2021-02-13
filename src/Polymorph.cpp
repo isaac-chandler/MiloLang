@@ -370,11 +370,6 @@ Expr *copyExpr(Expr *srcExpr) {
 
 		return dest;
 	}
-	case ExprFlavor::STRUCT_DEFAULT: {
-		c(Expr);
-
-		return dest;
-	}
 	case ExprFlavor::SWITCH: {
 		c(ExprSwitch);
 
