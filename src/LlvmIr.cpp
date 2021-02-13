@@ -380,6 +380,66 @@ static llvm::Constant *createConstant(State *state, Expr *expr) {
 			return llvm::ConstantStruct::get(llvmType, llvm::ArrayRef(values, memberCount));
 		}
 	}
+	case ExprFlavor::STRUCT_LITERAL: {
+		auto literal = static_cast<ExprStructLiteral *>(expr);
+		auto struct_ = static_cast<TypeStruct *>(literal->type);
+
+		auto llvmType = static_cast<llvm::StructType *>(getLlvmType(state->context, literal->type));
+
+		if (literal->type->flags & TYPE_STRUCT_IS_UNION) {
+			if (literal->initializers.count) {
+				assert(literal->initializers.count == 1);
+				auto value = literal->initializers.values[0];
+
+				if (getLlvmType(state->context, value->type) == llvmType->getStructElementType(0)) {
+					if (llvmType->getStructNumElements() == 1) {
+						return llvm::ConstantStruct::get(llvmType, createConstant(state, value));
+					}
+					else {
+						return llvm::ConstantStruct::get(llvmType, createConstant(state, value), llvm::UndefValue::get(llvmType->getStructElementType(1)));
+					}
+				}
+				else {
+					auto memberType = getLlvmType(state->context, value->type);
+					auto arrayType = llvm::ArrayType::get(llvm::Type::getInt8Ty(state->context), struct_->size - value->type->size);
+
+					auto tempType = llvm::StructType::get(memberType, arrayType);
+
+					return llvm::ConstantExpr::getBitCast(llvm::ConstantStruct::get(tempType, createConstant(state, value), llvm::UndefValue::get(arrayType)), llvmType);
+				}
+			}
+			else {
+				return llvm::UndefValue::get(llvmType);
+			}
+		}
+		else {
+			u64 memberCount = 0;
+
+			for (auto decl : struct_->members.declarations) {
+				if (decl->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING)) continue;
+
+				++memberCount;
+			}
+
+			llvm::Constant **values = new llvm::Constant * [memberCount] {};
+
+			u32 memberIndex = 0;
+
+			for (u32 i = 0; i < literal->initializers.count; i++) {
+				u32 memberIndex = getDeclarationIndex(&struct_->members, literal->initializers.declarations[i], DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING);
+
+				values[memberIndex] = createConstant(state, literal->initializers.values[i]);
+			}
+
+			for (u32 i = 0; i < memberCount; i++) {
+				if (!values[i]) {
+					values[i] = llvm::UndefValue::get(llvmType->getStructElementType(i));
+				}
+			}
+
+			return llvm::ConstantStruct::get(llvmType, llvm::ArrayRef(values, memberCount));
+		}
+	}
 	case ExprFlavor::ARRAY_LITERAL: {
 
 		auto array = static_cast<ExprArrayLiteral *>(expr);
@@ -707,6 +767,24 @@ llvm::CmpInst::Predicate getUCmp(TokenT op) {
 	}
 }
 
+llvm::Value *createGEPForStruct(State *state, llvm::Value *structPointer, TypeStruct *struct_, Declaration *member) {
+	if (struct_->flags & TYPE_STRUCT_IS_UNION) {
+		u64 offset = member->physicalStorage; // In the case of struct members, physicalStorage is the offset within the struct
+		assert(offset == 0);
+
+		return state->builder.CreatePointerCast(
+			structPointer,
+			llvm::PointerType::getUnqual(getLlvmType(state->context, getDeclarationType(member)))
+		);
+	}
+	else {
+		// @Speed currently we do a linear search through struct members to find 
+		u32 memberIndex = getDeclarationIndex(&struct_->members, member, DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING);
+
+		return state->builder.CreateStructGEP(structPointer, memberIndex);
+	}
+}
+
 llvm::Value *loadAddressOf(State *state, Expr *expr) {
 	if (expr->flavor == ExprFlavor::BINARY_OPERATOR && static_cast<ExprBinaryOperator *>(expr)->op == TOKEN('[')) {
 		auto binary = static_cast<ExprBinaryOperator *>(expr);
@@ -764,57 +842,13 @@ llvm::Value *loadAddressOf(State *state, Expr *expr) {
 				store = loadAddressOf(state, identifier->structAccess);
 			}
 
-			if (type->flags & TYPE_ARRAY_IS_FIXED) { // The only struct access we will generate for fixed arrays are .data, which is just the address of the array
-				assert(identifier->name == "data");
-				return state->builder.CreatePointerCast(store, 
-					llvm::PointerType::getUnqual(getLlvmType(state->context, static_cast<TypeArray *>(type)->arrayOf)));
-			}
+			assert(!(type->flags & TYPE_ARRAY_IS_FIXED));
 
 			if (type->flavor == TypeFlavor::POINTER) {
 				type = static_cast<TypePointer *>(type)->pointerTo;
 			}
 			
-			if (type->flags & TYPE_STRUCT_IS_UNION) {
-				u64 offset = identifier->declaration->physicalStorage; // In the case of struct members, physicalStorage is the offset within the struct
-				assert(offset == 0);
-
-				/*
-				return state->builder.CreatePointerCast(
-					state->builder.CreateConstGEP1_64(
-						state->builder.CreatePointerCast(
-							store,
-							llvm::Type::getInt8PtrTy(state->context)
-						),
-						offset
-					),
-					llvm::PointerType::getUnqual(getLlvmType(state->context, expr->type))
-				);
-				*/
-
-				return state->builder.CreatePointerCast(
-					store,
-					llvm::PointerType::getUnqual(getLlvmType(state->context, expr->type))
-				);
-			}
-			else {
-				auto struct_ = static_cast<TypeStruct *>(type);
-
-				u32 memberIndex = 0;
-
-				// @Speed currently we do a linear search through struct members to find 
-				for (auto member : struct_->members.declarations) {
-					if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING))
-						continue;
-
-					if (member == identifier->declaration) {
-						break;
-					}
-
-					memberIndex++;
-				}
-
-				return state->builder.CreateStructGEP(store, memberIndex);
-			}
+			return createGEPForStruct(state, store, static_cast<TypeStruct *>(type), identifier->declaration);
 		}
 		else {
 			if (identifier->declaration->enclosingScope->flavor == BlockFlavor::GLOBAL) {
@@ -1870,12 +1904,25 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 
 		return store;
 	}
+	case ExprFlavor::STRUCT_LITERAL: {
+		auto literal = static_cast<ExprStructLiteral *>(expr);
+
+		auto store = allocateType(state, literal->type);
+
+		for (u32 i = 0; i < literal->initializers.count; i++) {
+			auto value = generateLlvmIr(state, literal->initializers.values[i]);
+
+			state->builder.CreateStore(value, createGEPForStruct(state, store, static_cast<TypeStruct *>(literal->type), literal->initializers.declarations[i]));
+		}
+
+		return store;
+	}
 	case ExprFlavor::TYPE_LITERAL: {
 		auto type = static_cast<ExprLiteral *>(expr)->typeValue;
 
 		if (type->flavor == TypeFlavor::MODULE) {
 			reportError(expr, "Error: Cannot operate on a module");
-			return nullptr;
+			return llvm::UndefValue::get(llvm::Type::getInt8PtrTy(state->context));
 		}
 
 		return llvm::ConstantExpr::getBitCast(createTypeInfoVariable(state, type), llvm::Type::getInt8PtrTy(state->context));

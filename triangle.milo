@@ -1,6 +1,6 @@
-#load "windows.milo"
-#load "gl.milo"
-#load "standard.milo"
+#import "Windows"
+#import "GL"
+#import "Standard"
 
 should_quit: bool
 
@@ -9,16 +9,6 @@ window_height: s32 = 720
 
 set_gl_color :: (color: Vector4) {
 	glColor4f(color.r, color.g, color.b, color.a)
-}
-
-make_vector4 :: (x: f32, y: f32, z: f32, w: f32) -> Vector4 {
-	vector: Vector4 = --
-	vector.x = x
-	vector.y = y
-	vector.z = z
-	vector.w = w
-	
-	return vector
 }
 
 
@@ -65,15 +55,15 @@ textured_quad :: (using rectangle: *Rectangle) {
 
 gl_context: HGLRC
 
-_main :: () {	
+main :: () {	
 	startup_info: STARTUPINFOW
 	
 	GetStartupInfoW(*startup_info)
 	
-	show_command: u16 = SW_SHOWDEFAULT
+	show_command := SW_SHOWDEFAULT
 	
 	if startup_info.dwFlags & STARTF_USESHOWWINDOW {
-		show_command = startup_info.wShowWindow
+		show_command = cast() startup_info.wShowWindow
 	}
 	
 	instance := GetModuleHandleW(null)
@@ -186,11 +176,12 @@ _main :: () {
 	
 	ShowWindow(window_handle, cast() show_command)
 	
-	rect: Rectangle
-	rect.x = 500
-	rect.y = 500
-	rect.width = 100
-	rect.height = 100
+	rect :=  Rectangle.{
+		x = 500, 
+		y = 500, 
+		width = 100, 
+		height = 100
+	}
 	
 	while outer: !should_quit {
 		message: MSG = --
@@ -222,6 +213,4 @@ _main :: () {
 		if !SwapBuffers(device_context)
 			print("SwapBuffers failed\n")
 	}
-	
-	#run _main()
 }

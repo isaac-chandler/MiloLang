@@ -52,28 +52,19 @@ print_job :: (job: *Job) {
 using_test :: () {
 	using Job_Status
 
-	jim: Person
-	
-	jim.first_name = "Jim"
-	jim.last_name = "Halpert"
-	jim.age = 30
-	
+	jim := Person.{ "Jim", "Halpert", 30 }
 	
 	job: Job
 	
 	job.title = "Co-regional Manager"
 	job.experience = 4
 	
-	print_u64(Job_Status.SUSPENDED)
+	print("%", Job_Status.SUSPENDED)
 	
 	jim.job = *job
 	jim.job_status |= EMPLOYED
 	
 	print_job(jim)
-}
-
-_main :: () {
-	print_u64(cast() (cast(f64)sqrt(2) * 1000_000_000_000_000))
 }
 
 random_test :: () {
@@ -134,16 +125,14 @@ remove_test :: () {
 get_strings :: () -> #must []string {
 	a: [..] string
 
-	array_add_string(*a, "Test1")
-	array_add_string(*a, "Test2")
+	array_add(*a, "Test1")
+	array_add(*a, "Test2")
 
 	return a
 }
 
 get_linked_strings :: () -> #must ListNode {
-	a: ListNode
-	a.value = "LinkedTest1"
-	a.next = allocate(size_of(ListNode))
+	a := ListNode.{ value = "LinkedTest1", next = allocate(size_of(ListNode)) }
 	
 	b := a.next
 	b.value = "LinkedTest2"
@@ -162,7 +151,7 @@ find_string :: (array: []string, s: string) {
 			print_string(s)
 			print_string("\n")
 			
-			deallocate(cast() index)
+			deallocate(index.data)
 			
 			break
 		}
@@ -172,4 +161,8 @@ find_string :: (array: []string, s: string) {
 		print_string("\n")
 	}
 	
+}
+
+main :: () {
+
 }

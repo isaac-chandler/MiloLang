@@ -226,3 +226,37 @@ inline Declaration *findDeclaration(Block *block, String name, bool *yield, u32 
 
 	return declaration;
 }
+
+inline u32 getDeclarationIndex(Block *block, Declaration *declaration, u32 flaggedToIgnore) {
+	u32 index = 0;
+
+	assert(!(declaration->flags & flaggedToIgnore));
+
+	for (auto member : block->declarations) {
+		if (member->flags & flaggedToIgnore)
+			continue;
+
+		if (member == declaration)
+			return index;
+
+		index++;
+	}
+
+	assert(false);
+	return index;
+}
+
+inline Declaration *getDeclarationByIndex(Block *block, u32 index, u32 flaggedToIgnore) {
+	for (auto member : block->declarations) {
+		if (member->flags & flaggedToIgnore)
+			continue;
+
+		if (index == 0)
+			return member;
+
+		index--;
+	}
+
+	assert(false);
+	return nullptr;
+}

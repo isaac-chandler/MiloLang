@@ -133,7 +133,7 @@ Declaration *capacityDeclaration;
 
 Declaration *createDataDeclaration(Type *type) {
 	PROFILE_FUNC();
-	
+
 	auto dataType = TYPE_NEW(ExprLiteral);
 	dataType->flavor = ExprFlavor::TYPE_LITERAL;
 	dataType->start = {};
@@ -141,14 +141,21 @@ Declaration *createDataDeclaration(Type *type) {
 	dataType->type = &TYPE_TYPE;
 	dataType->typeValue = getPointer(type);
 
+	auto pointerZero = TYPE_NEW(ExprLiteral);
+	pointerZero->flavor = ExprFlavor::INT_LITERAL;
+	pointerZero->start = {};
+	pointerZero->end = {};
+	pointerZero->unsignedValue = 0;
+	pointerZero->type = dataType->typeValue;
+
 	auto dataDeclaration = TYPE_NEW(Declaration);
 	dataDeclaration->start = {};
 	dataDeclaration->end = {};
 	dataDeclaration->name = "data";
 	dataDeclaration->type = dataType;
-	dataDeclaration->initialValue = nullptr;
+	dataDeclaration->initialValue = pointerZero;
 	dataDeclaration->physicalStorage = 0;
-	dataDeclaration->flags |= DECLARATION_TYPE_IS_READY;
+	dataDeclaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
 
 	return dataDeclaration;
 }
@@ -546,23 +553,30 @@ void setupTypeTable() {
 	unsignedLiteralType->type = &TYPE_TYPE;
 	unsignedLiteralType->typeValue = &TYPE_UNSIGNED_INT_LITERAL;
 
+	auto u64Zero = TYPE_NEW(ExprLiteral);
+	u64Zero->flavor = ExprFlavor::INT_LITERAL;
+	u64Zero->start = {};
+	u64Zero->end = {};
+	u64Zero->unsignedValue = 0;
+	u64Zero->type = &TYPE_U64;
+
 	countDeclaration = TYPE_NEW(Declaration);
 	countDeclaration->start = {};
 	countDeclaration->end = {};
 	countDeclaration->name = "count";
 	countDeclaration->type = u64Type;
-	countDeclaration->initialValue = nullptr;
+	countDeclaration->initialValue = u64Zero;
 	countDeclaration->physicalStorage = 8;
-	countDeclaration->flags |= DECLARATION_TYPE_IS_READY;
+	countDeclaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
 
 	capacityDeclaration = TYPE_NEW(Declaration);
 	capacityDeclaration->start = {};
 	capacityDeclaration->end = {};
 	capacityDeclaration->name = "capacity";
 	capacityDeclaration->type = u64Type;
-	capacityDeclaration->initialValue = nullptr;
+	capacityDeclaration->initialValue = u64Zero;
 	capacityDeclaration->physicalStorage = 16;
-	capacityDeclaration->flags |= DECLARATION_TYPE_IS_READY;
+	capacityDeclaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
 
 	addDeclarationToBlockUnchecked(&TYPE_STRING.members, createDataDeclaration(&TYPE_U8), nullptr, 0);
 	addDeclarationToBlockUnchecked(&TYPE_STRING.members, countDeclaration, nullptr, 0);

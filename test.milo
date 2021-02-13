@@ -169,7 +169,7 @@ create_particle :: (using particle_system: *Particle_System) {
 }
 
 sub_vector2 :: (a: Vector2, b: Vector2) -> Vector2 {
-	return make_vector2(a.x - b.x, a.y - b.y)
+	return .{.{a.x - b.x, a.y - b.y}}
 }
 
 dot_vector2 :: (a: Vector2, b: Vector2) -> f32 {
@@ -381,24 +381,6 @@ set_gl_color :: (color: Vector4) {
 	glColor4f(color.r, color.g, color.b, color.a)
 }
 
-make_vector2 :: (x: f32, y: f32) -> Vector2 {
-	vector: Vector2 = --
-	vector.x = x
-	vector.y = y
-	
-	return vector
-}
-
-make_vector4 :: (x: f32, y: f32, z: f32, w: f32) -> Vector4 {
-	vector: Vector4 = --
-	vector.x = x
-	vector.y = y
-	vector.z = z
-	vector.w = w
-	
-	return vector
-}
-
 untextured_quad :: (using rectangle: *Rectangle) {
 
 	half_width := width * 0.5
@@ -453,8 +435,6 @@ create_bullet :: (x: f32, y: f32, vy: f32, color: Vector4, enemy: bool) {
 
 	entity: Entity
 	
-	// entity.flags = .DRAW_RECTANGLE 
-	// entity.color = make_vector4(1, 0, 1, 1)
 	entity.x = x
 	entity.y = y
 	entity.width = 10
@@ -494,12 +474,12 @@ create_bullet :: (x: f32, y: f32, vy: f32, color: Vector4, enemy: bool) {
 	particles.spawn_color = color
 	particles.spawn_radius = 4
 	particles.spawn_size = 4
-	particles.spawn_mean_velocity = make_vector2(0, vy * -1.5)
-	particles.spawn_velocity_range = make_vector2(0, vy * 0.5)
+	particles.spawn_mean_velocity = .{.{0, vy * -1.5}}
+	particles.spawn_velocity_range = .{.{0, vy * 0.5}}
 	particles.active = true
 	
 	bullet.particle_system = add_particle_system(*particles)
-	bullet.velocity = make_vector2(0, vy)
+	bullet.velocity = .{.{0, vy}}
 	bullet.enemy = enemy
 	
 	
@@ -522,7 +502,7 @@ create_enemy :: (texture_handle: u32, mesh: [][3]Vector2) {
 	entity.mesh = mesh
 	
 	entity.texture_handle = texture_handle
-	entity.color = make_vector4(1, 1, 1, 1)
+	entity.color = .{.{1, 1, 1, 1}}
 
 
 	enemy: Enemy
@@ -545,11 +525,11 @@ create_explosion :: (x: f32, y: f32) {
 	particles.texture_handle = 0
 	particles.spawn_rate = 30000
 	particles.spawn_lifetime = 0.3
-	particles.spawn_color = make_vector4(0.9, 0.5, 0.07, 1)
+	particles.spawn_color = .{.{0.9, 0.5, 0.07, 1}}
 	particles.spawn_radius = 30
 	particles.spawn_size = 4
-	particles.spawn_mean_velocity = make_vector2(300, 0)
-	particles.spawn_velocity_range = make_vector2(30, 0)
+	particles.spawn_mean_velocity =  .{.{300, 0}}
+	particles.spawn_velocity_range = .{.{30 , 0}}
 	particles.active = true
 	particles.mode = .EXPLOSION
 		
@@ -577,8 +557,8 @@ intersect :: (bullet: *Bullet, b: *Entity) -> bool {
 	     a.y + a.height * 0.5 < b.y - b.height * 0.5 ||
 	     a.y - a.height * 0.5 > b.y + b.height * 0.5) {
 		
-		a_offset := make_vector2(a.x, a.y)
-		b_offset := make_vector2(b.x, b.y)
+		a_offset := Vector2.{.{a.x, a.y}}
+		b_offset := Vector2.{.{b.x, b.y}}
 		
 		for i : bullet.mesh {
 			for j : b.mesh {
@@ -814,7 +794,7 @@ main :: () {
 		entity.height = 128
 		entity.flags = .DRAW_RECTANGLE
 		entity.texture_handle = texture
-		entity.color = make_vector4(1, 1, 1, 1)
+		entity.color = .{.{1, 1, 1, 1}}
 		entity.mesh = player_mesh
 	
 		player_index = add_entity(*entity)
@@ -832,10 +812,10 @@ main :: () {
 		particle_system.spawn_rate = 3000
 		particle_system.spawn_size = 4
 		particle_system.spawn_radius = 5
-		particle_system.spawn_mean_velocity = make_vector2(-240, 0)
-		particle_system.spawn_velocity_range = make_vector2(-120, 60)
+		particle_system.spawn_mean_velocity  = .{.{-240, 0 }}
+		particle_system.spawn_velocity_range = .{.{-120, 60}}
 		particle_system.spawn_lifetime = 0.25
-		particle_system.spawn_color = make_vector4(0.9, 0.5, 0.07, 1)
+		particle_system.spawn_color = .{.{0.9, 0.5, 0.07, 1}}
 		
 		left_particles = add_particle_system(*particle_system)
 	}
@@ -849,10 +829,10 @@ main :: () {
 		particle_system.spawn_rate = 3000
 		particle_system.spawn_size = 4
 		particle_system.spawn_radius = 5
-		particle_system.spawn_mean_velocity = make_vector2(240, 0)
-		particle_system.spawn_velocity_range = make_vector2(120, 60)
+		particle_system.spawn_mean_velocity  = .{.{240, 0 }}
+		particle_system.spawn_velocity_range = .{.{120, 60}}
 		particle_system.spawn_lifetime = 0.25
-		particle_system.spawn_color = make_vector4(0.9, 0.5, 0.07, 1)
+		particle_system.spawn_color = .{.{0.9, 0.5, 0.07, 1}}
 		
 		right_particles = add_particle_system(*particle_system)
 		
@@ -939,8 +919,8 @@ main :: () {
 			if space_is_down && time_to_fire <= 0 {
 				time_to_fire += FIRE_COOLDOWN
 				
-				create_bullet(player.x - 13, player.y + player.height * 0.5 - 30, BULLET_SPEED, make_vector4(0.45, 0.45, 0.45, 1), enemy = false)
-				create_bullet(player.x + 13, player.y + player.height * 0.5 - 30, BULLET_SPEED, make_vector4(0.45, 0.45, 0.45, 1), enemy = false)
+				create_bullet(player.x - 13, player.y + player.height * 0.5 - 30, BULLET_SPEED, .{.{0.45, 0.45, 0.45, 1}}, enemy = false)
+				create_bullet(player.x + 13, player.y + player.height * 0.5 - 30, BULLET_SPEED, .{.{0.45, 0.45, 0.45, 1}}, enemy = false)
 			}
 			
 			if time_to_fire < 0
@@ -981,7 +961,7 @@ main :: () {
 			if enemy.cooldown < 0 {
 				enemy.cooldown += ENEMY_FIRE_SPEED
 				
-				create_bullet(entity.x, entity.y - entity.height * 0.5, -ENEMY_BULLET_SPEED, make_vector4(0.45, 0.15, 0.15, 1), enemy = true)
+				create_bullet(entity.x, entity.y - entity.height * 0.5, -ENEMY_BULLET_SPEED, .{.{0.45, 0.15, 0.15, 1}}, enemy = true)
 			}
 		}
 		

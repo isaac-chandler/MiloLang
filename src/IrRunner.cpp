@@ -166,6 +166,13 @@ void createRuntimeValue(Expr *value, void *dest) {
 			createRuntimeValue(member->initialValue, static_cast<u8 *>(dest) + member->physicalStorage);
 		}
 	}
+	else if (value->flavor == ExprFlavor::STRUCT_LITERAL) {
+		auto literal = static_cast<ExprStructLiteral *>(value);
+
+		for (u32 i = 0; i < literal->initializers.count; i++) {
+			createRuntimeValue(literal->initializers.values[i], static_cast<u8 *>(dest) + literal->initializers.declarations[i]->physicalStorage);
+		}
+	}
 	else if (value->flavor == ExprFlavor::ARRAY_LITERAL) {
 		auto array = static_cast<ExprArrayLiteral *>(value);
 

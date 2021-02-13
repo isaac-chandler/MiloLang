@@ -1550,31 +1550,17 @@ bool parseArguments(LexerFile *lexer, Arguments *args, const char *message) {
 	do {
 		String name = { nullptr, 0u };
 
-		if (lexer->token.type == TokenT::IDENTIFIER) {
-			TokenT peek;
+		TokenT peek;
+		lexer->peekTokenTypes(1, &peek);
 
-			lexer->peekTokenTypes(1, &peek);
+		if (lexer->token.type == TokenT::IDENTIFIER && peek == TOKEN('=')) {
+			name = lexer->token.text;
 
-			if (peek == TOKEN('=')) {
-				name = lexer->token.text;
+			lexer->advance();
 
-				lexer->advance();
+			assert(lexer->token.type == TOKEN('='));
 
-				assert(lexer->token.type == TOKEN('='));
-
-				lexer->advance();
-			}
-			else {
-				goto unnamed;
-			}
-		}
-		else {
-		unnamed:
-
-			if (names.count) {
-				reportError(&lexer->token, "Error: Cannot have unnamed %s after named %s", message, message);
-				return false;
-			}
+			lexer->advance();
 		}
 
 		bool spread = expectAndConsume(lexer, TokenT::DOUBLE_DOT);
@@ -1590,7 +1576,7 @@ bool parseArguments(LexerFile *lexer, Arguments *args, const char *message) {
 
 		arguments.add(argument);
 
-		if (name.length) {
+		if (name.length || names.count) {
 			for (u64 i = names.count + 1; i < arguments.count; i++) {
 				names.add("");
 			}
@@ -1644,23 +1630,17 @@ bool parseStructLiteral(LexerFile *lexer, ExprStructLiteral *literal) {
 	do {
 		String name = { nullptr, 0u };
 
-		if (lexer->token.type == TokenT::IDENTIFIER) {
-			TokenT peek;
+		TokenT peek;
+		lexer->peekTokenTypes(1, &peek);
 
-			lexer->peekTokenTypes(1, &peek);
+		if (lexer->token.type == TokenT::IDENTIFIER && peek == TOKEN('=')) {
+			name = lexer->token.text;
 
-			if (peek == TOKEN('=')) {
-				name = lexer->token.text;
+			lexer->advance();
 
-				lexer->advance();
+			assert(lexer->token.type == TOKEN('='));
 
-				assert(lexer->token.type == TOKEN('='));
-
-				lexer->advance();
-			}
-			else {
-				goto unnamed;
-			}
+			lexer->advance();
 		}
 		else if (expectAndConsume(lexer, TokenT::DOUBLE_DASH)) {
 			literal->flags |= EXPR_STRUCT_LITERAL_UNSPECIFIED_MEMBERS_UNINITIALZIED;
@@ -1673,29 +1653,24 @@ bool parseStructLiteral(LexerFile *lexer, ExprStructLiteral *literal) {
 			}
 			break;
 		}
-		else {
-		unnamed:
+		else if (names.count) {
+			reportError(&lexer->token, "Error: Cannot have unnamed initializers after named intializers");
+			return false;
+		}
 
-			if (names.count) {
-				reportError(&lexer->token, "Error: Cannot have unnamed initializers after named intializers");
-				return false;
+		Expr *argument = parseExpr(lexer);
+
+		if (!argument)
+			return false;
+
+		initializers.add(argument);
+
+		if (name.length) {
+			for (u64 i = names.count + 1; i < initializers.count; i++) {
+				names.add("");
 			}
 
-
-			Expr *argument = parseExpr(lexer);
-
-			if (!argument)
-				return false;
-
-			initializers.add(argument);
-
-			if (name.length) {
-				for (u64 i = names.count + 1; i < initializers.count; i++) {
-					names.add("");
-				}
-
-				names.add(name);
-			}
+			names.add(name);
 		}
 	} while (expectAndConsume(lexer, ','));
 
@@ -2370,7 +2345,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 	}
 }
 
-Expr *parseUnaryExpr(LexerFile *lexer, CodeLocation plusStart = {});
+Expr *parsePrefixExpr(LexerFile *lexer, CodeLocation plusStart = {});
 
 Expr *makeUnaryOperator(LexerFile *lexer, CodeLocation &start, EndLocation &end, TokenT type) {
 	ExprUnaryOperator *expr = PARSER_NEW(ExprUnaryOperator);
@@ -2378,7 +2353,7 @@ Expr *makeUnaryOperator(LexerFile *lexer, CodeLocation &start, EndLocation &end,
 	expr->flavor = ExprFlavor::UNARY_OPERATOR;
 	expr->op = type;
 
-	expr->value = parseUnaryExpr(lexer);
+	expr->value = parsePrefixExpr(lexer);
 	if (!expr->value) {
 		return nullptr;
 	}
@@ -2388,7 +2363,7 @@ Expr *makeUnaryOperator(LexerFile *lexer, CodeLocation &start, EndLocation &end,
 	return expr;
 }
 
-Expr *parseUnaryExpr(LexerFile *lexer, CodeLocation plusStart) {
+Expr *parsePrefixExpr(LexerFile *lexer, CodeLocation plusStart) {
 	CodeLocation start = lexer->token.start;
 	EndLocation end = lexer->token.end;
 
@@ -2537,7 +2512,7 @@ Expr *parseUnaryExpr(LexerFile *lexer, CodeLocation plusStart) {
 			}
 		}
 
-		expr->right = parseUnaryExpr(lexer);
+		expr->right = parsePrefixExpr(lexer);
 		if (!expr->right) {
 			return nullptr;
 		}
@@ -2580,12 +2555,35 @@ Expr *parseUnaryExpr(LexerFile *lexer, CodeLocation plusStart) {
 			}
 		}
 
-		array->right = parseUnaryExpr(lexer);
+		array->right = parsePrefixExpr(lexer);
 
 		if (!array->right) {
 			return nullptr;
 		}
 		array->end = array->right->end;
+
+		if (array->right->flavor == ExprFlavor::STRUCT_LITERAL && array->right->type != &TYPE_STRUCT_LITERAL) {
+			auto literal = static_cast<ExprStructLiteral *>(array->right);
+
+			array->end = literal->typeValue->end;
+			literal->start = array->start;
+
+			array->right = literal->typeValue;
+			literal->typeValue = array;
+
+			return literal;
+		}
+		else if (array->right->flavor == ExprFlavor::ARRAY_LITERAL && array->right->type != &TYPE_ARRAY_LITERAL) {
+			auto literal = static_cast<ExprArrayLiteral *>(array->right);
+
+			array->end = literal->typeValue->end;
+			literal->start = array->start;
+
+			array->right = literal->typeValue;
+			literal->typeValue = array;
+
+			return literal;
+		}
 
 
 		return array;
@@ -2594,7 +2592,6 @@ Expr *parseUnaryExpr(LexerFile *lexer, CodeLocation plusStart) {
 		return parsePrimaryExpr(lexer);
 	}
 }
-
 
 // Shamelessly stolen from GCC, means we don't end up with ridiculous recursion depth when parsing binops
 Expr *parseBinaryOperator(LexerFile *lexer) {
@@ -2613,7 +2610,7 @@ Expr *parseBinaryOperator(LexerFile *lexer) {
 	BinaryOp current;
 
 	current.precedence = 0;
-	current.left = parseUnaryExpr(lexer);
+	current.left = parsePrefixExpr(lexer);
 
 	if (!current.left)
 		return nullptr;
@@ -2658,7 +2655,7 @@ Expr *parseBinaryOperator(LexerFile *lexer) {
 			plusStart = {};
 		}
 
-		right = parseUnaryExpr(lexer, plusStart);
+		right = parsePrefixExpr(lexer, plusStart);
 
 		if (!right)
 			return nullptr;

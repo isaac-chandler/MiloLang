@@ -612,6 +612,14 @@ void markUsedTypeInfoInExpr(BucketArray<Symbol> *symbols, Expr *expr) {
 		}
 		break;
 	}
+	case ExprFlavor::STRUCT_LITERAL: {
+		auto literal = static_cast<ExprStructLiteral *>(expr);
+
+		for (u64 i = 0; i < literal->initializers.count; i++) {
+			markUsedTypeInfoInExpr(symbols, literal->initializers.values[i]);
+		}
+		break;
+	}
 	case ExprFlavor::TYPE_LITERAL: {
 		markUsedTypeInfoInType(symbols, static_cast<ExprLiteral *>(expr)->typeValue);
 		break;
@@ -744,7 +752,8 @@ void writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataRelocations,
 		value->flavor == ExprFlavor::STRING_LITERAL ||
 		value->flavor == ExprFlavor::ARRAY_LITERAL ||
 		value->flavor == ExprFlavor::TYPE_LITERAL || 
-		value->flavor == ExprFlavor::STRUCT_DEFAULT);
+		value->flavor == ExprFlavor::STRUCT_DEFAULT ||
+		value->flavor == ExprFlavor::STRUCT_LITERAL);
 
 	if (value->flavor == ExprFlavor::FUNCTION) {
 		assert(type->size == 8);
@@ -835,6 +844,14 @@ void writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataRelocations,
 
 			writeValue(dataSize + member->physicalStorage, data + member->physicalStorage, dataRelocations, symbols, stringTable,
 				member->initialValue, emptyStringSymbolIndex, rdata);
+		}
+	}
+	else if (value->flavor == ExprFlavor::STRUCT_LITERAL) {
+		auto literal = static_cast<ExprStructLiteral *>(value);
+
+		for (u32 i = 0; i < literal->initializers.count; i++) {
+			auto offset = literal->initializers.declarations[i]->physicalStorage;
+			writeValue(dataSize + offset, data + offset, dataRelocations, symbols, stringTable, literal->initializers.values[i], emptyStringSymbolIndex, rdata);
 		}
 	}
 	else {

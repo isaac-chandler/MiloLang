@@ -1959,6 +1959,50 @@ u32 generateIr(IrState *state, Expr *expr, u32 dest, bool destWasForced) {
 
 			return dest;
 		}
+		case ExprFlavor::STRUCT_LITERAL: {
+			if (dest == DEST_NONE) return DEST_NONE;
+
+			u32 memberSize = 0;
+
+			auto literal = static_cast<ExprStructLiteral *>(expr);
+
+			for (u32 i = 0; i < literal->initializers.count; i++) {
+				if (literal->initializers.declarations[i]->physicalStorage & 7) {
+					memberSize = my_max(literal->initializers.values[i]->type->size, memberSize);
+				}
+			}
+
+			u32 addressReg = state->nextRegister++;
+			u32 memberTemp = state->nextRegister;
+			state->nextRegister += (memberSize + 7) / 8;
+
+			for (u32 i = 0; i < literal->initializers.count; i++) {
+				auto offset = literal->initializers.declarations[i]->physicalStorage;
+				auto value = literal->initializers.values[i];
+
+				if (offset & 7) {
+					generateIrForceDest(state, value, memberTemp);
+
+					Ir &address = state->ir.add();
+					address.op = IrOp::ADDRESS_OF_LOCAL;
+					address.a = dest;
+					address.immediate = offset;
+					address.dest = addressReg;
+					address.opSize = 8;
+
+					Ir &write = state->ir.add();
+					write.op = IrOp::WRITE;
+					write.a = addressReg;
+					write.b = memberTemp;
+					write.opSize = value->type->size;
+				}
+				else {
+					generateIrForceDest(state, value, dest + offset / 8);
+				}
+			}
+
+			return dest;
+		}
 		case ExprFlavor::IMPORT: {
 			reportError(expr, "Error: Cannot operate on a module");
 

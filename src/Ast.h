@@ -370,6 +370,7 @@ struct ExprEnumIncrement : Expr {
 struct Arguments {
 	Expr **values;
 	String *names;
+	Declaration **declarations = nullptr;
 	u32 count;
 
 };

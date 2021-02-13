@@ -12,9 +12,12 @@ Constexpr
 
 Ternary operator
 
-array literals
-
 struct literals
+
+Syntax for partial array literals, where the remaining values are filled in with the default value 
+ - maybe an option to fill with last specified value as well
+   - this would give an easy way to fill an array with a certain value
+ - Store array literals that are constants in the data segment instead of initializing them every time they are used
 
 Build options
  - Custom linker command
@@ -22,6 +25,14 @@ Build options
  - Change output type (lib, exe, dll)
  - Disable debug info
  - Force unreferenced type info to be emitted
+ 
+Current philosophy for order of execution is everything executes from left to right
+ - Make named arguments and returns execute from left to right? (currently they will execute in the order that the arguments have in the function declaration)
+   - This would require extra information to be stored on calls and would make codegen for calls slower, so may not be worth it to avoid a potential pitfall that in reality will basically never matter
+     - Code that relies heavily on execution order within a single statement is probably a bad idea anyway
+ - Make sure left to right works properly for multiple return values
+ - Make sure left to right works properly for comma asignments/declarations
+ 
  
 
 Add separate workspaces so that code run at compile time doesn't get emitted to the binary

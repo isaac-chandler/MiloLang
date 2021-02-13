@@ -67,14 +67,12 @@ THREAD_COUNT :: 4
 main :: () {
 	assert(height % THREAD_COUNT == 0)
 
-	file: []u8
-	
-	file.count = size_of(Bmp_File_Header) + size_of(Bmp_Dib_Header) + width * height * 3
-	file.data = allocate(file.count)
+	SIZE :: size_of(Bmp_File_Header) + size_of(Bmp_Dib_Header) + width * height * 3
+	file := []u8.{ allocate(SIZE), SIZE }
 	
 	file_header: Bmp_File_Header
 	
-	file_header.file_size = cast() file.count
+	file_header.file_size = SIZE
 	file_header.offset_to_image = size_of(Bmp_File_Header) + size_of(Bmp_Dib_Header);
 	
 	<<cast(*type_of(file_header)) file.data = file_header
@@ -85,22 +83,19 @@ main :: () {
 	dib_header.height = height
 	dib_header.image_size = 3 * width * height;
 	
-	<< cast(*type_of(dib_header)) (file.data + size_of(type_of(file_header))) = dib_header
+	<< cast(*type_of(dib_header)) *file[size_of(type_of(file_header))] = dib_header
 	
 	jobs: [THREAD_COUNT]Job
 	
 	threads: [THREAD_COUNT]Thread
 	
-	image := file
-	image.data += file_header.offset_to_image
-	image.count -= file_header.offset_to_image
-	
+	image := *file.data[file_header.offset_to_image]
 	
 	for * jobs {
 		it.start_row = height / THREAD_COUNT * cast() it_index
 		it.end_row = height / THREAD_COUNT * cast()(it_index + 1)
 		
-		it.data = image.data + it.start_row * width * 3
+		it.data = image + it.start_row * width * 3
 	}
 	
 	performance_counter_frequency: s64

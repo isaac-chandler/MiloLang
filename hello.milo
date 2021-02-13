@@ -1,5 +1,5 @@
-#load "standard.milo"
+#import "Standard"
 
-_main :: () {
+main :: () {
 	print("Hello World!\n")
 }

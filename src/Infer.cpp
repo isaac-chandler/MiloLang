@@ -1246,6 +1246,32 @@ void copyLiteral(Expr **exprPointer, Expr *expr) {
 
 		break;
 	}
+	case ExprFlavor::STRUCT_LITERAL: {
+		auto literal = static_cast<ExprStructLiteral *>(expr);
+
+		if (literal->type == &TYPE_STRUCT_LITERAL) {
+			auto newLiteral = INFER_NEW(ExprStructLiteral);
+			*newLiteral = *static_cast<ExprStructLiteral *>(expr);
+
+			newLiteral->initializers.values = INFER_NEW_ARRAY(Expr *, literal->initializers.count);
+
+			for (u32 i = 0; i < literal->initializers.count; i++) {
+				newLiteral->initializers.values[i] = literal->initializers.values[i];
+
+				copyLiteral(&newLiteral->initializers.values[i], literal->initializers.values[i]);
+			}
+
+			newLiteral->start = (*exprPointer)->start;
+			newLiteral->end = (*exprPointer)->end;
+
+			*exprPointer = newLiteral;
+		}
+		else {
+			*exprPointer = literal;
+		}
+
+		break;
+	}
 	default:
 		assert(false);
 	}
@@ -1838,6 +1864,14 @@ bool arrayIsLiteral(ExprArrayLiteral *array) {
 	return true;
 }
 
+bool structIsLiteral(ExprStructLiteral *struct_) {
+	for (u64 i = 0; i < struct_->initializers.count; i++)
+		if (!isLiteral(struct_->initializers.values[i]))
+			return false;
+
+	return true;
+}
+
 bool isLiteral(Expr *expr) {
 	return expr->flavor == ExprFlavor::INT_LITERAL || 
 		expr->flavor == ExprFlavor::FLOAT_LITERAL || 
@@ -1846,6 +1880,7 @@ bool isLiteral(Expr *expr) {
 		expr->flavor == ExprFlavor::FUNCTION || 
 		expr->flavor == ExprFlavor::IMPORT || 
 		(expr->flavor == ExprFlavor::ARRAY_LITERAL && arrayIsLiteral(static_cast<ExprArrayLiteral *>(expr))) ||
+		(expr->flavor == ExprFlavor::STRING_LITERAL && structIsLiteral(static_cast<ExprStructLiteral *>(expr))) ||
 		expr->flavor == ExprFlavor::STRUCT_DEFAULT;
 }
 
@@ -1875,35 +1910,73 @@ bool defaultValueIsZero(SubJob *job, Type *type, bool *yield) {
 	case TypeFlavor::STRUCT: {
 		auto struct_ = static_cast<TypeStruct *>(type);
 
-		for (auto member : struct_->members.declarations) {
-			if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING)) continue;
+		if (struct_->flags & TYPE_STRUCT_IS_UNION) {
+			bool zero = false;
 
-			if (member->flags & DECLARATION_IS_UNINITIALIZED) return false;
+			for (auto member : struct_->members.declarations) {
+				if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING)) 
+					continue;
 
-			if (!(member->flags & DECLARATION_VALUE_IS_READY)) {
-				goToSleep(job, &member->sleepingOnMyValue, "Struct default value is zero member value not ready");
+				if (member->flags & DECLARATION_IS_UNINITIALIZED) 
+					continue;
 
-				*yield = true;
-				continue;
+				if (!(member->flags & DECLARATION_VALUE_IS_READY)) {
+					goToSleep(job, &member->sleepingOnMyValue, "Struct default value is zero member value not ready");
+
+					*yield = true;
+					continue;
+				}
+
+				assert(member->initialValue);
+
+				auto initialValue = member->initialValue;
+
+				if ((initialValue->flavor == ExprFlavor::INT_LITERAL || initialValue->flavor == ExprFlavor::FLOAT_LITERAL)
+					&& static_cast<ExprLiteral *>(initialValue)->unsignedValue == 0) { // Check against unsignedValue even for float literals so if the user explicitly 
+																		   // sets the default value to -0, they will actually get -0, not 0
+				}
+				else {
+					return false;
+				}
 			}
 
-			assert(member->initialValue);
-
-			auto initialValue = member->initialValue;
-
-			if ((initialValue->flavor == ExprFlavor::INT_LITERAL || initialValue->flavor == ExprFlavor::FLOAT_LITERAL)
-				&& static_cast<ExprLiteral *>(initialValue)->unsignedValue == 0) { // Check against unsignedValue even for float literals so if the user explicitly 
-																						   // sets the default value to -0, they will actually get -0, not 0
-			}
-			else {
+			if (*yield)
 				return false;
-			}
+
+			return zero;
 		}
+		else {
+			for (auto member : struct_->members.declarations) {
+				if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING)) continue;
 
-		if (*yield)
-			return false;
+				if (member->flags & DECLARATION_IS_UNINITIALIZED)
+					return false;
 
-		return true;
+				if (!(member->flags & DECLARATION_VALUE_IS_READY)) {
+					goToSleep(job, &member->sleepingOnMyValue, "Struct default value is zero member value not ready");
+
+					*yield = true;
+					continue;
+				}
+
+				assert(member->initialValue);
+
+				auto initialValue = member->initialValue;
+
+				if ((initialValue->flavor == ExprFlavor::INT_LITERAL || initialValue->flavor == ExprFlavor::FLOAT_LITERAL)
+					&& static_cast<ExprLiteral *>(initialValue)->unsignedValue == 0) { // Check against unsignedValue even for float literals so if the user explicitly 
+																							   // sets the default value to -0, they will actually get -0, not 0
+				}
+				else {
+					return false;
+				}
+			}
+
+			if (*yield)
+				return false;
+
+			return true;
+		}
 	}
 	default: {
 		return false;
@@ -2345,6 +2418,25 @@ bool inferUnaryDotArrayLiteral(SubJob *job, Type *correct, Expr *&given) {
 	return true;
 }
 
+bool inferUnaryDotStructLiteral(SubJob *job, Type *correct, Expr *&given) {
+	auto literal = static_cast<ExprStructLiteral *>(given);
+
+	assert(correct->flavor == TypeFlavor::ARRAY || correct->flavor == TypeFlavor::STRING || correct->flavor == TypeFlavor::STRUCT);
+
+	if (correct->flags & TYPE_ARRAY_IS_FIXED) {
+		reportError(given, "Error: Cannot have a struct literal for a fixed array");
+		return false;
+	}
+
+
+	literal->type = correct;
+
+	beginFlatten(job, &given);
+	subJobs.add(job);
+
+	return true;
+}
+
 bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yield) {
 	*yield = false;
 	if (correct != given->type) {
@@ -2549,8 +2641,12 @@ bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yi
 					return false;
 				}
 			}
-			else if (correct->flavor == TypeFlavor::ARRAY && given->type == &TYPE_ARRAY_LITERAL) {
+			else if (given->type == &TYPE_ARRAY_LITERAL && correct->flavor == TypeFlavor::ARRAY) {
 				*yield = inferUnaryDotArrayLiteral(job, correct, given);
+				return false;
+			}
+			else if (given->type == &TYPE_STRUCT_LITERAL && (correct->flavor == TypeFlavor::ARRAY || correct->flavor == TypeFlavor::STRING || correct->flavor == TypeFlavor::STRUCT)) {
+				*yield = inferUnaryDotStructLiteral(job, correct, given);
 				return false;
 			}
 
@@ -2560,7 +2656,7 @@ bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yi
 					*yield = true;
 					return false;
 				} else {
-					if (correct == TYPE_ANY && given->type != TYPE_ANY) {
+					if (correct == TYPE_ANY && given->type != TYPE_ANY && given->type->flavor != TypeFlavor::AUTO_CAST) {
 						trySolidifyNumericLiteralToDefault(given);
 						insertImplicitCast(job->sizeDependencies, &given, TYPE_ANY);
 						return true;
@@ -2795,12 +2891,39 @@ Conversion getConversionCost(SubJob *job, Expr *location, Type *correct, Expr *g
 			}
 		}
 
+
+		if ((correct->flavor == TypeFlavor::ARRAY || correct->flavor == TypeFlavor::STRING || correct->flavor == TypeFlavor::STRUCT) && given->type == &TYPE_STRUCT_LITERAL) {
+			if (correct->flags & TYPE_ARRAY_IS_FIXED)
+				return ConversionCost::CANNOT_CONVERT;
+
+			auto block = &static_cast<TypeStruct *>(correct)->members;
+
+			for (auto importer : block->importers) {
+				if (importer->import->flavor == ExprFlavor::STATIC_IF) {
+					goToSleep(job, &block->sleepingOnMe, "Struct literal sleeping on static if");
+					*yield = true;
+					return ConversionCost::CANNOT_CONVERT;
+				}
+			}
+
+			auto literal = static_cast<ExprStructLiteral *>(given);
+
+			if (literal->initializers.names) {
+				for (u32 i = 0; i < literal->initializers.count; i++) {
+					if (literal->initializers.names[i].length && !findDeclarationNoYield(block, literal->initializers.names[i]))
+						return ConversionCost::CANNOT_CONVERT;
+				}
+			}
+
+			return ConversionCost::EXACT_MATCH;
+		}
+
 		if (usingConversionIsValid(job, correct, given, yield))
 			return ConversionCost::CONVERSION;
 		else if (*yield)
 				return ConversionCost::CANNOT_CONVERT;
 
-		if (correct == TYPE_ANY)
+		if (correct == TYPE_ANY && given->type->flavor != TypeFlavor::AUTO_CAST)
 			return ConversionCost::ANY;
 
 		return ConversionCost::CANNOT_CONVERT;
@@ -2872,6 +2995,8 @@ bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char 
 	}
 #endif
 
+	bool hadNamed = false;
+
 	if (arguments->names || arguments->count != block->declarations.count || (functionLocation->flags & EXPR_FUNCTION_HAS_VARARGS)) {
 		Expr **sortedArguments = INFER_NEW_ARRAY(Expr *, block->declarations.count){};
 
@@ -2880,11 +3005,16 @@ bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char 
 
 			u32 argIndex = i;
 			if (arguments->names && arguments->names[i].length) {
+				hadNamed = true;
 				argument = findDeclarationNoYield(block, arguments->names[i]);
-			}
 
-			if (!argument) {
-				reportError(arguments->values[i], "Error: %.*s does not have a %s called %.*s", STRING_PRINTF(functionName), message, STRING_PRINTF(arguments->names[i]));
+				if (!argument) {
+					reportError(arguments->values[i], "Error: %.*s does not have a %s called %.*s", STRING_PRINTF(functionName), message, STRING_PRINTF(arguments->names[i]));
+					return false;
+				}
+			}
+			else if (hadNamed) {
+				reportError(arguments->values[i], "Error: Cannot have unnamed arguments after named arguments");
 				return false;
 			}
 
@@ -3609,6 +3739,14 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 					*yield = inferUnaryDotArrayLiteral(job, left->type, right);
 					return *yield;
 				}
+				else if (left->type == &TYPE_STRUCT_LITERAL && (right->type->flavor == TypeFlavor::ARRAY || right->type->flavor == TypeFlavor::STRING || right->type->flavor == TypeFlavor::STRUCT)) {
+					*yield = inferUnaryDotStructLiteral(job, right->type, left);
+					return *yield;
+				}
+				else if (right->type == &TYPE_STRUCT_LITERAL && (left->type->flavor == TypeFlavor::ARRAY || left->type->flavor == TypeFlavor::STRING || left->type->flavor == TypeFlavor::STRUCT)) {
+					*yield = inferUnaryDotStructLiteral(job, left->type, right);
+					return *yield;
+				}
 			}
 			else if (assignmentOp) {
 				if (right->type == &TYPE_UNSIGNED_INT_LITERAL && left->type->flavor == TypeFlavor::FLOAT) {
@@ -3695,6 +3833,10 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 				}
 				else if (right->type == &TYPE_ARRAY_LITERAL && left->type->flavor == TypeFlavor::ARRAY) {
 					*yield = inferUnaryDotArrayLiteral(job, left->type, right);
+					return *yield;
+				}
+				else if (right->type == &TYPE_STRUCT_LITERAL && (left->type->flavor == TypeFlavor::ARRAY || left->type->flavor == TypeFlavor::STRING || left->type->flavor == TypeFlavor::STRUCT)) {
+					*yield = inferUnaryDotStructLiteral(job, left->type, right);
 					return *yield;
 				}
 			}
@@ -4533,7 +4675,8 @@ bool inferFlattened(SubJob *job) {
 		case ExprFlavor::ARRAY_LITERAL: {
 			auto literal = static_cast<ExprArrayLiteral *>(expr);
 
-			if (literal->typeValue) {
+			if (!literal->type) {
+				assert(literal->typeValue);
 				if (literal->typeValue->type == &TYPE_AUTO_CAST) {
 					bool yield = false;
 					if (!tryAutoCast(job, &literal->typeValue, &TYPE_TYPE, &yield)) {
@@ -4584,6 +4727,7 @@ bool inferFlattened(SubJob *job) {
 				addSizeDependency(job->sizeDependencies, literal->type);
 			}
 
+			assert(literal->type != &TYPE_ARRAY_LITERAL);
 			assert(literal->type && literal->type->flavor == TypeFlavor::ARRAY);
 
 			auto array = static_cast<TypeArray *>(literal->type);
@@ -4600,6 +4744,208 @@ bool inferFlattened(SubJob *job) {
 			break;
 		}
 		case ExprFlavor::STRUCT_LITERAL: {
+			auto literal = static_cast<ExprStructLiteral *>(expr);
+
+			if (!literal->type) {
+				assert(literal->typeValue);
+				if (literal->typeValue->type == &TYPE_AUTO_CAST) {
+					bool yield = false;
+					if (!tryAutoCast(job, &literal->typeValue, &TYPE_TYPE, &yield)) {
+						if (!yield) {
+							reportError(literal->typeValue, "Error: Cannot convert %.*s to type",
+								STRING_PRINTF(static_cast<ExprBinaryOperator *>(literal->typeValue)->right->type->name));
+							return false;
+						}
+						else {
+							return true;
+						}
+					}
+				}
+
+				if (literal->typeValue->type->flavor != TypeFlavor::TYPE) {
+					reportError(literal->typeValue, "Error: Struct literal type must be a type");
+					return false;
+				}
+
+				if (literal->typeValue->flavor != ExprFlavor::TYPE_LITERAL) {
+					reportError(literal->typeValue, "Error: Struct literal type must be a constant");
+					return false;
+				}
+
+				auto type = static_cast<ExprLiteral *>(literal->typeValue)->typeValue;
+
+				if (type->flavor != TypeFlavor::ARRAY && type->flavor != TypeFlavor::STRING && type->flavor != TypeFlavor::STRUCT) {
+					reportError(literal->typeValue, "Error: Can only have a struct literal for a struct-like type, not a %.*s", STRING_PRINTF(type->name));
+					return false;
+				}
+
+				if (type->flags & TYPE_ARRAY_IS_FIXED) {
+					reportError(literal->typeValue, "Error: Cannot have a struct literal for a fixed array");
+					return false;
+				}
+
+				literal->type = type;
+				addSizeDependency(job->sizeDependencies, literal->type);
+			}
+
+			assert(literal->type != &TYPE_STRUCT_LITERAL);
+
+			auto block = &static_cast<TypeStruct *>(literal->type)->members;
+
+			
+
+			for (auto importer : block->importers) {
+				if (importer->import->flavor == ExprFlavor::STATIC_IF) {
+					goToSleep(job, &block->sleepingOnMe, "Struct literal sleeping on importer");
+					return true;
+				}
+			}
+
+			if (!literal->initializers.declarations) {
+				u32 memberCount = 0;
+
+				for (auto member : block->declarations) {
+					if (member->flags & (DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_CONSTANT))
+						continue;
+
+					memberCount++;
+				}
+
+				u32 wantedInitializerCount = (literal->type->flags & TYPE_STRUCT_IS_UNION ? 1 : memberCount);
+
+				if (literal->initializers.count > wantedInitializerCount) {
+					if ((literal->type->flags & TYPE_STRUCT_IS_UNION)) {
+						reportError(literal, "Error: Can only initialize one value of union '%.*s'", STRING_PRINTF(literal->type->name),
+							STRING_PRINTF(literal->type->name), memberCount, literal->initializers.count);
+					}
+					else {
+						reportError(literal, "Error: Too many initializer values for %.*s, (Wanted: %u, Given: %u)",
+							STRING_PRINTF(literal->type->name), memberCount, literal->initializers.count);
+					}
+					return false;
+				}
+
+				Array<Expr *> initializers;
+				Array<Declaration *> members;
+
+				Expr **sortedInitializers = nullptr;
+
+				bool needsExtraInitializers = literal->initializers.count != wantedInitializerCount &&
+					!(literal->flags & EXPR_STRUCT_LITERAL_UNSPECIFIED_MEMBERS_UNINITIALZIED);
+
+				if (literal->initializers.names || needsExtraInitializers) {
+					sortedInitializers = new Expr * [memberCount] {};
+				}
+
+				for (u32 i = 0; i < literal->initializers.count; i++) {
+					Declaration *member;
+					u32 memberIndex = i;
+
+					auto initializer = literal->initializers.values[i];
+
+					if (literal->initializers.names && literal->initializers.names[i].length) {
+						member = findDeclarationNoYield(block, literal->initializers.names[i]);
+
+						if (!member) {
+							reportError(initializer, "Error: %.*s does not have member %.*s", STRING_PRINTF(literal->type->name), literal->initializers.names[i]);
+							return false;
+						}
+
+						if (member->flags & DECLARATION_IS_CONSTANT) {
+							reportError(initializer, "Error: Cannot initialize a constant member");
+							return false;
+						}
+
+						// @Incomplete Allow this in cases where the 'using'ed variable wouldn't cause a dereference of a potentially uninitialized pointer
+						if (member->flags & DECLARATION_IMPORTED_BY_USING) {
+							reportError(initializer, "Error: Cannot initialize a member that is added by a using");
+							return false;
+						}
+
+						memberIndex = getDeclarationIndex(block, member, DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_CONSTANT);
+					}
+					else {
+						member = getDeclarationByIndex(block, i, DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_CONSTANT);
+					}
+
+					if (!(member->flags & DECLARATION_TYPE_IS_READY)) {
+						delete[] sortedInitializers;
+						members.free();
+
+						goToSleep(job, &member->sleepingOnMyType, "Struct initializer waiting on member type");
+						return true;
+					}
+
+					members.add(member);
+
+					if (sortedInitializers) {
+						if (sortedInitializers[memberIndex]) {
+							reportError(initializer, "Error: Cannot initialize %.*s multiple times", STRING_PRINTF(member->name));
+							reportError(sortedInitializers[memberIndex], "   ..: Here is the previous initialization");
+							return false;
+						}
+						else {
+							sortedInitializers[memberIndex] = initializer;
+						}
+					}
+				}
+
+				if (needsExtraInitializers) {
+					initializers.reserve(memberCount);
+
+					for (u32 i = 0; i < literal->initializers.count; i++) {
+						initializers.add(literal->initializers.values[i]);
+					}
+
+					for (u32 i = 0; i < memberCount; i++) {
+						if (sortedInitializers[i])
+							continue;
+
+						// This could be done in the
+						auto member = getDeclarationByIndex(block, i, DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_CONSTANT);
+
+						if (member->flags & DECLARATION_IS_UNINITIALIZED)
+							continue;
+
+						if (!(member->flags & DECLARATION_TYPE_IS_READY)) {
+							delete[] sortedInitializers;
+							initializers.free();
+							members.free();
+
+							goToSleep(job, &member->sleepingOnMyType, "Struct initializer waiting on member type");
+							return true;
+						}
+
+						if (!(member->flags & DECLARATION_VALUE_IS_READY)) {
+							delete[] sortedInitializers;
+							initializers.free();
+							members.free();
+
+							goToSleep(job, &member->sleepingOnMyValue, "Struct initializer waiting on member default");
+							return true;
+						}
+
+						initializers.add(member->initialValue);
+						members.add(member);
+					}
+
+					literal->initializers.count = initializers.count;
+					literal->initializers.values = initializers.storage;
+				}
+
+				literal->initializers.declarations = members.storage;
+
+				delete[] sortedInitializers;
+			}
+
+			for (u32 i = 0; i < literal->initializers.count; i++) {
+				bool yield;
+				if (!assignOp(job, literal->initializers.values[i], getDeclarationType(literal->initializers.declarations[i]), literal->initializers.values[i], &yield)) {
+					return yield;
+				}
+			}
+
+
 			break;
 		}
 		case ExprFlavor::RUN: {
@@ -7617,6 +7963,16 @@ bool findTypeInfoInExprRecurse(RunJob *job, ArraySet<Type *> *types, Expr *expr)
 
 		for (u64 i = 0; i < array->count; i++) {
 			if (!findTypeInfoInExprRecurse(job, types, array->values[i]))
+				return false;
+		}
+
+		return true;
+	}
+	case ExprFlavor::STRING_LITERAL: {
+		auto struct_ = static_cast<ExprStructLiteral *>(expr);
+
+		for (u64 i = 0; i < struct_->initializers.count; i++) {
+			if (!findTypeInfoInExprRecurse(job, types, struct_->initializers.values[i]))
 				return false;
 		}
 
