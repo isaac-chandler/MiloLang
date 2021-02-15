@@ -374,6 +374,7 @@ whitespace:
 	}
 
 	if (c == '\\') {
+		c = readCharacter(this, &endOfFile);
 		goto charEscape;
 	}
 	else if (c < ' ') {
@@ -430,6 +431,10 @@ charEscape:
 		goto charLiteralEnd;
 	}
 	else if (c == 'b') {
+		c = readCharacter(this, &endOfFile, true);
+		goto charLiteralEnd;
+	}
+	else if (c == 'a') {
 		c = readCharacter(this, &endOfFile, true);
 		goto charLiteralEnd;
 	}
@@ -528,6 +533,9 @@ stringEscape:
 		goto stringLiteral;
 	}
 	else if (c == 'b') {
+		goto stringLiteral;
+	}
+	else if (c == 'a') {
 		goto stringLiteral;
 	}
 	else if (c == 'f') {
@@ -1170,6 +1178,7 @@ charEscape:
 
 	if (c == '\\') {
 		token.unsignedValue = '\\';
+		c = readCharacter(this, &endOfFile);
 		goto charLiteralEnd;
 	}
 	else if (c == '\'') {
@@ -1219,6 +1228,11 @@ charEscape:
 	}
 	else if (c == 'b') {
 		token.unsignedValue = '\b';
+		c = readCharacter(this, &endOfFile);
+		goto charLiteralEnd;
+	}
+	else if (c == 'a') {
+		token.unsignedValue = '\a';
 		c = readCharacter(this, &endOfFile);
 		goto charLiteralEnd;
 	}
@@ -1393,6 +1407,10 @@ stringEscape:
 	}
 	else if (c == 'b') {
 		stringBuilder.add('\b');
+		goto stringLiteral;
+	}
+	else if (c == 'a') {
+		stringBuilder.add('\a');
 		goto stringLiteral;
 	}
 	else if (c == 'f') {
@@ -1880,7 +1898,6 @@ exponent:
 	if (digit >= 0) {
 		exponent *= 10;
 		exponent += static_cast<u64>(digit);
-
 
 		if (exponentIsNegative) {
 			if (exponent > 1074) {

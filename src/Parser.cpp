@@ -16,16 +16,15 @@
 #endif
 
 struct BinaryOperator {
-	TokenT tokens[5];
+	TokenT tokens[7];
 	bool rightAssociative;
 };
 
 static const BinaryOperator binaryOpPrecedences[] = {
 	{{TokenT::LOGIC_OR, TokenT::LOGIC_AND}},
-	{{TokenT::EQUAL, TokenT::NOT_EQUAL}},
+	{{TokenT::EQUAL, TokenT::NOT_EQUAL, TOKEN('>'), TokenT::LESS_EQUAL, TOKEN('<'), TokenT::GREATER_EQUAL}},
 	{{TOKEN('|'), TOKEN('^'), TOKEN('&')}},
 	{{TokenT::SHIFT_LEFT, TokenT::SHIFT_RIGHT}},
-	{{TOKEN('>'), TokenT::LESS_EQUAL, TOKEN('<'), TokenT::GREATER_EQUAL}},
 	{{TOKEN('+'), TOKEN('-')}},
 	{{TOKEN('*'), TOKEN('/'), TOKEN('%')}},
 };
@@ -1627,52 +1626,52 @@ bool parseStructLiteral(LexerFile *lexer, ExprStructLiteral *literal) {
 	Array<Expr *> initializers;
 	Array<String> names;
 
-	do {
-		String name = { nullptr, 0u };
+	if (lexer->token.type != TOKEN('}')) {
+		do {
+			String name = { nullptr, 0u };
 
-		TokenT peek;
-		lexer->peekTokenTypes(1, &peek);
+			TokenT peek;
+			lexer->peekTokenTypes(1, &peek);
 
-		if (lexer->token.type == TokenT::IDENTIFIER && peek == TOKEN('=')) {
-			name = lexer->token.text;
+			if (lexer->token.type == TokenT::IDENTIFIER && peek == TOKEN('=')) {
+				name = lexer->token.text;
 
-			lexer->advance();
+				lexer->advance();
 
-			assert(lexer->token.type == TOKEN('='));
+				assert(lexer->token.type == TOKEN('='));
 
-			lexer->advance();
-		}
-		else if (expectAndConsume(lexer, TokenT::DOUBLE_DASH)) {
-			literal->flags |= EXPR_STRUCT_LITERAL_UNSPECIFIED_MEMBERS_UNINITIALZIED;
+				lexer->advance();
+			}
+			else if (expectAndConsume(lexer, TokenT::DOUBLE_DASH)) {
+				literal->flags |= EXPR_STRUCT_LITERAL_UNSPECIFIED_MEMBERS_UNINITIALZIED;
 
-			lexer->advance();
-
-			if (lexer->token.type == TOKEN(',')) {
-				reportError(&lexer->token, "Error: Cannot specify more intializers after marking the literal uninitialized");
+				if (lexer->token.type == TOKEN(',')) {
+					reportError(&lexer->token, "Error: Cannot specify more intializers after marking the literal uninitialized");
+					return false;
+				}
+				break;
+			}
+			else if (names.count) {
+				reportError(&lexer->token, "Error: Cannot have unnamed initializers after named intializers");
 				return false;
 			}
-			break;
-		}
-		else if (names.count) {
-			reportError(&lexer->token, "Error: Cannot have unnamed initializers after named intializers");
-			return false;
-		}
 
-		Expr *argument = parseExpr(lexer);
+			Expr *argument = parseExpr(lexer);
 
-		if (!argument)
-			return false;
+			if (!argument)
+				return false;
 
-		initializers.add(argument);
+			initializers.add(argument);
 
-		if (name.length) {
-			for (u64 i = names.count + 1; i < initializers.count; i++) {
-				names.add("");
+			if (name.length) {
+				for (u64 i = names.count + 1; i < initializers.count; i++) {
+					names.add("");
+				}
+
+				names.add(name);
 			}
-
-			names.add(name);
-		}
-	} while (expectAndConsume(lexer, ','));
+		} while (expectAndConsume(lexer, ','));
+	}
 
 	if (!expectAndConsume(lexer, '}')) {
 		reportExpectedError(&lexer->token, "Error: Expected , or } in struct literal");

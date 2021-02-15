@@ -1,3 +1,5 @@
+#import "Standard"
+
 read_line :: (s: string) -> (line: string, remaining: string) {
 	remaining := s
 	line := s
@@ -16,22 +18,26 @@ read_line :: (s: string) -> (line: string, remaining: string) {
 	return line, remaining
 }
 
-// Read a charcter from a UTF-8 string
-read_character :: (s: string) -> (character: u32, remaining: string) {	ONE_BYTE           :: 0b0000_0000
-	ONE_BYTE_MASK      :: 0b1000_0000
+Utf8_Constants :: struct {
+	ONE_BYTE:           u8: 0b0000_0000
+	ONE_BYTE_MASK:      u8: 0b1000_0000
 	
-	TWO_BYTE           :: 0b1100_0000
-	TWO_BYTE_MASK      :: 0b1110_0000
+	TWO_BYTE:           u8: 0b1100_0000
+	TWO_BYTE_MASK:      u8: 0b1110_0000
 	
-	THREE_BYTE         :: 0b1110_0000
-	THREE_BYTE_MASK    :: 0b1111_0000
+	THREE_BYTE:         u8: 0b1110_0000
+	THREE_BYTE_MASK:    u8: 0b1111_0000
 	
-	FOUR_BYTE          :: 0b1111_0000
-	FOUR_BYTE_MASK     :: 0b1111_1000
+	FOUR_BYTE:          u8: 0b1111_0000
+	FOUR_BYTE_MASK:     u8: 0b1111_1000
 	
-	TRAILING_BYTE      :: 0b1000_0000
-	TRAILING_BYTE_MASK :: 0b1100_0000
-	
+	TRAILING_BYTE:      u8: 0b1000_0000
+	TRAILING_BYTE_MASK: u8: 0b1100_0000	
+}
+
+// Read a charcter from a UTF-8 string as a UTF codepoint, returns cast(u32)-1 on failure
+read_character :: (s: string) -> (character: u32, remaining: string) {
+	using Utf8_Constants
 
 	if !s return cast() -1, s
 	
@@ -120,4 +126,28 @@ split_at_first :: (s: string, c: u8) -> (before: string, after: string) {
 	}
 	
 	return before, after
+}
+
+// Appends a Unicode codepoint to a dynamic array representing a unicode string, the passed codepoint must be in the range of 
+// values representable in UTF8 (0 <= codepoint <= 0x1F_FFFF)
+append :: (string_buffer: *[..]u8, codepoint: u32) {
+	using Utf8_Constants
+
+	if codepoint < 128 {
+		array_add(string_buffer, cast() codepoint)
+	} else if codepoint < 1 << 11 {
+		array_add(string_buffer, cast() (codepoint >> 6                       ) | TWO_BYTE)
+		array_add(string_buffer, cast() (codepoint       & ~TRAILING_BYTE_MASK) | TRAILING_BYTE)
+	} else if codepoint < 1 << 16 {
+		array_add(string_buffer, cast() (codepoint >> 12                      ) | THREE_BYTE)
+		array_add(string_buffer, cast() (codepoint >> 6  & ~TRAILING_BYTE_MASK) | TRAILING_BYTE)
+		array_add(string_buffer, cast() (codepoint       & ~TRAILING_BYTE_MASK) | TRAILING_BYTE)
+	} else if codepoint < 1 << 21 {
+		array_add(string_buffer, cast() (codepoint >> 18                      ) | FOUR_BYTE)
+		array_add(string_buffer, cast() (codepoint >> 12 & ~TRAILING_BYTE_MASK) | TRAILING_BYTE)
+		array_add(string_buffer, cast() (codepoint >> 6  & ~TRAILING_BYTE_MASK) | TRAILING_BYTE)
+		array_add(string_buffer, cast() (codepoint       & ~TRAILING_BYTE_MASK) | TRAILING_BYTE)
+	} else {
+		assert(false)
+	}
 }

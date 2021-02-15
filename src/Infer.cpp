@@ -1853,35 +1853,6 @@ bool evaluateConstantBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 	return true;
 }
 
-bool isLiteral(Expr *expr);
-
-bool arrayIsLiteral(ExprArrayLiteral *array) {
-	for (u64 i = 0; i < array->count; i++)
-		if (!isLiteral(array->values[i]))
-			return false;
-
-	return true;
-}
-
-bool structIsLiteral(ExprStructLiteral *struct_) {
-	for (u64 i = 0; i < struct_->initializers.count; i++)
-		if (!isLiteral(struct_->initializers.values[i]))
-			return false;
-
-	return true;
-}
-
-bool isLiteral(Expr *expr) {
-	return expr->flavor == ExprFlavor::INT_LITERAL ||
-		expr->flavor == ExprFlavor::FLOAT_LITERAL ||
-		expr->flavor == ExprFlavor::TYPE_LITERAL ||
-		expr->flavor == ExprFlavor::STRING_LITERAL ||
-		expr->flavor == ExprFlavor::FUNCTION ||
-		expr->flavor == ExprFlavor::IMPORT ||
-		(expr->flavor == ExprFlavor::ARRAY_LITERAL && arrayIsLiteral(static_cast<ExprArrayLiteral *>(expr))) ||
-		(expr->flavor == ExprFlavor::STRING_LITERAL && structIsLiteral(static_cast<ExprStructLiteral *>(expr)));
-}
-
 bool defaultValueIsZero(SubJob *job, Type *type, bool *yield) {
 	*yield = false;
 
@@ -7585,7 +7556,7 @@ bool checkGuaranteedReturn(Expr *expr) {
 			if (!case_.condition)
 				hasElse = true;
 
-			if (!checkGuaranteedReturn(case_.block) && !(case_.fallsThrough && checkGuaranteedReturn(switch_->cases[i + 1].block))) {
+			if (!checkGuaranteedReturn(case_.block) && !(case_.fallsThrough && i + 1 != switch_->cases.count)) {
 				return false;
 			}
 		}

@@ -318,6 +318,10 @@ int main(int argc, char *argv[]) {
 			firstBuildArgument = i + 1;
 			break;
 		}
+		else if (argv[i][0] == '-') {
+			reportError("Option %s not recognized", argv[i]);
+			return 1;
+		}
 		else {
 			if (input) {
 				reportError("Error: Cannot more than one input file");
@@ -328,7 +332,7 @@ int main(int argc, char *argv[]) {
 		}
 	}
 
-	buildArguments.count = argc - firstBuildArgument;
+	buildArguments.count = argc - static_cast<u64>(firstBuildArgument);
 
 	buildArguments.data = new MiloString[buildArguments.count];
 
@@ -342,29 +346,61 @@ int main(int argc, char *argv[]) {
 		reportError("Usage: %s <file>", argv[0]);
 	}
 
-	char *inputFile = input;
-	char *lastSlash = nullptr;
-	char *lastDot = nullptr;
+	char pathToInputFile[1024];
+	char *filePart;
+	if (GetFullPathNameA(input, sizeof(pathToInputFile) / sizeof(pathToInputFile[0]), pathToInputFile, &filePart) && filePart) {
+		input = filePart;
 
-	while (char c = *inputFile) {
-		if (c == '\\' || c == '/')
-			lastSlash = inputFile;
-		else if (c == '.')
-			lastDot = inputFile;
+		if (filePart > pathToInputFile) {
+			filePart[-1] = 0;
+			SetCurrentDirectoryA(pathToInputFile);
+		}
 
-		inputFile++;
-	}
+		auto inputFileName = filePart;
 
+		char *lastDot = nullptr;
 
-	if (lastDot > lastSlash) {
-		buildOptions.output_name.count = lastDot - input;
+		while (char c = *inputFileName) {
+			if (c == '.') {
+				lastDot = inputFileName;
+			}
+
+			inputFileName++;
+		}
+
+		if (lastDot) {
+			buildOptions.output_name.count = lastDot - input;
+		}
+		else {
+			buildOptions.output_name.count = inputFileName - input;
+		}
 	}
 	else {
-		buildOptions.output_name.count = inputFile - input;
+		char *inputFile = input;
+		char *lastSlash = nullptr;
+		char *lastDot   = nullptr;
+
+		while (char c = *inputFile) {
+			if (c == '\\' || c == '/')
+				lastSlash = inputFile;
+			else if (c == '.')
+				lastDot = inputFile;
+
+			inputFile++;
+		}
+
+
+		if (lastDot > lastSlash) {
+			buildOptions.output_name.count = lastDot - input;
+		}
+		else {
+			buildOptions.output_name.count = inputFile - input;
+		}
 	}
 
 	buildOptions.output_name.data = new u8[buildOptions.output_name.count];
 	memcpy(buildOptions.output_name.data, input, buildOptions.output_name.count);
+	
 
 	auto start = high_resolution_clock::now();
 
@@ -402,14 +438,18 @@ int main(int argc, char *argv[]) {
 		if (printDiagnostics) {
 			u64 totalQueued = totalDeclarations + totalFunctions + totalSizes + totalImporters + totalRuns;
 			reportInfo("Total queued: %llu", totalQueued);
-			reportInfo("  %llu declarations (%llu skipped, %llu type infers, %llu value infers)", 
+			reportInfo("  %-5llu declarations (%-5llu skipped,       %-5llu type infers, %-5llu value infers)", 
 				totalDeclarations, totalDeclarations - totalInferredDeclarations, totalInferDeclarationTypes, totalInferDeclarationValues);
-			reportInfo("  %llu functions (%llu header infers, %llu body infers)", totalFunctions, totalInferFunctionHeaders, totalInferFunctionBodies);
-			reportInfo("  %llu types (%llu struct sizes, %llu enum sizes, %llu array sizes)", totalSizes, totalInferStructSizes, totalInferEnumSizes, totalInferArraySizes);
-			reportInfo("  %llu importers (%llu infers)", totalImporters, totalInferImporters);
-			reportInfo("  %llu runs (%llu infers)", totalRuns, totalInferRuns);
+			reportInfo("  %-5llu functions    (%-5llu header infers, %-5llu body infers)", totalFunctions, totalInferFunctionHeaders, totalInferFunctionBodies);
+			reportInfo("  %-5llu types        (%-5llu struct sizes,  %-5llu enum sizes,  %-5llu array sizes)", totalSizes, totalInferStructSizes, totalInferEnumSizes, totalInferArraySizes);
+			reportInfo("  %-5llu importers    (%-5llu infers)", totalImporters, totalInferImporters);
+			reportInfo("  %-5llu runs         (%-5llu infers)", totalRuns, totalInferRuns);
 			reportInfo("Total infers: %llu, %.1f infers/queued, %.1f iterations/infer", totalFlattenedInfers, static_cast<float>(totalFlattenedInfers) / totalQueued, static_cast<float>(totalInferIterations) / totalFlattenedInfers);
 			reportInfo("Total types: %llu, %.1f sizes/type", totalSizes, static_cast<float>(totalInferStructSizes + totalInferEnumSizes + totalInferArraySizes) / totalSizes);
+
+			if (buildOptions.backend == Build_Options::Backend::X64) {
+				reportInfo("IR Instructions: %u", irInstructions);
+			}
 		}
 	}
 
@@ -664,8 +704,8 @@ int main(int argc, char *argv[]) {
 			}
 
 
-			linkerCommand = mprintf(L"\"%s\" %s -nodefaultlib -out:%s /debug %S %s \"-libpath:%s\" \"-libpath:%s\" \"-libpath:%s\" -incremental:no -nologo -natvis:milo.natvis",
-				linkerPath, utf8ToWString(objectFileName), utf8ToWString(outputFileName), libBuffer, linkLibC ? L"__milo_cmain.obj" : L"__milo_chkstk.obj -entry:main", windowsLibPath, crtLibPath, ucrtLibPath);
+			linkerCommand = mprintf(L"\"%s\" %S -nodefaultlib -out:%.*S /debug %S %S%s \"-libpath:%s\" \"-libpath:%s\" \"-libpath:%s\" -incremental:no -nologo -natvis:%Smilo.natvis",
+				linkerPath, objectFileName, STRING_PRINTF(outputFileName), libBuffer, modulePath, linkLibC ? L"__milo_cmain.obj" : L"__milo_chkstk.obj -entry:main", windowsLibPath, crtLibPath, ucrtLibPath, modulePath);
 		}
 
 

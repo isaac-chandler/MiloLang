@@ -1,0 +1,62 @@
+#import "File"
+#import "Standard"
+#import "String"
+
+#load "lexer.milo"
+
+Location :: struct {
+	file_index: u32
+	l0:         u32
+	c0:         u32
+	l1:         u32
+	c1:         u32
+}
+
+filenames: [..]string
+
+had_error := false
+
+report_error :: (using location: Location, format: string, values: any..) {
+	had_error = true
+	
+	print("%:%,% ", filenames[file_index], l0, c0)
+	print(format, ..values)
+	print("\n")
+}
+
+main :: () {
+	array_add(*filenames, "test.milo")
+	
+	file, success := read_entire_file(filenames[0])
+	
+	lexer := Lexer.{ data = cast,bit(string) file }
+	
+	if !success {
+		print("Failed to open file\n")
+		return
+	}
+	
+	while true {
+		token, success := advance_token(*lexer)
+		
+		if !success
+			break
+		
+		if token.kind == .END_OF_FILE
+			break;
+		
+		if cast() token.kind < 128 {
+			print("%\n", string.{cast() *token.kind, 1})
+		} else if token.kind == .INT_LITERAL {
+			print("%\n", token.integer)
+		} else if token.kind == .FLOAT_LITERAL {
+			print("%\n", token.float)
+		} else if token.kind == .STRING_LITERAL {
+			print("\"%\"\n", token.text)
+		} else if token.kind == .IDENTIFIER {
+			print("%\n", token.text)
+		} else {		
+			print("%\n", token.kind)
+		}
+	}
+}

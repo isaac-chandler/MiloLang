@@ -1835,8 +1835,6 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 			auto value = generateIrAndLoadIfStoredByPointer(state, literal->initializers.values[i]);
 
 			state->builder.CreateStore(value, createGEPForStruct(state, store, static_cast<TypeStruct *>(literal->type), literal->initializers.declarations[i]));
-
-			bool visualStudioSucks = true;
 		}
 
 		return store;

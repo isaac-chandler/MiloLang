@@ -494,6 +494,36 @@ inline Type *getTypeForExpr(Expr *expr) {
 }
 
 
+
+inline bool isLiteral(Expr *expr);
+
+inline bool arrayIsLiteral(ExprArrayLiteral *array) {
+	for (u64 i = 0; i < array->count; i++)
+		if (!isLiteral(array->values[i]))
+			return false;
+
+	return true;
+}
+
+inline bool structIsLiteral(ExprStructLiteral *struct_) {
+	for (u64 i = 0; i < struct_->initializers.count; i++)
+		if (!isLiteral(struct_->initializers.values[i]))
+			return false;
+
+	return true;
+}
+
+inline bool isLiteral(Expr *expr) {
+	return expr->flavor == ExprFlavor::INT_LITERAL ||
+		expr->flavor == ExprFlavor::FLOAT_LITERAL ||
+		expr->flavor == ExprFlavor::TYPE_LITERAL ||
+		expr->flavor == ExprFlavor::STRING_LITERAL ||
+		expr->flavor == ExprFlavor::FUNCTION ||
+		expr->flavor == ExprFlavor::IMPORT ||
+		(expr->flavor == ExprFlavor::ARRAY_LITERAL && arrayIsLiteral(static_cast<ExprArrayLiteral *>(expr))) ||
+		(expr->flavor == ExprFlavor::STRUCT_LITERAL && structIsLiteral(static_cast<ExprStructLiteral *>(expr)));
+}
+
 inline Type *getDeclarationType(Declaration *declaration) {
 	assert(declaration->flags & DECLARATION_TYPE_IS_READY);
 	assert(declaration->type);

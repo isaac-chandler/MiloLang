@@ -2242,6 +2242,8 @@ bool generateIrForFunction(ExprFunction *function) {
 		return false;
 	}
 
+	irInstructions += function->state.ir.count;
+
 	//addLineMarker(&function->state, function->body->start.fileUid, function->body->end);
 
 	function->flags |= EXPR_FUNCTION_RUN_READY;

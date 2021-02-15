@@ -90,8 +90,6 @@ copy_string :: (s: string) -> #must string {
 	return result
 }
 
-args: []string
-
 memory_copy :: (dst: *void, src: *void, count: u64) {
 	a : *u8 = dst
 	b: *u8 = src
