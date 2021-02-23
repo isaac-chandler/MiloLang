@@ -25,6 +25,18 @@ report_error :: (using location: Location, format: string, values: any..) {
 }
 
 main :: () {
+	arguments := get_command_line_arguments()
+	
+	if arguments.count == 0 {
+		print("Failed to read command line arguments\n")
+		return
+	}
+	
+	if arguments.count != 2 {
+		print("Usage: % <filename>\n", arguments[0])
+		return
+	}
+
 	array_add(*filenames, "test.milo")
 	
 	file, success := read_entire_file(filenames[0])

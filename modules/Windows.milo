@@ -230,6 +230,8 @@ MSG :: struct {
 		
 		WM_KEYDOWN :: 0x100
 		WM_KEYUP   :: 0x101
+		
+		WM_LBUTTONDOWN :: 0x0201
 	}
 }
 
@@ -329,8 +331,16 @@ using Peek_Message_Options :: enum u32 {
 	PM_NOYIELD  :: 2
 }
 
-GetCommandLineA :: () -> *u8 #external "kernel32"
+GetCommandLineW :: () -> *u16 #external "kernel32"
+CommandLineToArgvW :: (lpCmdLine: *u16, pNumArgs: *s32) -> **u16 #external "shell32"
 
+LocalFree :: (hMem: HANDLE) -> HANDLE #external "kernel32"
+
+using Code_Page :: enum u32 {
+	CP_UTF8 :: 65001
+}
+
+SetConsoleOutputCP :: (wCodePageID: Code_Page) -> s32 #external "kernel32"
 
 SwapBuffers :: (Arg1: HDC) -> s32 #external "gdi32"
 

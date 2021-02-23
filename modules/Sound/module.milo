@@ -1,0 +1,52 @@
+#import "Standard"
+
+#if TARGET_WINDOWS {
+	#load "Windows.milo"
+} else {
+	unsupported_os: u64 = "error"
+}
+
+SAMPLE_RATE :: 48000
+
+Sample :: struct {
+	left: s16
+	right: s16
+}
+
+latency_sample_count: u32
+sample_buffer: []Sample
+
+initialize_sound :: (hwnd: HWND, buffer_length: f32 = 2.0, latency: f32 = 1.0 / 15) -> #must bool {
+	set_latency(latency)
+	buffer_sample_count = cast(u32) (buffer_length * SAMPLE_RATE)
+	
+	sample_buffer.data = allocate(buffer_sample_count * size_of(Sample))
+	
+	if !initialize_sound_os(hwnd) return false
+	
+	return true
+}
+
+set_latency :: (latency: f32) {
+	latency_sample_count = cast(u32) (latency * SAMPLE_RATE)
+}
+
+fill_samples :: (samples: []Sample, sample_index: u32) {
+	sinf :: (val: f32) -> f32 
+		#external "c"
+		
+	HZ :: 440
+	PERIOD :: SAMPLE_RATE / HZ
+	
+	for * samples {
+		t := cast(f32) (sample_index + it_index) * (HZ*6.2831853071/SAMPLE_RATE) 
+		
+		sample_value := cast(s16) (100 * sinf(t))
+	
+		it.left = sample_value
+		it.right = sample_value
+	}	
+}
+
+#scope_module
+buffer_sample_count: u32

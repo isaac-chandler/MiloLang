@@ -147,10 +147,6 @@ create_wide_string :: (s: string) -> #must *u16 {
 	return result
 }
 
-get_command_line_arguments :: () -> []string {
-	return args
-}
-
 DIGIT_TABLE :: "0123456789abcdefghijklmnopqrstuvwxyz"
 
 u64_to_string :: (value: u64, base: u64 = 10) -> #must string {

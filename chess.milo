@@ -1,0 +1,537 @@
+#import "Windows"
+#import "GL"
+#import "Standard"
+#import "Random"
+#import "Bitmap"
+#import "File"
+
+should_quit: bool
+
+window_width: s32 = 800
+window_height: s32 = 800
+
+load_image :: (filename: string) -> u32 {	
+	file, success := read_entire_file(filename)
+	defer deallocate(file.data)
+	
+	if !success {
+		print("Failed to load image ")
+		print(filename)
+		print("\n")
+		return 0
+	}
+	
+	if file.count < size_of(Bmp_File_Header) + size_of(Bmp_Dib_Header) {
+		return 0
+	}
+
+	file_header := cast(*Bmp_File_Header)file.data
+	dib_header := cast(*Bmp_Dib_Header)(file.data + size_of(Bmp_File_Header))
+	
+	if file_header.header != Bmp_File_Header.EXPECTED_HEADER || file_header.file_size != file.count {
+		return 0
+	}
+	
+	if dib_header.bits_per_pixel != 32 || 
+		dib_header.compression_method != .BI_BITFIELDS || 
+		dib_header.alpha_mask != 0xFF000000 ||
+		dib_header.red_mask   != 0x00FF0000 ||
+		dib_header.green_mask != 0x0000FF00 ||
+		dib_header.blue_mask  != 0x000000FF ||
+		dib_header.height <= 0 {
+		
+		return 0
+	}
+	
+	texture: u32
+	
+	glGenTextures(1, *texture)
+	glBindTexture(GL_TEXTURE_2D, texture)
+	
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP)
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP)
+	
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, dib_header.width, dib_header.height, 0, GL_BGRA_EXT, GL_UNSIGNED_BYTE, file.data + file_header.offset_to_image)
+	
+	return texture
+}
+
+Rectangle :: struct {
+	x: f32
+	y: f32
+	width: f32
+	height: f32
+}
+
+rng: Random_State
+
+textured_quad :: (using rectangle: *Rectangle) {
+	glTexCoord2f(0, 0)
+	glVertex2f(x, y)
+	
+	
+	glTexCoord2f(1, 0)
+	glVertex2f(x + width, y)
+	
+	
+	glTexCoord2f(1, 1)
+	glVertex2f(x + width, y + height)
+	
+	
+	glTexCoord2f(0, 1)
+	glVertex2f(x, y + height)
+}
+
+
+gl_context: HGLRC
+
+pack :: (x: s8, y: s8) -> s8 {
+	return y * 8 + x
+}
+
+unpack :: (postion: s8) -> (s8, s8) {
+	return postion & 7, postion >> 3
+}
+
+Move :: struct {
+	start: s8
+	end: s8
+}
+
+using Piece :: enum_flags u8 {
+	ROOK
+	BISHOP
+	KING
+	KNIGHT	PAWN
+	
+	BLACK
+	
+	QUEEN :: ROOK | BISHOP
+}
+
+global_board := State.{board = .[
+	ROOK|BLACK, KNIGHT|BLACK, BISHOP|BLACK, KING|BLACK, QUEEN|BLACK, BISHOP|BLACK, KNIGHT|BLACK, ROOK|BLACK, 
+	PAWN|BLACK, PAWN  |BLACK, PAWN  |BLACK, PAWN|BLACK, PAWN |BLACK, PAWN  |BLACK, PAWN  |BLACK, PAWN|BLACK, 
+	0,          0,            0,            0,          0,           0,            0,            0         , 
+	0,          0,            0,            0,          0,           0,            0,            0         , 
+	0,          0,            0,            0,          0,           0,            0,            0         , 
+	0,          0,            0,            0,          0,           0,            0,            0         , 
+	PAWN,       PAWN,         PAWN,         PAWN,       PAWN,        PAWN,         PAWN,         PAWN      , 
+	ROOK,       KNIGHT,       BISHOP,       KING,       QUEEN,       BISHOP,       KNIGHT,       ROOK      
+]}
+
+State :: struct {
+	Castle :: enum_flags u8 {
+		BLACK_NO_KINGSIDE
+		BLACK_NO_QUEENSIDE
+		WHITE_NO_KINGSIDE
+		WHITE_NO_QUEENSIDE
+	}
+
+	castle_state: Castle
+	en_passant_position: s8 = -1
+	board: [64]Piece
+}
+
+add_move_if_legal :: (using state: *State, moves: *[..]Move, start: s8, dx: s8, dy: s8, friendly_king_position: s8, must_capture := false) {
+	color := board[start] & BLACK
+
+	x, y := unpack(start)
+	
+	x += dx
+	y += dy
+	
+	if x < 0 || y < 0 || x >= 8 || y >= 8 {
+		return
+	}
+	
+	end := pack(x, y)
+	
+	if !board[end] {
+		if !must_capture {
+			array_add(moves, .{start, end})
+		}
+	}
+	else if (board[end] & BLACK) != color {
+		array_add(moves, .{start, end})
+	}
+}
+
+get_moves_for_piece :: (using state: *State, moves: *[..]Move, position: s8, friendly_king_position: s8) {
+	piece := board[position]
+	
+	color := piece & BLACK
+	piece_kind := piece & ~BLACK
+	
+	if piece == PAWN {
+		if position >= 8 && !board[position - 8] {
+			add_move_if_legal(state, moves, position, 0, -1, friendly_king_position)
+		}
+		
+		add_move_if_legal(state, moves, position, 1, -1, friendly_king_position, must_capture = true)
+		add_move_if_legal(state, moves, position, -1, -1, friendly_king_position, must_capture = true)
+		
+		if position >> 3 == 6 && !board[position - 16] {
+			add_move_if_legal(state, moves, position, 0, -2, friendly_king_position)
+		}
+		return
+	} else if piece == PAWN|BLACK {
+		if position < 56 && !board[position + 8] {
+			add_move_if_legal(state, moves, position, 0, 1, friendly_king_position)
+		}
+		
+		add_move_if_legal(state, moves, position, 1, 1, friendly_king_position, must_capture = true)
+		add_move_if_legal(state, moves, position, -1, 1, friendly_king_position, must_capture = true)
+		
+		if position >> 3 == 1 && !board[position + 16] {
+			add_move_if_legal(state, moves, position, 0, 2, friendly_king_position)
+		}
+		return
+	} else if piece_kind == KNIGHT {
+		add_move_if_legal(state, moves, position,  1,  2, friendly_king_position)
+		add_move_if_legal(state, moves, position, -1,  2, friendly_king_position)
+		add_move_if_legal(state, moves, position,  1, -2, friendly_king_position)
+		add_move_if_legal(state, moves, position, -1, -2, friendly_king_position)
+		add_move_if_legal(state, moves, position,  2,  1, friendly_king_position)
+		add_move_if_legal(state, moves, position, -2,  1, friendly_king_position)
+		add_move_if_legal(state, moves, position,  2, -1, friendly_king_position)
+		add_move_if_legal(state, moves, position, -2, -1, friendly_king_position)
+	}
+}
+
+selected_square: s8 = -1
+
+do_move :: (using state: *State, using move: Move) {
+	board[end] = board[start]
+	board[start] = 0
+}
+
+main :: () {
+	defer exit(0)
+
+	rand_seed: s64
+	
+	QueryPerformanceCounter(*rand_seed)
+
+	rng = create_random(cast(u64) rand_seed, GetTickCount())
+	
+	performance_counter_frequency: s64
+	
+	QueryPerformanceFrequency(*performance_counter_frequency)
+	
+	counter_scale := 1.0 / cast(f32) performance_counter_frequency
+	
+	startup_info: STARTUPINFOW
+	
+	GetStartupInfoW(*startup_info)
+	
+	show_command : = SW_SHOWDEFAULT
+	if startup_info.dwFlags & STARTF_USESHOWWINDOW {
+		show_command = cast() startup_info.wShowWindow
+	}
+	
+	instance := GetModuleHandleW(null)
+	
+	class_name := create_wide_string("Window Class")
+	window_class: WNDCLASSW
+	
+	window_class.style = CS_OWNDC | CS_VREDRAW | CS_HREDRAW
+	window_class.lpfnWndProc = (hwnd: HWND, uMsg: MSG.Message, wParam: u64, lParam: s64) -> s64 #c_call {	
+		if uMsg == {
+			case WM_CLOSE
+
+				DestroyWindow(hwnd)
+				
+				print("Closing\n")
+				
+			case WM_DESTROY
+				glFinish()
+				
+				dc := wglGetCurrentDC()
+				
+				if !wglDeleteContext(gl_context)
+					print("Failed to delete gl context\n")
+					
+				if !ReleaseDC(hwnd, dc)
+					print("Failed to delete device context\n")
+				
+				PostQuitMessage(0)
+				
+			case WM_PAINT
+				paint: PAINTSTRUCT = --
+				
+				dc := BeginPaint(hwnd, *paint)
+				EndPaint(hwnd, *paint)
+				
+			case WM_SIZE
+				client_rect: RECT = --
+				
+				GetClientRect(hwnd, *client_rect)
+				
+				window_width = client_rect.right - client_rect.left
+				window_height = client_rect.bottom - client_rect.top
+				
+				print("%x%\n", window_width, window_height)
+				print("----------\n")
+				
+			case WM_LBUTTONDOWN
+				
+				x := cast(s16) lParam
+				y := cast(s16) (lParam >> 16)
+				
+				selected_square = pack(cast() (x / 100), cast() (y / 100))
+				
+			else
+				return DefWindowProcW(hwnd, uMsg, wParam, lParam)
+		}
+		
+		return 0
+	}
+	window_class.hInstance = instance
+	window_class.lpszClassName = class_name
+	window_class.hbrBackground = GetStockObject(BLACK_BRUSH)
+	
+	
+	if RegisterClassW(*window_class) == 0 {
+		print("Failed to register window class\n")
+		print("%\n", GetLastError())
+		return
+	}
+	
+	
+	window_style := WS_OVERLAPPEDWINDOW ^ WS_THICKFRAME ^ WS_MAXIMIZEBOX
+	
+	window_rect: RECT
+	
+	window_rect.top = 0
+	window_rect.bottom = window_height
+	window_rect.left = 0
+	window_rect.right = window_width
+	
+	AdjustWindowRectEx(*window_rect, window_style ^ WS_OVERLAPPED | WS_TILED)
+	
+	window_handle := CreateWindowExW(lpClassName = class_name, lpWindowName = create_wide_string("Test Window"), dwStyle = window_style, 
+		nWidth = window_rect.right - window_rect.left, nHeight = window_rect.bottom - window_rect.top, hInstance = instance)
+	
+	if window_handle == null {
+		print("Failed to open window\n")
+		print("%\n", GetLastError())
+		return
+	}
+	
+	device_context := GetDC(window_handle)
+	
+	desired_format: PIXELFORMATDESCRIPTOR
+	desired_format.dwFlags = PFD_SUPPORT_OPENGL | PFD_DRAW_TO_WINDOW | PFD_DOUBLEBUFFER
+	desired_format.cColorBits = 32
+	desired_format.cAlphaBits = 8
+	desired_format.iLayerType = PFD_MAIN_PLANE
+	
+	found_format := ChoosePixelFormat(device_context, *desired_format)
+	
+	if found_format == 0 {
+		print("Could not find a pixel format\n")
+		return
+	}
+	
+	used_format: PIXELFORMATDESCRIPTOR
+	
+	if !SetPixelFormat(device_context, found_format, *used_format) {
+		print("Failed to set pixel format")
+		return
+	}
+	
+	
+	gl_context = wglCreateContext(device_context)
+	
+	if !gl_context {
+		print("Failed to create gl context")
+		return
+	}
+	
+	wglMakeCurrent(device_context, gl_context)
+	
+	
+	load_gl_extensions()
+	wglSwapIntervalEXT(0)
+	
+	glEnable(GL_TEXTURE_2D)
+	texture := load_image("chess.bmp")
+	
+	glEnable(GL_BLEND)
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+	
+	ShowWindow(window_handle, show_command)
+	
+	last_time: s64
+
+	
+	QueryPerformanceCounter(*last_time)
+	
+	player_color: Piece = 0
+	
+	moves: [..]Move
+	
+	while !should_quit {
+		current_time: s64
+		
+		QueryPerformanceCounter(*current_time)
+		
+		delta := cast() (current_time - last_time) * counter_scale
+		
+		message: MSG = --
+		
+		while PeekMessageW(*message, null) {
+			if (message.message == WM_QUIT) {
+				should_quit = true
+				break
+			}
+			
+			TranslateMessage(*message)
+			DispatchMessageW(*message)
+		}
+	
+		glViewport(0, 0, window_width, window_height)
+		glClear(GL_COLOR_BUFFER_BIT)
+		
+		glMatrixMode(GL_PROJECTION)
+		glLoadIdentity()
+		glOrtho(0, 8, 8, 0, -5, 5)
+		glMatrixMode(GL_MODELVIEW)
+		glLoadIdentity()
+		
+		
+		if selected_square != -1 {
+			for moves {
+				if it.end == selected_square {
+					do_move(*global_board, it)
+					moves.count = 0
+					selected_square = -1
+					player_color ^= BLACK
+					break
+				}
+			} or {
+				piece := global_board.board[selected_square]
+				
+				if !piece || piece & BLACK != player_color {
+					selected_square = -1
+				} else {
+					moves.count = 0
+					get_moves_for_piece(*global_board, *moves, selected_square, 0)
+				}
+			}
+		}
+		
+		glDisable(GL_TEXTURE_2D)
+		glBegin(GL_QUADS)
+		
+		for y: 8 {
+			for x: 8 {
+				if (x + y) & 1
+					glColor3f(0.4, 0.3, 0.2)
+				else
+					glColor3f(0.8, 0.7, 0.5)
+				
+				
+				glVertex2f(cast(f32) x, cast(f32) y)
+				glVertex2f(cast(f32) x + 1, cast(f32) y)
+				glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
+				glVertex2f(cast(f32) x, cast(f32) y + 1)
+			}		}
+		
+		if selected_square != -1 {
+			x, y := unpack(selected_square)
+		
+			glColor4f(1, 1, 0, 0.4)
+			
+			glVertex2f(cast(f32) x, cast(f32) y)
+			glVertex2f(cast(f32) x + 1, cast(f32) y)
+			glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
+			glVertex2f(cast(f32) x, cast(f32) y + 1)
+		}
+		
+		glColor4f(0, 1, 0, 0.4)
+		
+		for moves {
+			x, y := unpack(it.end)
+			
+			glVertex2f(cast(f32) x, cast(f32) y)
+			glVertex2f(cast(f32) x + 1, cast(f32) y)
+			glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
+			glVertex2f(cast(f32) x, cast(f32) y + 1)
+		}
+		
+		glEnd()
+		
+		glColor3f(1, 1, 1)
+		
+		glEnable(GL_TEXTURE_2D)
+		glBegin(GL_QUADS)
+		
+		for piece: global_board.board {
+			if piece {
+				x, y := unpack(cast() it_index)
+				y_coord: f32 = 0.5
+				x_coord: f32 = 0
+				
+				if piece & BLACK {
+					y_coord = 0
+				}
+				
+				if piece & QUEEN == QUEEN {
+					x_coord = 1.0 / 6.0
+				} else if piece & BISHOP {
+					x_coord = 2.0 / 6.0
+				} else if piece & KNIGHT {
+					x_coord = 3.0 / 6.0
+				} else if piece & ROOK {
+					x_coord = 4.0 / 6.0
+				} else if piece & PAWN {
+					x_coord = 5.0 / 6.0
+				}
+				
+				
+				glTexCoord2f(x_coord, y_coord + 0.5)
+				glVertex2f(cast(f32) x, cast(f32) y)
+				
+				glTexCoord2f(x_coord + 1.0 / 6.0, y_coord + 0.5)
+				glVertex2f(cast(f32) x + 1, cast(f32) y)
+				
+				glTexCoord2f(x_coord + 1.0 / 6.0, y_coord)
+				glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
+				
+				glTexCoord2f(x_coord, y_coord)
+				glVertex2f(cast(f32) x, cast(f32) y + 1)
+			}
+		}
+		
+		glEnd()
+		
+		
+		if (delta > 1.0 / 55) {
+			print("%\n", delta)
+		}
+		
+		SwapBuffers(device_context)
+		
+		last_time = current_time
+	}
+}
+
+#import "Compiler"
+
+setup_build :: () {
+	arguments := get_build_arguments()
+	
+	if arguments {
+		options: Build_Options
+		options.backend = .LLVM
+		options.llvm_options = arguments
+		
+		set_build_options(options)
+	}
+}
+
+#run setup_build()

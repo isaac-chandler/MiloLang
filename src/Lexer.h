@@ -12,7 +12,7 @@
 
 #define LITERAL_IS_BINARY_EXPONENT 0x8
 
-#define LITERAL_IS_CHARACTER 0x8
+#define LITERAL_IS_CHARACTER 0x10
 
 #define TOKEN(x) (static_cast<TokenT>(x))
 
