@@ -1263,6 +1263,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 			state->builder.SetInsertPoint(rightBlock);
 
 			auto right = generateLlvmIr(state, binary->right);
+			rightBlock = state->builder.GetInsertBlock();
 			state->builder.CreateBr(exitBlock);
 
 			
