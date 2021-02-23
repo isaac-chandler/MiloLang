@@ -104,7 +104,8 @@ using Piece :: enum_flags u8 {
 	ROOK
 	BISHOP
 	KING
-	KNIGHT	PAWN
+	KNIGHT
+	PAWN
 	
 	BLACK
 	
@@ -135,9 +136,33 @@ State :: struct {
 	board: [64]Piece
 }
 
-add_move_if_legal :: (using state: *State, moves: *[..]Move, start: s8, dx: s8, dy: s8, friendly_king_position: s8, must_capture := false) {
+add_move_if_legal :: (using state: *State, moves: *[..]Move, start: s8, end: s8, friendly_king_position: s8, must_capture: bool) {
 	color := board[start] & BLACK
+	
+	check_checks :: (using state: *State, start: s8, end: s8, friendly_king_position: s8) -> bool {
+		old_start := board[start]
+		old_end := board[end]
+		
+		board[end] = board[start]
+		board[start] = 0
+		defer board[start] = old_start
+		defer board[end] = old_end
+		
+		return look_for_checks(state, friendly_king_position, old_start & BLACK)
+	}
 
+	if !board[end] {
+		if !must_capture && !check_checks(state, start, end, friendly_king_position) {
+		
+			array_add(moves, .{start, end})
+		}
+	}
+	else if board[end] & BLACK != color && !check_checks(state, start, end, friendly_king_position) {	
+		array_add(moves, .{start, end})
+	}
+}
+
+add_move_if_legal :: (using state: *State, moves: *[..]Move, start: s8, dx: s8, dy: s8, friendly_king_position: s8, must_capture: bool) {
 	x, y := unpack(start)
 	
 	x += dx
@@ -149,17 +174,133 @@ add_move_if_legal :: (using state: *State, moves: *[..]Move, start: s8, dx: s8, 
 	
 	end := pack(x, y)
 	
-	if !board[end] {
-		if !must_capture {
-			array_add(moves, .{start, end})
-		}
-	}
-	else if (board[end] & BLACK) != color {
-		array_add(moves, .{start, end})
-	}
+	add_move_if_legal(state, moves, start, end, friendly_king_position, must_capture)
 }
 
-get_moves_for_piece :: (using state: *State, moves: *[..]Move, position: s8, friendly_king_position: s8) {
+precompute_legal_knights_moves :: () -> [64][8]s8 {
+	result: [64][8]s8
+	
+	for * result {
+		moves := [..]s8.{data = it.data, count = 0, capacity = 8}
+		
+		x, y := unpack(cast() it_index)
+		
+		if x >= 1 && y >= 2  array_add(*moves, pack(x - 1, y - 2))
+		if x >= 1 && y <= 5  array_add(*moves, pack(x - 1, y + 2))
+		if x >= 2 && y >= 1  array_add(*moves, pack(x - 2, y - 1))
+		if x >= 2 && y <= 6  array_add(*moves, pack(x - 2, y + 1))
+		if x <= 6 && y >= 2  array_add(*moves, pack(x + 1, y - 2))
+		if x <= 6 && y <= 5  array_add(*moves, pack(x + 1, y + 2))
+		if x <= 5 && y >= 1  array_add(*moves, pack(x + 2, y - 1))
+		if x <= 5 && y <= 6  array_add(*moves, pack(x + 2, y + 1))
+		
+		if moves.count != 8 {
+			array_add(*moves, -1)
+		}
+	}
+	
+	return result
+}
+
+Bishop_Move_Distance :: struct {
+	up_left:    s8
+	up_right:   s8
+	down_left:  s8
+	down_right: s8
+}
+
+precompute_bishop_move_distances :: () -> [64]Bishop_Move_Distance {
+	result: [64]Bishop_Move_Distance
+	
+	for * result {
+		x, y := unpack(cast() it_index)
+		
+		it.up_left    = min(    x,     y)
+		it.up_right   = min(7 - x,     y)
+		it.down_left  = min(    x, 7 - y)
+		it.down_right = min(7 - x, 7 - y)
+	}
+	
+	return result
+}
+
+legal_knights_moves :: #run precompute_legal_knights_moves()
+legal_bishop_moves :: #run precompute_bishop_move_distances()
+
+look_for_checks :: (using state: *State, king_position: s8, king_color: Piece) -> bool {
+	
+	enemy_color := king_color ^ BLACK
+
+	for legal_knights_moves[king_position] {
+		if it == -1  break;
+		
+		if board[it] == KNIGHT | enemy_color {
+			return true
+		}
+	}
+	
+	
+	look_for_line_checks :: (using state: *State, king_position: s8, king_color: Piece, num_moves: s8, delta: s8, piece_kind: Piece) -> bool {
+		move := king_position
+		
+		for num_moves {
+			move += delta
+			
+			piece := board[move]
+			
+			if piece {
+				if piece & BLACK == king_color {
+					return false
+				} else {
+					return piece & piece_kind || (piece == KING | king_color ^ BLACK && it == 0)
+				}
+			}
+		}
+		
+		return false
+	}
+	
+	if look_for_line_checks(state, king_position, king_color, legal_bishop_moves[king_position].up_left,   -9, BISHOP)  return true
+	if look_for_line_checks(state, king_position, king_color, legal_bishop_moves[king_position].up_right,  -7, BISHOP)  return true
+	if look_for_line_checks(state, king_position, king_color, legal_bishop_moves[king_position].down_left,  7, BISHOP)  return true
+	if look_for_line_checks(state, king_position, king_color, legal_bishop_moves[king_position].down_right, 9, BISHOP)  return true
+	
+	x, y := unpack(king_position)
+	
+	if look_for_line_checks(state, king_position, king_color,     y, -8, ROOK)  return true
+	if look_for_line_checks(state, king_position, king_color,     x, -1, ROOK)  return true
+	if look_for_line_checks(state, king_position, king_color, 7 - y,  8, ROOK)  return true
+	if look_for_line_checks(state, king_position, king_color, 7 - x,  1, ROOK)  return true
+	
+	if king_color == BLACK && y < 7 {
+		if x >= 1 && board[king_position + 7] == PAWN
+			return true
+		
+		if x < 7 && board[king_position + 9] == PAWN
+			return true
+	}
+	
+	if king_color != BLACK && y >= 1 {
+		if x >= 1 && board[king_position - 9] == PAWN|BLACK
+			return true
+		
+		if x < 7 && board[king_position - 7] == PAWN|BLACK
+			return true
+	}
+	
+	return false
+}
+
+look_for_king :: (using state: *State, color: Piece) -> s8 {
+	for board {
+		if it == color | KING
+			return cast() it_index
+	}
+	
+	return -1
+}
+
+get_moves_for_piece :: (using state: *State, moves: *[..]Move, position: s8, friendly_king_position: s8, must_capture := false) {
 	piece := board[position]
 	
 	color := piece & BLACK
@@ -167,37 +308,72 @@ get_moves_for_piece :: (using state: *State, moves: *[..]Move, position: s8, fri
 	
 	if piece == PAWN {
 		if position >= 8 && !board[position - 8] {
-			add_move_if_legal(state, moves, position, 0, -1, friendly_king_position)
+			add_move_if_legal(state, moves, position, 0, -1, friendly_king_position, must_capture)
 		}
 		
 		add_move_if_legal(state, moves, position, 1, -1, friendly_king_position, must_capture = true)
 		add_move_if_legal(state, moves, position, -1, -1, friendly_king_position, must_capture = true)
 		
 		if position >> 3 == 6 && !board[position - 16] {
-			add_move_if_legal(state, moves, position, 0, -2, friendly_king_position)
+			add_move_if_legal(state, moves, position, 0, -2, friendly_king_position, must_capture)
 		}
 		return
 	} else if piece == PAWN|BLACK {
 		if position < 56 && !board[position + 8] {
-			add_move_if_legal(state, moves, position, 0, 1, friendly_king_position)
+			add_move_if_legal(state, moves, position, 0, 1, friendly_king_position, must_capture)
 		}
 		
 		add_move_if_legal(state, moves, position, 1, 1, friendly_king_position, must_capture = true)
 		add_move_if_legal(state, moves, position, -1, 1, friendly_king_position, must_capture = true)
 		
 		if position >> 3 == 1 && !board[position + 16] {
-			add_move_if_legal(state, moves, position, 0, 2, friendly_king_position)
+			add_move_if_legal(state, moves, position, 0, 2, friendly_king_position, must_capture)
 		}
 		return
 	} else if piece_kind == KNIGHT {
-		add_move_if_legal(state, moves, position,  1,  2, friendly_king_position)
-		add_move_if_legal(state, moves, position, -1,  2, friendly_king_position)
-		add_move_if_legal(state, moves, position,  1, -2, friendly_king_position)
-		add_move_if_legal(state, moves, position, -1, -2, friendly_king_position)
-		add_move_if_legal(state, moves, position,  2,  1, friendly_king_position)
-		add_move_if_legal(state, moves, position, -2,  1, friendly_king_position)
-		add_move_if_legal(state, moves, position,  2, -1, friendly_king_position)
-		add_move_if_legal(state, moves, position, -2, -1, friendly_king_position)
+		for legal_knights_moves[position] {
+			if it == -1  break;
+			
+			add_move_if_legal(state, moves, position, it, friendly_king_position, must_capture)
+		}
+	} else if piece_kind == KING {
+		add_move_if_legal(state, moves, position, -1, -1, friendly_king_position - 9, must_capture)
+		add_move_if_legal(state, moves, position,  0, -1, friendly_king_position - 8, must_capture)
+		add_move_if_legal(state, moves, position,  1, -1, friendly_king_position - 7, must_capture)
+		add_move_if_legal(state, moves, position, -1,  0, friendly_king_position - 1, must_capture)
+		add_move_if_legal(state, moves, position,  1,  0, friendly_king_position + 1, must_capture)
+		add_move_if_legal(state, moves, position, -1,  1, friendly_king_position + 7, must_capture)
+		add_move_if_legal(state, moves, position,  0,  1, friendly_king_position + 8, must_capture)
+		add_move_if_legal(state, moves, position,  1,  1, friendly_king_position + 9, must_capture)
+	}
+	
+		
+	add_line_moves :: (using state: *State, moves: *[..]Move, position: s8, friendly_king_position: s8, num_moves: s8, delta: s8, must_capture: bool) {
+		move := position
+		
+		for num_moves {
+			move += delta
+			
+			add_move_if_legal(state, moves, position, move, friendly_king_position, must_capture)
+			
+			if board[move]
+				break
+		}
+	}
+	
+	if piece_kind & BISHOP {
+		add_line_moves(state, moves, position, friendly_king_position, legal_bishop_moves[position].up_left,   -9, must_capture)
+		add_line_moves(state, moves, position, friendly_king_position, legal_bishop_moves[position].up_right,  -7, must_capture)
+		add_line_moves(state, moves, position, friendly_king_position, legal_bishop_moves[position].down_left,  7, must_capture)
+		add_line_moves(state, moves, position, friendly_king_position, legal_bishop_moves[position].down_right, 9, must_capture)
+	}
+	if piece_kind & ROOK {
+		x, y := unpack(position)
+	
+		add_line_moves(state, moves, position, friendly_king_position,     y, -8, must_capture)
+		add_line_moves(state, moves, position, friendly_king_position,     x, -1, must_capture)
+		add_line_moves(state, moves, position, friendly_king_position, 7 - y,  8, must_capture)
+		add_line_moves(state, moves, position, friendly_king_position, 7 - x,  1, must_capture)
 	}
 }
 
@@ -281,7 +457,12 @@ main :: () {
 				x := cast(s16) lParam
 				y := cast(s16) (lParam >> 16)
 				
-				selected_square = pack(cast() (x / 100), cast() (y / 100))
+				square := pack(cast() (x / 100), cast() (y / 100))
+				
+				if square == selected_square
+					selected_square = -1
+				else
+					selected_square = square
 				
 			else
 				return DefWindowProcW(hwnd, uMsg, wParam, lParam)
@@ -407,7 +588,6 @@ main :: () {
 			for moves {
 				if it.end == selected_square {
 					do_move(*global_board, it)
-					moves.count = 0
 					selected_square = -1
 					player_color ^= BLACK
 					break
@@ -419,9 +599,13 @@ main :: () {
 					selected_square = -1
 				} else {
 					moves.count = 0
-					get_moves_for_piece(*global_board, *moves, selected_square, 0)
+					get_moves_for_piece(*global_board, *moves, selected_square, look_for_king(*global_board, player_color))
 				}
 			}
+		}
+		
+		if selected_square == -1 {
+			moves.count = 0
 		}
 		
 		glDisable(GL_TEXTURE_2D)
@@ -439,7 +623,8 @@ main :: () {
 				glVertex2f(cast(f32) x + 1, cast(f32) y)
 				glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
 				glVertex2f(cast(f32) x, cast(f32) y + 1)
-			}		}
+			}
+		}
 		
 		if selected_square != -1 {
 			x, y := unpack(selected_square)

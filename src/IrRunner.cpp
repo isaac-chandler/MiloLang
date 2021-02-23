@@ -1019,11 +1019,7 @@ Expr *getReturnValueFromBytes(CodeLocation start, EndLocation end, Type *type, v
 		literal->end = end;
 		literal->unsignedValue = value;
 
-		literal->type = &TYPE_UNSIGNED_INT_LITERAL;
-
-		if ((type->flags & TYPE_INTEGER_IS_SIGNED) && literal->signedValue < 0) {
-				literal->type = &TYPE_SIGNED_INT_LITERAL;
-		}
+		literal->type = type;
 
 		return literal;
 	}
@@ -1053,8 +1049,35 @@ Expr *getReturnValueFromBytes(CodeLocation start, EndLocation end, Type *type, v
 
 	}
 	case TypeFlavor::STRUCT: {
-		assert(false); // @Incomplete
-		return nullptr;
+		assert(!(type->flags & TYPE_STRUCT_IS_UNION)); // @Incomplete
+
+		auto struct_ = static_cast<TypeStruct *>(type);
+
+		auto literal = new ExprStructLiteral;
+		literal->flavor = ExprFlavor::STRUCT_LITERAL;
+		literal->start = start;
+		literal->end = end;
+		literal->type = type;
+		literal->typeValue = nullptr;
+		literal->initializers.count = 0;
+		literal->initializers.names = nullptr;
+
+		Array<Expr *> values;
+		Array<Declaration *> declarations;
+
+		for (auto member : struct_->members.declarations) {
+			if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING))
+				continue;
+
+			literal->initializers.count++;
+			values.add(getReturnValueFromBytes(start, end, getDeclarationType(member), static_cast<char *>(bytes) + member->physicalStorage));
+			declarations.add(member);
+		}
+
+		literal->initializers.values = values.storage;
+		literal->initializers.declarations = declarations.storage;
+
+		return literal;
 	}
 	case TypeFlavor::TYPE: {
 		auto value = *static_cast<Type **>(bytes);

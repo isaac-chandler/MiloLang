@@ -61,14 +61,14 @@ Vector4 :: union {
 }
 
 
-min :: (a: u64, b: u64) -> #must u64 {
+min :: (a: $T, b: T) -> #must T {
 	if a < b 
 		return a
 	else 
 		return b
 }
 
-max :: (a: u64, b: u64) -> #must u64 {
+max :: (a: $T, b: T) -> #must T {
 	if a > b 
 		return a
 	else 

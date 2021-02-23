@@ -3094,7 +3094,7 @@ bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char 
 
 				if (argument->initialValue) {
 					if (argument->flags & DECLARATION_VALUE_IS_READY) {
-						assert(isLiteral(argument->initialValue));
+						assert((argument->flags & DECLARATION_IS_RUN_RETURN) || isLiteral(argument->initialValue));
 
 						sortedArguments[i] = argument->initialValue;
 						addSizeDependency(job->sizeDependencies, argument->initialValue->type);
@@ -4655,6 +4655,7 @@ bool inferFlattened(SubJob *job) {
 					else if (identifier->structAccess->type->flavor == TypeFlavor::POINTER &&
 						(static_cast<TypePointer *>(identifier->structAccess->type)->pointerTo->flags & TYPE_ARRAY_IS_FIXED)) {
 						auto cast = INFER_NEW(ExprBinaryOperator);
+						cast->flavor = ExprFlavor::BINARY_OPERATOR;
 						cast->op = TokenT::CAST;
 						cast->start = identifier->start;
 						cast->end = identifier->end;
@@ -8329,6 +8330,42 @@ bool ensureTypeInfos(RunJob *job, Expr *expr) {
 	return true;
 }
 
+bool returnTypeIsLegalForRun(Expr *run, Type *type) {
+	if (type->flags & TYPE_FUNCTION_IS_C_CALL) {
+		reportError(run, "Error: #run statements cannot return a #c_call function");
+		return false;
+	}
+	else if (type->flags & TYPE_ARRAY_IS_DYNAMIC) {
+		reportError(run, "Error: #run statements cannot return a dynamic array");
+		return false;
+	}
+	else if (type->flavor == TypeFlavor::ARRAY && !(type->flags & TYPE_ARRAY_IS_FIXED)) {
+		reportError(run, "Error: #run statements cannot return an array view @Incomplete");
+		return false;
+	}
+	else if (type->flags & TYPE_STRUCT_IS_UNION) {
+		reportError(run, "Error: #run statements cannot return a union");
+		return false;
+	}
+	else if (type->flavor == TypeFlavor::ARRAY) {
+		return returnTypeIsLegalForRun(run, static_cast<TypeArray *>(type)->arrayOf);
+	}
+	else if (type->flavor == TypeFlavor::STRUCT) {
+		auto struct_ = static_cast<TypeStruct *>(type);
+
+		for (auto declaration : struct_->members.declarations) {
+			if (declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING))
+				continue;
+
+			if (!returnTypeIsLegalForRun(run, getDeclarationType(declaration))) {
+				reportError(declaration, "   ..: Which is part of struct %.*s", STRING_PRINTF(type->name));
+				return false;
+			}
+		}
+	}
+	
+	return true;
+}
 
 bool inferRun(SubJob *subJob) {
 	PROFILE_FUNC();
@@ -8344,30 +8381,6 @@ bool inferRun(SubJob *subJob) {
 	assert(!(function->flags & TYPE_FUNCTION_IS_C_CALL));
 
 	auto returnType = function->returnTypes[0];
-
-	// @Incomplete: Warn if #run returns a pointer? Maybe issuse a warning for any non-null pointer
-	while (true) {
-
-		if (returnType->flags & EXPR_FUNCTION_IS_C_CALL) {
-			reportError(run, "Error: #run statements cannot return a #c_call function");
-			return false;
-		}
-		else if (returnType->flags & EXPR_ARRAY_IS_DYNAMIC) {
-			reportError(run, "Error: #run statements cannot return a dynamic array");
-			return false;
-		}
-		else if (returnType->flavor == TypeFlavor::STRUCT) {
-			reportError(run, "Error: #run statements cannot return a struct @Incomplete");
-			return false;
-		}
-
-		if (returnType->flavor == TypeFlavor::ARRAY) {
-			returnType = static_cast<TypeArray *>(returnType)->arrayOf;
-		}
-		else {
-			break;
-		}
-	}
 
 	while (job->checkingFunctions.count) {
 		auto &index = job->checkingFunctionIndices[job->checkingFunctionIndices.count - 1];
@@ -8479,6 +8492,9 @@ bool inferRun(SubJob *subJob) {
 			}
 		}
 	}
+
+	if (!returnTypeIsLegalForRun(run, function->returnTypes[0]))
+		return false;
 
 	VMState state;
 	initVMState(&state); // @Speed, keep this around for multiple run directives
