@@ -6233,7 +6233,7 @@ bool inferFlattened(SubJob *job) {
 			}
 			case TokenT::TYPE_OF: {
 				trySolidifyNumericLiteralToDefault(value);
-
+				
 				if (value->type == &TYPE_AUTO_CAST) {
 					reportError(value, "Error: Cannot take the type of an auto casted value");
 					return false;
@@ -6258,6 +6258,12 @@ bool inferFlattened(SubJob *job) {
 				auto literal = inferMakeTypeLiteral(unary->start, unary->end, value->type);
 
 				*exprPointer = literal;
+
+				break;
+			}
+			case TokenT::IS_CONSTANT: {
+
+				*exprPointer = createIntLiteral(unary->start, unary->end, &TYPE_BOOL, isLiteral(value));
 
 				break;
 			}

@@ -129,7 +129,7 @@ State :: struct {
 		BLACK_NO_QUEENSIDE
 		WHITE_NO_KINGSIDE
 		WHITE_NO_QUEENSIDE
-	}
+	}	
 
 	castle_state: Castle
 	en_passant_position: s8 = -1
@@ -410,7 +410,7 @@ main :: () {
 	
 	instance := GetModuleHandleW(null)
 	
-	class_name := create_wide_string("Window Class")
+	class_name := to_windows_string("Window Class")
 	window_class: WNDCLASSW
 	
 	window_class.style = CS_OWNDC | CS_VREDRAW | CS_HREDRAW
@@ -493,7 +493,7 @@ main :: () {
 	
 	AdjustWindowRectEx(*window_rect, window_style ^ WS_OVERLAPPED | WS_TILED)
 	
-	window_handle := CreateWindowExW(lpClassName = class_name, lpWindowName = create_wide_string("Test Window"), dwStyle = window_style, 
+	window_handle := CreateWindowExW(lpClassName = class_name, lpWindowName = to_windows_string("Test Window"), dwStyle = window_style, 
 		nWidth = window_rect.right - window_rect.left, nHeight = window_rect.bottom - window_rect.top, hInstance = instance)
 	
 	if window_handle == null {

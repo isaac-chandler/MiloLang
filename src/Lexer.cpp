@@ -61,7 +61,8 @@ static const Keyword keywords[] = {
 	{"#import", TokenT::IMPORT}, 
 	{"#scope_module", TokenT::SCOPE_MODULE}, 
 	{"#scope_export", TokenT::SCOPE_EXPORT}, 
-	{"#c_varargs", TokenT::C_VARARGS}
+	{"#c_varargs", TokenT::C_VARARGS}, 
+	{"is_constant", TokenT::IS_CONSTANT}
 };
 
 void BigInt::zero() {

@@ -4,6 +4,81 @@
 	unsupported_os: u64 = "error"
 }
 
+Concatenator :: struct {
+	Bucket :: struct {
+		data: [4096]u8
+		offset: u64
+		next: *Bucket
+	}
+	
+	current_bucket: *Bucket
+	first_bucket: Bucket
+}
+
+reset :: (using c: *Concatenator) {
+	first_bucket.offset = 0
+}
+
+free_concatenator :: (using c: *Concatenator) {
+	bucket := first_bucket.next
+	
+	while bucket {
+		next := bucket.next
+		
+		deallocate(bucket)
+		
+		bucket = next
+	}
+}
+
+next_bucket :: (using c: *Concatenator) {
+	using current_bucket
+	
+	if !current_bucket
+		current_bucket = *first_bucket
+	
+	if offset == data.count {
+		if !next {
+			next = allocate(size_of(Bucket))
+			next.next = null
+		}
+		
+		current_bucket = next
+		offset = 0
+	}
+}
+
+append :: (using c: *Concatenator, character: u8) {
+	using current_bucket
+
+	next_bucket(c)
+	
+	data[offset] = character
+	offset += 1
+}
+
+append :: (using c: *Concatenator, s: string) {
+	using current_bucket
+	
+	remaining := s
+	
+	while true {
+		next_bucket(c)
+		
+		capacity := data.count - offset
+		if remaining.count > capacity {
+			memory_copy(*data[offset], remaining.data, capacity)
+			remaining = remaining[capacity..]
+			offset = data.count
+		} else {
+			memory_copy(*data[offset], remaining.data, remaining.count)
+			offset += remaining.count
+		
+			break
+		}
+	}
+}
+
 Vector2 :: union {
 	using _xy: struct {
 		x: f32
@@ -11,10 +86,6 @@ Vector2 :: union {
 	}
 	
 	elements: [2]f32 = --
-	
-	print_me :: (using vector: *Vector2) {
-		print("(%, %)", x, y)
-	}
 }
 
 
@@ -28,10 +99,6 @@ Vector3 :: union {
 	elements: [3]f32 = --
 	
 	xy: Vector2 = --
-	
-	print_me :: (using vector: *Vector3) {
-		print("(%, %, %)", x, y, z)
-	}
 }
 
 Vector4 :: union {
@@ -53,11 +120,6 @@ Vector4 :: union {
 	
 	xyz: Vector3 = --
 	xy: Vector2 = --
-	
-	
-	print_me :: (using vector: *Vector4) {
-		print("(%, %, %, %)", x, y, z, w)
-	}
 }
 
 
@@ -73,11 +135,6 @@ max :: (a: $T, b: T) -> #must T {
 		return a
 	else 
 		return b
-}
-
-
-print_string :: (s: string) {
-	print_buffer(cast() s)
 }
 
 copy_string :: (s: string) -> #must string {
@@ -111,7 +168,7 @@ array_add :: (array: *[..]$T, value: T) {
 }
 
 panic :: () {
-	print_string("Panic")
+	print("Panic")
 	
 	exit(1)
 }
@@ -134,18 +191,6 @@ array_remove_by_pointer :: (array: *[]$T, value: *T) {
 	}	
 }
 
-// @Incomplete, only converts ascii to UTF16, not UTF8
-create_wide_string :: (s: string) -> #must *u16 {
-	result: *u16 = allocate((s.count + 1) * size_of(u16))
-	
-	for s {
-		result[it_index] = it
-	}
-	
-	result[s.count] = 0
-	
-	return result
-}
 
 DIGIT_TABLE :: "0123456789abcdefghijklmnopqrstuvwxyz"
 
@@ -184,12 +229,35 @@ u64_to_string :: (value: u64, base: u64 = 10) -> #must string {
 	return result
 }
 
-print_u64 :: (num: u64, base: u64 = 10) {
-	s := u64_to_string(num, base)
-	defer deallocate(s.data)
+print_u64 :: (c: *Concatenator, value: u64, base: u64 = 10) {
+	if base > 36 || base < 2
+		return;
+
+	if value == 0 {
+		append(c, '0')
+		return
+	}
 	
-	print_string(s)
+	result: [64]u8
+	count: u64
+	
+	remaining := value
+	
+	while remaining {
+		result[count] = DIGIT_TABLE[remaining % base]
+		remaining /= base
+		
+		count += 1
+	}
+	
+	while count {
+		count -= 1
+		
+		append(c, result[count])
+	}
 }
+
+
 
 read_integer :: (value: any) -> u64 {
 	mask: u64
@@ -216,16 +284,6 @@ read_integer :: (value: any) -> u64 {
 	return number
 }
 
-// @Unicode
-print_char :: (value: u8) {
-	char := value
-	buffer: []u8
-	buffer.count = 1
-	buffer.data = *char
-	
-	print_buffer(buffer)
-}
-
 
 is_infinite :: (x: f64) -> bool {
 	bits := cast,bit(u64) x
@@ -241,90 +299,100 @@ is_nan :: (x: f64) -> bool {
 
 
 // This function is terrible
-print_f64 :: (num: f64, decimal_places: u64 = 6, base: u64 = 10) {
+print_f64 :: (c: *Concatenator, num: f64, decimal_places: u64 = 6, base: u64 = 10) {
 	value := num
 
 	if is_nan(value) {
-		print_string("NaN")
+		append(c, "NaN")
 		return
 	}
 
 	if (value < 0) {
-		print_string("-")
+		append(c, '-')
 		value = -value
 	}
 	
 	if is_infinite(value) {
-		print_string("infinity")
+		append(c, "infinity")
 		return
 	}
 	
 	if num >= 1p64 {
-		print_string("unhandled case in print_f64")
+		append(c, "unhandled case in print_f64")
 		return
 	}
 	
 	integer_part := cast(u64) value
 	
-	print_u64(integer_part, base)
+	print_u64(c, integer_part, base)
 	
-	print_string(".")
+	append(c, '.')
 	
 	for decimal_places {
 		value *= cast(f64) base
 		
 		integer := cast(u64) value
 		
-		print_char(DIGIT_TABLE[integer % base])
+		append(c, DIGIT_TABLE[integer % base])
 	}
 }
 
+std_out_concatenator: Concatenator
+
 print :: (format: string, vals: any..) {
+	reset(*std_out_concatenator)
+
+	print_to_buffer(*std_out_concatenator, format, ..vals)
+	
+	print_buffer(*std_out_concatenator)
+}
+
+print_to_buffer :: (c: *Concatenator, format: string, vals: any..) {
 	index: u64
 	
-	for format
+	for format {
 		if it == '%' {
 			if index > vals.count
 				return;
-			print_any(vals[index])
+			print_any(c, vals[index])
 			index += 1
 		} else {
-			print_char(it)
+			append(c, it)
 		}
-			
+	}
 }
 
 
-print_any :: (using val: any) {
+print_any :: (c: *Concatenator, using val: any) {
 	if !value_type
-		print_string("<Error no type info in print>")
+		append(c, "<Error no type info in print>")
 	else if value_type == type_info(void) 
-		print_string("void")
+		append(c, "void")
 	else if value_type == type_info(type) {
 	
-		print_string(type_info(cast() val).name)
+		append(c, type_info(cast() val).name)
 		
 	} else if value_type == type_info(bool) {
 		value := cast(bool) val
 	
 		if value
-			print_string("true")
+			append(c, "true")
 		else
-			print_string("false")
+			append(c, "false")
 		
 	} else if value_type == type_info(string) {
 	
-		print_string(cast() val)
+		append(c, cast(string) val)
 		
 	} else if value_type.tag == .INTEGER {		
 		value := read_integer(val)
 		
 		if (cast(*Type_Info_Integer) value_type).signed && (value & (1 << 63)) {
-			print_string("-")
+			append(c, '-')
 			value = -value
 		}
 		
-		print_u64(value)
+		print_u64(c, value)
 	} else if value_type.tag == .ENUM {
 		info := cast(*Type_Info_Enum) value_type
 		
@@ -340,53 +408,54 @@ print_any :: (using val: any) {
 				if value & it.value {
 					value &= ~it.value
 				
-					if !first print_string(" | ")
+					if !first append(c, " | ")
 					
 					if info.name {
 						if first
-							print_string(info.name)
+							append(c, info.name)
 							
-						print_string(".")
+						append(c, '.')
 					}
 					
 					first = false
 					
-					print_string(it.name)
+					append(c, it.name)
 				}
 			}
 			
-			print_invalid :: (value: u64) {
-				print_string("(INVALID enum_flags ")
-				print_u64(value, 16)
-				print_string(")")
+			print_invalid :: (c: *Concatenator, value: u64) {
+				append(c, "(INVALID enum_flags ")
+				print_u64(c, value, 16)
+				append(c, '.')
 			}
 			
 			if first {
 				if value {
 					if info.name {
-						print("%.", info.name)
+						append(c, info.name)
+						append(c, '.')
 					}
 					
-					print_invalid(value)
+					print_invalid(c, value)
 				} else
-					print_string("0")
+					append(c, '0')
 			} else if value {
-				print_string(" | ")
+				append(c, " | ")
 				
 				if info.name
-					print_string(".")
+					append(c, '.')
 				
-				print_invalid(value)
+				print_invalid(c, value)
 			}
 		} else {
 			for info.values {
 				if value == it.value {
 					if info.name {
-						print_string(info.name)
-						print_string(".")
+						append(c, info.name)
+						append(c, '.')
 					}
 				
-					print_string(it.name)
+					append(c, it.name)
 					break
 				}
 			} or {
@@ -394,14 +463,16 @@ print_any :: (using val: any) {
 				num.value_pointer = value_pointer
 				num.value_type = info.base_type
 				
-				print("(INVALID enum %)", num)
+				append(c, "(INVALID enum ")
+				print_u64(c, read_integer(num))
+				append(c, ')')
 			}
 		}
 		
 		
 	} else if value_type.tag == .POINTER || value_type.tag == .FUNCTION {
 	
-		print_u64(cast(u64) val, 16)
+		print_u64(c, cast(u64) val, 16)
 		
 	} else if value_type.tag == .ARRAY {
 	
@@ -415,58 +486,42 @@ print_any :: (using val: any) {
 			count = (cast([]u8) val).count
 		}
 		
-		print("[%]%", count, info.element_type.name)
+		append(c, '[')
+		print_u64(c, count)
+		append(c, ']')
+		append(c, info.element_type.name)
 		
 	} else if value_type.tag == .STRUCT {	
 		info := cast(*Type_Info_Struct) value_type
 		
+		append(c, "{ ")
+	
 		for info.members {
-			if it.name == "print_me" && it.member_type.tag == .FUNCTION {
-				func := cast(*Type_Info_Function) it.member_type
+			if !(it.flags & .CONSTANT) {
+				val: any = --
+				val.value_pointer = value_pointer + it.offset
+				val.value_type = it.member_type
 				
-				if func.arguments.count == 1 && func.arguments[0].tag == .POINTER && 
-					(cast(*Type_Info_Pointer) func.arguments[0]).value_type == cast() info && 
-					func.returns.count == 1 && func.returns[0] == type_info(void) {
-					f: (*void) -> void 
-					
-					if it.flags & .CONSTANT {
-						f = <<cast(*type_of(f)) it.initial_value
-					} else {
-						f = <<cast(*type_of(f)) (value_pointer + it.offset)
-					}
-					
-					f(value_pointer)
-					break
-				}
+				append(c, it.name)
+				append(c, " = ")
+				print_any(c, val)
+				append(c, ' ')
+				print("% = % ", it.name, val)
 			}
-		} or {
+		}
 		
-			print_string("{ ")
-		
-			for info.members {
-				if !(it.flags & .CONSTANT) {
-					val: any = --
-					val.value_pointer = value_pointer + it.offset
-					val.value_type = it.member_type
-					
-					print("% = % ", it.name, val)
-				}
-			}
-			
-			print_string("}")
-
-		}		
+		append(c, '}')
 	} else if value_type == type_info(f64) {
 	
-		print_f64(cast(f64) val)
+		print_f64(c, cast(f64) val)
 		
 	} else if value_type == type_info(f32) {
 	
-		print_f64(cast() cast(f32) val)
+		print_f64(c, cast() cast(f32) val)
 		
 	} else {
 	
-		print("Cannot print %", value_type.name)
-		
+		append(c, "Cannot print ")
+		append(c, value_type.name)		
 	}
 }

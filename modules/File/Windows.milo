@@ -4,7 +4,7 @@
 read_entire_file :: (file: string) -> (#must result: []u8, success := true) {
 	result: []u8
 	
-	filename := create_wide_string(file)
+	filename := to_windows_string(file)
 	
 	handle := CreateFileW(filename, GENERIC_READ, FILE_SHARE_READ, null, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN)
 	
@@ -56,7 +56,7 @@ read_entire_file :: (file: string) -> (#must result: []u8, success := true) {
 write_entire_file :: (file: string, data: []u8) -> bool {
 	write := data
 	
-	filename := create_wide_string(file)
+	filename := to_windows_string(file)
 	
 	handle := CreateFileW(filename, GENERIC_WRITE, 0, null, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN)
 	

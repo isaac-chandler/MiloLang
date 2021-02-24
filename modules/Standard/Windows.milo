@@ -26,32 +26,6 @@ exit :: (code: u32 = 0) {
 	ExitProcess(code)
 }
 
-convert_windows_string :: (windows_string: *u16) -> string {
-	result: [..]u8 // @Efficiency: Don't do this
-	
-	pointer := windows_string
-	
-	while <<pointer {
-		utf32: u32 = <<pointer
-		
-		if 0xD800 <= utf32 && utf32 < 0xDC00 {
-			high := (utf32 - 0xD800) << 10
-			
-			pointer += 1
-			
-			low: u32 = <<pointer - 0xDC00
-			
-			utf32 = high + low + 0x1_0000
-		}
-		
-		append(*result, utf32)
-		
-		pointer += 1
-	}
-	
-	return .{result.data, result.count}
-}
-
 // @Unicode
 print_buffer :: (buffer: []u8) {
 	if !std_out {
@@ -61,6 +35,22 @@ print_buffer :: (buffer: []u8) {
 	
 	bytes_written: u32
 	WriteFile(std_out, buffer.data, cast() buffer.count, *bytes_written)
+}
+
+print_buffer :: (c: *Concatenator) {
+	if !std_out {
+		std_out = GetStdHandle(STD_OUTPUT_HANDLE)
+		SetConsoleOutputCP(CP_UTF8)
+	}
+	
+	bucket := c.current_bucket
+	
+	while bucket {
+		bytes_written: u32
+		WriteFile(std_out, bucket.data.data, cast() bucket.offset, *bytes_written)
+		
+		bucket = bucket.next
+	}
 }
 
 get_command_line_arguments :: () -> []string {
@@ -75,10 +65,52 @@ get_command_line_arguments :: () -> []string {
 	args := []string.{allocate(size_of(string) * cast(u64) count), cast() count}
 	
 	for * args {
-		<<it = convert_windows_string(windows_args[it_index])
+		<<it = from_windows_string(windows_args[it_index])
 	}
 
 	return args
+}
+
+run_command_asyncs :: (command: string) -> bool {
+	startup: STARTUPINFOW
+	
+	info: PROCESS_INFORMATION = --
+	
+	windows_command := to_windows_string(command)
+	defer deallocate(windows_command)
+	
+	if !CreateProcessW(lpCommandLine = windows_command, lpStartupInfo = *startup, lpProcessInformation = *info)
+		return false
+	
+	CloseHandle(info.hThread)
+	CloseHandle(info.hProcess)
+	
+	return true
+}
+
+run_command :: (command: string) -> u32 {
+	startup: STARTUPINFOW
+	
+	info: PROCESS_INFORMATION = --
+	
+	windows_command := to_windows_string(command)
+	defer deallocate(windows_command)
+	
+	if !CreateProcessW(lpCommandLine = windows_command, lpStartupInfo = *startup, lpProcessInformation = *info)
+		return cast() -1
+	
+	CloseHandle(info.hThread)
+	
+	WaitForSingleObject(info.hProcess)
+	
+	exit_code: u32 = --
+	
+	if !GetExitCodeProcess(info.hProcess, *exit_code)
+		return cast() -2
+	
+	CloseHandle(info.hProcess)
+	
+	return exit_code
 }
 
 #scope_module

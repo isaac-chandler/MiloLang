@@ -1906,6 +1906,30 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 		expr = unary;
 	}
+	else if (expectAndConsume(lexer, TokenT::IS_CONSTANT)) {
+		ExprUnaryOperator *unary = PARSER_NEW(ExprUnaryOperator);
+		unary->flavor = ExprFlavor::UNARY_OPERATOR;
+		unary->op = TokenT::IS_CONSTANT;
+		unary->start = start;
+
+		if (!expectAndConsume(lexer, '(')) {
+			reportExpectedError(&lexer->token, "Error: Expected '(' after is_constant");
+			return nullptr;
+		}
+
+		unary->value = parseExpr(lexer);
+		if (!unary->value) {
+			return nullptr;
+		}
+		unary->end = lexer->token.end;
+
+		if (!expectAndConsume(lexer, ')')) {
+			reportExpectedError(&lexer->token, "Error: Expected ')' after value in is_constant");
+			return nullptr;
+		}
+
+		expr = unary;
+	}
 	else if (expectAndConsume(lexer, TokenT::U8)) {
 		expr = parserMakeTypeLiteral(lexer, start, end, &TYPE_U8);
 	}
