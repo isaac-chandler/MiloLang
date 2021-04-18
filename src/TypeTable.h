@@ -220,7 +220,7 @@ struct Type_Info {
 	Tag tag;
 	u64 size;
 	u64 alignment;
-	String name;
+	MiloString name;
 };
 
 struct Type_Info_Integer : Type_Info {
@@ -258,7 +258,7 @@ struct Type_Info_Struct : Type_Info {
 			constexpr static u64 USING         = 0x4;
 		};
 
-		String name;
+		MiloString name;
 		u64 offset;
 		Type_Info *member_type;
 		void *initial_value;
@@ -276,7 +276,7 @@ struct Type_Info_Struct : Type_Info {
 
 struct Type_Info_Enum : Type_Info {
 	struct Value {
-		String name;
+		MiloString name;
 		u64 value;
 	};
 

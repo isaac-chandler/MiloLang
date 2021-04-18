@@ -167,6 +167,18 @@ array_add :: (array: *[..]$T, value: T) {
 	(<<array)[array.count - 1] = value
 }
 
+array_pop :: (array: *[]$T) -> T {
+	value := (<<array)[array.count - 1]
+	array.count -= 1
+	
+	return value
+}
+
+
+array_peek :: (array: []$T) -> T {
+	return array[array.count - 1]
+}
+
 panic :: () {
 	print("Panic")
 	
@@ -352,7 +364,7 @@ print_to_buffer :: (c: *Concatenator, format: string, vals: any..) {
 	
 	for format {
 		if it == '%' {
-			if index > vals.count
+			if index >= vals.count
 				return;
 			print_any(c, vals[index])
 			index += 1
@@ -506,7 +518,6 @@ print_any :: (c: *Concatenator, using val: any) {
 				append(c, " = ")
 				print_any(c, val)
 				append(c, ' ')
-				print("% = % ", it.name, val)
 			}
 		}
 		

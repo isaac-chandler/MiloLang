@@ -166,7 +166,7 @@ void createRuntimeValue(Expr *value, void *dest) {
 			createRuntimeValue(array->values[i], store + i * arrayType->arrayOf->size);
 
 			if (i + 1 == array->count && arrayType->count > array->count) {
-				for (u32 j = i + 1; j < array->count; j++) {
+				for (u32 j = i + 1; j < arrayType->count; j++) {
 					memcpy(store + j * arrayType->arrayOf->size, store + i * arrayType->arrayOf->size, arrayType->arrayOf->size);
 				}
 

@@ -383,7 +383,7 @@ static llvm::Constant *createConstant(State *state, Expr *expr) {
 			values[i] = value;
 
 			if (i + 1 == array->count && arrayType->count > array->count) {
-				for (u64 j = i + 1; j < array->count; j++) {
+				for (u64 j = i + 1; j < arrayType->count; j++) {
 					values[j] = value;
 				}
 
@@ -391,7 +391,7 @@ static llvm::Constant *createConstant(State *state, Expr *expr) {
 			}
 		}
 
-		return llvm::ConstantArray::get(static_cast<llvm::ArrayType *>(getLlvmType(state->context, arrayType)), llvm::ArrayRef(values, array->count));
+		return llvm::ConstantArray::get(static_cast<llvm::ArrayType *>(getLlvmType(state->context, arrayType)), llvm::ArrayRef(values, arrayType->count));
 	}
 	}
 
@@ -788,7 +788,7 @@ llvm::Value *loadAddressOf(State *state, Expr *expr) {
 		}
 	}
 	else {
-		assert(expr->type->flavor == TypeFlavor::ARRAY || expr->type->flavor == TypeFlavor::STRING);
+		assert(expr->type->flavor == TypeFlavor::ARRAY || expr->type->flavor == TypeFlavor::STRING || expr->type->flavor == TypeFlavor::STRUCT);
 
 		return generateLlvmIr(state, expr);
 	}
@@ -1020,7 +1020,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 				else if (right->type->flags & TYPE_ARRAY_IS_DYNAMIC) {
 					assert(!(castTo->flags & TYPE_ARRAY_IS_FIXED));
 
-					auto load = state->builder.CreateLoad(state->builder.CreateBitCast(value, getLlvmType(state->context, castTo)));
+					auto load = state->builder.CreateLoad(state->builder.CreateBitCast(value, llvm::PointerType::getUnqual(getLlvmType(state->context, castTo))));
 
 					return allocateAndStore(state, load);
 				}
@@ -1830,15 +1830,28 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 	case ExprFlavor::STRUCT_LITERAL: {
 		auto literal = static_cast<ExprStructLiteral *>(expr);
 
-		auto store = allocateType(state, literal->type);
-
-		for (u32 i = 0; i < literal->initializers.count; i++) {
-			auto value = generateIrAndLoadIfStoredByPointer(state, literal->initializers.values[i]);
-
-			state->builder.CreateStore(value, createGEPForStruct(state, store, static_cast<TypeStruct *>(literal->type), literal->initializers.declarations[i]));
+		if (literal->llvmStorage) {
+			return literal->llvmStorage;
 		}
+		else if (structIsLiteral(literal)) {
+			literal->llvmStorage = createUnnnamedConstant(state, getLlvmType(state->context, literal->type));
 
-		return store;
+			literal->llvmStorage->setInitializer(createConstant(state, literal));
+
+			return literal->llvmStorage;
+		}
+		else {
+
+			auto store = allocateType(state, literal->type);
+
+			for (u32 i = 0; i < literal->initializers.count; i++) {
+				auto value = generateIrAndLoadIfStoredByPointer(state, literal->initializers.values[i]);
+
+				state->builder.CreateStore(value, createGEPForStruct(state, store, static_cast<TypeStruct *>(literal->type), literal->initializers.declarations[i]));
+			}
+
+			return store;
+		}
 	}
 	case ExprFlavor::TYPE_LITERAL: {
 		auto type = static_cast<ExprLiteral *>(expr)->typeValue;
@@ -1931,45 +1944,56 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 	case ExprFlavor::ARRAY_LITERAL: {
 		auto array = static_cast<ExprArrayLiteral *>(expr);
 
-
-		auto arrayType = static_cast<TypeArray *>(array->type);
-		assert(arrayType->flags & TYPE_ARRAY_IS_FIXED);
-
-		auto storage = allocateType(state, array->type);
-
-		for (u64 i = 0; i < arrayType->count; i++) {
-			auto value = generateIrAndLoadIfStoredByPointer(state, array->values[i]);
-
-			if (i + 1 == array->count && arrayType->count > array->count) {
-				auto preBlock = state->builder.GetInsertBlock();
-
-				auto loopBlock = llvm::BasicBlock::Create(state->context, "array.fill.loop", state->function);
-				auto postBlock = llvm::BasicBlock::Create(state->context, "array.fill.post", state->function);
-
-				state->builder.CreateBr(loopBlock);
-
-				auto i64 = llvm::Type::getInt64Ty(state->context);
-
-				state->builder.SetInsertPoint(loopBlock);
-				auto phi = state->builder.CreatePHI(llvm::Type::getInt64Ty(state->context), 2);
-				phi->addIncoming(llvm::ConstantInt::get(i64, arrayType->count - i), preBlock);
-
-				state->builder.CreateStore(value, state->builder.CreateGEP(storage, { llvm::ConstantInt::get(i64, 0), phi }));
-
-				auto sub = state->builder.CreateSub(phi, llvm::ConstantInt::get(i64, 1));
-				phi->addIncoming(sub, loopBlock);
-
-				state->builder.CreateCondBr(state->builder.CreateICmpNE(sub, llvm::ConstantInt::get(i64, 0)), loopBlock, postBlock);
-
-				state->builder.SetInsertPoint(postBlock);
-				break;
-			}
-			else {
-				state->builder.CreateStore(value, state->builder.CreateConstGEP2_64(storage, 0, i));
-			}
+		if (array->llvmStorage) {
+			return array->llvmStorage;
 		}
+		else if (arrayIsLiteral(array)) {
+			array->llvmStorage = createUnnnamedConstant(state, getLlvmType(state->context, array->type));
 
-		return storage;
+			array->llvmStorage->setInitializer(createConstant(state, array));
+
+			return array->llvmStorage;
+		}
+		else {
+			auto arrayType = static_cast<TypeArray *>(array->type);
+			assert(arrayType->flags & TYPE_ARRAY_IS_FIXED);
+
+			auto storage = allocateType(state, array->type);
+
+			for (u64 i = 0; i < arrayType->count; i++) {
+				auto value = generateIrAndLoadIfStoredByPointer(state, array->values[i]);
+
+				if (i + 1 == array->count && arrayType->count > array->count) {
+					auto preBlock = state->builder.GetInsertBlock();
+
+					auto loopBlock = llvm::BasicBlock::Create(state->context, "array.fill.loop", state->function);
+					auto postBlock = llvm::BasicBlock::Create(state->context, "array.fill.post", state->function);
+
+					state->builder.CreateBr(loopBlock);
+
+					auto i64 = llvm::Type::getInt64Ty(state->context);
+
+					state->builder.SetInsertPoint(loopBlock);
+					auto phi = state->builder.CreatePHI(llvm::Type::getInt64Ty(state->context), 2);
+					phi->addIncoming(llvm::ConstantInt::get(i64, arrayType->count - i), preBlock);
+
+					state->builder.CreateStore(value, state->builder.CreateGEP(storage, { llvm::ConstantInt::get(i64, 0), phi }));
+
+					auto sub = state->builder.CreateSub(phi, llvm::ConstantInt::get(i64, 1));
+					phi->addIncoming(sub, loopBlock);
+
+					state->builder.CreateCondBr(state->builder.CreateICmpNE(sub, llvm::ConstantInt::get(i64, 0)), loopBlock, postBlock);
+
+					state->builder.SetInsertPoint(postBlock);
+					break;
+				}
+				else {
+					state->builder.CreateStore(value, state->builder.CreateConstGEP2_64(storage, 0, i));
+				}
+			}
+
+			return storage;
+		}
 	}
 	case ExprFlavor::STATIC_IF: {
 		return nullptr; // In the event that the static if returns false and there is no else block, we just leave the static if expression in the tree, 

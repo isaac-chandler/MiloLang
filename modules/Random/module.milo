@@ -29,6 +29,10 @@ random_u32 :: (rng: *Random_State) -> u32 {
     return (xorshifted >> rot) | (xorshifted << ((-rot) & 31))
 }
 
+random_u64 :: (rng: *Random_State) -> u64 {
+	return cast(u64) random_u32(rng) << 32 | random_u32(rng)
+}
+
 random_f32 :: (rng: *Random_State) -> f32 {
 	return cast(f32) random_u32(rng) * 0x1p-32
 }

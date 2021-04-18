@@ -4095,7 +4095,7 @@ void runCoffWriter() {
 						if (member->flags & DECLARATION_MARKED_AS_USING) data.flags |= Type_Info_Struct::Member::Flags::USING;
 
 
-						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), name.characters), names + nameCount);
+						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), name.data), names + nameCount);
 
 						if (member->initialValue) {
 							addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), member_type),
@@ -4168,7 +4168,7 @@ void runCoffWriter() {
 						data.name = { nullptr, member->name.length };
 						data.value = static_cast<ExprLiteral *>(member->initialValue)->unsignedValue;
 
-						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), name.characters), names + i);
+						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), name.data), names + i);
 
 						rdata.add(&data, sizeof(data));
 					}

@@ -2052,7 +2052,7 @@ Expr *createDefaultValue(SubJob *job, Type *type, bool *shouldYield) {
 	}
 	case TypeFlavor::ENUM: {
 		assert(!(type->flags & TYPE_ENUM_IS_FLAGS)); // The default value for a flags enum is 0
-		auto first = static_cast<TypeEnum *>(type)->members.declarations[ENUM_SPECIAL_MEMBER_COUNT];
+		auto first = static_cast<TypeEnum *>(type)->members.declarations[0];
 
 		if ((first->flags & DECLARATION_VALUE_IS_READY)) {
 			return first->initialValue;
@@ -5157,12 +5157,12 @@ bool inferFlattened(SubJob *job) {
 			if (slice->sliceEnd) {
 				trySolidifyNumericLiteralToDefault(slice->sliceEnd);
 
-				if (slice->sliceStart->type->flavor != TypeFlavor::INTEGER) {
+				if (slice->sliceEnd->type->flavor != TypeFlavor::INTEGER) {
 					reportError(slice->sliceEnd, "Error: Array index must be an integer");
 					return false;
 				}
 
-				if (slice->sliceStart->type->size != 8) {
+				if (slice->sliceEnd->type->size != 8) {
 					insertImplicitCast(job->sizeDependencies, &slice->sliceEnd, slice->sliceEnd->type->flags & TYPE_INTEGER_IS_SIGNED ? &TYPE_S64 : &TYPE_U64);
 				}
 			}
@@ -8119,7 +8119,7 @@ void fillTypeInfo(Type *type) {
 
 	typeInfo->size = type->size;
 	typeInfo->alignment = type->alignment;
-	typeInfo->name = type->name;
+	typeInfo->name = { (u8 *) type->name.characters, type->name.length };
 
 	switch (type->flavor) {
 	case TypeFlavor::BOOL: {
@@ -8183,7 +8183,7 @@ void fillTypeInfo(Type *type) {
 		enumInfo->values.data = INFER_NEW_ARRAY(Type_Info_Enum::Value, enumInfo->values.count);
 
 		for (u32 i = 0; i + ENUM_SPECIAL_MEMBER_COUNT < values->declarations.count; i++) {
-			enumInfo->values.data[i].name = values->declarations[i]->name;
+			enumInfo->values.data[i].name = { (u8 *)values->declarations[i]->name.characters, values->declarations[i]->name.length };
 			enumInfo->values.data[i].value = static_cast<ExprLiteral *>(values->declarations[i]->initialValue)->unsignedValue;
 		}
 
@@ -8264,7 +8264,7 @@ void fillTypeInfo(Type *type) {
 
 			auto &memberInfo = structInfo->members.data[count++];
 
-			memberInfo.name = member->name;
+			memberInfo.name = { (u8 *)member->name.characters, member->name.length };
 			memberInfo.offset = (member->flags & DECLARATION_IS_CONSTANT) ? 0 : member->physicalStorage;
 
 			auto memberType = getDeclarationType(member);

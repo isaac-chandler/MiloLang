@@ -241,6 +241,7 @@ MSG :: struct {
 		WM_KEYUP   :: 0x101
 		
 		WM_LBUTTONDOWN :: 0x0201
+		WM_RBUTTONDOWN :: 0x0204
 	}
 }
 
@@ -381,7 +382,7 @@ from_windows_string :: (windows_string: *u16) -> string {
 	
 	WideCharToMultiByte(lpWideCharStr = windows_string, lpMultiByteStr = result.data, cbMultiByte = cast() character_count)
 	
-	return ressult
+	return result
 }
 
 to_windows_string :: (s: string) -> *u16 {

@@ -389,11 +389,29 @@ struct ExprArrayLiteral : Expr {
 	Expr *typeValue;
 	Expr **values;
 	u32 count;
+
+	union {
+		struct {
+			union Symbol *symbol;
+			u32 physicalStorage;
+		};
+
+		llvm::GlobalVariable *llvmStorage = nullptr;
+	};
 };
 
 struct ExprStructLiteral : Expr {
 	Expr *typeValue;
 	Arguments initializers;
+
+	union {
+		struct {
+			union Symbol *symbol;
+			u32 physicalStorage;
+		};
+
+		llvm::GlobalVariable *llvmStorage = nullptr;
+	};
 };
 
 struct ExprFunction : Expr {
