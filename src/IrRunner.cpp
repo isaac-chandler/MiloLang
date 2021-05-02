@@ -969,7 +969,7 @@ Expr *getReturnValueFromBytes(CodeLocation start, EndLocation end, Type *type, v
 		}
 
 		auto literal = new ExprLiteral;
-		literal->flavor = ExprFlavor::INT_LITERAL;
+		literal->flavor = ExprFlavor::FLOAT_LITERAL;
 		literal->start = start;
 		literal->end = end;
 		literal->floatValue = value;

@@ -12,7 +12,8 @@ Constexpr
 
 Ternary operator
 
-struct literals
+Improve IR generators handling of larger than machine size values (currently they are just allocated multiple consecutive register numbers)
+ - Maybe large values are always by pointer, similar to LLVM (probably include structs/arrays that are machine sized as well so we don't have to special case)
 
 Syntax for partial array literals, where the remaining values are filled in with the default value 
  - maybe an option to fill with last specified value as well

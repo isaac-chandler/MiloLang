@@ -62,6 +62,8 @@ enum class IrOp : u8 {
 	NOOP,
 	FUNCTION, 
 	STRING, 
+	ARRAY_LITERAL, 
+	STRUCT_LITERAL, 
 	LINE_MARKER, 
 	TYPE, 
 	TYPE_INFO, 

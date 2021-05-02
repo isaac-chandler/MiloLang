@@ -1501,7 +1501,7 @@ void runCoffWriter() {
 	BucketedArenaAllocator xdata(65536);
 
 	SectionHeader bssSection = {};
-	bssSection.virtualSize = 0;
+	bssSection.sizeOfRawData = 0;
 	BucketArray<Symbol> symbols;
 
 	s64 f32ToU64ConstantSymbolIndex = -1;
@@ -3300,7 +3300,7 @@ void runCoffWriter() {
 						auto type = ir.arguments->args[i].type;
 
 
-						if (ir.arguments->args[i].number == static_cast<u64>(-1LL)) {
+						if (ir.arguments->args[i].number == static_cast<u32>(-1)) {
 
 							code.add1Unchecked(intRegisters[i + parameterOffset] >= 8 ? 0x4C : 0x48);
 							code.add1Unchecked(0x8D);
@@ -3689,12 +3689,12 @@ void runCoffWriter() {
 			if ((declaration->flags & DECLARATION_IS_UNINITIALIZED) ||
 				((declaration->initialValue->flavor == ExprFlavor::INT_LITERAL || declaration->initialValue->flavor == ExprFlavor::FLOAT_LITERAL)
 					&& static_cast<ExprLiteral *>(declaration->initialValue)->unsignedValue == 0)) {
-				bssSection.virtualSize = AlignPO2(bssSection.virtualSize, type->alignment);
+				bssSection.sizeOfRawData = AlignPO2(bssSection.sizeOfRawData, type->alignment);
 
-				symbol->value = bssSection.virtualSize;
+				symbol->value = bssSection.sizeOfRawData;
 				symbol->sectionNumber = BSS_SECTION_NUMBER;
 
-				bssSection.virtualSize += type->size;
+				bssSection.sizeOfRawData += type->size;
 			}
 			else {
 				data.allocateUnaligned(AlignPO2(data.totalSize, type->alignment) - data.totalSize);
@@ -4319,11 +4319,10 @@ void runCoffWriter() {
 				section.header->virtualSize = 0;
 			}
 			else {
-				section.header->sizeOfRawData = AlignPO2(section.header->virtualSize, 4);
-				section.header->virtualSize = 0;
+				section.header->sizeOfRawData = AlignPO2(section.header->sizeOfRawData, 4);
 			}
 
-			if (section.header->sizeOfRawData) {
+			if (section.data) {
 				section.header->pointerToRawData = sectionPointer;
 
 				sectionPointer += section.header->sizeOfRawData;
@@ -4410,6 +4409,10 @@ void runCoffWriter() {
 			for (u32 i = 0; i < sections.count; i++) {
 				auto section = sections[i];
 
+				if (printDiagnostics) {
+					reportInfo("%s size: %u", section.header->name, section.header->sizeOfRawData);
+				}
+
 				if (section.data) {
 					if (printDiagnostics) {
 						reportInfo("%s size: %u", section.header->name, section.data->totalSize);
@@ -4419,16 +4422,6 @@ void runCoffWriter() {
 					writeAllocator(out, *section.data);
 
 
-				}
-				else if (section.header->sizeOfRawData) {
-					if (printDiagnostics) {
-						reportInfo("%s size: %u", section.header->name, section.header->sizeOfRawData);
-					}
-					char zero[1024] = {};
-
-					for (s64 write = section.header->sizeOfRawData; write > 0; write -= sizeof(zero)) {
-						doWrite(zero, static_cast<u32>(my_min(sizeof(zero), write)));
-					}
 				}
 
 				if (section.relocations) {
