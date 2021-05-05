@@ -285,6 +285,7 @@
     <ClInclude Include="src\Basic.h" />
     <ClInclude Include="src\Block.h" />
     <ClInclude Include="src\BucketedArenaAllocator.h" />
+    <ClInclude Include="src\CodeView.h" />
     <ClInclude Include="src\CoffWriter.h" />
     <ClInclude Include="src\CompilerMain.h" />
     <ClInclude Include="src\Error.h" />
@@ -311,6 +312,7 @@
     </ClCompile>
     <ClCompile Include="src\Block.cpp" />
     <ClCompile Include="src\BucketedArenaAllocator.cpp" />
+    <ClCompile Include="src\CodeView.cpp" />
     <ClCompile Include="src\CoffWriter.cpp" />
     <ClCompile Include="src\CompilerMain.cpp" />
     <ClCompile Include="src\Error.cpp" />

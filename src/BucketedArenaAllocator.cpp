@@ -92,12 +92,16 @@ void BucketedArenaAllocator::add(const void *value, u32 size) {
 	current->remaining -= size;
 }
 
-void BucketedArenaAllocator::addUnchecked(const void *value, u32 size) {
+void *BucketedArenaAllocator::addUnchecked(const void *value, u32 size) {
 	assert(size <= current->remaining);
+	auto dest = current->memory;
+
 	memcpy(current->memory, value, size);
 	current->memory += size;
 	current->remaining -= size;
 	totalSize += size;
+
+	return dest;
 }
 
 #define addN(name, type)											\

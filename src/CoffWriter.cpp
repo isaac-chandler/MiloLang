@@ -6,6 +6,7 @@
 #include "CompilerMain.h"
 #include "Error.h"
 #include "UTF.h"
+#include "CodeView.h"
 
 union SymbolName {
 	char name[8];
@@ -13,6 +14,16 @@ union SymbolName {
 		u32 zeroes;
 		u32 namePointer;
 	};
+};
+
+struct CoffTypeIndexPatch {
+	u32 *location;
+	Type *type;
+};
+
+struct CoffFunctionIDTypeIndexPatch {
+	u32 *location;
+	ExprFunction *function;
 };
 
 void setSectionName(char *header, u64 size, const char *name) {
@@ -518,6 +529,10 @@ void writeSet(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u3
 #define PDATA_SECTION_NUMBER 7
 #define XDATA_SECTION_NUMBER 8
 
+Array<CoffTypeIndexPatch> coffTypePatches;
+Array<CoffFunctionIDTypeIndexPatch> coffFunctionIdTypePatches;
+
+
 u32 *addRelocationToUnkownSymbol(BucketedArenaAllocator *allocator, u32 virtualAddress, u16 type) {
 	allocator->ensure(10);
 	allocator->add4Unchecked(virtualAddress);
@@ -867,522 +882,17 @@ void addLineInfo(Array<LineInfo> *lineInfo, Array<ColumnInfo> *columnInfo, u32 o
 	column.end = end.column + 1;
 }
 
-const u32 S_UDT = 0x1108;
-const u32 T_VOID = 0x0003;
-const u32 T_64PVOID = 0x0603;
-const u32 T_64PUCHAR = 0x0620;
-const u32 T_INT1 = 0x0068;
-const u32 T_64PINT1 = 0x0668;
-const u32 T_UINT1 = 0x0069;
-const u32 T_64PUINT1 = 0x0669;
-const u32 T_INT2 = 0x0072;
-const u32 T_64PINT2 = 0x0672;
-const u32 T_UINT2 = 0x0073;
-const u32 T_64PUINT2 = 0x0673;
-const u32 T_INT4 = 0x0074;
-const u32 T_64PINT4 = 0x0674;
-const u32 T_UINT4 = 0x0075;
-const u32 T_64PUINT4 = 0x0675;
-const u32 T_INT8 = 0x0076;
-const u32 T_64PINT8 = 0x0676;
-const u32 T_UINT8 = 0x0077;
-const u32 T_64PUINT8 = 0x0677;
-const u32 T_REAL32 = 0x0040;
-const u32 T_64PREAL32 = 0x0640;
-const u32 T_REAL64 = 0x0041;
-const u32 T_64PREAL64 = 0x0641;
-const u32 T_BOOL08 = 0x0030;
-const u32 T_64PBOOL08 = 0x0630;
-
-
-u32 getCoffTypeIndex(BucketedArenaAllocator *debugTypes, Type *type);
-
-u32 debugTypeId = 0x1000;
-
-void alignDebugTypes(BucketedArenaAllocator *debugTypes) {
-	u32 padding = -debugTypes->totalSize & 3;
-
-	debugTypes->ensure(padding);
-	for (u32 i = 0; i < padding; i++) {
-		debugTypes->add1Unchecked(0xF0 + padding - i);
-	}
-
-	assert(!(debugTypes->totalSize & 3));
-}
-
-struct DebugLeaf {
-	BucketedArenaAllocator *debugTypes;
-
-	DebugLeaf(BucketedArenaAllocator *debugTypes) : debugTypes(debugTypes) {}
-
-	DebugLeaf(BucketedArenaAllocator &debugTypes) : debugTypes(&debugTypes) {}
-
-	template<typename T>
-	u32 operator+(T t) {
-		u16 *patch = debugTypes->add2(0);
-		u32 start = debugTypes->totalSize;
-		t();
-		alignDebugTypes(debugTypes);
-		*patch = static_cast<u16>(debugTypes->totalSize - start);
-		return debugTypeId++;
-	}
-};
-
-#define DEBUG_LEAF DebugLeaf(debugTypes) + [&]()
-
-void addStructUniqueNumber(BucketedArenaAllocator *debugTypes, u32 name = debugTypeId) {
-	char buffer[32];
-	
-	_itoa(static_cast<int>(name - 0x1000), buffer, 16);
-
-	debugTypes->addNullTerminatedString(buffer);
-}
-
-
-bool appendCoffName(BucketedArenaAllocator *debugSymbols, Type *type) {
-	if (type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::ENUM) {
-		auto structure = static_cast<TypeStruct *>(type);
-
-		if (structure->enclosingScope->flavor == BlockFlavor::STRUCT) {
-			appendCoffName(debugSymbols, CAST_FROM_SUBSTRUCT(TypeStruct, members, structure->enclosingScope));
-			debugSymbols->addString("::");
-		}
-	}
-
-	if (type->flavor == TypeFlavor::ARRAY) {
-		auto array = static_cast<TypeArray *>(type);
-
-		if (array->flags & TYPE_ARRAY_IS_FIXED) {
-			appendCoffName(debugSymbols, array->arrayOf);
-			debugSymbols->addString(" [");
-
-			char buffer[16];
-			_itoa(array->count, buffer, 10);
-
-			debugSymbols->addString(buffer);
-			debugSymbols->add1(']');
-		}
-		else if (array->flags & TYPE_ARRAY_IS_DYNAMIC) {
-			debugSymbols->addString("Dynamic_Array<");
-			if (appendCoffName(debugSymbols, array->arrayOf)) {
-				debugSymbols->add1(' ');
-			}
-
-			debugSymbols->add1('>');
-			return true;
-		}
-		else {
-			debugSymbols->addString("Array<");
-			if (appendCoffName(debugSymbols, array->arrayOf)) {
-				debugSymbols->add1(' ');
-			}
-
-			debugSymbols->add1('>');
-			return true;
-		}
-	}
-	else if (type->flags & TYPE_IS_ANONYMOUS) {
-		debugSymbols->addString("<unnamed-");
-		debugSymbols->addString(type->name);
-		debugSymbols->add1('-');
-		addStructUniqueNumber(debugSymbols, type->codeviewTypeIndex);
-		debugSymbols->add1('>');
-	}
-	else {
-		debugSymbols->addString(type->name);
-	}
-
-	return false;
-}
-
 
 void emitUDT(BucketedArenaAllocator *debugSymbols, Type *type) {
 	debugSymbols->ensure(8);
 	u16 *size = debugSymbols->add2Unchecked(0);
 	u32 start = debugSymbols->totalSize;
 	debugSymbols->add2Unchecked(S_UDT);
-	debugSymbols->add4Unchecked(type->codeviewTypeIndex);
+	auto patch = debugSymbols->add4Unchecked(0);
+	coffTypePatches.add({ patch, type });
 	appendCoffName(debugSymbols, type);
 	debugSymbols->add1(0);
 	*size = static_cast<u16>(debugSymbols->totalSize - start);
-}
-
-u32 createCoffType(BucketedArenaAllocator *debugTypes, Type *type) {
-	if (type == &TYPE_BOOL) {
-		return T_BOOL08;
-	}
-	else if (type == &TYPE_VOID) {
-		return T_VOID;
-	}
-	else if (type == &TYPE_F32) {
-		return T_REAL32;
-	}
-	else if (type == &TYPE_F64) {
-		return T_REAL64;
-	}
-	else if (type == &TYPE_S8) {
-		return T_INT1;
-	}
-	else if (type == &TYPE_S16) {
-		return T_INT2;
-	}
-	else if (type == &TYPE_S32) {
-		return T_INT4;
-	}
-	else if (type == &TYPE_S64) {
-		return T_INT8;
-	}
-	else if (type == &TYPE_U8) {
-		return T_UINT1;
-	}
-	else if (type == &TYPE_U16) {
-		return T_UINT2;
-	}
-	else if (type == &TYPE_U32) {
-		return T_UINT4;
-	}
-	else if (type == &TYPE_U64) {
-		return T_UINT8;
-	}
-	else if (type->flavor == TypeFlavor::POINTER) {
-		auto pointer = static_cast<TypePointer *>(type);
-
-		auto indexOfType = getCoffTypeIndex(debugTypes, pointer->pointerTo);
-
-
-		// @Incomplete change 0x100 to a more concrete value
-		if (indexOfType < 0x100) {
-			return indexOfType | 0x600;
-		}
-
-		return DEBUG_LEAF{
-			debugTypes->ensure(2);
-			debugTypes->add2Unchecked(0x1002); // LF_POINTER
-			debugTypes->add4Unchecked(indexOfType);
-			debugTypes->add4Unchecked(0x1000c); // 64 bit normal pointer
-		};
-	}
-	else if (type->flavor == TypeFlavor::STRING) {
-		auto fieldList = DEBUG_LEAF{
-			debugTypes->ensure(12);
-			debugTypes->add2Unchecked(0x1203); // LF_FIELDLIST
-
-			debugTypes->add2Unchecked(0x150D); // LF_MEMBER
-			debugTypes->add2Unchecked(0x3); // public
-			debugTypes->add4Unchecked(T_64PUCHAR);
-			debugTypes->add2Unchecked(0); // offset 0
-			debugTypes->addNullTerminatedString("data");
-			alignDebugTypes(debugTypes);
-
-			debugTypes->ensure(10);
-			debugTypes->add2Unchecked(0x150D); // LF_MEMBER
-			debugTypes->add2Unchecked(0x3); // public
-			debugTypes->add4Unchecked(T_UINT8);
-			debugTypes->add2Unchecked(8); // offset 8
-			debugTypes->addNullTerminatedString("count");
-		};
-
-		return DEBUG_LEAF{
-			debugTypes->ensure(20);
-			debugTypes->add2Unchecked(0x1505); // LF_STRUCTURE
-			debugTypes->add2Unchecked(2); // 2 members
-			debugTypes->add2Unchecked(0x200); // Has a unique name
-			debugTypes->add4Unchecked(fieldList); // field list
-			debugTypes->add4Unchecked(0); // super class
-			debugTypes->add4Unchecked(0); // vtable
-			debugTypes->add2Unchecked(16);
-			debugTypes->addNullTerminatedString("string");
-			debugTypes->add1('@');
-			addStructUniqueNumber(debugTypes);
-		};
-	}
-	else if (type->flavor == TypeFlavor::ARRAY) {
-		auto array = static_cast<TypeArray *>(type);
-
-		if (array->flags & TYPE_ARRAY_IS_FIXED) {
-			u32 arrayOf = getCoffTypeIndex(debugTypes, array->arrayOf);
-
-			return DEBUG_LEAF{
-				debugTypes->ensure(17);
-				debugTypes->add2Unchecked(0x1503); // LF_ARRAY
-				debugTypes->add4Unchecked(arrayOf);
-				debugTypes->add4Unchecked(T_INT8);
-				debugTypes->add2Unchecked(0x8004); // LF_ULONG
-				debugTypes->add4Unchecked(array->size);
-				debugTypes->add1Unchecked(0); // No name
-			};
-		}
-		else {
-			u32 dataType = getCoffTypeIndex(debugTypes, getDeclarationType(array->members.declarations[0]));
-
-			u32 fieldList = DEBUG_LEAF{
-				debugTypes->ensure(12);
-				debugTypes->add2Unchecked(0x1203); // LF_FIELDLIST
-
-				debugTypes->add2Unchecked(0x150D); // LF_MEMBER
-				debugTypes->add2Unchecked(0x3); // public
-				debugTypes->add4Unchecked(dataType);
-				debugTypes->add2Unchecked(0); // offset 0
-				debugTypes->addNullTerminatedString("data");
-				alignDebugTypes(debugTypes);
-
-				debugTypes->ensure(10);
-				debugTypes->add2Unchecked(0x150D); // LF_MEMBER
-				debugTypes->add2Unchecked(0x3); // public
-				debugTypes->add4Unchecked(T_UINT8);
-				debugTypes->add2Unchecked(8); // offset 8
-				debugTypes->addNullTerminatedString("count");
-
-				if (array->flags & TYPE_ARRAY_IS_DYNAMIC) {
-					alignDebugTypes(debugTypes);
-
-					debugTypes->ensure(10);
-					debugTypes->add2Unchecked(0x150D); // LF_MEMBER
-					debugTypes->add2Unchecked(0x3); // public
-					debugTypes->add4Unchecked(T_UINT8);
-					debugTypes->add2Unchecked(16); // offset 8
-					debugTypes->addNullTerminatedString("capacity");
-				}
-			};
-
-			return DEBUG_LEAF{
-				debugTypes->ensure(20);
-				debugTypes->add2Unchecked(0x1505); // LF_STRUCTURE
-				debugTypes->add2Unchecked(array->flags & TYPE_ARRAY_IS_DYNAMIC ? 3 : 2); // 2 members
-				debugTypes->add2Unchecked(0x200); // Has a unique name
-				debugTypes->add4Unchecked(fieldList); // field list
-				debugTypes->add4Unchecked(0); // super class
-				debugTypes->add4Unchecked(0); // vtable
-				debugTypes->add2Unchecked(array->size);
-				appendCoffName(debugTypes, array);
-				debugTypes->add1(0);
-				debugTypes->add1('@');
-				addStructUniqueNumber(debugTypes);
-			};
-		}
-	}
-	else if (type->flavor == TypeFlavor::FUNCTION) {
-		auto function = static_cast<TypeFunction *>(type);
-
-		for (u32 i = 0; i < function->argumentCount; i++) {
-			getCoffTypeIndex(debugTypes, function->argumentTypes[i]);
-		}
-
-		for (u32 i = 0; i < function->returnCount; i++) {
-			getCoffTypeIndex(debugTypes, function->returnTypes[i]);
-		}
-
-		u32 firstReturn = debugTypeId;
-
-		for (u32 i = 1; i < function->returnCount; i++) {
-			DEBUG_LEAF{
-				debugTypes->ensure(10);
-				debugTypes->add2Unchecked(0x1002); // LF_POINTER
-				debugTypes->add4Unchecked(function->returnTypes[i]->codeviewTypeIndex);
-				debugTypes->add4Unchecked(0x1000c); // 64 bit normal pointer
-			};
-		}
-
-		u32 argList = DEBUG_LEAF{
-			debugTypes->ensure(6 + (function->argumentCount + function->returnCount - 1) * 4);
-			debugTypes->add2Unchecked(0x1201); // LF_ARGLIST
-			debugTypes->add4Unchecked(function->argumentCount + function->returnCount - 1);
-
-			for (u32 i = 0; i < function->argumentCount; i++) {
-				debugTypes->add4Unchecked(function->argumentTypes[i]->codeviewTypeIndex);
-			}
-
-			for (u32 i = 1;	i < function->returnCount; i++) {
-				debugTypes->add4Unchecked(firstReturn + i - 1);
-			}
-		};
-
-		u32 functionType = DEBUG_LEAF{
-			debugTypes->ensure(14);
-			debugTypes->add2Unchecked(0x1008); // LF_PROCEDURE
-			debugTypes->add4Unchecked(function->returnTypes[0]->codeviewTypeIndex);
-			debugTypes->add1Unchecked(0); // C near call
-			debugTypes->add1Unchecked(0);
-			debugTypes->add2Unchecked(function->argumentCount + function->returnCount - 1); // 0 parameters
-			debugTypes->add4Unchecked(argList);
-		};
-
-		return DEBUG_LEAF {
-			debugTypes->ensure(10);
-			debugTypes->add2Unchecked(0x1002); // LF_POINTER
-			debugTypes->add4Unchecked(functionType);
-			debugTypes->add4Unchecked(0x1000c); // 64 bit normal pointer
-		};
-	}
-	else if (type->flavor == TypeFlavor::ENUM) {
-		auto enumeration = static_cast<TypeEnum *>(type);
-
-		u32 integerType = getCoffTypeIndex(debugTypes, enumeration->integerType);
-		
-		// Use a struct with bitfields to represent a flags enum
-		if (enumeration->flags & TYPE_ENUM_IS_FLAGS) {
-			u32 firstFlag = debugTypeId;
-
-			u16 nested = enumeration->enclosingScope->flavor == BlockFlavor::STRUCT ? 8 : 0;
-
-			for (auto declaration : enumeration->members.declarations) {
-				if (!(declaration->flags & DECLARATION_IS_ENUM_VALUE))
-					continue;
-
-				assert(declaration->initialValue->flavor == ExprFlavor::INT_LITERAL);
-				assert(!(declaration->initialValue->type->flags & TYPE_INTEGER_IS_SIGNED));
-				
-				u64 value = static_cast<ExprLiteral *>(declaration->initialValue)->unsignedValue;
-
-				if (value && !(value & value - 1)) { // If exactly one bit is set
-					unsigned long bit;
-
-					_BitScanForward64(&bit, value);
-					
-					DEBUG_LEAF{
-						debugTypes->ensure(8);
-						debugTypes->add2Unchecked(0x1205); // LF_BITFIELD
-						debugTypes->add4Unchecked(integerType);
-						debugTypes->add1Unchecked(1); // 1 bit
-						debugTypes->add1Unchecked(static_cast<u8>(bit));
-					};
-				}
-			}
-
-			u32 flagCount = 0;
-
-			u32 fieldList = DEBUG_LEAF{
-				debugTypes->add2(0x1203); // LF_FIELDLIST
-
-				for (auto declaration : enumeration->members.declarations) {
-					if (!(declaration->flags & DECLARATION_IS_ENUM_VALUE))
-						continue;
-					
-					u64 value = static_cast<ExprLiteral *>(declaration->initialValue)->unsignedValue;
-
-					if (value && !(value & value - 1)) { // If exactly one bit is set
-						alignDebugTypes(debugTypes);
-
-						debugTypes->ensure(10);
-						debugTypes->add2Unchecked(0x150D); // LF_MEMBER
-						debugTypes->add2Unchecked(0x3); // public
-						debugTypes->add4Unchecked(firstFlag + flagCount++);
-						debugTypes->add2Unchecked(0); // offset 0
-						debugTypes->addNullTerminatedString(declaration->name);
-					}
-				}
-			};
-
-			return DEBUG_LEAF{
-				debugTypes->ensure(20);
-				debugTypes->add2Unchecked(0x1505); // LF_STRUCTURE
-				debugTypes->add2Unchecked(flagCount);
-				debugTypes->add2Unchecked(0x200 | nested); // Has a unique name
-				debugTypes->add4Unchecked(fieldList); // field list
-				debugTypes->add4Unchecked(0); // super class
-				debugTypes->add4Unchecked(0); // vtable
-				debugTypes->add2Unchecked(enumeration->size);
-				appendCoffName(debugTypes, enumeration);
-				debugTypes->add1(0);
-				debugTypes->add1('@');
-				addStructUniqueNumber(debugTypes);
-			};
-		}
-		else {
-			u32 fieldList = DEBUG_LEAF {
-				debugTypes->add4(0x1203); // LF_FIELDLIST
-
-				for (auto declaration : enumeration->members.declarations) {
-					if (!(declaration->flags & DECLARATION_IS_ENUM_VALUE))
-						continue;
-
-					assert(declaration->initialValue->flavor == ExprFlavor::INT_LITERAL);
-					assert(!(declaration->initialValue->type->flags & TYPE_INTEGER_IS_SIGNED));
-
-					alignDebugTypes(debugTypes);
-					debugTypes->ensure(14);
-					debugTypes->add2Unchecked(0x1502); // LF_ENUMERATE
-					debugTypes->add2Unchecked(0x3); // Public
-					debugTypes->add2Unchecked(0x800A); // LF_UQUADWORD
-					debugTypes->add8Unchecked(static_cast<ExprLiteral *>(declaration->initialValue)->unsignedValue);
-					debugTypes->addNullTerminatedString(declaration->name);
-				}
-			};
-
-			return DEBUG_LEAF{
-				debugTypes->ensure(14);
-				debugTypes->add2Unchecked(0x1507); // LF_ENUM
-				debugTypes->add2Unchecked(static_cast<u16>(enumeration->members.declarations.count - ENUM_SPECIAL_MEMBER_COUNT));
-				debugTypes->add2Unchecked(0x200); // Has a unique name
-				debugTypes->add4Unchecked(integerType);
-				debugTypes->add4Unchecked(fieldList);
-				appendCoffName(debugTypes, enumeration);
-				debugTypes->add1(0);
-				debugTypes->add1('@');
-				addStructUniqueNumber(debugTypes);
-			};
-		}
-	}
-	else if (type->flavor == TypeFlavor::TYPE) {
-		u32 fieldList = DEBUG_LEAF{
-			debugTypes->ensure(12);
-			debugTypes->add2Unchecked(0x1203); // LF_FIELDLIST
-
-			debugTypes->add2Unchecked(0x150D); // LF_MEMBER
-			debugTypes->add2Unchecked(0x3); // public
-			debugTypes->add4Unchecked(T_64PVOID);
-			debugTypes->add2Unchecked(0); // offset 0
-			debugTypes->addNullTerminatedString("value");
-		};
-
-		return DEBUG_LEAF{
-			debugTypes->ensure(20);
-			debugTypes->add2Unchecked(0x1505); // LF_STRUCTURE
-			debugTypes->add2Unchecked(1); // 1 member
-			debugTypes->add2Unchecked(0x200); // Has a unique name
-			debugTypes->add4Unchecked(fieldList); // field list
-			debugTypes->add4Unchecked(0); // super class
-			debugTypes->add4Unchecked(0); // vtable
-			debugTypes->add2Unchecked(8);
-			debugTypes->addNullTerminatedString("type");
-			debugTypes->add1('@');
-			addStructUniqueNumber(debugTypes);
-		};
-	}
-	else if (type->flavor == TypeFlavor::STRUCT) {
-		auto structure = static_cast<TypeStruct *>(type);
-
-		u16 packed = structure->flags & TYPE_STRUCT_IS_PACKED ? 1 : 0;
-		u16 nested = structure->enclosingScope->flavor == BlockFlavor::STRUCT ? 8 : 0;
-
-		return DEBUG_LEAF{
-			debugTypes->ensure(20);
-			debugTypes->add2Unchecked(0x1505); // LF_STRUCTURE
-			debugTypes->add2Unchecked(0);
-
-			debugTypes->add2Unchecked(0x280 | packed | nested); // Has a unique name and is a forward declaration
-			debugTypes->add4Unchecked(0); // field list
-			debugTypes->add4Unchecked(0); // super class
-			debugTypes->add4Unchecked(0); // vtable
-			debugTypes->add2Unchecked(0); // size
-			appendCoffName(debugTypes, structure);
-			debugTypes->add1(0);
-			debugTypes->add1('@');
-			addStructUniqueNumber(debugTypes);
-		};
-	}
-	
-	// Unhandled case
-	assert(false);
-
-	return 0;
-}
-
-u32 getCoffTypeIndex(BucketedArenaAllocator *debugTypes, Type *type) {
-	if (!type->codeviewTypeIndex)
-		type->codeviewTypeIndex = createCoffType(debugTypes, type);
-
-	return type->codeviewTypeIndex;
 }
 
 #pragma pack(push, 1)
@@ -1479,6 +989,12 @@ void emitBasicTypeDebugInfo(BucketedArenaAllocator *debugSymbols) {
 
 	*subsectionSizePatch = debugSymbols->totalSize - previousSize;
 	alignAllocator(debugSymbols, 4);
+}
+
+bool placeValueInBSSSection(Declaration *declaration) {
+	return (declaration->flags & DECLARATION_IS_UNINITIALIZED) ||
+		((declaration->initialValue->flavor == ExprFlavor::INT_LITERAL || declaration->initialValue->flavor == ExprFlavor::FLOAT_LITERAL)
+			&& static_cast<ExprLiteral *>(declaration->initialValue)->unsignedValue == 0);
 }
 
 void runCoffWriter() {
@@ -1643,17 +1159,6 @@ void runCoffWriter() {
 
 			auto name = function->valueOfDeclaration ? function->valueOfDeclaration->name : "__unnamed";
 
-			// @Volatile: This relies on the LF_PROCEDURE node being directly before the LF_POINTER node that defines the function pointer type
-			u32 funcType = getCoffTypeIndex(&debugTypes, function->type) - 1;
-
-			u32 funcId = DEBUG_LEAF{
-				debugTypes.ensure(10);
-				debugTypes.add2Unchecked(0x1601); // LF_FUNC_ID
-				debugTypes.add4Unchecked(0);
-				debugTypes.add4Unchecked(funcType);
-				debugTypes.addNullTerminatedString(name);
-			};
-
 			debugSymbols.ensure(39);
 			debugSymbolsRelocations.ensure(20);
 			debugSymbols.add2Unchecked(static_cast<u16>(sizeof(PROCSYM32) + name.length - 1));
@@ -1664,7 +1169,9 @@ void runCoffWriter() {
 			u32 *functionLengthPatch = debugSymbols.add4Unchecked(code.totalSize - functionStart);
 			u32 *functionPreambleEndPatch = debugSymbols.add4Unchecked(0);
 			u32 *functionPostambleStartPatch = debugSymbols.add4Unchecked(0);
-			debugSymbols.add4Unchecked(funcId);
+			u32 *patch = debugSymbols.add4Unchecked(0);
+			coffFunctionIdTypePatches.add({ patch, function });
+			
 
 			debugSymbolsRelocations.add4Unchecked(debugSymbols.totalSize);
 			debugSymbolsRelocations.add4Unchecked(function->physicalStorage);
@@ -1673,7 +1180,7 @@ void runCoffWriter() {
 			debugSymbols.add4Unchecked(0);
 
 			debugSymbolsRelocations.add4Unchecked(debugSymbols.totalSize);
-			debugSymbolsRelocations.add4Unchecked(textSectionSymbolIndex);
+			debugSymbolsRelocations.add4Unchecked(function->physicalStorage);
 			debugSymbolsRelocations.add2Unchecked(IMAGE_REL_AMD64_SECTION);
 
 			debugSymbols.add2Unchecked(0);
@@ -1711,11 +1218,13 @@ void runCoffWriter() {
 				auto argument = function->arguments.declarations[i];
 				REGREL32 argumentInfo;
 				argumentInfo.off = getRegisterOffset(function, i + 1 + paramOffset);
-				argumentInfo.typind = getCoffTypeIndex(&debugTypes, getDeclarationType(argument));
+				argumentInfo.typind = 0;
 
 				debugSymbols.ensure(2 + sizeof(argumentInfo));
 				debugSymbols.add2Unchecked(static_cast<u16>(sizeof(argumentInfo) + 1 + argument->name.length));
-				debugSymbols.addUnchecked(&argumentInfo, sizeof(argumentInfo));
+				REGREL32 *patch = (REGREL32 *)debugSymbols.addUnchecked(&argumentInfo, sizeof(argumentInfo));
+				coffTypePatches.add({ &patch->typind, getDeclarationType(argument) });
+
 				debugSymbols.addNullTerminatedString(argument->name);
 			}
 
@@ -3484,7 +2993,7 @@ void runCoffWriter() {
 						debugSymbols.add4Unchecked(code.totalSize - functionStart);
 
 						debugSymbolsRelocations.add4Unchecked(debugSymbols.totalSize);
-						debugSymbolsRelocations.add4Unchecked(textSectionSymbolIndex);
+						debugSymbolsRelocations.add4Unchecked(function->physicalStorage);
 						debugSymbolsRelocations.add2Unchecked(IMAGE_REL_AMD64_SECTION);
 
 						debugSymbols.add2Unchecked(0);
@@ -3496,11 +3005,12 @@ void runCoffWriter() {
 							REGREL32 variableInfo;
 
 							variableInfo.off = getRegisterOffset(function, declaration->physicalStorage);
-							variableInfo.typind = getCoffTypeIndex(&debugTypes, getDeclarationType(declaration));
+							variableInfo.typind = 0;
 
 							debugSymbols.ensure(2 + sizeof(variableInfo));
 							debugSymbols.add2Unchecked(static_cast<u16>(sizeof(variableInfo) + declaration->name.length + 1));
-							debugSymbols.addUnchecked(&variableInfo, sizeof(variableInfo));
+							REGREL32 *patch = (REGREL32 *) debugSymbols.addUnchecked(&variableInfo, sizeof(variableInfo));
+							coffTypePatches.add({ &patch->typind, getDeclarationType(declaration) });
 							debugSymbols.addNullTerminatedString(declaration->name);
 						}
 					}
@@ -3623,7 +3133,7 @@ void runCoffWriter() {
 				debugSymbols.add4Unchecked(0);
 
 				debugSymbolsRelocations.add4Unchecked(debugSymbols.totalSize);
-				debugSymbolsRelocations.add4Unchecked(textSectionSymbolIndex);
+				debugSymbolsRelocations.add4Unchecked(function->physicalStorage);
 				debugSymbolsRelocations.add2Unchecked(IMAGE_REL_AMD64_SECTION);
 
 				debugSymbols.add2Unchecked(0);
@@ -3658,7 +3168,8 @@ void runCoffWriter() {
 			debugSymbols.add2Unchecked(static_cast<u16>(sizeof(DATASYM32) + declaration->name.length - 1));
 			debugSymbols.add2Unchecked(0x110d); // S_GDATA32
 
-			debugSymbols.add4Unchecked(getCoffTypeIndex(&debugTypes, getDeclarationType(declaration)));
+			u32 *patch = debugSymbols.add4Unchecked(0);
+			coffTypePatches.add({ patch, getDeclarationType(declaration) });
 
 			debugSymbolsRelocations.add4Unchecked(debugSymbols.totalSize);
 			debugSymbolsRelocations.add4Unchecked(declaration->physicalStorage);
@@ -3667,7 +3178,7 @@ void runCoffWriter() {
 			debugSymbols.add4Unchecked(0);
 
 			debugSymbolsRelocations.add4Unchecked(debugSymbols.totalSize);
-			debugSymbolsRelocations.add4Unchecked(declaration->flags & DECLARATION_IS_UNINITIALIZED ? BSS_SECTION_NUMBER : DATA_SECTION_NUMBER);
+			debugSymbolsRelocations.add4Unchecked(declaration->physicalStorage);
 			debugSymbolsRelocations.add2Unchecked(IMAGE_REL_AMD64_SECTION);
 
 			debugSymbols.add2Unchecked(0);
@@ -3686,9 +3197,7 @@ void runCoffWriter() {
 			symbol->storageClass = IMAGE_SYM_CLASS_EXTERNAL;
 			symbol->type = 0;
 
-			if ((declaration->flags & DECLARATION_IS_UNINITIALIZED) ||
-				((declaration->initialValue->flavor == ExprFlavor::INT_LITERAL || declaration->initialValue->flavor == ExprFlavor::FLOAT_LITERAL)
-					&& static_cast<ExprLiteral *>(declaration->initialValue)->unsignedValue == 0)) {
+			if (placeValueInBSSSection(declaration)) {
 				bssSection.sizeOfRawData = AlignPO2(bssSection.sizeOfRawData, type->alignment);
 
 				symbol->value = bssSection.sizeOfRawData;
@@ -3734,103 +3243,27 @@ void runCoffWriter() {
 
 		u32 previousSize = debugSymbols.totalSize;
 
+		exportTypeTableToDebugTSection(&debugTypes);
+
+		for (auto patch : coffTypePatches) {
+			*patch.location = getCoffTypeIndex(patch.type);
+		}
+
+		for (auto patch : coffFunctionIdTypePatches) {
+			*patch.location = createFunctionIDType(patch.function);
+		}
+
 		for (u64 i = 0; i < typeTableCapacity; i++) {
 			auto entry = typeTableEntries[i];
 
 			if (entry.hash) {
 				auto type = entry.value;
 
-				if (type->codeviewTypeIndex) {
-					if (type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::ARRAY || type->flavor == TypeFlavor::ENUM) {
-						if (type->flavor == TypeFlavor::STRUCT) {
-							auto structure = static_cast<TypeStruct *>(type);
 
-							u32 memberCount = 0;
 
-							for (auto member : structure->members.declarations) {
-								if (member->flags & DECLARATION_IMPORTED_BY_USING) continue;
-
-								auto type = getDeclarationType(member);
-
-								if (member->flags & DECLARATION_IS_CONSTANT) {
-									if (type != &TYPE_TYPE)
-										continue;
-
-									auto nestType = static_cast<ExprLiteral *>(member->initialValue)->typeValue;
-
-									getCoffTypeIndex(&debugTypes, nestType);
-								}
-								else {
-									getCoffTypeIndex(&debugTypes, type);
-
-								}
-							}
-
-							u32 fieldList = DEBUG_LEAF{
-								debugTypes.add2(0x1203); // LF_FIELDLIST
-
-								auto struct_ = static_cast<TypeStruct *>(type);
-
-								u16 hasNested = 0;
-
-								for (auto member : struct_->members.declarations) {
-									if (member->flags & DECLARATION_IMPORTED_BY_USING) continue;
-
-									auto type = getDeclarationType(member);
-
-									if (member->flags & DECLARATION_IS_CONSTANT) {
-										if (type != &TYPE_TYPE)
-											continue;
-
-										auto nestType = static_cast<ExprLiteral *>(member->initialValue)->typeValue;
-
-										alignDebugTypes(&debugTypes);
-										debugTypes.ensure(6);
-										debugTypes.add2(0x1510); // LF_NESTTYPE
-										debugTypes.add2(0);
-										debugTypes.add4(nestType->codeviewTypeIndex);
-										debugTypes.addNullTerminatedString(member->name);
-										hasNested = 0x10;
-										memberCount++;
-									}
-									else {
-										alignDebugTypes(&debugTypes);
-										debugTypes.ensure(10);
-										debugTypes.add2Unchecked(0x150D); // LF_MEMBER
-										debugTypes.add2Unchecked(0x3); // public
-										debugTypes.add4Unchecked(type->codeviewTypeIndex);
-										debugTypes.add2Unchecked(member->physicalStorage); // offset
-										debugTypes.addNullTerminatedString(member->name);
-										memberCount++;
-
-									}
-								}
-							};
-
-							bool isUnion = structure->flags & TYPE_STRUCT_IS_UNION ? true : false;
-
-							u16 packed = structure->flags & TYPE_STRUCT_IS_PACKED ? 1 : 0;
-							u16 nested = structure->enclosingScope->flavor == BlockFlavor::STRUCT ? 8 : 0;
-
-							DEBUG_LEAF{
-								debugTypes.ensure(20);
-								debugTypes.add2Unchecked(isUnion ? 0x1506 : 0x1505); //LF_UNION : LF_STRUCTURE
-								debugTypes.add2Unchecked(memberCount);
-								debugTypes.add2Unchecked(0x200 | packed); // Has a unique name
-								debugTypes.add4Unchecked(fieldList); // field list
-								debugTypes.add4Unchecked(0); // super class
-								debugTypes.add4Unchecked(0); // vtable
-								debugTypes.add2Unchecked(structure->size);
-								appendCoffName(&debugTypes, structure);
-								debugTypes.add1(0);
-								debugTypes.add1('@');
-								addStructUniqueNumber(&debugTypes, structure->codeviewTypeIndex); // Use the same unique name as the forward declaration
-							};
-						}
-
-						if (!(type->flags & (TYPE_ARRAY_IS_FIXED | TYPE_ENUM_IS_FLAGS)))
-							emitUDT(&debugSymbols, type);
-					}
+				if (type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::ARRAY || type->flavor == TypeFlavor::ENUM) {
+					if (!(type->flags & (TYPE_ARRAY_IS_FIXED | TYPE_ENUM_IS_FLAGS)))
+						emitUDT(&debugSymbols, type);
 				}
 
 				if (!(type->flags & TYPE_USED_IN_OUTPUT))
@@ -4290,6 +3723,7 @@ void runCoffWriter() {
 		sections.add({ &bssSection });
 		sections.add({ &dataSection, &data, &dataRelocations });
 		sections.add({ &textSection, &code, &codeRelocations });
+
 		sections.add({ &debugSymbolSection, &debugSymbols, &debugSymbolsRelocations });
 		sections.add({ &debugTypeSection, &debugTypes });
 		sections.add({ &pdataSection, &pdata, &pdataRelocations });

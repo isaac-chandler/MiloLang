@@ -23,29 +23,53 @@ static u32 nextStructHash = STRUCT_HASH_PRIME;
 
 static u32 count;
 
+u32 findInTypeTable(Type *type) {
+	u32 slot = type->hash & (typeTableCapacity - 1);
+
+	while (typeTableEntries[slot].hash) {
+		if (typeTableEntries[slot].value == type)
+			break;
+
+		if (++slot == typeTableCapacity) slot = 0;
+	}
+
+	assert(typeTableEntries[slot].value == type);
+
+	return slot;
+}
+
+u32 findSlotInTypeTable(Type *type) {
+	u32 slot = type->hash & (typeTableCapacity - 1);
+
+	while (typeTableEntries[slot].hash) {
+		if (typeTableEntries[slot].value == type)
+			break;
+
+		if (++slot == typeTableCapacity) slot = 0;
+	}
+
+	return slot;
+}
+
 void rehash() {
 	PROFILE_FUNC();
-	u32 newCapacity = typeTableCapacity * 2;
-	TypeTableEntry *newEntries = new TypeTableEntry[newCapacity];
+	u32 oldCapacity = typeTableCapacity;
+	typeTableCapacity *= 2;
+	TypeTableEntry *oldEntries = typeTableEntries;
+	typeTableEntries = new TypeTableEntry[typeTableCapacity];
 
-	for (u32 i = 0; i < typeTableCapacity; i++) {
-		TypeTableEntry entry = typeTableEntries[i];
+	for (u32 i = 0; i < oldCapacity; i++) {
+		TypeTableEntry entry = oldEntries[i];
 
 		if (entry.hash == 0) continue;
 
-		u32 slot = entry.hash & (newCapacity - 1);
+		u32 slot = findSlotInTypeTable(entry.value);
 
-		while (newEntries[slot].hash) {
-			if (++slot == newCapacity) slot = 0;
-		}
-
-		newEntries[slot].hash =entry.hash;
-		newEntries[slot].value = entry.value;
+		typeTableEntries[slot].hash =entry.hash;
+		typeTableEntries[slot].value = entry.value;
 	}
 
-	delete[] typeTableEntries;
-	typeTableEntries = newEntries;
-	typeTableCapacity = newCapacity;
+	delete[] oldEntries;
 }
 
 void insertIntoTable(Type *type, u32 slot) {
@@ -53,11 +77,7 @@ void insertIntoTable(Type *type, u32 slot) {
 	if (count * 10 > typeTableCapacity * 7) {
 		rehash();
 
-		slot = type->hash & (typeTableCapacity - 1);
-
-		while (typeTableEntries[slot].hash) {
-			if (++slot == typeTableCapacity) slot = 0;
-		}
+		slot = findSlotInTypeTable(type);
 	}
 
 	typeTableEntries[slot].value = type;
@@ -70,11 +90,7 @@ void insertIntoTable(Type *type) {
 		rehash();
 	}
 
-	u32 slot = type->hash & (typeTableCapacity - 1);
-
-	while (typeTableEntries[slot].hash) {
-		if (++slot == typeTableCapacity) slot = 0;
-	}
+	u32 slot = findSlotInTypeTable(type);
 
 	typeTableEntries[slot].value = type;
 	typeTableEntries[slot].hash = type->hash;
@@ -126,8 +142,8 @@ TypePointer *getPointer(Type *type) {
 	return result;
 }
 
-// The enclosingScope for these declarations will be incorrect but that shouldn't matter @Volatile
 ExprLiteral *unsignedLiteralType;
+// The enclosingScope for these declarations will be incorrect but that shouldn't matter @Volatile
 Declaration *countDeclaration;
 Declaration *capacityDeclaration;
 

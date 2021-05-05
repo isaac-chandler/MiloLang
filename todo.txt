@@ -9,6 +9,9 @@ enums
 Constexpr
  - slices
  - bitwise casts cast(T,bit)
+ 
+
+Maybe make [] operations on a pointer illegal so that pointers to an array are less error prone (then maybe make [] on a pointer to array work the same way as . on a pointer (just do the dereference))
 
 Ternary operator
 
@@ -212,5 +215,10 @@ function polymorhpism
  - Allow $T/type to only match the polymorph if T is convertible to type
  - Allow function arguments to be baked
  - Allow fixed array length to be polymorphic
- 
+
+separate CoffWriter into platform independent and platform specific parts
+ - CodeView/DWARF
+ - COFF/ELF
+ - x64 codegen, filling data segment
+
 struct polymorhpism
