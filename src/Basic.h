@@ -176,11 +176,14 @@ inline thread_local Profile *profileIndex;
 
 struct Timer {
 	__forceinline Timer(const char *name) {
+
 		Profile *write = profileIndex++;
 
 		write->name = name;
 
+		_ReadWriteBarrier();
 		write->time = __rdtsc();
+		_ReadWriteBarrier();
 	}
 
 	__forceinline Timer(const char *name, const char *color) {
@@ -189,13 +192,17 @@ struct Timer {
 		write->name = name;
 		write->color = color;
 
+		_ReadWriteBarrier();
 		write->time = __rdtsc();
+		_ReadWriteBarrier();
 	}
 
 	__forceinline ~Timer() {
 		Profile *write = profileIndex++;
 
+		_ReadWriteBarrier();
 		write->time = __rdtsc();
+		_ReadWriteBarrier();
 	}
 };
 

@@ -51,20 +51,24 @@ struct BlockEntry {
 };
 
 u64 doHash(String string) {
+	/*
 	u64 hash = 0;
 
 	for (u32 i = 0; i < string.length; i++) {
 		hash *= 251;
 		hash += string.characters[i];
 	}
-	// @Incomplete: 
-	//return MurmurHash64A(string.characters, string.length, 0);
+	*/
+
+	u64 hash = MurmurHash64A(string.characters, string.length, 0);
+
+	if (hash == 0) hash = 1;
 
 	return hash;
 }
 
 void insert(Block *block, BlockEntry entry) {
-	PROFILE_ZONE();
+	PROFILE_FUNC();
 	u64 slot = entry.hash & (block->tableCapacity - 1);
 
 	u64 dist = 1;
@@ -113,6 +117,7 @@ void rehash(Block *block) {
 }
 
 void addToTable(Block *block, Declaration *declaration) {
+	PROFILE_FUNC();
 	if (declaration->name.length) {
 		u64 hash = doHash(declaration->name);
 

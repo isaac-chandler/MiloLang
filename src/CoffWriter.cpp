@@ -1055,7 +1055,7 @@ void runCoffWriter() {
 		u32 subsectionOffset = debugSymbols.totalSize;
 
 		COMPILESYM3 compileFlags;
-		compileFlags.flags.iLanguage = 1; // @Cleanup Check no other language uses this
+		compileFlags.flags.iLanguage = 20; // @Cleanup Check no other language uses this
 		compileFlags.flags.unused = 0;
 
 #if BUILD_WINDOWS
@@ -3245,12 +3245,15 @@ void runCoffWriter() {
 
 		exportTypeTableToDebugTSection(&debugTypes);
 
-		for (auto patch : coffTypePatches) {
-			*patch.location = getCoffTypeIndex(patch.type);
-		}
+		{
+			PROFILE_ZONE("Patch debug types");
+			for (auto patch : coffTypePatches) {
+				*patch.location = getCoffTypeIndex(patch.type);
+			}
 
-		for (auto patch : coffFunctionIdTypePatches) {
-			*patch.location = createFunctionIDType(patch.function);
+			for (auto patch : coffFunctionIdTypePatches) {
+				*patch.location = createFunctionIDType(patch.function);
+			}
 		}
 
 		for (u64 i = 0; i < typeTableCapacity; i++) {

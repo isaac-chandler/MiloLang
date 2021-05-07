@@ -85,6 +85,7 @@ public:
 	u32 capacity = 0;
 
 	__declspec(noinline) void resize(u32 newCapacity) {
+		PROFILE_FUNC();
 		assert(newCapacity >= count);
 
 		if (newCapacity < 4) {

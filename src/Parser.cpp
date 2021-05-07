@@ -848,6 +848,15 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 		for (Block *block = lexer->currentBlock; block; block = block->parentBlock) {
 			if (block->flavor == BlockFlavor::ARGUMENTS) {
 				return_->returnsFrom = CAST_FROM_SUBSTRUCT(ExprFunction, arguments, block);
+
+				auto inDefer = lexer->inDeferStack[lexer->inDeferStack.count - 1];
+
+				if (inDefer) {
+					reportError(return_, "Error: Cannot have a return inside a defer");
+					reportError(inDefer, "");
+					return nullptr;
+				}
+
 				return return_;
 			}
 		}
@@ -913,6 +922,10 @@ ExprBlock *parseBlock(LexerFile *lexer, bool isCase, ExprBlock *block) {
 			break;
 		}
 		else if (lexer->token.type == TokenT::DEFER) {
+			if (block->declarations.flavor != BlockFlavor::IMPERATIVE) {
+				reportError(&lexer->token, "Error: Defer statements can only be used in an imperative scope");
+				return nullptr;
+			}
 
 			auto defer = PARSER_NEW(ExprDefer);
 			defer->flavor = ExprFlavor::DEFER;
@@ -920,19 +933,18 @@ ExprBlock *parseBlock(LexerFile *lexer, bool isCase, ExprBlock *block) {
 			defer->enclosingScope = lexer->currentBlock;
 
 			lexer->advance();
+			defer->end = lexer->previousTokenEnd;
 			
+			auto oldInDefer = lexer->inDeferStack[lexer->inDeferStack.count - 1];
+			lexer->inDeferStack[lexer->inDeferStack.count - 1] = defer;
 			defer->expr = parseStatement(lexer, false);
+			lexer->inDeferStack[lexer->inDeferStack.count - 1] = oldInDefer;
 
 			if (!defer->expr) {
 				return nullptr;
 			}
 
 			defer->end = lexer->previousTokenEnd;
-
-			if (block->declarations.flavor != BlockFlavor::IMPERATIVE) {
-				reportError("Error: Defer statements can only be used in an imperative scope");
-				return nullptr;
-			}
 
 			block->exprs.add(defer);
 
@@ -1401,7 +1413,9 @@ ExprFunction *parseFunctionOrFunctionType(LexerFile *lexer, CodeLocation start, 
 
 		function->flavor = ExprFlavor::FUNCTION;
 
+		lexer->inDeferStack.add(nullptr); // The defer stack is used to determine if there is a defer inside a return, but it is fine if there is a return inside a function inside a defer
 		function->body = parseBlock(lexer, false, usingBlock);
+		lexer->inDeferStack.pop();
 		if (!function->body) {
 			return nullptr;
 		}

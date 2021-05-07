@@ -18,6 +18,8 @@ Ternary operator
 Improve IR generators handling of larger than machine size values (currently they are just allocated multiple consecutive register numbers)
  - Maybe large values are always by pointer, similar to LLVM (probably include structs/arrays that are machine sized as well so we don't have to special case)
 
+Speed up IR Runner (currenly the #run directives in chess.milo take ~1.5 ms, which is like 100x to slow)
+
 Syntax for partial array literals, where the remaining values are filled in with the default value 
  - maybe an option to fill with last specified value as well
    - this would give an easy way to fill an array with a certain value
@@ -153,10 +155,11 @@ Make comma assignments work for things other than function calls
  - Do we really need this, I can't think of any other use cases than a swap, if we really want this functionality, maybe just add a swap primitive i.e. #swap a, b
 
 string representation
- - is it worth having implict conversion to utf16 C-strings (windows wide strings) and utf32 C-strings
+ - is it worth having implict conversion to utf16 C-strings (windows wide strings) and utf32 C-strings at compile time
  - utf16 and utf32 string types?
 
-function overloading
+make x64 debug info handle structs defined in procedures
+make it handle nested procedures (if possible)
 
 performance
  - Profile TypeTable.cpp
