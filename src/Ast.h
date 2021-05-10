@@ -41,6 +41,8 @@ enum class IrOp : u8 {
 	SHIFT_RIGHT,
 	READ,
 	WRITE,
+	ZERO_MEMORY, 
+	COPY, 
 	SET,
 	GOTO,
 	IF_Z_GOTO,
@@ -52,10 +54,12 @@ enum class IrOp : u8 {
 	NOT_EQUAL,
 	EQUAL,
 	ADDRESS_OF_GLOBAL,
-	ADDRESS_OF_LOCAL,
+	STACK_ADDRESS,
 	IMMEDIATE,
 	FLOAT_TO_INT,
 	INT_TO_FLOAT,
+	FLOAT_CAST, 
+	EXTEND_INT, 
 	RETURN,
 	CALL,
 	NEG,
@@ -79,8 +83,6 @@ inline bool isStandardSize(u64 size) {
 	return size == 1 || size == 2 || size == 4 || size == 8;
 }
 
-#define DEST_NONE UINT32_MAX
-
 struct Argument {
 	u32 number;
 	struct Type *type;
@@ -97,20 +99,15 @@ struct Ir {
 		struct {
 			u32 dest;
 			u32 opSize;
-			u32 a;
-
+			union {
+				u32 a;
+				struct ExprFunction *function;
+			};
 
 			union {
 				u32 b;
 				u64 immediate;
-				struct Declaration *declaration;
-				struct ExprFunction *function;
-				struct ExprStringLiteral *string;
-				struct Type *type;
-				struct Block *block;
-				u32 branchTarget;
-				u32 destSize;
-				FunctionCall *arguments;
+				void *data;
 			};
 
 		};
@@ -126,9 +123,10 @@ struct Ir {
 };
 
 struct IrState {
-	u32 nextRegister = 1;
-	u32 callAuxStorage = 0;
-	u32 parameterSpace = 0;
+	u32 nextRegister = 0;
+	u32 stackSpace = 0;
+	u32 maxCallArguments = 0;
+	u32 parameters = 0;
 	Array<Ir> ir;
 
 	BucketedArenaAllocator allocator;

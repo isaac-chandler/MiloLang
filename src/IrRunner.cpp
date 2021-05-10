@@ -13,7 +13,7 @@ struct StackNode {
 
 	u32 count;
 	u32 offset;
-	u64 data[];
+	alignas(16) u64 data[];
 };
 
 StackNode *allocateStackBlock(u32 size) {
@@ -64,34 +64,7 @@ void freeStack(VMState *state, u32 count) {
 
 
 char getSigChar(Type *type) {
-	if (type == &TYPE_S8) {
-		return DC_SIGCHAR_CHAR;
-	}
-	else if (type == &TYPE_S16) {
-		return DC_SIGCHAR_SHORT;
-	}
-	else if (type == &TYPE_S32) {
-		return DC_SIGCHAR_INT;
-	}
-	else if (type == &TYPE_S64) {
-		return DC_SIGCHAR_LONGLONG;
-	}
-	else if (type == &TYPE_U8) {
-		return DC_SIGCHAR_UCHAR;
-	}
-	else if (type == &TYPE_U16) {
-		return DC_SIGCHAR_USHORT;
-	}
-	else if (type == &TYPE_U32) {
-		return DC_SIGCHAR_UINT;
-	}
-	else if (type == &TYPE_U64) {
-		return DC_SIGCHAR_ULONGLONG;
-	}
-	else if (type == &TYPE_BOOL) {
-		return DC_SIGCHAR_BOOL;
-	}
-	else if (type == &TYPE_VOID) {
+	if (type == &TYPE_VOID) {
 		return DC_SIGCHAR_VOID;
 	}
 	else if (type == &TYPE_F32) {
@@ -99,12 +72,6 @@ char getSigChar(Type *type) {
 	}
 	else if (type == &TYPE_F64) {
 		return DC_SIGCHAR_DOUBLE;
-	}
-	else if (type->flavor == TypeFlavor::ENUM) {
-		return getSigChar(static_cast<TypeEnum *>(type)->integerType);
-	}
-	else if (type->flavor == TypeFlavor::POINTER || type->flavor == TypeFlavor::TYPE || type->flavor == TypeFlavor::FUNCTION) {
-		return DC_SIGCHAR_POINTER;
 	}
 	else if (type->size == 1) {
 		return DC_SIGCHAR_UCHAR;
@@ -211,10 +178,35 @@ void deinitVMState(VMState *state) {
 
 static ExprRun *runningDirective;
 
-
+void getDcParameter(u64 *dest, Type *type, DCArgs *dcArgs) {
+	if (type == &TYPE_F32) {
+		*reinterpret_cast<float *>(dest) = dcbArgFloat(dcArgs);
+	}
+	else if (type == &TYPE_F64) {
+		*reinterpret_cast<double *>(dest) = dcbArgDouble(dcArgs);
+	}
+	else if (type->size == 1) {
+		*dest = dcbArgUChar(dcArgs);
+	}
+	else if (type->size == 2) {
+		*dest = dcbArgUShort(dcArgs);
+	}
+	else if (type->size == 4) {
+		*dest = dcbArgUInt(dcArgs);
+	}
+	else if (type->size == 8) {
+		*dest = dcbArgULongLong(dcArgs);
+	}
+	else {
+		*reinterpret_cast<void **>(dest) = dcbArgPointer(dcArgs);
+	}
+}
 
 void runFunction(VMState *state, ExprFunction *expr, Ir *caller, DCArgs *dcArgs, u64 *callerStack) {
+	auto callerArguments = static_cast<FunctionCall *>(caller->data);
+
 	if (expr->flags & EXPR_FUNCTION_IS_COMPILER) {
+		assert(!dcArgs);
 		assert(expr->valueOfDeclaration);
 
 		if (std::this_thread::get_id() != mainThread) {
@@ -228,7 +220,7 @@ void runFunction(VMState *state, ExprFunction *expr, Ir *caller, DCArgs *dcArgs,
 			name->flavor = ExprFlavor::STRING_LITERAL;
 			name->start = {};
 			name->end = {};
-			name->string = *reinterpret_cast<String *>(callerStack + caller->arguments->args[0].number);
+			name->string = *reinterpret_cast<String *>(callerStack[callerArguments->args[0].number]);
 			name->type = &TYPE_STRING;
 
 			auto load = new ExprLoad;
@@ -244,7 +236,7 @@ void runFunction(VMState *state, ExprFunction *expr, Ir *caller, DCArgs *dcArgs,
 			inferInput.add(InferQueueJob(import, runningDirective->module));
 		}
 		else if (expr->valueOfDeclaration->name == "set_build_options") {
-			auto options = *reinterpret_cast<Build_Options *>(callerStack + caller->arguments->args[0].number);
+			auto options = *reinterpret_cast<Build_Options *>(callerStack[callerArguments->args[0].number]);
 
 			if (options.backend != Build_Options::Backend::X64 && options.backend != Build_Options::Backend::LLVM) {
 				reportError(caller, "Error: Unrecognized backend %llu in set_build_options", options.backend);
@@ -255,14 +247,10 @@ void runFunction(VMState *state, ExprFunction *expr, Ir *caller, DCArgs *dcArgs,
 			buildOptions = options;
 		}
 		else if (expr->valueOfDeclaration->name == "get_build_options") {
-			if (caller->dest) {
-				*reinterpret_cast<Build_Options *>(callerStack + caller->dest) = buildOptions;
-			}
+			*reinterpret_cast<Build_Options *>(callerStack[callerArguments->args[0].number]) = buildOptions;
 		}
 		else if (expr->valueOfDeclaration->name == "get_build_arguments") {
-			if (caller->dest) {
-				*reinterpret_cast<MiloArray<MiloString> *>(callerStack + caller->dest) = buildArguments;
-			}
+			*reinterpret_cast<MiloArray<MiloString> *>(callerStack[callerArguments->args[0].number]) = buildArguments;
 		}
 		else {
 			reportError(caller,           "Error: Unknown compiler function: %.*s", STRING_PRINTF(expr->valueOfDeclaration->name));
@@ -271,68 +259,33 @@ void runFunction(VMState *state, ExprFunction *expr, Ir *caller, DCArgs *dcArgs,
 		return;
 	}
 
-	u32 dummyStorage = 0;
-	u32 outParameters = expr->returns.declarations.count - 1;
+	u32 spaceToAllocate = AlignPO2(expr->state.nextRegister, 2) + AlignPO2(expr->state.stackSpace, 16) / 8;
 
-	for (u32 i = 0; i < outParameters; i++) {
-		if (caller->arguments->args[expr->arguments.declarations.count + i].number == static_cast<u32>(-1)) {
-			dummyStorage = my_max(dummyStorage,
-				(getDeclarationType(expr->returns.declarations[i + 1])->size + 7) / 8);
-		}
-	}
-
-	u64 *stack = allocateStack(state, expr->state.nextRegister + dummyStorage);
-	stack[0] = 0; // The 0th register is the special constant 0 value
+	u64 *stack = allocateStack(state, spaceToAllocate);
+	u64 stackSpace = reinterpret_cast<u64>(stack + AlignPO2(expr->state.nextRegister, 2));
 
 #if BUILD_DEBUG
 	CodeLocation line;
 #endif
 
 	if (dcArgs) {
-		for (u32 i = 0; i < expr->arguments.declarations.count; i++) {
-			auto &argument = expr->arguments.declarations[i];
-			auto argumentType = getDeclarationType(argument);
+		u32 argIndex = 0;
 
-			if (argumentType == &TYPE_F32) {
-				*reinterpret_cast<float *>(stack + expr->arguments.declarations[i]->physicalStorage) = dcbArgFloat(dcArgs);
-			}
-			else if (argumentType == &TYPE_F64) {
-				*reinterpret_cast<double *>(stack + expr->arguments.declarations[i]->physicalStorage) = dcbArgDouble(dcArgs);
-			}
-			else if (argumentType->size == 1) {
-				stack[expr->arguments.declarations[i]->physicalStorage] = dcbArgUChar(dcArgs);
-			}
-			else if (argumentType->size == 2) {
-				stack[expr->arguments.declarations[i]->physicalStorage] = dcbArgUShort(dcArgs);
-			}
-			else if (argumentType->size == 4) {
-				stack[expr->arguments.declarations[i]->physicalStorage] = dcbArgUInt(dcArgs);
-			}
-			else if (argumentType->size == 8) {
-				stack[expr->arguments.declarations[i]->physicalStorage] = dcbArgULongLong(dcArgs);
-			}
-			else {
-				memcpy(stack + expr->arguments.declarations[i]->physicalStorage, dcbArgPointer(dcArgs), argumentType->size);
-			}
+		if (!isStandardSize(getDeclarationType(expr->returns.declarations[0])->size)) {
+			getDcParameter(stack + argIndex++, getDeclarationType(expr->returns.declarations[0]), dcArgs);
+		}
+
+		for (auto argument : expr->arguments.declarations) {
+			getDcParameter(stack + argIndex++, getDeclarationType(argument), dcArgs);
+		}
+
+		for (u32 i = 0; i < expr->returns.declarations.count; i++) {
+			getDcParameter(stack + argIndex++, getDeclarationType(expr->returns.declarations[i]), dcArgs);
 		}
 	}
 	else {
-
-		assert(expr->arguments.declarations.count == caller->arguments->argCount - outParameters);
-
-		for (u32 i = 0; i < expr->arguments.declarations.count; i++) {
-			auto &argument = caller->arguments->args[i];
-			for (u32 j = 0; j < (argument.type->size + 7) / 8; j++) {
-				stack[expr->arguments.declarations[i]->physicalStorage + j] = callerStack[argument.number + (argument.number == 0 ? 0 : j)];
-			}
-		}
-
-		for (u32 i = 0; i < outParameters; i++) {
-			auto number = caller->arguments->args[expr->arguments.declarations.count + i].number;
-			if (number == static_cast<u64>(-1))
-				stack[expr->returns.declarations[i + 1]->physicalStorage] = reinterpret_cast<u64>(stack + expr->state.nextRegister);
-			else
-				stack[expr->returns.declarations[i + 1]->physicalStorage] = callerStack[number];
+		for (u32 i = 0; i < callerArguments->argCount; i++) {
+			stack[i] = callerStack[callerArguments->args[i].number];
 		}
 	}
 
@@ -377,11 +330,11 @@ if (op.flags & IR_FLOAT_OP) {\
 
 		u64 signBit = 1ULL << (op.opSize * 8ULL - 1ULL);
 
-		if (op.destSize == 8) {
+		if (op.b == 8) {
 			destMask = 0xFFFF'FFFF'FFFF'FFFFULL;
 		}
 		else {
-			destMask = (1ULL << (op.destSize * 8ULL)) - 1ULL;
+			destMask = (1ULL << (op.b * 8ULL)) - 1ULL;
 		}
 
 		switch (op.op) {
@@ -576,108 +529,40 @@ if (op.flags & IR_FLOAT_OP) {\
 
 				dcReset(state->dc);
 
-				for (u64 i = 0; i < op.arguments->argCount; i++) {
-					auto type = op.arguments->args[i].type;
-					auto number = op.arguments->args[i].number;
+				auto arguments = static_cast<FunctionCall *>(op.data);
 
-					if (type->flavor == TypeFlavor::ENUM) {
-						type = static_cast<TypeEnum *>(type)->integerType;
-					}
+				for (u64 i = 0; i < arguments->argCount; i++) {
+					auto type = arguments->args[i].type;
+					auto number = arguments->args[i].number;
 
-					if (type == &TYPE_BOOL) {
-						dcArgBool(state->dc, stack[number] & 0xFF);
-					}
-					else if (type == &TYPE_S8 || type == &TYPE_U8) {
-						dcArgChar(state->dc, stack[number] & 0xFF);
-					}
-					else if (type == &TYPE_S16 || type == &TYPE_U16) {
-						dcArgShort(state->dc, stack[number] & 0xFFFF);
-					}
-					else if (type == &TYPE_S32 || type == &TYPE_U32) {
-						dcArgInt(state->dc, stack[number] & 0xFFFF'FFFFULL);
-					}
-					else if (type == &TYPE_S64 || type == &TYPE_U64) {
-						dcArgLongLong(state->dc, stack[number]);
-					}
-					else if (type == &TYPE_TYPE || type->flavor == TypeFlavor::POINTER || type->flavor == TypeFlavor::FUNCTION) {
-						dcArgPointer(state->dc, reinterpret_cast<void *>(stack[number]));
-					}
-					else if (type == &TYPE_F32) {
+					if (type == &TYPE_F32) {
 						dcArgFloat(state->dc, *reinterpret_cast<float *>(stack + number));
 					}
 					else if (type == &TYPE_F64) {
 						dcArgDouble(state->dc, *reinterpret_cast<double *>(stack + number));
 					}
-					else if (type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::ARRAY || type == &TYPE_STRING) {
-						auto struct_ = dcNewStruct(1, DEFAULT_ALIGNMENT); // @Speed: allocating a struct every time
-
-						// @Hack: This may not work for some calling conventions if they separate structs into their individual values
-						dcStructField(struct_, DC_SIGCHAR_CHAR, type->alignment, type->size);
-
-						if (number == 0 && type->size > 8) {
-							auto zeros = malloc(type->size); // @Speed
-							memset(zeros, 0, type->size);
-
-							dcArgStruct(state->dc, struct_, zeros);
-
-							free(zeros);
-						}
-						else {
-							dcArgStruct(state->dc, struct_, stack + number);
-						}
-
-						dcFreeStruct(struct_);
+					if (type->size == 1) {
+						dcArgChar(state->dc, stack[number] & 0xFF);
+					}
+					else if (type->size == 2) {
+						dcArgShort(state->dc, stack[number] & 0xFF);
+					}
+					else if (type->size == 4) {
+						dcArgInt(state->dc, stack[number] & 0xFFFF'FFFFULL);
+					}
+					else if (type->size == 8) {
+						dcArgLongLong(state->dc, stack[number]);
 					}
 					else {
 						assert(false);
 					}
 				}
 
-				auto type = op.arguments->returnType;
+				auto type = arguments->returnType;
 
 
-				if (type->flavor == TypeFlavor::ENUM) {
-					type = static_cast<TypeEnum *>(type)->integerType;
-				}
-
-				if (type == &TYPE_VOID) {
+				if (type == &TYPE_VOID || op.opSize == 0) {
 					dcCallVoid(state->dc, function);
-				}
-				else if (type == &TYPE_BOOL) {
-					bool val = dcCallBool(state->dc, function);
-
-					if (op.dest)
-						stack[op.dest] = val;
-				}
-				else if (type == &TYPE_S8 || type == &TYPE_U8) {
-					char val = dcCallChar(state->dc, function);
-
-					if (op.dest)
-						stack[op.dest] = type->flags & TYPE_INTEGER_IS_SIGNED ? (u64) (s64) val : (u64) val;
-				}
-				else if (type == &TYPE_S16 || type == &TYPE_U16) {
-					short val = dcCallShort(state->dc, function);
-
-					if (op.dest)
-						stack[op.dest] = type->flags & TYPE_INTEGER_IS_SIGNED ? (u64) (s64) val : (u64) val;
-				}
-				else if (type == &TYPE_S32 || type == &TYPE_U32) {
-					int val = dcCallInt(state->dc, function);
-
-					if (op.dest)
-						stack[op.dest] = type->flags & TYPE_INTEGER_IS_SIGNED ? (u64) (s64) val : (u64) val;
-				}
-				else if (type == &TYPE_S64 || type == &TYPE_U64) {
-					long long val = dcCallLongLong(state->dc, function);
-					
-					if (op.dest)
-						stack[op.dest] = val;
-				}
-				else if (type == &TYPE_TYPE || type->flavor == TypeFlavor::POINTER || type->flavor == TypeFlavor::FUNCTION) {
-					void *val = dcCallPointer(state->dc, function);
-
-					if (op.dest)
-						stack[op.dest] = reinterpret_cast<u64>(val);
 				}
 				else if (type == &TYPE_F32) {
 					float val = dcCallFloat(state->dc, function);
@@ -691,21 +576,29 @@ if (op.flags & IR_FLOAT_OP) {\
 					if (op.dest)
 						*reinterpret_cast<double *>(stack + op.dest) = val;
 				}
-				else if (type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::ARRAY || type == &TYPE_STRING) {
-					auto struct_ = dcNewStruct(1, DEFAULT_ALIGNMENT); // @Speed
-
-					// @Hack: This may not work for some calling conventions
-					dcStructField(struct_, DC_SIGCHAR_CHAR, type->alignment, type->size);
+				else if (type->size == 1) {
+					char val = dcCallChar(state->dc, function);
 
 					if (op.dest)
-						dcCallStruct(state->dc, function, struct_, stack + op.dest);
-					else {
-						void *dummy = malloc(type->size); // @Speed
-						dcCallStruct(state->dc, function, struct_, dummy);
-						free(dummy);
-					}
+						stack[op.dest] = val;
+				}
+				else if (type->size == 2) {
+					short val = dcCallShort(state->dc, function);
 
-					dcFreeStruct(struct_);
+					if (op.dest)
+						stack[op.dest] = type->flags & TYPE_INTEGER_IS_SIGNED ? (u64) (s64) val : (u64) val;
+				}
+				else if (type->size == 4) {
+					int val = dcCallInt(state->dc, function);
+
+					if (op.dest)
+						stack[op.dest] = type->flags & TYPE_INTEGER_IS_SIGNED ? (u64) (s64) val : (u64) val;
+				}
+				else if (type->size == 8) {
+					long long val = dcCallLongLong(state->dc, function);
+					
+					if (op.dest)
+						stack[op.dest] = val;
 				}
 				else {
 					assert(false);
@@ -717,15 +610,10 @@ if (op.flags & IR_FLOAT_OP) {\
 			break;
 		}
 		case IrOp::RETURN: {
-			if (op.opSize != 0 && caller->dest) {
-				if (op.a == 0) {
-					memset(callerStack + caller->dest, 0, op.opSize);
-				}
-				else {
-					memcpy(callerStack + caller->dest, stack + op.a, op.opSize);
-				}
+			if (op.opSize != 0 && caller->opSize != 0) {
+				memcpy(callerStack + caller->dest, stack + op.a, op.opSize);
 			}
-			freeStack(state, expr->state.nextRegister);
+			freeStack(state, spaceToAllocate);
 			return;
 		}
 		case IrOp::FLOAT_TO_INT: {
@@ -749,7 +637,7 @@ if (op.flags & IR_FLOAT_OP) {\
 		}
 		case IrOp::INT_TO_FLOAT: {
 			if (op.flags & IR_SIGNED_OP) {
-				if (op.destSize == 8) {
+				if (op.b == 8) {
 					*reinterpret_cast<double *>(stack + op.dest) = static_cast<double>(S_A);
 				}
 				else {
@@ -757,7 +645,7 @@ if (op.flags & IR_FLOAT_OP) {\
 				}
 			}
 			else {
-				if (op.destSize == 8) {
+				if (op.b == 8) {
 					*reinterpret_cast<double *>(stack + op.dest) = static_cast<double>(A);
 				}
 				else {
@@ -766,67 +654,60 @@ if (op.flags & IR_FLOAT_OP) {\
 			}
 			break;
 		}
+		case IrOp::EXTEND_INT: {
+			auto result = A;
+
+			if (op.flags & IR_SIGNED_OP) {
+				result = result & signBit ? result | ~destMask : result;
+			}
+
+			stack[op.dest] = result & destMask;
+			break;
+		}
+		case IrOp::FLOAT_CAST: {
+			if (op.opSize == 4) {
+				assert(op.b == 8);
+
+				*reinterpret_cast<double *>(stack + op.dest) = *reinterpret_cast<float *>(stack + op.a);
+			}
+			else {
+				assert(op.opSize == 8);
+				assert(op.b == 4);
+
+				*reinterpret_cast<float *>(stack + op.dest) = static_cast<float>(*reinterpret_cast<double *>(stack + op.a));
+			}
+			break;
+		}
 		case IrOp::IMMEDIATE: {
 			stack[op.dest] = op.immediate & opMask;
 			break;
 		}
 		case IrOp::SET: {
-			if (op.opSize != op.destSize && isStandardSize(op.opSize)) {
-				if (op.flags & IR_FLOAT_OP) {
-					if (op.opSize == 4) {
-						assert(op.destSize == 8);
-
-						*reinterpret_cast<double *>(stack + op.dest) = *reinterpret_cast<float *>(stack + op.a);
-					}
-					else {
-						assert(op.opSize == 8);
-						assert(op.destSize == 4);
-
-						*reinterpret_cast<float *>(stack + op.dest) = static_cast<float>(*reinterpret_cast<double *>(stack + op.a));
-					}
-				}
-				else {
-					auto result = A;
-
-					if (op.flags & IR_SIGNED_OP) {
-						result = result * signBit ? result | ~destMask : result;
-					}
-
-					stack[op.dest] = result & destMask;
-				}
-			}
-			else {
-				assert(op.opSize == op.destSize);
-
-				if (op.a == 0) {
-					memset(stack + op.dest, 0, op.opSize);
-				}
-				else {
-					memcpy(stack + op.dest, stack + op.a, op.opSize);
-				}
-			}
+			stack[op.dest] = stack[op.a];
 			break;
 		}
 		case IrOp::READ: {
-			memcpy(stack + op.dest, reinterpret_cast<void *>(stack[op.a]), op.destSize);
+			memcpy(stack + op.dest, reinterpret_cast<char *>(stack[op.a]) + op.immediate, op.opSize);
 			break;
 		}
 		case IrOp::WRITE: {
-			if (op.b == 0) {
-				memset(reinterpret_cast<void *>(stack[op.a]), 0, op.opSize);
-			}
-			else {
-				memcpy(reinterpret_cast<void *>(stack[op.a]), stack + op.b, op.opSize);
-			}
+			memcpy(reinterpret_cast<u8 *>(stack[op.dest]) + op.immediate, stack + op.a, op.opSize);
+			break;
+		}
+		case IrOp::COPY: {
+			memcpy(reinterpret_cast<u8 *>(stack[op.dest]) + op.immediate, reinterpret_cast<void *>(stack[op.a]), op.opSize);
+			break;
+		}
+		case IrOp::ZERO_MEMORY: {
+			memset(reinterpret_cast<char *>(stack[op.dest]) + op.immediate, 0, op.opSize);
 			break;
 		}
 		case IrOp::ADDRESS_OF_GLOBAL: {
-			assert(op.declaration->runtimeValue);
-			stack[op.dest] = reinterpret_cast<u64>(op.declaration->runtimeValue) + op.a;
+			stack[op.dest] = reinterpret_cast<u64>(static_cast<Declaration *>(op.data)->runtimeValue) + op.a;
 			break;
 		}
-		case IrOp::ADDRESS_OF_LOCAL: {
-			stack[op.dest] = reinterpret_cast<u64>(reinterpret_cast<u8 *>(stack + op.a) + op.immediate);
+		case IrOp::STACK_ADDRESS: {
+			stack[op.dest] = stackSpace + op.immediate;
 			break;
 		}
 		case IrOp::FUNCTION: {
@@ -842,18 +723,15 @@ if (op.flags & IR_FLOAT_OP) {\
 			break;
 		}
 		case IrOp::STRING: {
-			stack[op.dest] = reinterpret_cast<u64>(op.string->string.characters);
-			stack[op.dest + 1] = op.string->string.length;
-			break;
-		}
-		case IrOp::TYPE_INFO: {
-			auto type = reinterpret_cast<Type *>(stack[op.a]);
-			assert(type->runtimeTypeInfo);
-			stack[op.dest] = reinterpret_cast<u64>(type->runtimeTypeInfo);
+			stack[op.dest] = reinterpret_cast<u64>(static_cast<ExprStringLiteral *>(op.data)->string.characters);
 			break;
 		}
 		case IrOp::TYPE: {
-			stack[op.dest] = reinterpret_cast<u64>(op.type);
+			stack[op.dest] = reinterpret_cast<u64>(op.data);
+			break;
+		}
+		case IrOp::TYPE_INFO: {
+			stack[op.dest] = reinterpret_cast<u64>(reinterpret_cast<Type *>(stack[op.a])->runtimeTypeInfo);
 			break;
 		}
 		case IrOp::LINE_MARKER: {
@@ -1102,34 +980,49 @@ Expr *getReturnValueFromBytes(CodeLocation start, EndLocation end, Type *type, v
 
 Expr *runFunctionRoot(VMState *state, ExprRun *directive) {
 	PROFILE_FUNC();
-	u64 store[32];
+	u64 returnStore[32];
+	char argumentsStore[sizeof(FunctionCall) + sizeof(Argument)];
 
 	runningDirective = directive;
 
 	auto function = static_cast<ExprFunction *>(directive->function);
 
-	u64 *stackPointer = store;
+	u64 *returnPointer = returnStore;
 
 	auto returnType = getDeclarationType(function->returns.declarations[0]);
 
-	if (returnType->size > sizeof(store)) {
-		stackPointer = static_cast<u64 *>(malloc(returnType->size));
+	if (returnType->size > sizeof(returnStore)) {
+		returnPointer = static_cast<u64 *>(malloc(returnType->size));
 	}
+
+	u32 bigReturn = !isStandardSize(returnType->size);
 
 	Ir dummyOp;
 	dummyOp.op = IrOp::CALL;
-	FunctionCall arguments;
-	arguments.argCount = 0;
-	arguments.returnType = returnType;
-	dummyOp.arguments = &arguments;
-	dummyOp.dest = arguments.returnType == &TYPE_VOID ? 0 : 1;
+	FunctionCall *arguments = reinterpret_cast<FunctionCall *>(argumentsStore);
 
-	runFunction(state, function, &dummyOp, nullptr, stackPointer - 1);
+	if (bigReturn) {
+		arguments->argCount = 1;
+		arguments->args[0].number = 0;
+		arguments->args[0].type = TYPE_VOID_POINTER;
+	}
+	else {
+		arguments->argCount = 0;
+	}
 
-	auto result = getReturnValueFromBytes(function->start, function->end, returnType, stackPointer);
+	arguments->returnType = bigReturn ? &TYPE_VOID : returnType;
+	dummyOp.data = arguments;
+	dummyOp.opSize = bigReturn || returnType == &TYPE_VOID ? 0 : returnType->size;
+	dummyOp.dest = 0;
 
-	if (returnType->size > sizeof(store)) {
-		free(stackPointer);
+	u64 argument = reinterpret_cast<u64>(returnPointer);
+
+	runFunction(state, function, &dummyOp, nullptr, &argument);
+
+	auto result = getReturnValueFromBytes(function->start, function->end, returnType, returnPointer);
+
+	if (returnType->size > sizeof(returnStore)) {
+		free(returnPointer);
 	}
 
 	return result;
@@ -1141,30 +1034,24 @@ char cCallCallback(DCCallback *pcb, DCArgs *args, DCValue *result, void *userdat
 
 	auto returnType = getDeclarationType(function->returns.declarations[0]);
 
-	u64 *resultPointer = &result->L;
+	bool bigReturn = !isStandardSize(returnType->size);
 
-	if (!isStandardSize(returnType->size)) {
-		resultPointer = static_cast<u64 *>(dcbArgPointer(args));
-	}
+	u64 *resultPointer = &result->L;
 
 	Ir dummyOp;
 	dummyOp.op = IrOp::CALL;
 	FunctionCall arguments;
 	arguments.argCount = 0;
-	arguments.returnType = returnType;
-	dummyOp.arguments = &arguments;
-	dummyOp.dest = arguments.returnType == &TYPE_VOID ? 0 : 1;
+	arguments.returnType = bigReturn ? TYPE_VOID_POINTER : returnType;
+	dummyOp.data = &arguments;
+	dummyOp.dest = 0;
+	dummyOp.opSize = arguments.returnType == &TYPE_VOID ? 0 : arguments.returnType->size;
 
 	VMState state;
 
 	initVMState(&state);
-	runFunction(&state, function, &dummyOp, args, resultPointer - 1);
+	runFunction(&state, function, &dummyOp, args, resultPointer);
 	deinitVMState(&state);
-
-
-	if (!isStandardSize(returnType->size)) {
-		result->p = resultPointer;
-	}
 
 	return getSigChar(returnType);
 }

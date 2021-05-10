@@ -8460,7 +8460,7 @@ bool inferRun(SubJob *subJob) {
 					auto &op = ir[index];
 
 					if (op.op == IrOp::TYPE) {
-						if (!ensureTypeInfos(job, op.type))
+						if (!ensureTypeInfos(job, static_cast<Type *>(op.data)))
 							return true;
 
 					}
@@ -8472,19 +8472,20 @@ bool inferRun(SubJob *subJob) {
 						}
 					}
 					else if (op.op == IrOp::ADDRESS_OF_GLOBAL) {
-						if (!op.declaration->runtimeValue) {
-							if (!(op.declaration->flags & DECLARATION_VALUE_IS_READY)) {
-								goToSleep(job, &op.declaration->sleepingOnMyValue, "Address of global declaration value not ready");
+						auto declaration = static_cast<Declaration *>(op.data);
+						if (!declaration->runtimeValue) {
+							if (!(declaration->flags & DECLARATION_VALUE_IS_READY)) {
+								goToSleep(job, &declaration->sleepingOnMyValue, "Address of global declaration value not ready");
 								return true;
 							}
 
-							if (!ensureTypeInfos(job, op.declaration->initialValue)) {
+							if (!ensureTypeInfos(job, declaration->initialValue)) {
 								return true;
 							}
 
-							op.declaration->runtimeValue = malloc(getDeclarationType(op.declaration)->size);
+							declaration->runtimeValue = malloc(getDeclarationType(declaration)->size);
 
-							createRuntimeValue(op.declaration->initialValue, op.declaration->runtimeValue);
+							createRuntimeValue(declaration->initialValue, declaration->runtimeValue);
 						}
 					}
 

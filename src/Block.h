@@ -76,6 +76,7 @@ struct Declaration {
 		struct {
 			union Symbol *symbol;
 			u32 physicalStorage;
+			u32 registerOfStorage;
 		};
 
 		class llvm::Value *llvmStorage;

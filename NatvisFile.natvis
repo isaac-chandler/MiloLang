@@ -56,17 +56,19 @@
   
 
   <Type Name="Ir">
-    <DisplayString Condition="op == IrOp::STRING">STRING {dest} &lt;- "{string->string}"</DisplayString>
-    <DisplayString Condition="op == IrOp::CALL">CALL_{opSize*8} {dest} &lt;- {a} {&amp;arguments->args[0],[arguments->argCount]na}</DisplayString>
+    <DisplayString Condition="op == IrOp::STRING">STRING {dest} &lt;- "{((ExprStringLiteral*)data)->string}"</DisplayString>
+  <DisplayString Condition="op == IrOp::CALL">CALL_{opSize*8} {dest} &lt;- {a} {&amp;((FunctionCall*)data)->args[0],[((FunctionCall*)data)->argCount]na}</DisplayString>
     <DisplayString Condition="op == IrOp::FUNCTION &amp;&amp; function->valueOfDeclaration">FUNCTION {dest} &lt;- {function->valueOfDeclaration->name}</DisplayString>
     <DisplayString Condition="op == IrOp::SET">SET_{opSize*8} {dest} &lt;- {a}</DisplayString>
     <DisplayString Condition="op == IrOp::IF_Z_GOTO || op == IrOp::IF_NZ_GOTO">{op,en}_{opSize*8} {a}, {b}</DisplayString>
     <DisplayString Condition="op == IrOp::GOTO">GOTO {b}</DisplayString>
-    <DisplayString Condition="op == IrOp::TYPE">TYPE {dest} &lt;- {type}</DisplayString>
-    <DisplayString Condition="op == IrOp::READ">{op,en}_{destSize*8} {dest} &lt;- {a}</DisplayString>
-    <DisplayString Condition="op == IrOp::WRITE">{op,en}_{opSize*8} {a} {b}</DisplayString>
+    <DisplayString Condition="op == IrOp::TYPE">TYPE {dest} &lt;- {(Type*)data}</DisplayString>
+    <DisplayString Condition="op == IrOp::READ">{op,en}_{opSize*8} {dest} &lt;- {a}:{immediate}</DisplayString>
+    <DisplayString Condition="op == IrOp::WRITE">{op,en}_{opSize*8} {dest}:{immediate} {a}</DisplayString>
+    <DisplayString Condition="op == IrOp::COPY">{op,en}_{opSize*8} {dest}:{immediate} {a}</DisplayString>
     <DisplayString Condition="op == IrOp::IMMEDIATE">{op,en}_{opSize*8} {dest} &lt;- {immediate}</DisplayString>
     <DisplayString Condition="op == IrOp::ADD_CONSTANT">{op,en}_{opSize*8} {dest} &lt;- {a}, {immediate}</DisplayString>
+    <DisplayString Condition="op == IrOp::LINE_MARKER">L{location.start.line}</DisplayString>
     <DisplayString>{op,en}_{opSize*8} {dest} &lt;- {a}, {b}</DisplayString>
   </Type>
 

@@ -7,6 +7,7 @@
 #include "Error.h"
 #include "UTF.h"
 #include "CodeView.h"
+#include "IrGenerator.h"
 
 union SymbolName {
 	char name[8];
@@ -113,18 +114,30 @@ struct Relocation {
 };
 #pragma pack(pop)
 
-u32 getRegisterOffset(ExprFunction *function, u32 regNo) {
-	assert(regNo != 0);
+u32 getParameterSpaceForCallOffset(ExprFunction *function) {
+	return 0;
+}
 
-	if (regNo > function->state.parameterSpace) {
-		return (regNo - function->state.parameterSpace - 1 + function->state.callAuxStorage) * 8 + 16;
+u32 getStackSpaceOffset(ExprFunction *function) {
+	return getParameterSpaceForCallOffset(function) + AlignPO2(function->state.maxCallArguments * 8, 16);
+}
+
+u32 getRegisterOffset(ExprFunction *function) {
+	return getStackSpaceOffset(function) + AlignPO2(function->state.stackSpace, 8);
+}
+
+u32 getSpaceToAllocate(ExprFunction *function) {
+	u32 registerCount = function->state.nextRegister - function->state.parameters;
+
+	return AlignPO2(getRegisterOffset(function) + registerCount * 8 - 8, 16) + 8;
+}
+
+u32 getRegisterOffset(ExprFunction *function, u32 regNo) {
+	if (regNo >= function->state.parameters) {
+		return getRegisterOffset(function) + (regNo - function->state.parameters) * 8;
 	}
 
-	u32 registerCount = function->state.nextRegister - function->state.parameterSpace - 1 + function->state.callAuxStorage;
-
-	u32 spaceToAllocate = (registerCount >> 1) * 16 + 8;
-
-	return spaceToAllocate + regNo * 8 + 16;
+	return getSpaceToAllocate(function) + regNo * 8 + 24;
 }
 
 
@@ -205,17 +218,6 @@ void writeRSPRegisterByte(BucketedArenaAllocator *code, ExprFunction *function, 
 }
 
 void loadIntoIntRegister(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u8 loadInto, u32 regNo) {
-	if (regNo == 0) {
-		if (loadInto >= 8) {
-			code->add1Unchecked(0x45);
-			loadInto -= 8;
-		}
-
-		code->add1Unchecked(0x31);
-		code->add1Unchecked(0xC0 | loadInto | (loadInto << 3));
-		return;
-	}
-
 	u8 rex = 0x40;
 
 	if (size == 8) {
@@ -276,18 +278,6 @@ void storeFromIntRegister(BucketedArenaAllocator *code, ExprFunction *function, 
 }
 
 void loadIntoFloatRegister(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u8 loadInto, u32 regNo) {
-	if (regNo == 0) {
-		if (regNo >= 8) {
-			code->add1Unchecked(0x45);
-			regNo -= 8;
-		}
-
-		code->add1Unchecked(0x0F);
-		code->add1Unchecked(0x57);
-		code->add1Unchecked(0xC0 | loadInto | (loadInto << 3));
-		return;
-	}
-
 	if (size == 8) {
 		code->add1Unchecked(0xF2);
 	}
@@ -455,69 +445,9 @@ void loadImmediateIntoIntRegister(BucketedArenaAllocator *code, u8 loadInto, u64
 }
 
 void writeSet(BucketedArenaAllocator *code, ExprFunction *function, u64 size, u32 dest, u32 src) {
-	if (src == 0) {
-		if (isStandardSize(size)) {
-			storeImmediate(code, function, size, dest, 0);
-		}
-		else {
-			code->add1Unchecked(0x48);
-			code->add1Unchecked(0x8D);
-			writeRSPRegisterByte(code, function, RDI, dest);
-
-			u64 count = size;
-
-			if (size % 8 == 0) {
-				count = size / 8;
-			}
-
-			loadImmediateIntoIntRegister(code, RCX, count);
-
-			code->add1Unchecked(0x31); // xor eax, eax
-			code->add1Unchecked(0xC0);
-
-			code->add1Unchecked(0xF3);
-			code->add1Unchecked(0x48);
-
-			if (size % 8 == 0) {
-				code->add1Unchecked(0xAB);
-			}
-			else {
-				code->add1Unchecked(0xAA);
-			}
-		}
-	}
-	else {
-		if (isStandardSize(size)) {
-			loadIntoIntRegister(code, function, size, RAX, src);
-			storeFromIntRegister(code, function, size, dest, RAX);
-		}
-		else {
-			code->add1Unchecked(0x48);
-			code->add1Unchecked(0x8D);
-			writeRSPRegisterByte(code, function, RSI, src);
-
-			code->add1Unchecked(0x48);
-			code->add1Unchecked(0x8D);
-			writeRSPRegisterByte(code, function, RDI, dest);
-
-			u64 count = size;
-
-			if (size % 8 == 0) {
-				loadImmediateIntoIntRegister(code, RCX, size / 8);
-
-				code->add1Unchecked(0xF3); // rep movsq
-				code->add1Unchecked(0x48);
-				code->add1Unchecked(0xA5);
-			}
-			else {
-				loadImmediateIntoIntRegister(code, RCX, size);
-
-				code->add1Unchecked(0xF3); // rep movsb
-				code->add1Unchecked(0x48);
-				code->add1Unchecked(0xA4);
-			}
-		}
-	}
+	assert(isStandardSize(size));
+	loadIntoIntRegister(code, function, size, RAX, src);
+	storeFromIntRegister(code, function, size, dest, RAX);
 }
 
 #define RDATA_SECTION_NUMBER 1
@@ -1148,9 +1078,7 @@ void runCoffWriter() {
 				symbol->numberOfAuxSymbols = 0;
 			}
 
-			u32 registerCount = function->state.nextRegister - function->state.parameterSpace - 1 + function->state.callAuxStorage;
-
-			u32 spaceToAllocate = (registerCount >> 1) * 16 + 8;
+			u32 spaceToAllocate = getSpaceToAllocate(function);
 
 			debugSymbols.ensure(8);
 			debugSymbols.add4Unchecked(0xF1);
@@ -1216,8 +1144,17 @@ void runCoffWriter() {
 
 			for (u32 i = 0; i < function->arguments.declarations.count; i++) {
 				auto argument = function->arguments.declarations[i];
+				
 				REGREL32 argumentInfo;
-				argumentInfo.off = getRegisterOffset(function, i + 1 + paramOffset);
+
+				if (isStandardSize(getDeclarationType(argument)->size) && isStoredByPointer(getDeclarationType(argument))) {
+					argumentInfo.off = getStackSpaceOffset(function) + argument->physicalStorage;
+
+				}
+				else {
+					argumentInfo.off = getRegisterOffset(function, argument->registerOfStorage);
+				}
+
 				argumentInfo.typind = 0;
 
 				debugSymbols.ensure(2 + sizeof(argumentInfo));
@@ -1335,35 +1272,6 @@ void runCoffWriter() {
 			u32 functionPreambleEnd = code.totalSize - functionStart;
 			*functionPreambleEndPatch = functionPreambleEnd;
 
-			for (u32 i = 0; i < function->arguments.declarations.count; i++) {
-				auto type = getDeclarationType(function->arguments.declarations[i]);
-
-				if (!isStandardSize(type->size)) {
-					loadIntoIntRegister(&code, function, 8, RSI, i + 1 + paramOffset);
-
-					code.add1Unchecked(0x48);
-					code.add1Unchecked(0x8D);
-					writeRSPRegisterByte(&code, function, RDI, function->arguments.declarations[i]->physicalStorage);
-
-					if (type->size % 8 == 0) {
-						loadImmediateIntoIntRegister(&code, RCX, type->size / 8);
-
-						code.add1Unchecked(0xF3); //  rep movsq
-						code.add1Unchecked(0x48);
-						code.add1Unchecked(0xA5);
-					}
-					else {
-						loadImmediateIntoIntRegister(&code, RCX, type->size);
-
-						code.add1Unchecked(0xF3); //  rep movsb
-						code.add1Unchecked(0x48);
-						code.add1Unchecked(0xA4);
-					}
-				}
-
-				code.ensure(64);
-			}
-
 			for (u32 index = 0; index < function->state.ir.count; index++) {
 				auto &ir = function->state.ir[index];
 
@@ -1373,14 +1281,15 @@ void runCoffWriter() {
 
 				switch (ir.op) {
 				case IrOp::TYPE: {
-					markUsedTypeInfoInType(&symbols, ir.type);
+					auto type = static_cast<Type *>(ir.data);
+					markUsedTypeInfoInType(&symbols, type);
 
 					code.add1Unchecked(0x48);
 					code.add1Unchecked(0xB8);
 
 					codeRelocations.ensure(10);
 					codeRelocations.add4Unchecked(code.totalSize);
-					codeRelocations.add4Unchecked(ir.type->physicalStorage);
+					codeRelocations.add4Unchecked(type->physicalStorage);
 					codeRelocations.add2Unchecked(IMAGE_REL_AMD64_ADDR64);
 
 					code.add8Unchecked(0);
@@ -1391,63 +1300,46 @@ void runCoffWriter() {
 					break;
 				}
 				case IrOp::ADD: {
-					if (ir.a == 0 && ir.b == 0) {
-						code.add1Unchecked(0x31); // xor eax, eax
-						code.add1Unchecked(0xC0);
+					if (ir.flags & IR_FLOAT_OP) {
+						loadIntoFloatRegister(&code, function, ir.opSize, 0, ir.a);
+
+						if (ir.opSize == 8) {
+							code.add1Unchecked(0xF2);
+						}
+						else {
+							code.add1Unchecked(0xF3);
+						}
+
+						code.add1Unchecked(0x0F);
+						code.add1Unchecked(0x58);
+						writeRSPRegisterByte(&code, function, 0, ir.b);
+
+						storeFromFloatRegister(&code, function, ir.opSize, ir.dest, 0);
+					}
+					else {
+						loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
+
+						if (ir.opSize == 8) {
+							code.add1Unchecked(0x48);
+						}
+						else if (ir.opSize == 2) {
+							code.add1Unchecked(0x66);
+						}
+
+						if (ir.opSize == 1) {
+							code.add1Unchecked(0x02);
+						}
+						else {
+							code.add1Unchecked(0x03);
+						}
+
+						writeRSPRegisterByte(&code, function, RAX, ir.b);
 
 						storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
 					}
-					if (ir.a == 0) {
-						writeSet(&code, function, ir.opSize, ir.dest, ir.b);
-					}
-					else if (ir.b == 0) {
-						writeSet(&code, function, ir.opSize, ir.dest, ir.a);
-					}
-					else {
-						if (ir.flags & IR_FLOAT_OP) {
-							loadIntoFloatRegister(&code, function, ir.opSize, 0, ir.a);
-
-							if (ir.opSize == 8) {
-								code.add1Unchecked(0xF2);
-							}
-							else {
-								code.add1Unchecked(0xF3);
-							}
-
-							code.add1Unchecked(0x0F);
-							code.add1Unchecked(0x58);
-							writeRSPRegisterByte(&code, function, 0, ir.b);
-
-							storeFromFloatRegister(&code, function, ir.opSize, ir.dest, 0);
-						}
-						else {
-							loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
-
-							if (ir.opSize == 8) {
-								code.add1Unchecked(0x48);
-							}
-							else if (ir.opSize == 2) {
-								code.add1Unchecked(0x66);
-							}
-
-							if (ir.opSize == 1) {
-								code.add1Unchecked(0x02);
-							}
-							else {
-								code.add1Unchecked(0x03);
-							}
-
-							writeRSPRegisterByte(&code, function, RAX, ir.b);
-
-							storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
-						}
-					}
 				} break;
 				case IrOp::ADD_CONSTANT: {
-					if (ir.a == 0) {
-						storeImmediate(&code, function, ir.opSize, ir.dest, ir.immediate);
-					}
-					else if (ir.b == 0) {
+					if (ir.immediate == 0) {
 						writeSet(&code, function, ir.opSize, ir.dest, ir.a);
 					}
 					else {
@@ -1473,26 +1365,71 @@ void runCoffWriter() {
 					}
 				} break;
 				case IrOp::SUB: {
-					if (ir.b == 0) {
-						writeSet(&code, function, ir.opSize, ir.dest, ir.a);
+					if (ir.flags & IR_FLOAT_OP) {
+						loadIntoFloatRegister(&code, function, ir.opSize, 0, ir.a);
+
+						if (ir.opSize == 8) {
+							code.add1Unchecked(0xF2);
+						}
+						else {
+							code.add1Unchecked(0xF3);
+						}
+
+						code.add1Unchecked(0x0F);
+						code.add1Unchecked(0x5C);
+
+						writeRSPRegisterByte(&code, function, 0, ir.b);
+
+						storeFromFloatRegister(&code, function, ir.opSize, ir.dest, 0);
 					}
 					else {
-						if (ir.flags & IR_FLOAT_OP) {
-							loadIntoFloatRegister(&code, function, ir.opSize, 0, ir.a);
+						loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
 
-							if (ir.opSize == 8) {
-								code.add1Unchecked(0xF2);
-							}
-							else {
-								code.add1Unchecked(0xF3);
-							}
+						if (ir.opSize == 8) {
+							code.add1Unchecked(0x48);
+						}
+						else if (ir.opSize == 2) {
+							code.add1Unchecked(0x66);
+						}
 
-							code.add1Unchecked(0x0F);
-							code.add1Unchecked(0x5C);
+						if (ir.opSize == 1) {
+							code.add1Unchecked(0x2A);
+						}
+						else {
+							code.add1Unchecked(0x2B);
+						}
 
-							writeRSPRegisterByte(&code, function, 0, ir.b);
+						writeRSPRegisterByte(&code, function, RAX, ir.b);
 
-							storeFromFloatRegister(&code, function, ir.opSize, ir.dest, 0);
+						storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
+					}
+				} break;
+				case IrOp::MUL: {
+					if (ir.flags & IR_FLOAT_OP) {
+						loadIntoFloatRegister(&code, function, ir.opSize, 0, ir.a);
+
+						if (ir.opSize == 8) {
+							code.add1Unchecked(0xF2);
+						}
+						else {
+							code.add1Unchecked(0xF3);
+						}
+
+						code.add1Unchecked(0x0F);
+						code.add1Unchecked(0x59);
+
+						writeRSPRegisterByte(&code, function, 0, ir.b);
+
+						storeFromFloatRegister(&code, function, ir.opSize, ir.dest, 0);
+					}
+					else {
+						if (ir.opSize == 1) {
+							loadIntoIntRegister(&code, function, 1, RAX, ir.a);
+
+							code.add1Unchecked(0xF6);
+							writeRSPRegisterByte(&code, function, 5, ir.b);
+
+							storeFromIntRegister(&code, function, 1, ir.dest, RAX);
 						}
 						else {
 							loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
@@ -1504,73 +1441,18 @@ void runCoffWriter() {
 								code.add1Unchecked(0x66);
 							}
 
-							if (ir.opSize == 1) {
-								code.add1Unchecked(0x2A);
-							}
-							else {
-								code.add1Unchecked(0x2B);
-							}
-
+							code.add1Unchecked(0x0F);
+							code.add1Unchecked(0xAF);
 							writeRSPRegisterByte(&code, function, RAX, ir.b);
 
 							storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
 						}
 					}
 				} break;
-				case IrOp::MUL: {
-					if (ir.a == 0 || ir.b == 0) {
-						storeImmediate(&code, function, ir.opSize, ir.dest, 0);
-					}
-					else {
-						if (ir.flags & IR_FLOAT_OP) {
-							loadIntoFloatRegister(&code, function, ir.opSize, 0, ir.a);
-
-							if (ir.opSize == 8) {
-								code.add1Unchecked(0xF2);
-							}
-							else {
-								code.add1Unchecked(0xF3);
-							}
-
-							code.add1Unchecked(0x0F);
-							code.add1Unchecked(0x59);
-
-							writeRSPRegisterByte(&code, function, 0, ir.b);
-
-							storeFromFloatRegister(&code, function, ir.opSize, ir.dest, 0);
-						}
-						else {
-							if (ir.opSize == 1) {
-								loadIntoIntRegister(&code, function, 1, RAX, ir.a);
-
-								code.add1Unchecked(0xF6);
-								writeRSPRegisterByte(&code, function, 5, ir.b);
-
-								storeFromIntRegister(&code, function, 1, ir.dest, RAX);
-							}
-							else {
-								loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
-
-								if (ir.opSize == 8) {
-									code.add1Unchecked(0x48);
-								}
-								else if (ir.opSize == 2) {
-									code.add1Unchecked(0x66);
-								}
-
-								code.add1Unchecked(0x0F);
-								code.add1Unchecked(0xAF);
-								writeRSPRegisterByte(&code, function, RAX, ir.b);
-
-								storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
-							}
-						}
-					}
-				} break;
 				case IrOp::MUL_BY_CONSTANT: {
 					assert(ir.opSize == 8);
 
-					if (ir.a == 0 || ir.b == 0) {
+					if (ir.immediate == 0) {
 						storeImmediate(&code, function, ir.opSize, ir.dest, 0);
 					}
 					else {
@@ -1763,85 +1645,64 @@ void runCoffWriter() {
 					}
 				} break;
 				case IrOp::AND: {
-					if (ir.a == 0 || ir.b == 0) {
-						storeImmediate(&code, function, ir.opSize, ir.dest, 0);
+					loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
+
+					if (ir.opSize == 8) {
+						code.add1Unchecked(0x48);
+					}
+					else if (ir.opSize == 2) {
+						code.add1Unchecked(0x66);
+					}
+
+					if (ir.opSize == 1) {
+						code.add1Unchecked(0x22);
 					}
 					else {
-						loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
-
-						if (ir.opSize == 8) {
-							code.add1Unchecked(0x48);
-						}
-						else if (ir.opSize == 2) {
-							code.add1Unchecked(0x66);
-						}
-
-						if (ir.opSize == 1) {
-							code.add1Unchecked(0x22);
-						}
-						else {
-							code.add1Unchecked(0x23);
-						}
-						writeRSPRegisterByte(&code, function, RAX, ir.b);
-
-						storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
+						code.add1Unchecked(0x23);
 					}
+					writeRSPRegisterByte(&code, function, RAX, ir.b);
+
+					storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
 				} break;
 				case IrOp::OR: {
-					if (ir.a == 0) {
-						writeSet(&code, function, ir.opSize, ir.dest, ir.b);
+					loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
+
+					if (ir.opSize == 8) {
+						code.add1Unchecked(0x48);
 					}
-					else if (ir.b == 0) {
-						writeSet(&code, function, ir.opSize, ir.dest, ir.a);
+					else if (ir.opSize == 2) {
+						code.add1Unchecked(0x66);
+					}
+
+					if (ir.opSize == 1) {
+						code.add1Unchecked(0x0A);
 					}
 					else {
-						loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
-
-						if (ir.opSize == 8) {
-							code.add1Unchecked(0x48);
-						}
-						else if (ir.opSize == 2) {
-							code.add1Unchecked(0x66);
-						}
-
-						if (ir.opSize == 1) {
-							code.add1Unchecked(0x0A);
-						}
-						else {
-							code.add1Unchecked(0x0B);
-						}
-						writeRSPRegisterByte(&code, function, RAX, ir.b);
-
-						storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
+						code.add1Unchecked(0x0B);
 					}
+					writeRSPRegisterByte(&code, function, RAX, ir.b);
+
+					storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
 				} break;
 				case IrOp::XOR: {
-					if (ir.a == 0) {
-						writeSet(&code, function, ir.opSize, ir.dest, ir.b);
+					loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
+
+					if (ir.opSize == 8) {
+						code.add1Unchecked(0x48);
 					}
-					else if (ir.b == 0) {
-						writeSet(&code, function, ir.opSize, ir.dest, ir.a);
+					else if (ir.opSize == 2) {
+						code.add1Unchecked(0x66);
+					}
+
+					if (ir.opSize == 1) {
+						code.add1Unchecked(0x32);
 					}
 					else {
-						loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
-
-						if (ir.opSize == 8) {
-							code.add1Unchecked(0x48);
-						}
-						else if (ir.opSize == 2) {
-							code.add1Unchecked(0x66);
-						}
-
-						if (ir.opSize == 1) {
-							code.add1Unchecked(0x32);
-						}
-						else {
-							code.add1Unchecked(0x33);
-						}
-						writeRSPRegisterByte(&code, function, RAX, ir.b);
-
-						storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
+						code.add1Unchecked(0x33);
 					}
+					writeRSPRegisterByte(&code, function, RAX, ir.b);
+
+					storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
 				} break;
 				case IrOp::NOT: {
 					loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
@@ -1914,19 +1775,89 @@ void runCoffWriter() {
 					storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
 				} break;
 				case IrOp::READ: {
-					assert(ir.opSize == 8);
+					assert(isStandardSize(ir.opSize));
+					loadIntoIntRegister(&code, function, 8, RAX, ir.a);
 
-					if (isStandardSize(ir.destSize)) {
+					if (ir.opSize == 8) {
+						code.add1Unchecked(0x48);
+					}
+					else if (ir.opSize == 2) {
+						code.add1Unchecked(0x66);
+					}
+
+					if (ir.opSize == 1) {
+						code.add1Unchecked(0x8A);
+					}
+					else {
+						code.add1Unchecked(0x8B);
+					}
+
+					if (!ir.immediate) {
+						code.add1Unchecked(0x00);
+					}
+					else if (ir.immediate <= 0x7f) {
+						code.add1Unchecked(0x40);
+						code.add1Unchecked(ir.immediate);
+					}
+					else {
+						code.add1Unchecked(0x80);
+						code.add4Unchecked(ir.immediate);
+					}
+
+					storeFromIntRegister(&code, function, ir.opSize, ir.dest, RAX);
+				} break;
+				case IrOp::WRITE: {
+					assert(isStandardSize(ir.opSize));
+
+					loadIntoIntRegister(&code, function, 8, RAX, ir.dest);
+					loadIntoIntRegister(&code, function, ir.opSize, RCX, ir.a);
+
+					if (ir.opSize == 2) {
+						code.add1Unchecked(0x66);
+					}
+					else if (ir.opSize == 8) {
+						code.add1Unchecked(0x48);
+					}
+
+					if (ir.opSize == 1) {
+						code.add1Unchecked(0x88);
+					}
+					else {
+						code.add1Unchecked(0x89);
+					}
+
+					if (!ir.immediate) {
+						code.add1Unchecked(0x08);
+					}
+					else if (ir.immediate <= 0x7f) {
+						code.add1Unchecked(0x48);
+						code.add1Unchecked(ir.immediate);
+					}
+					else {
+						code.add1Unchecked(0x88);
+						code.add4Unchecked(ir.immediate);
+					}
+				} break;
+				case IrOp::COPY: {					
+					if (isStandardSize(ir.opSize)) {
 						loadIntoIntRegister(&code, function, 8, RAX, ir.a);
+						loadIntoIntRegister(&code, function, 8, RCX, ir.dest);
 
-						if (ir.destSize == 8) {
+						if (ir.immediate) {
+							code.add1Unchecked(0x48);
+							code.add1Unchecked(0x81);
+							code.add1Unchecked(0xC1);
+							code.add4Unchecked(ir.immediate);
+						}
+
+						if (ir.opSize == 8) {
 							code.add1Unchecked(0x48);
 						}
-						else if (ir.destSize == 2) {
+						else if (ir.opSize == 2) {
 							code.add1Unchecked(0x66);
 						}
 
-						if (ir.destSize == 1) {
+						if (ir.opSize == 1) {
 							code.add1Unchecked(0x8A);
 						}
 						else {
@@ -1935,42 +1866,11 @@ void runCoffWriter() {
 
 						code.add1Unchecked(0x00);
 
-						storeFromIntRegister(&code, function, ir.destSize, ir.dest, RAX);
-					}
-					else {
-
-						loadIntoIntRegister(&code, function, 8, RSI, ir.a);
-
-						code.add1Unchecked(0x48);
-						code.add1Unchecked(0x8D);
-						writeRSPRegisterByte(&code, function, RDI, ir.dest);
-
-						if (ir.destSize % 8 == 0) {
-							loadImmediateIntoIntRegister(&code, RCX, ir.destSize / 8);
-
-							code.add1Unchecked(0xF3); // rep movsq
+						if (ir.opSize == 8) {
 							code.add1Unchecked(0x48);
-							code.add1Unchecked(0xA5);
 						}
-						else {
-							loadImmediateIntoIntRegister(&code, RCX, ir.destSize);
-
-							code.add1Unchecked(0xF3); // rep movsb
-							code.add1Unchecked(0x48);
-							code.add1Unchecked(0xA4);
-						}
-					}
-				} break;
-				case IrOp::WRITE: {
-					if (isStandardSize(ir.opSize)) {
-						loadIntoIntRegister(&code, function, 8, RAX, ir.a);
-						loadIntoIntRegister(&code, function, ir.opSize, RCX, ir.b);
-
-						if (ir.opSize == 2) {
+						else if (ir.opSize == 2) {
 							code.add1Unchecked(0x66);
-						}
-						else if (ir.opSize == 8) {
-							code.add1Unchecked(0x48);
 						}
 
 						if (ir.opSize == 1) {
@@ -1980,147 +1880,142 @@ void runCoffWriter() {
 							code.add1Unchecked(0x89);
 						}
 
-						code.add1Unchecked(0x08);
+						code.add1Unchecked(0x01);
 					}
 					else {
-						if (ir.b == 0) {
-							loadIntoIntRegister(&code, function, 8, RDI, ir.a);
+						loadIntoIntRegister(&code, function, 8, RDI, ir.dest);
+						loadIntoIntRegister(&code, function, 8, RSI, ir.a);
 
-							if (ir.opSize % 8 == 0) {
-								loadImmediateIntoIntRegister(&code, RCX, ir.opSize / 8);
-
-								code.add1Unchecked(0x31); // xor eax, eax
-								code.add1Unchecked(0xC0);
-
-								code.add1Unchecked(0xF3); // rep stosq
-								code.add1Unchecked(0x48);
-								code.add1Unchecked(0xAB);
-							}
-							else {
-								loadImmediateIntoIntRegister(&code, RCX, ir.opSize);
-
-								code.add1Unchecked(0x30); // xor al, al
-								code.add1Unchecked(0xC0);
-
-								code.add1Unchecked(0xF3); // rep stosb
-								code.add1Unchecked(0x48);
-								code.add1Unchecked(0xAA);
-							}
-						}
-						else {
+						if (ir.immediate) {
 							code.add1Unchecked(0x48);
-							code.add1Unchecked(0x8D);
-							writeRSPRegisterByte(&code, function, RSI, ir.b);
-
-							loadIntoIntRegister(&code, function, 8, RDI, ir.a);
-
-							if (ir.opSize % 8 == 0) {
-								loadImmediateIntoIntRegister(&code, RCX, ir.opSize / 8);
-
-								code.add1Unchecked(0xF3); // rep movsq
-								code.add1Unchecked(0x48);
-								code.add1Unchecked(0xA5);
-							}
-							else {
-								loadImmediateIntoIntRegister(&code, RCX, ir.opSize);
-
-								code.add1Unchecked(0xF3); // rep movsb
-								code.add1Unchecked(0x48);
-								code.add1Unchecked(0xA4);
-							}
+							code.add1Unchecked(0x81);
+							code.add1Unchecked(0xC7);
+							code.add4Unchecked(ir.immediate);
 						}
+
+						loadImmediateIntoIntRegister(&code, RCX, ir.opSize);
+
+						code.add1Unchecked(0xF3);
+						code.add1Unchecked(0xA4);
 					}
 				} break;
-				case IrOp::TYPE_INFO: // Currently at runtime a type is just a *Type_Info so a TYPE_INFO instruction is equivalent to a transfer
-				case IrOp::SET: {
-					if (ir.opSize == ir.destSize || ir.a == 0) {
-						writeSet(&code, function, ir.opSize, ir.dest, ir.a);
+				case IrOp::ZERO_MEMORY: {
+					assert(!ir.immediate);
+
+					code.add1Unchecked(0x31);
+					code.add1Unchecked(0xC0);
+
+					if (isStandardSize(ir.opSize)) {
+						loadIntoIntRegister(&code, function, 8, RCX, ir.dest);
+
+						if (ir.opSize == 8) {
+							code.add1Unchecked(0x48);
+						}
+						else if (ir.opSize == 2) {
+							code.add1Unchecked(0x66);
+						}
+
+						if (ir.opSize == 1) {
+							code.add1Unchecked(0x88);
+						}
+						else {
+							code.add1Unchecked(0x89);
+						}
+
+						code.add1Unchecked(0x01);
 					}
 					else {
-						if (ir.flags & IR_FLOAT_OP) {
-							if (ir.opSize == 8) {
-								assert(ir.destSize == 4);
+						loadIntoIntRegister(&code, function, 8, RDI, ir.dest);
 
-								code.add1Unchecked(0xF2);
+						loadImmediateIntoIntRegister(&code, RCX, ir.opSize);
+
+						code.add1Unchecked(0xF3);
+						code.add1Unchecked(0xAA);
+					}
+				} break;
+				case IrOp::SET: {
+					writeSet(&code, function, ir.opSize, ir.dest, ir.a);
+				} break;
+				case IrOp::TYPE_INFO: {
+					writeSet(&code, function, 8, ir.dest, ir.a);
+				} break;
+				case IrOp::FLOAT_CAST: {
+					if (ir.opSize == 8) {
+						assert(ir.b == 4);
+
+						code.add1Unchecked(0xF2);
+					}
+					else {
+						assert(ir.opSize == 4);
+						assert(ir.b == 8);
+
+						code.add1Unchecked(0xF3);
+					}
+
+					code.add1Unchecked(0x0F);
+					code.add1Unchecked(0x5A);
+
+					writeRSPRegisterByte(&code, function, 0, ir.a);
+					storeFromFloatRegister(&code, function, ir.b, ir.dest, 0);
+				} break;
+				case IrOp::EXTEND_INT: {
+					if (ir.flags & IR_SIGNED_OP) {
+						if (ir.opSize == 1) {
+							if (ir.b == 2) {
+								code.add1Unchecked(0x66);
 							}
-							else {
-								assert(ir.opSize == 4);
-								assert(ir.destSize == 8);
-
-								code.add1Unchecked(0xF3);
+							else if (ir.b == 8) {
+								code.add1Unchecked(0x48);
 							}
 
 							code.add1Unchecked(0x0F);
-							code.add1Unchecked(0x5A);
-
-							writeRSPRegisterByte(&code, function, 0, ir.a);
-							storeFromFloatRegister(&code, function, ir.destSize, ir.dest, 0);
+							code.add1Unchecked(0xBE);
+							writeRSPRegisterByte(&code, function, RAX, ir.a);
 						}
-						else {
-							if (ir.destSize < ir.opSize) {
-								writeSet(&code, function, ir.destSize, ir.dest, ir.a);
+						else if (ir.opSize == 2) {
+							if (ir.b == 8) {
+								code.add1Unchecked(0x48);
 							}
-							else {
-								if (ir.flags & IR_SIGNED_OP) {
-									if (ir.opSize == 1) {
-										if (ir.destSize == 2) {
-											code.add1Unchecked(0x66);
-										}
-										else if (ir.destSize == 8) {
-											code.add1Unchecked(0x48);
-										}
 
-										code.add1Unchecked(0x0F);
-										code.add1Unchecked(0xBE);
-										writeRSPRegisterByte(&code, function, RAX, ir.a);
-									}
-									else if (ir.opSize == 2) {
-										if (ir.destSize == 8) {
-											code.add1Unchecked(0x48);
-										}
-
-										code.add1Unchecked(0x0F);
-										code.add1Unchecked(0xBF);
-										writeRSPRegisterByte(&code, function, RAX, ir.a);
-									}
-									else if (ir.opSize == 4) {
-										code.add1Unchecked(0x48);
-										code.add1Unchecked(0x63);
-										writeRSPRegisterByte(&code, function, RAX, ir.a);
-									}
-								}
-								else {
-									if (ir.opSize == 1) {
-										if (ir.destSize == 2) {
-											code.add1Unchecked(0x66);
-										}
-
-										code.add1Unchecked(0x0F);
-										code.add1Unchecked(0xB6);
-										writeRSPRegisterByte(&code, function, RAX, ir.a);
-
-
-									}
-									else if (ir.opSize == 2) {
-										code.add1Unchecked(0x0F);
-										code.add1Unchecked(0xB7);
-										writeRSPRegisterByte(&code, function, RAX, ir.a);
-									}
-									else if (ir.opSize == 4) {
-										loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
-									}
-								}
-
-								storeFromIntRegister(&code, function, ir.destSize, ir.dest, RAX);
-							}
+							code.add1Unchecked(0x0F);
+							code.add1Unchecked(0xBF);
+							writeRSPRegisterByte(&code, function, RAX, ir.a);
+						}
+						else if (ir.opSize == 4) {
+							code.add1Unchecked(0x48);
+							code.add1Unchecked(0x63);
+							writeRSPRegisterByte(&code, function, RAX, ir.a);
 						}
 					}
+					else {
+						if (ir.opSize == 1) {
+							if (ir.b == 2) {
+								code.add1Unchecked(0x66);
+							}
+
+							code.add1Unchecked(0x0F);
+							code.add1Unchecked(0xB6);
+							writeRSPRegisterByte(&code, function, RAX, ir.a);
+
+
+						}
+						else if (ir.opSize == 2) {
+							code.add1Unchecked(0x0F);
+							code.add1Unchecked(0xB7);
+							writeRSPRegisterByte(&code, function, RAX, ir.a);
+						}
+						else if (ir.opSize == 4) {
+							loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
+						}
+					}
+
+					storeFromIntRegister(&code, function, ir.b, ir.dest, RAX);
 				} break;
 				case IrOp::GOTO: {
 					code.add1Unchecked(0xE9);
 
 					JumpPatch patch;
-					patch.opToPatch = ir.branchTarget;
+					patch.opToPatch = ir.b;
 					patch.location = reinterpret_cast<s32 *>(code.add4Unchecked(0));
 					patch.rip = code.totalSize;
 
@@ -2148,7 +2043,7 @@ void runCoffWriter() {
 					code.add1Unchecked(0x80 | C_Z);
 
 					JumpPatch patch;
-					patch.opToPatch = ir.branchTarget;
+					patch.opToPatch = ir.b;
 					patch.location = reinterpret_cast<s32 *>(code.add4Unchecked(0));
 					patch.rip = code.totalSize;
 
@@ -2176,7 +2071,7 @@ void runCoffWriter() {
 					code.add1Unchecked(0x80 | C_NZ);
 
 					JumpPatch patch;
-					patch.opToPatch = ir.branchTarget;
+					patch.opToPatch = ir.b;
 					patch.location = reinterpret_cast<s32 *>(code.add4Unchecked(0));
 					patch.rip = code.totalSize;
 
@@ -2251,8 +2146,10 @@ void runCoffWriter() {
 					}
 				} break;
 				case IrOp::ADDRESS_OF_GLOBAL: {
-					assert(ir.declaration->enclosingScope->flavor == BlockFlavor::GLOBAL);
-					assert(!(ir.declaration->flags & DECLARATION_IS_CONSTANT));
+					auto declaration = static_cast<Declaration *>(ir.data);
+
+					assert(declaration->enclosingScope->flavor == BlockFlavor::GLOBAL);
+					assert(!(declaration->flags & DECLARATION_IS_CONSTANT));
 
 					code.add1Unchecked(0x48);
 					code.add1Unchecked(0x8D);
@@ -2260,29 +2157,24 @@ void runCoffWriter() {
 
 					codeRelocations.ensure(10);
 					codeRelocations.add4Unchecked(static_cast<u32>(code.totalSize));
-					codeRelocations.add4Unchecked(createSymbolForDeclaration(&symbols, ir.declaration));
+					codeRelocations.add4Unchecked(createSymbolForDeclaration(&symbols, declaration));
 					codeRelocations.add2Unchecked(IMAGE_REL_AMD64_REL32);
 
 					code.add4Unchecked(ir.a);
 
 					storeFromIntRegister(&code, function, 8, ir.dest, RAX);
 				} break;
-				case IrOp::ADDRESS_OF_LOCAL: {
+				case IrOp::STACK_ADDRESS: {
 					code.add1Unchecked(0x48);
 					code.add1Unchecked(0x8D);
+					writeRSPOffsetByte(&code, RAX, getStackSpaceOffset(function) + ir.immediate);
 
-					writeRSPRegisterByte(&code, function, RAX, ir.a, static_cast<u32>(ir.immediate));
 					storeFromIntRegister(&code, function, 8, ir.dest, RAX);
 				} break;
 				case IrOp::IMMEDIATE: {
 					storeImmediate(&code, function, ir.opSize, ir.dest, ir.immediate);
 				} break;
 				case IrOp::FLOAT_TO_INT: {
-					if (ir.a == 0) {
-						writeSet(&code, function, ir.destSize, ir.dest, 0);
-						break;
-					}
-
 					if (ir.flags & IR_SIGNED_OP) {
 						if (ir.opSize == 8) {
 							code.add1Unchecked(0xF2);
@@ -2291,17 +2183,17 @@ void runCoffWriter() {
 							code.add1Unchecked(0xF3);
 						}
 
-						if (ir.destSize == 8) {
+						if (ir.b == 8) {
 							code.add1Unchecked(0x48);
 						}
 
 						code.add1Unchecked(0x0F);
 						code.add1Unchecked(0x2C);
 						writeRSPRegisterByte(&code, function, RAX, ir.a);
-						storeFromIntRegister(&code, function, ir.destSize, ir.dest, RAX);
+						storeFromIntRegister(&code, function, ir.b, ir.dest, RAX);
 					}
 					else {
-						if (ir.destSize == 8) { // Aww sheet
+						if (ir.b == 8) { // Aww sheet
 							loadIntoFloatRegister(&code, function, ir.opSize, 0, ir.a);
 
 							if (ir.opSize == 8) {
@@ -2453,7 +2345,7 @@ void runCoffWriter() {
 								code.add1Unchecked(0xC8);
 							}
 
-							storeFromIntRegister(&code, function, ir.destSize, ir.dest, RAX);
+							storeFromIntRegister(&code, function, ir.b, ir.dest, RAX);
 						}
 
 						else {
@@ -2464,7 +2356,7 @@ void runCoffWriter() {
 								code.add1Unchecked(0xF3);
 							}
 
-							if (ir.destSize == 4) {
+							if (ir.b == 4) {
 								code.add1Unchecked(0x48);
 							}
 
@@ -2473,19 +2365,14 @@ void runCoffWriter() {
 
 
 							writeRSPRegisterByte(&code, function, RAX, ir.a);
-							storeFromIntRegister(&code, function, ir.destSize, ir.dest, RAX);
+							storeFromIntRegister(&code, function, ir.b, ir.dest, RAX);
 						}
 					}
 				} break;
 				case IrOp::INT_TO_FLOAT: {
-					if (ir.a == 0) {
-						writeSet(&code, function, ir.destSize, ir.dest, 0);
-						break;
-					}
-
 					if (ir.flags & IR_SIGNED_OP) {
 						if (ir.opSize >= 4) {
-							if (ir.destSize == 8) {
+							if (ir.b == 8) {
 								code.add1Unchecked(0xF2);
 							}
 							else {
@@ -2499,7 +2386,7 @@ void runCoffWriter() {
 							code.add1Unchecked(0x0F);
 							code.add1Unchecked(0x2A);
 							writeRSPRegisterByte(&code, function, 0, ir.a);
-							storeFromFloatRegister(&code, function, ir.destSize, ir.dest, 0);
+							storeFromFloatRegister(&code, function, ir.b, ir.dest, 0);
 						}
 						else {
 							code.add1Unchecked(0x0F);
@@ -2511,7 +2398,7 @@ void runCoffWriter() {
 							}
 							writeRSPRegisterByte(&code, function, RAX, ir.a);
 
-							if (ir.destSize == 8) {
+							if (ir.b == 8) {
 								code.add1Unchecked(0xF2);
 							}
 							else {
@@ -2522,7 +2409,7 @@ void runCoffWriter() {
 							code.add1Unchecked(0x2A);
 							code.add1Unchecked(0xC0);
 
-							storeFromFloatRegister(&code, function, ir.destSize, ir.dest, 0);
+							storeFromFloatRegister(&code, function, ir.b, ir.dest, 0);
 						}
 					}
 					else {
@@ -2543,7 +2430,7 @@ void runCoffWriter() {
 							u32 firstJumpRel = code.totalSize;
 
 
-							if (ir.destSize == 8) {
+							if (ir.b == 8) {
 								code.add1Unchecked(0xF2);
 							}
 							else {
@@ -2580,7 +2467,7 @@ void runCoffWriter() {
 							code.add1Unchecked(0x09);
 							code.add1Unchecked(0xC8);
 
-							if (ir.destSize == 8) {
+							if (ir.b == 8) {
 								code.add1Unchecked(0xF2);
 							}
 							else {
@@ -2592,7 +2479,7 @@ void runCoffWriter() {
 							code.add1Unchecked(0x2A);
 							code.add1Unchecked(0xC0);
 
-							if (ir.destSize == 8) {
+							if (ir.b == 8) {
 								code.add1Unchecked(0xF2);
 							}
 							else {
@@ -2606,12 +2493,12 @@ void runCoffWriter() {
 							*secondJumpPatch = code.totalSize - secondJumpRel;
 
 							// .done
-							storeFromFloatRegister(&code, function, ir.destSize, ir.dest, 0);
+							storeFromFloatRegister(&code, function, ir.b, ir.dest, 0);
 						}
 						else if (ir.opSize == 4) {
 							loadIntoIntRegister(&code, function, 4, RAX, ir.a);
 
-							if (ir.destSize == 8) {
+							if (ir.b == 8) {
 								code.add1Unchecked(0xF2);
 							}
 							else {
@@ -2623,7 +2510,7 @@ void runCoffWriter() {
 							code.add1Unchecked(0x0F);
 							code.add1Unchecked(0x2A);
 							code.add1Unchecked(0xC0);
-							storeFromFloatRegister(&code, function, ir.destSize, ir.dest, 0);
+							storeFromFloatRegister(&code, function, ir.b, ir.dest, 0);
 						}
 						else {
 							code.add1Unchecked(0x0F);
@@ -2635,7 +2522,7 @@ void runCoffWriter() {
 							}
 							writeRSPRegisterByte(&code, function, RAX, ir.a);
 
-							if (ir.destSize == 8) {
+							if (ir.b == 8) {
 								code.add1Unchecked(0xF2);
 							}
 							else {
@@ -2646,67 +2533,19 @@ void runCoffWriter() {
 							code.add1Unchecked(0x2A);
 							code.add1Unchecked(0xC0);
 
-							storeFromFloatRegister(&code, function, ir.destSize, ir.dest, 0);
+							storeFromFloatRegister(&code, function, ir.b, ir.dest, 0);
 						}
 					}
 				} break;
 				case IrOp::RETURN: {
 					if (ir.opSize) {
-						if (isStandardSize(ir.opSize)) {
-							if (ir.flags & IR_FLOAT_OP) {
-								loadIntoFloatRegister(&code, function, ir.opSize, 0, ir.a);
-							}
-							else {
-								loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
-							}
+						assert(isStandardSize(ir.opSize));
+
+						if (ir.flags & IR_FLOAT_OP) {
+							loadIntoFloatRegister(&code, function, ir.opSize, 0, ir.a);
 						}
 						else {
-							loadIntoIntRegister(&code, function, 8, RDI, 1);
-
-							if (ir.a == 0) {
-								if (ir.opSize % 8 == 0) {
-									loadImmediateIntoIntRegister(&code, RCX, ir.opSize / 8);
-
-									code.add1Unchecked(0x31); // xor eax, eax
-									code.add1Unchecked(0xC0);
-
-									code.add1Unchecked(0xF3); // rep stosq
-									code.add1Unchecked(0x48);
-									code.add1Unchecked(0xAB);
-								}
-								else {
-									loadImmediateIntoIntRegister(&code, RCX, ir.opSize);
-
-									code.add1Unchecked(0x30); // xor al, al
-									code.add1Unchecked(0xC0);
-
-									code.add1Unchecked(0xF3); // rep stosb
-									code.add1Unchecked(0x48);
-									code.add1Unchecked(0xAA);
-								}
-							}
-							else {
-								code.add1Unchecked(0x48);
-								code.add1Unchecked(0x8D);
-								writeRSPRegisterByte(&code, function, RSI, ir.a);
-
-								if (ir.opSize % 8 == 0) {
-									loadImmediateIntoIntRegister(&code, RCX, ir.opSize / 8);
-
-									code.add1Unchecked(0xF3); // rep movsq
-									code.add1Unchecked(0x48);
-									code.add1Unchecked(0xA5);
-								}
-								else {
-									loadImmediateIntoIntRegister(&code, RCX, ir.opSize);
-
-									code.add1Unchecked(0xF3); // rep movsb
-									code.add1Unchecked(0x48);
-									code.add1Unchecked(0xA4);
-								}
-							}
-
-							loadIntoIntRegister(&code, function, 8, RAX, 1);
+							loadIntoIntRegister(&code, function, ir.opSize, RAX, ir.a);
 						}
 					}
 
@@ -2720,185 +2559,57 @@ void runCoffWriter() {
 					jumpPatches.add(patch);
 				} break;
 				case IrOp::CALL: {
-					u32 parameterOffset;
-
-					if (!isStandardSize(ir.arguments->returnType->size)) {
-						parameterOffset = 1;
-					}
-					else {
-						parameterOffset = 0;
-					}
-
-					u32 parameterSpace = my_max(4, ir.arguments->argCount + parameterOffset);
-
-					u32 largeStorage = parameterSpace;
-
-					for (u64 i = 0; i < ir.arguments->argCount; i++) {
-						u32 size = ir.arguments->args[i].type->size;
-						u32 reg = ir.arguments->args[i].number;
-
-						if (reg == static_cast<u32>(-1)) {
-							continue;
-						}
-
-						if (!isStandardSize(size)) {
-							if (largeStorage & 1) {
-								++largeStorage; // Align to 16 bytes
-							}
-
-							code.add1Unchecked(0x48);
-							code.add1Unchecked(0x8D);
-							writeRSPOffsetByte(&code, RDI, largeStorage * 8);
-
-							if (reg == 0) {
-								if (size % 8 == 0) {
-									loadImmediateIntoIntRegister(&code, RCX, size / 8);
-
-									code.add1Unchecked(0x31); // xor eax, eax
-									code.add1Unchecked(0xC0);
-
-									code.add1Unchecked(0xF3); // rep stosq
-									code.add1Unchecked(0x48);
-									code.add1Unchecked(0xAB);
-								}
-								else {
-									loadImmediateIntoIntRegister(&code, RCX, size);
-
-									code.add1Unchecked(0x30); // xor al, al
-									code.add1Unchecked(0xC0);
-
-									code.add1Unchecked(0xF3); // rep stosb
-									code.add1Unchecked(0x48);
-									code.add1Unchecked(0xAA);
-								}
-							}
-							else {
-								code.add1Unchecked(0x48);
-								code.add1Unchecked(0x8D);
-								writeRSPRegisterByte(&code, function, RSI, reg);
-
-								if (size % 8 == 0) {
-									loadImmediateIntoIntRegister(&code, RCX, size / 8);
-
-									code.add1Unchecked(0xF3); // rep movsq
-									code.add1Unchecked(0x48);
-									code.add1Unchecked(0xA5);
-								}
-								else {
-									loadImmediateIntoIntRegister(&code, RCX, size);
-
-									code.add1Unchecked(0xF3); // rep movsb
-									code.add1Unchecked(0x48);
-									code.add1Unchecked(0xA4);
-								}
-							}
-
-							largeStorage += (size + 7) / 8;
-							code.ensure(128);
-						}
-					}
-
-					u32 dumpSpace = largeStorage;
-
-					largeStorage = parameterSpace;
-
 					constexpr int intRegisters[4] = { RCX, RDX, 8, 9 };
 
+					auto arguments = static_cast<FunctionCall *>(ir.data);
 
-					for (u8 i = 0; i < my_min(4 - parameterOffset, ir.arguments->argCount); i++) {
-						auto type = ir.arguments->args[i].type;
+					code.ensure(128);
+
+					for (u8 i = 0; i < my_min(4, arguments->argCount); i++) {
+						auto type = arguments->args[i].type;
 
 
-						if (ir.arguments->args[i].number == static_cast<u32>(-1)) {
-
-							code.add1Unchecked(intRegisters[i + parameterOffset] >= 8 ? 0x4C : 0x48);
-							code.add1Unchecked(0x8D);
-							writeRSPOffsetByte(&code, intRegisters[i + parameterOffset] & 7, dumpSpace * 8);
-						}
-						else if (type->flavor == TypeFlavor::FLOAT) {
-							loadIntoFloatRegister(&code, function, type->size, i + parameterOffset, ir.arguments->args[i].number);
+						if (type->flavor == TypeFlavor::FLOAT) {
+							loadIntoFloatRegister(&code, function, type->size, i, arguments->args[i].number);
 						}
 						else {
-							if (isStandardSize(type->size)) {
-								loadIntoIntRegister(&code, function, type->size, intRegisters[i + parameterOffset], ir.arguments->args[i].number);
-							}
-							else {
-								if (largeStorage & 1) {
-									++largeStorage; // Align to 16 bytes
-								}
-
-								code.add1Unchecked(intRegisters[i + parameterOffset] >= 8 ? 0x4C : 0x48);
-								code.add1Unchecked(0x8D);
-								writeRSPOffsetByte(&code, intRegisters[i + parameterOffset] & 7, largeStorage * 8);
-
-								u32 size = type->size;
-								largeStorage += (size + 7) / 8;
-							}
+							assert(isStandardSize(type->size));
+							loadIntoIntRegister(&code, function, type->size, intRegisters[i], arguments->args[i].number);
 						}
 					}
 
-					for (u32 i = 4 - parameterOffset; i < ir.arguments->argCount; i++) {
-						u64 size = ir.arguments->args[i].type->size;
+					for (u32 i = 4; i < arguments->argCount; i++) {
+						u64 size = arguments->args[i].type->size;
 
-						if (ir.arguments->args[i].number == static_cast<u64>(-1LL)) {
-
-							code.add1Unchecked(0x48);
-							code.add1Unchecked(0x8D);
-							writeRSPOffsetByte(&code, RAX, dumpSpace * 8);
-						}
-						else if (isStandardSize(size)) {
-							loadIntoIntRegister(&code, function, ir.arguments->args[i].type->size, RAX, ir.arguments->args[i].number);
-						}
-						else {
-							if (largeStorage & 1) {
-								++largeStorage; // Align to 16 bytes
-							}
-
-							code.add1Unchecked(0x48);
-							code.add1Unchecked(0x8D);
-							writeRSPOffsetByte(&code, RAX, largeStorage * 8);
-
-							largeStorage += (largeStorage + 7) / 8;
-						}
+						assert(isStandardSize(size));
+						loadIntoIntRegister(&code, function, arguments->args[i].type->size, RAX, arguments->args[i].number);
+						
 
 						code.add1Unchecked(0x48);
 						code.add1Unchecked(0x89);
-						writeRSPOffsetByte(&code, RAX, (i + parameterOffset) * 8);
+						writeRSPOffsetByte(&code, RAX, getParameterSpaceForCallOffset(function) + i * 8);
 
 						code.ensure(128);
 					}
 
-					if (!isStandardSize(ir.arguments->returnType->size)) {
-						code.add1Unchecked(0x48);
-						code.add1Unchecked(0x8D);
-
-						if (ir.dest) {
-							writeRSPRegisterByte(&code, function, RCX, ir.dest);
-						}
-						else {
-							writeRSPOffsetByte(&code, RCX, dumpSpace * 8);
-						}
-					}
+					assert(isStandardSize(arguments->returnType->size));
 
 					code.add1Unchecked(0xFF);
 					writeRSPRegisterByte(&code, function, 2, ir.a);
 
-					if (ir.dest != 0) {
-						if (isStandardSize(ir.arguments->returnType->size)) {
-							if (ir.arguments->returnType->flavor == TypeFlavor::FLOAT) {
-								storeFromFloatRegister(&code, function, ir.arguments->returnType->size, ir.dest, 0);
-							}
-							else {
-								storeFromIntRegister(&code, function, ir.arguments->returnType->size, ir.dest, RAX);
-							}
+					if (arguments->returnType != &TYPE_VOID && ir.opSize) {
+						assert(isStandardSize(arguments->returnType->size));
+
+						if (arguments->returnType->flavor == TypeFlavor::FLOAT) {
+							storeFromFloatRegister(&code, function, arguments->returnType->size, ir.dest, 0);
+						}
+						else {
+							storeFromIntRegister(&code, function, arguments->returnType->size, ir.dest, RAX);
 						}
 					}
 				} break;
 				case IrOp::NEG: {
-					if (ir.a == 0) {
-						storeImmediate(&code, function, ir.opSize, ir.dest, 0);
-					}
-					else if (ir.flags & IR_FLOAT_OP) {
+					if (ir.flags & IR_FLOAT_OP) {
 						code.add1Unchecked(0x0F); // xorps xmm0, xmm0
 						code.add1Unchecked(0x57);
 						code.add1Unchecked(0xC0);
@@ -2961,21 +2672,20 @@ void runCoffWriter() {
 
 					codeRelocations.ensure(10);
 					codeRelocations.add4Unchecked(code.totalSize);
-					codeRelocations.add4Unchecked(createSymbolForString(&emptyStringSymbolIndex, &symbols, &stringTable, &rdata, ir.string));
+					codeRelocations.add4Unchecked(createSymbolForString(&emptyStringSymbolIndex, &symbols, &stringTable, &rdata, static_cast<ExprStringLiteral *>(ir.data)));
 					codeRelocations.add2Unchecked(IMAGE_REL_AMD64_REL32);
 
 					code.add4Unchecked(0);
 
 					storeFromIntRegister(&code, function, 8, ir.dest, RAX);
-
-					loadImmediateIntoRAX(&code, ir.string->string.length);
-					storeFromIntRegister(&code, function, 8, ir.dest + 1, RAX);
 				} break;
 				case IrOp::LINE_MARKER: {
 					addLineInfo(&lineInfo, &columnInfo, code.totalSize - functionStart, ir.location.start, ir.location.end);
 				} break;
 				case IrOp::BLOCK: {
-					if (ir.block) {
+					auto block = static_cast<Block *>(ir.data);
+
+					if (block) {
 						debugSymbols.ensure(19);
 						debugSymbolsRelocations.ensure(20);
 
@@ -2999,12 +2709,12 @@ void runCoffWriter() {
 						debugSymbols.add2Unchecked(0);
 						debugSymbols.add1Unchecked(0);
 
-						for (auto declaration : ir.block->declarations) {
+						for (auto declaration : block->declarations) {
 							if (declaration->flags & (DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_CONSTANT)) continue;
 
 							REGREL32 variableInfo;
 
-							variableInfo.off = getRegisterOffset(function, declaration->physicalStorage);
+							variableInfo.off = getStackSpaceOffset(function) + declaration->physicalStorage;
 							variableInfo.typind = 0;
 
 							debugSymbols.ensure(2 + sizeof(variableInfo));
@@ -3851,9 +3561,6 @@ void runCoffWriter() {
 				}
 
 				if (section.data) {
-					if (printDiagnostics) {
-						reportInfo("%s size: %u", section.header->name, section.data->totalSize);
-					}
 
 					//assert(section.header->pointerToRawData == ftell(out));
 					writeAllocator(out, *section.data);

@@ -489,11 +489,6 @@ static void popLoop(State *state) {
 	state->builder.SetInsertPoint(end);
 }
 
-
-bool isStoredByPointer(Type *type) {
-	return type->flavor == TypeFlavor::ARRAY || type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::STRING;
-}
-
 llvm::Value *generateIrAndLoadIfStoredByPointer(State *state, Expr *expr) {
 	auto value = generateLlvmIr(state, expr);
 
