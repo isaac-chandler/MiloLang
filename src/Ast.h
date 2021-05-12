@@ -398,6 +398,8 @@ struct ExprArrayLiteral : Expr {
 
 		llvm::GlobalVariable *llvmStorage = nullptr;
 	};
+
+	void *runtimeValue = nullptr;
 };
 
 struct ExprStructLiteral : Expr {
@@ -412,6 +414,8 @@ struct ExprStructLiteral : Expr {
 
 		llvm::GlobalVariable *llvmStorage = nullptr;
 	};
+
+	void *runtimeValue = nullptr;
 };
 
 struct ExprFunction : Expr {

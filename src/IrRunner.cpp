@@ -141,6 +141,16 @@ void createRuntimeValue(Expr *value, void *dest) {
 			}
 		}
 	}
+	else if (value->flavor == ExprFlavor::STRUCT_LITERAL) {
+		auto literal = static_cast<ExprStructLiteral *>(value);
+
+		auto arrayType = static_cast<TypeArray *>(value->type);
+		auto store = static_cast<u8 *>(dest);
+
+		for (u32 i = 0; i < literal->initializers.count; i++) {
+			createRuntimeValue(literal->initializers.values[i], store + literal->initializers.declarations[i]->physicalStorage);
+		}
+	}
 	else if (value->flavor == ExprFlavor::TYPE_LITERAL) {
 		assert(static_cast<ExprLiteral *>(value)->typeValue->runtimeTypeInfo);
 		memcpy(dest, &static_cast<ExprLiteral *>(value)->typeValue->runtimeTypeInfo, sizeof(Type_Info *));
@@ -726,6 +736,28 @@ if (op.flags & IR_FLOAT_OP) {\
 			stack[op.dest] = reinterpret_cast<u64>(static_cast<ExprStringLiteral *>(op.data)->string.characters);
 			break;
 		}
+		case IrOp::ARRAY_LITERAL: {
+			auto literal = static_cast<ExprArrayLiteral *>(op.data);
+
+			if (!literal->runtimeValue) {
+				literal->runtimeValue = malloc(literal->type->size);
+				createRuntimeValue(literal, literal->runtimeValue);
+			}
+
+			stack[op.dest] = reinterpret_cast<u64>(literal->runtimeValue);
+			break;
+		}
+		case IrOp::STRUCT_LITERAL: {
+			auto literal = static_cast<ExprStructLiteral *>(op.data);
+
+			if (!literal->runtimeValue) {
+				literal->runtimeValue = malloc(literal->type->size);
+				createRuntimeValue(literal, literal->runtimeValue);
+			}
+
+			stack[op.dest] = reinterpret_cast<u64>(literal->runtimeValue);
+			break;
+		}
 		case IrOp::TYPE: {
 			stack[op.dest] = reinterpret_cast<u64>(op.data);
 			break;
@@ -1017,7 +1049,7 @@ Expr *runFunctionRoot(VMState *state, ExprRun *directive) {
 
 	u64 argument = reinterpret_cast<u64>(returnPointer);
 
-	runFunction(state, function, &dummyOp, nullptr, &argument);
+	runFunction(state, function, &dummyOp, nullptr, bigReturn ? &argument : returnPointer);
 
 	auto result = getReturnValueFromBytes(function->start, function->end, returnType, returnPointer);
 

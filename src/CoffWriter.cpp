@@ -2679,6 +2679,76 @@ void runCoffWriter() {
 
 					storeFromIntRegister(&code, function, 8, ir.dest, RAX);
 				} break;
+				case IrOp::ARRAY_LITERAL: {
+					auto array = static_cast<ExprArrayLiteral *>(ir.data);
+
+					code.add1Unchecked(0x48);
+					code.add1Unchecked(0x8D);
+					code.add1Unchecked(0x05);
+
+					if (!(array->flags & EXPR_HAS_STORAGE)) {
+						array->flags |= EXPR_HAS_STORAGE;
+
+						array->physicalStorage = static_cast<u32>(symbols.count());
+						array->symbol = reinterpret_cast<Symbol *>(symbols.allocator.allocateUnaligned(sizeof(Symbol)));
+
+						rdata.allocateUnaligned(AlignPO2(rdata.totalSize, array->type->alignment) - rdata.totalSize);
+
+						setSymbolName(&stringTable, &array->symbol->name, symbols.count());
+						array->symbol->storageClass = IMAGE_SYM_CLASS_STATIC;
+						array->symbol->value = static_cast<u32>(rdata.totalSize);
+						array->symbol->sectionNumber = RDATA_SECTION_NUMBER;
+						array->symbol->type = 0;
+						array->symbol->numberOfAuxSymbols = 0;
+
+						writeValue(rdata.totalSize, static_cast<u8 *>(rdata.allocateUnaligned(array->type->size)), &rdataRelocations, &symbols, &stringTable, array,
+							&emptyStringSymbolIndex, &rdata);
+					}
+
+					codeRelocations.ensure(10);
+					codeRelocations.add4Unchecked(code.totalSize);
+					codeRelocations.add4Unchecked(array->physicalStorage);
+					codeRelocations.add2Unchecked(IMAGE_REL_AMD64_REL32);
+
+					code.add4Unchecked(0);
+
+					storeFromIntRegister(&code, function, 8, ir.dest, RAX);
+				} break;
+				case IrOp::STRUCT_LITERAL: {
+					auto literal = static_cast<ExprStructLiteral *>(ir.data);
+
+					code.add1Unchecked(0x48);
+					code.add1Unchecked(0x8D);
+					code.add1Unchecked(0x05);
+
+					if (!(literal->flags & EXPR_HAS_STORAGE)) {
+						literal->flags |= EXPR_HAS_STORAGE;
+
+						literal->physicalStorage = static_cast<u32>(symbols.count());
+						literal->symbol = reinterpret_cast<Symbol *>(symbols.allocator.allocateUnaligned(sizeof(Symbol)));
+
+						rdata.allocateUnaligned(AlignPO2(rdata.totalSize, literal->type->alignment) - rdata.totalSize);
+
+						setSymbolName(&stringTable, &literal->symbol->name, symbols.count());
+						literal->symbol->storageClass = IMAGE_SYM_CLASS_STATIC;
+						literal->symbol->value = static_cast<u32>(rdata.totalSize);
+						literal->symbol->sectionNumber = RDATA_SECTION_NUMBER;
+						literal->symbol->type = 0;
+						literal->symbol->numberOfAuxSymbols = 0;
+
+						writeValue(rdata.totalSize, static_cast<u8 *>(rdata.allocateUnaligned(literal->type->size)), &rdataRelocations, &symbols, &stringTable, literal,
+							&emptyStringSymbolIndex, &rdata);
+					}
+
+					codeRelocations.ensure(10);
+					codeRelocations.add4Unchecked(code.totalSize);
+					codeRelocations.add4Unchecked(literal->physicalStorage);
+					codeRelocations.add2Unchecked(IMAGE_REL_AMD64_REL32);
+
+					code.add4Unchecked(0);
+
+					storeFromIntRegister(&code, function, 8, ir.dest, RAX);
+				} break;
 				case IrOp::LINE_MARKER: {
 					addLineInfo(&lineInfo, &columnInfo, code.totalSize - functionStart, ir.location.start, ir.location.end);
 				} break;
@@ -2714,7 +2784,16 @@ void runCoffWriter() {
 
 							REGREL32 variableInfo;
 
-							variableInfo.off = getStackSpaceOffset(function) + declaration->physicalStorage;
+							u32 offset;
+
+							if (declarationIsStoredByPointer(declaration)) {
+								offset = getStackSpaceOffset(function) + declaration->physicalStorage;
+							}
+							else {
+								offset = getRegisterOffset(function, declaration->registerOfStorage);
+							}
+
+							variableInfo.off = offset;
 							variableInfo.typind = 0;
 
 							debugSymbols.ensure(2 + sizeof(variableInfo));

@@ -856,6 +856,7 @@ main :: () {
 	
 	if !initialize_sound(window_handle) {
 		print("Failed to initialize sound")
+		return
 	}
 	
 	while !should_quit {

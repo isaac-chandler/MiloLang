@@ -388,10 +388,6 @@ IrOp getOpForBinary(TokenT op) {
 	}
 }
 
-bool declarationIsStoredByPointer(Declaration *declaration) {
-	return isStoredByPointer(getDeclarationType(declaration)) || (declaration->flags & DECLARATION_IS_POINTED_TO) || (declaration->enclosingScope->flavor == BlockFlavor::GLOBAL);
-}
-
 u32 loadAddressOf(IrState *state, Expr *expr, u32 offset = 0) {
 	if (expr->flavor == ExprFlavor::BINARY_OPERATOR && static_cast<ExprBinaryOperator *>(expr)->op == TOKEN('[')) {
 		auto binary = static_cast<ExprBinaryOperator *>(expr);
@@ -1797,19 +1793,31 @@ u32 generateIr(IrState *state, Expr *expr) {
 		return 0;
 	}
 	case ExprFlavor::STRUCT_LITERAL: {
-
 		auto literal = static_cast<ExprStructLiteral *>(expr);
+		if (structIsLiteral(literal)) {
 
-		u32 address = allocateStackSpaceAndLoadAddress(state, literal->type);
+			u32 result = allocateRegister(state);
 
-		for (u32 i = 0; i < literal->initializers.count; i++) {
-			auto offset = literal->initializers.declarations[i]->physicalStorage;
-			auto value = literal->initializers.values[i];
+			Ir &address = state->ir.add();
+			address.op = IrOp::STRUCT_LITERAL;
+			address.dest = result;
+			address.data = literal;
 
-			copyOrWrite(state, address, generateIr(state, value), value->type, offset);
+			return result;
 		}
+		else {
 
-		return address;
+			u32 address = allocateStackSpaceAndLoadAddress(state, literal->type);
+
+			for (u32 i = 0; i < literal->initializers.count; i++) {
+				auto offset = literal->initializers.declarations[i]->physicalStorage;
+				auto value = literal->initializers.values[i];
+
+				copyOrWrite(state, address, generateIr(state, value), value->type, offset);
+			}
+
+			return address;
+		}
 	}
 	case ExprFlavor::IMPORT: {
 		reportError(expr, "Error: Cannot operate on a module");
@@ -1951,56 +1959,69 @@ u32 generateIr(IrState *state, Expr *expr) {
 
 		assert(array->type->flags & TYPE_ARRAY_IS_FIXED);
 
-		auto arrayType = static_cast<TypeArray *>(array->type);
+		if (arrayIsLiteral(array)) {
 
-		u32 addressReg = allocateStackSpaceAndLoadAddress(state, arrayType);
+			u32 result = allocateRegister(state);
 
-		for (u32 i = 0; i < arrayType->count; i++) {
-			if (i + 1 == array->count && arrayType->count > array->count) {
-				u32 countReg = constant(state, allocateRegister(state), 8, arrayType->count - i);
+			Ir &address = state->ir.add();
+			address.op = IrOp::ARRAY_LITERAL;
+			address.dest = result;
+			address.data = array;
 
-				Ir &address = state->ir.add();
-				address.op = IrOp::ADD_CONSTANT;
-				address.dest = addressReg;
-				address.a = addressReg;
-				address.immediate = i * arrayType->arrayOf->size;
-				address.opSize = 8;
-
-				u32 value = generateIr(state, array->values[i]);
-
-				u32 patch = state->ir.count;
-
-				copyOrWrite(state, addressReg, value, arrayType->arrayOf);
-
-				Ir &add = state->ir.add();
-				add.op = IrOp::ADD_CONSTANT;
-				add.dest = addressReg;
-				add.a = addressReg;
-				add.immediate = arrayType->arrayOf->size;
-				add.opSize = 8;
-
-				Ir &dec = state->ir.add();
-				dec.op = IrOp::ADD_CONSTANT;
-				dec.dest = countReg;
-				dec.a = countReg;
-				dec.immediate = static_cast<u64>(-1LL);
-				dec.opSize = 8;
-
-				Ir &branch = state->ir.add();
-				branch.op = IrOp::IF_NZ_GOTO;
-				branch.a = countReg;
-				branch.b = patch;
-				branch.opSize = 8;
-
-				break;
-			}
-			else {
-				u32 value = generateIr(state, array->values[i]);
-				copyOrWrite(state, addressReg, value, arrayType->arrayOf, i * arrayType->arrayOf->size);
-			}
+			return result;
 		}
+		else {
+			auto arrayType = static_cast<TypeArray *>(array->type);
 
-		return addressReg;
+			u32 addressReg = allocateStackSpaceAndLoadAddress(state, arrayType);
+
+			for (u32 i = 0; i < arrayType->count; i++) {
+				if (i + 1 == array->count && arrayType->count > array->count) {
+					u32 countReg = constant(state, allocateRegister(state), 8, arrayType->count - i);
+
+					Ir &address = state->ir.add();
+					address.op = IrOp::ADD_CONSTANT;
+					address.dest = addressReg;
+					address.a = addressReg;
+					address.immediate = i * arrayType->arrayOf->size;
+					address.opSize = 8;
+
+					u32 value = generateIr(state, array->values[i]);
+
+					u32 patch = state->ir.count;
+
+					copyOrWrite(state, addressReg, value, arrayType->arrayOf);
+
+					Ir &add = state->ir.add();
+					add.op = IrOp::ADD_CONSTANT;
+					add.dest = addressReg;
+					add.a = addressReg;
+					add.immediate = arrayType->arrayOf->size;
+					add.opSize = 8;
+
+					Ir &dec = state->ir.add();
+					dec.op = IrOp::ADD_CONSTANT;
+					dec.dest = countReg;
+					dec.a = countReg;
+					dec.immediate = static_cast<u64>(-1LL);
+					dec.opSize = 8;
+
+					Ir &branch = state->ir.add();
+					branch.op = IrOp::IF_NZ_GOTO;
+					branch.a = countReg;
+					branch.b = patch;
+					branch.opSize = 8;
+
+					break;
+				}
+				else {
+					u32 value = generateIr(state, array->values[i]);
+					copyOrWrite(state, addressReg, value, arrayType->arrayOf, i * arrayType->arrayOf->size);
+				}
+			}
+
+			return addressReg;
+		}
 	}
 	case ExprFlavor::RUN: // Statement level runs are not removed from the ast but shouldn't generate code
 	case ExprFlavor::STATIC_IF: {

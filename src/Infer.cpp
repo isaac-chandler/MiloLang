@@ -8496,6 +8496,16 @@ bool inferRun(SubJob *subJob) {
 							return true;
 
 					}
+					else if (op.op == IrOp::ARRAY_LITERAL) {
+						if (!ensureTypeInfos(job, static_cast<ExprArrayLiteral *>(op.data)))
+							return true;
+
+					}
+					else if (op.op == IrOp::STRUCT_LITERAL) {
+						if (!ensureTypeInfos(job, static_cast<ExprStructLiteral *>(op.data)))
+							return true;
+
+					}
 					else if (op.op == IrOp::FUNCTION) {
 						if (!(op.function->flags & EXPR_FUNCTION_RUN_CHECKED)) {
 							if (pushFunctionToRunCheck(job, op.function)) {

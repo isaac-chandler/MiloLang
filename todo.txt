@@ -9,21 +9,23 @@ enums
 Constexpr
  - slices
  - bitwise casts cast(T,bit)
- 
+
+
+Investigate differences in moves explored in chess.milo between x64 and llvm backend
 
 Maybe make [] operations on a pointer illegal so that pointers to an array are less error prone (then maybe make [] on a pointer to array work the same way as . on a pointer (just do the dereference))
 
 Ternary operator
 
-Improve IR generators handling of larger than machine size values (currently they are just allocated multiple consecutive register numbers)
- - Maybe large values are always by pointer, similar to LLVM (probably include structs/arrays that are machine sized as well so we don't have to special case)
 
-Speed up IR Runner (currenly the #run directives in chess.milo take ~1.5 ms, which is like 100x to slow)
+Speed up IR Runner (currenly the #run directives in chess.milo take ~1.5 ms, which is like 100x too slow)
+ - Optimize loop
+ - Emit higher quality ir
+ - Maybe at some point switch to JITing instead of interpreting, so we could just use the x64 backend instead of having a separate IrRunner
 
 Syntax for partial array literals, where the remaining values are filled in with the default value 
  - maybe an option to fill with last specified value as well
    - this would give an easy way to fill an array with a certain value
- - Store array literals that are constants in the data segment instead of initializing them every time they are used
 
 Build options
  - Custom linker command
