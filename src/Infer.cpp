@@ -4396,6 +4396,42 @@ void addRunJob(ExprRun *run) {
 	subJobs.add(run->runJob);
 }
 
+void markDeclarationsAsPointedTo(Expr *expr) {
+	while (true) {
+		if (expr->flavor == ExprFlavor::IDENTIFIER) {
+			auto identifier = static_cast<ExprIdentifier *>(expr);
+			if (identifier->structAccess) {
+				// If a struct access is by pointer, we are not pointing to any new declarations
+				if (identifier->structAccess->type->flavor == TypeFlavor::POINTER) {
+					break;
+				}
+
+				expr = identifier->structAccess;
+			}
+			else {
+				identifier->declaration->flags |= DECLARATION_IS_POINTED_TO;
+				break;
+			}
+		}
+		else if (expr->flavor == ExprFlavor::BINARY_OPERATOR) {
+			auto binary = static_cast<ExprBinaryOperator *>(expr);
+
+			if (binary->op != TOKEN('[')) {
+				break;
+			}
+
+			if (!(binary->left->type->flags & TYPE_ARRAY_IS_FIXED)) {
+				break;
+			}
+
+			expr = binary->left;
+		}
+		else {
+			break;
+		}
+	}
+}
+
 bool inferFlattened(SubJob *job) {
 	PROFILE_FUNC();
 	++totalFlattenedInfers;
@@ -4641,6 +4677,8 @@ bool inferFlattened(SubJob *job) {
 							reportError(identifier, "Error: Cannot get the data pointer of a fixed array that has no storage");
 							return false;
 						}
+
+						markDeclarationsAsPointedTo(identifier->structAccess);
 
 						auto address = INFER_NEW(ExprUnaryOperator);
 						address->flavor = ExprFlavor::UNARY_OPERATOR;
@@ -6417,47 +6455,41 @@ bool inferFlattened(SubJob *job) {
 					*exprPointer = inferMakeTypeLiteral(unary->start, value->end, getPointer(literal->typeValue));
 					(*exprPointer)->valueOfDeclaration = expr->valueOfDeclaration;
 				}
-				else if (value->flavor == ExprFlavor::BINARY_OPERATOR) {
-					auto binary = static_cast<ExprBinaryOperator *>(value);
-
-					if (binary->op == TOKEN('[')) {
-						auto pointer = getPointer(value->type);
-
-						unary->type = pointer;
-					}
-					else {
-						reportError(value, "Error: Cannot take an address to something that has no storage");
-						return false;
-					}
-				}
-				else if (value->flavor == ExprFlavor::UNARY_OPERATOR) {
-					auto unary2 = static_cast<ExprUnaryOperator *>(value);
-
-					if (unary2->op == TokenT::SHIFT_LEFT) {
-						checkedRemoveLastSizeDependency(job->sizeDependencies, value->type);
-
-						unary->type = unary2->value->type;
-					}
-					else {
-						reportError(value, "Error: Cannot take an address to something that has no storage");
-						return false;
-					}
-				}
-				else if (value->flavor == ExprFlavor::IDENTIFIER) {
+				else {
 					if (!isAddressable(value)) {
 						reportError(value, "Error: Cannot take an address to something that has no storage");
 						return false;
 					}
 
-					checkedRemoveLastSizeDependency(job->sizeDependencies, value->type);
+					if (value->flavor == ExprFlavor::BINARY_OPERATOR) {
+						// We need a special case for *a[x] because normally if we take a pointer to a value, we no longer depend on the size of that value, 
+						// however for the case of [], we stil depend on the size because it is needed to calculate the address
+						auto binary = static_cast<ExprBinaryOperator *>(value);
 
-					auto pointer = getPointer(value->type);
+						assert(binary->op == TOKEN('['));
+						auto pointer = getPointer(value->type);
 
-					unary->type = pointer;
-				}
-				else {
-					reportError(value, "Error: Cannot take an addres to something that has no storage");
-					return false;
+						unary->type = pointer;
+						markDeclarationsAsPointedTo(unary->value);
+					}
+					else if (value->flavor == ExprFlavor::UNARY_OPERATOR) {
+						// Fold down *<< so that the ir generation doesn't have to deal with it
+						auto unary2 = static_cast<ExprUnaryOperator *>(value);
+
+						assert(unary2->op == TokenT::SHIFT_LEFT);
+						checkedRemoveLastSizeDependency(job->sizeDependencies, value->type);
+
+						unary->type = unary2->value->type;
+					}
+					else {
+						checkedRemoveLastSizeDependency(job->sizeDependencies, value->type);
+
+						auto pointer = getPointer(value->type);
+
+						unary->type = pointer;
+						markDeclarationsAsPointedTo(unary->value);
+					}
+
 				}
 
 				break;

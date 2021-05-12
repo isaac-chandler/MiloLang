@@ -388,6 +388,10 @@ IrOp getOpForBinary(TokenT op) {
 	}
 }
 
+bool declarationIsStoredByPointer(Declaration *declaration) {
+	return isStoredByPointer(getDeclarationType(declaration)) || (declaration->flags & DECLARATION_IS_POINTED_TO) || (declaration->enclosingScope->flavor == BlockFlavor::GLOBAL);
+}
+
 u32 loadAddressOf(IrState *state, Expr *expr, u32 offset = 0) {
 	if (expr->flavor == ExprFlavor::BINARY_OPERATOR && static_cast<ExprBinaryOperator *>(expr)->op == TOKEN('[')) {
 		auto binary = static_cast<ExprBinaryOperator *>(expr);
@@ -497,33 +501,36 @@ u32 loadAddressOf(IrState *state, Expr *expr, u32 offset = 0) {
 			}
 		}
 		else {
-			u32 result = allocateRegister(state);
-
 			if (identifier->declaration->enclosingScope->flavor == BlockFlavor::GLOBAL) {
+				u32 result = allocateRegister(state);
+
 				Ir &address = state->ir.add();
 				address.op = IrOp::ADDRESS_OF_GLOBAL;
 				address.dest = result;
 				address.a = offset;
 				address.data = identifier->declaration;
+
+				return result;
 			}
 			else {
-				result = identifier->declaration->registerOfStorage;
+				u32 address = identifier->declaration->registerOfStorage;
+
+				assert(declarationIsStoredByPointer(identifier->declaration));
 
 				if (offset) {
-					u32 address = allocateRegister(state);
-
+					u32 result = allocateRegister(state);
 					Ir &add = state->ir.add();
 					add.op = IrOp::ADD_CONSTANT;
-					add.dest = address;
-					add.a = result;
+					add.dest = result;
+					add.a = address;
 					add.immediate = offset;
 					add.opSize = 8;
 
-					result = address;
+					address = result;
 				}
-			}
 
-			return result;
+				return address;
+			}
 		}
 	}
 	else {
@@ -676,7 +683,7 @@ u32 generateCast(IrState *state, ExprBinaryOperator *binary) {
 			return result;
 		}
 		else {
-			if (castTo->size < right->type->size) {
+			if (castTo->size <= right->type->size) {
 				return rightReg;
 			}
 
@@ -755,6 +762,34 @@ u32 generateMathBinaryOp(IrState *state, ExprBinaryOperator *binary) {
 }
 
 void generateAssignBinaryOp(IrState *state, ExprBinaryOperator *binary) {
+
+	if (binary->left->flavor == ExprFlavor::IDENTIFIER) {
+		auto identifier = static_cast<ExprIdentifier *>(binary->left);
+
+		if (!identifier->structAccess && !declarationIsStoredByPointer(identifier->declaration)) {
+
+			u32 rightReg = generateIr(state, binary->right);
+
+			Ir &ir = state->ir.add();
+			ir.op = getOpForBinary(binary->op);
+			ir.dest = identifier->declaration->registerOfStorage;
+			ir.a = identifier->declaration->registerOfStorage;
+			ir.b = rightReg;
+			ir.opSize = binary->right->type->size;
+
+			if (binary->left->type->flavor == TypeFlavor::FLOAT) {
+				ir.flags |= IR_FLOAT_OP;
+			}
+
+			if (binary->left->type->flags & TYPE_INTEGER_IS_SIGNED) {
+				assert(binary->right->type->flags & TYPE_INTEGER_IS_SIGNED);
+
+				ir.flags |= IR_SIGNED_OP;
+			}
+
+			return;
+		}
+	}
 	u32 address = loadAddressOf(state, binary->left);
 	u32 result = memop(state, IrOp::READ, allocateRegister(state), address, binary->left->type->size);
 
@@ -767,8 +802,6 @@ void generateAssignBinaryOp(IrState *state, ExprBinaryOperator *binary) {
 	ir.b = rightReg;
 	ir.opSize = binary->right->type->size;
 
-	memop(state, IrOp::WRITE, address, result, binary->left->type->size);
-
 	if (binary->left->type->flavor == TypeFlavor::FLOAT) {
 		ir.flags |= IR_FLOAT_OP;
 	}
@@ -778,6 +811,10 @@ void generateAssignBinaryOp(IrState *state, ExprBinaryOperator *binary) {
 
 		ir.flags |= IR_SIGNED_OP;
 	}
+
+	memop(state, IrOp::WRITE, address, result, binary->left->type->size);
+
+	
 }
 
 u32 generateEquals(IrState *state, u32 leftReg, Expr *right, bool equals) {
@@ -947,6 +984,21 @@ u32 generateBinary(IrState *state, ExprBinaryOperator *binary) {
 		}
 	}
 	case TOKEN('='): {
+		if (left->flavor == ExprFlavor::IDENTIFIER) {
+			auto identifier = static_cast<ExprIdentifier *>(left);
+
+			if (!identifier->structAccess && !declarationIsStoredByPointer(identifier->declaration)) {
+				u32 value = generateIr(state, right);
+				Ir &set = state->ir.add();
+				set.op = IrOp::SET;
+				set.dest = identifier->declaration->registerOfStorage;
+				set.a = value;
+				set.opSize = identifier->type->size;
+				
+				return 0;
+			}
+		}
+
 		u32 address = loadAddressOf(state, left);
 		copyOrWrite(state, address, generateIr(state, right), left->type);
 		return 0;
@@ -1044,8 +1096,13 @@ void generateBlock(IrState *state, ExprBlock *block) {
 
 	for (auto declaration : block->declarations.declarations) {
 		if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING))) {
-			declaration->physicalStorage = allocateStackSpace(state, getDeclarationType(declaration));
-			declaration->registerOfStorage = loadStackAddress(state, declaration->physicalStorage);
+			if (declarationIsStoredByPointer(declaration)) {
+				declaration->physicalStorage = allocateStackSpace(state, getDeclarationType(declaration));
+				declaration->registerOfStorage = loadStackAddress(state, declaration->physicalStorage);
+			}
+			else {
+				declaration->registerOfStorage = allocateRegister(state);
+			}
 		}
 	}
 
@@ -1320,6 +1377,17 @@ u32 generateCall(IrState *state, ExprFunctionCall *call, ExprCommaAssignment *co
 
 	for (u32 i = 1; i < type->returnCount; i++) {
 		if (comma && i < comma->exprCount) {
+			if (comma->left[i]->flavor == ExprFlavor::IDENTIFIER) {
+				auto identifier = static_cast<ExprIdentifier *>(comma->left[i]);
+
+				if (!identifier->structAccess && !declarationIsStoredByPointer(identifier->declaration)) {
+					u32 address = allocateStackSpaceAndLoadAddress(state, comma->left[i]->type);
+
+					argumentInfo->args[call->arguments.count + bigReturn + i - 1].number = address;
+					argumentInfo->args[call->arguments.count + bigReturn + i - 1].type = TYPE_VOID_POINTER;
+					continue;
+				}
+			}
 			u32 address = loadAddressOf(state, comma->left[i]);
 
 			argumentInfo->args[call->arguments.count + bigReturn + i - 1].number = address;
@@ -1382,6 +1450,20 @@ u32 generateCall(IrState *state, ExprFunctionCall *call, ExprCommaAssignment *co
 
 	if (!bigReturn && isStoredByPointer(type->returnTypes[0])) {
 		result = memop(state, IrOp::WRITE, allocateStackSpaceAndLoadAddress(state, type->returnTypes[0]), result, type->returnTypes[0]->size);
+	}
+
+	if (comma) {
+		for (u32 i = 1; i < comma->exprCount; i++) {
+			if (comma->left[i]->flavor == ExprFlavor::IDENTIFIER) {
+				auto identifier = static_cast<ExprIdentifier *>(comma->left[i]);
+
+				if (!identifier->structAccess && !declarationIsStoredByPointer(identifier->declaration)) {
+					u32 address = argumentInfo->args[call->arguments.count + bigReturn + i - 1].number;
+
+					memop(state, IrOp::READ, identifier->declaration->registerOfStorage, address, identifier->type->size);
+				}
+			}
+		}
 	}
 
 	return result;
@@ -1502,10 +1584,7 @@ u32 generateIr(IrState *state, Expr *expr) {
 			}
 		}
 		else {
-			if (identifier->declaration->enclosingScope->flavor == BlockFlavor::ARGUMENTS || (identifier->declaration->flags & (DECLARATION_IS_ITERATOR | DECLARATION_IS_ITERATOR_INDEX))) {
-				return identifier->declaration->registerOfStorage;
-			}
-			else {
+			if (declarationIsStoredByPointer(identifier->declaration)) {
 				u32 address = loadAddressOf(state, expr);
 
 				if (isStoredByPointer(identifier->type)) {
@@ -1514,6 +1593,9 @@ u32 generateIr(IrState *state, Expr *expr) {
 				else {
 					return memop(state, IrOp::READ, allocateRegister(state), address, identifier->type->size);
 				}
+			}
+			else {
+				return identifier->declaration->registerOfStorage;
 			}
 		}
 
@@ -1642,6 +1724,21 @@ u32 generateIr(IrState *state, Expr *expr) {
 	case ExprFlavor::COMMA_ASSIGNMENT: {
 		auto comma = static_cast<ExprCommaAssignment *>(expr);
 
+		if (comma->left[0]->flavor == ExprFlavor::IDENTIFIER) {
+			auto identifier = static_cast<ExprIdentifier *>(comma->left[0]);
+
+			if (!identifier->structAccess && !declarationIsStoredByPointer(identifier->declaration)) {
+				u32 result = generateCall(state, static_cast<ExprFunctionCall *>(comma->call), comma);
+
+				Ir &set = state->ir.add();
+				set.op = IrOp::SET;
+				set.dest = identifier->declaration->registerOfStorage;
+				set.a = result;
+				set.opSize = identifier->type->size;
+
+				return 0;
+			}
+		}
 		u32 address = loadAddressOf(state, comma->left[0]);
 
 		u32 result = generateCall(state, static_cast<ExprFunctionCall *>(comma->call), comma);

@@ -51,6 +51,8 @@
 
 #define DECLARATION_DEFINES_POLYMORPH_VARIABLE 0x10'0000
 
+#define DECLARATION_IS_POINTED_TO 0x20'0000
+
 struct Declaration {
 	CodeLocation start;
 	EndLocation end;

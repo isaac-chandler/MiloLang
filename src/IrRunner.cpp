@@ -736,7 +736,7 @@ if (op.flags & IR_FLOAT_OP) {\
 		}
 		case IrOp::LINE_MARKER: {
 #if BUILD_DEBUG
-			line = op.location.start;
+		line = op.location.start;
 #endif
 			break;
 		}

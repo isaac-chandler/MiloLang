@@ -62,7 +62,7 @@ thread_proc :: (data: *void) -> u32 #c_call {
 	return 0
 }
 
-THREAD_COUNT :: 4
+THREAD_COUNT :: 8
 
 main :: () {
 	assert(height % THREAD_COUNT == 0)
