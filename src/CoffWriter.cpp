@@ -717,14 +717,12 @@ void writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataRelocations,
 		for (u64 i = 0; i < arrayType->count; i++) {
 			writeValue(dataSize, data, dataRelocations, symbols, stringTable, array->values[i], emptyStringSymbolIndex, rdata);
 
-			auto oldData = data;
-
 			dataSize += elementSize;
 			data += elementSize;
 
 			if (i + 1 == array->count && arrayType->count > array->count) {
 				for (u64 j = i + 1; j < arrayType->count; j++) {
-					memcpy(data, oldData, elementSize);
+					writeValue(dataSize, data, dataRelocations, symbols, stringTable, array->values[i], emptyStringSymbolIndex, rdata);
 					dataSize += elementSize;
 					data += elementSize;
 				}
@@ -777,9 +775,9 @@ void writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataRelocations,
 }
 
 void alignAllocator(BucketedArenaAllocator *allocator, u64 alignment) {
-	u64 padding = 0;
+	u64 padding[2] = {};
 
-	allocator->add(&padding, AlignPO2(allocator->totalSize, alignment) - allocator->totalSize);
+	allocator->add(padding, AlignPO2(allocator->totalSize, alignment) - allocator->totalSize);
 }
 
 struct LineInfo {
@@ -3555,12 +3553,26 @@ void runCoffWriter() {
 
 				if (section.relocations) {
 					section.header->pointerToRelocations = sectionPointer;
-					assert(section.relocations->totalSize / sizeof(Relocation) < UINT16_MAX);
 
-					// @Incomplete @Robustness, we need to do something else if there are more than 65535 relocations
-					section.header->numberOfRelocations = static_cast<u16>(section.relocations->totalSize / sizeof(Relocation));
+					u32 relocationCount = section.relocations->totalSize / sizeof(Relocation);
+
+					if (relocationCount > UINT16_MAX) {
+						section.header->characteristics |= IMAGE_SCN_LNK_NRELOC_OVFL;
+						section.header->numberOfRelocations = UINT16_MAX;
+					}
+					else {
+						section.header->numberOfRelocations = static_cast<u16>(relocationCount);
+					}
 
 					alignAllocator(section.relocations, 4);
+
+					if (relocationCount > UINT16_MAX) {
+						sectionPointer += 10;
+
+						section.relocations->add2(0); // @Hack We padded to what we though was a multiple of 4 bytes, but since an extra relocation is added at the beginning, 
+						                              // we need to add 2 more bytes to ensure alignment
+					}
+
 					sectionPointer += section.relocations->totalSize;
 				}
 				else {
@@ -3602,7 +3614,7 @@ void runCoffWriter() {
 
 			const auto writeAllocator = [&](HANDLE out, BucketedArenaAllocator allocator) {
 				for (auto bucket = allocator.first; bucket; bucket = bucket->next) {
-					u32 count = (allocator.bucketSize - bucket->remaining);
+					u32 count = (bucket->size - bucket->remaining);
 
 					doWrite(bucket->memory - count, count);
 				}
@@ -3648,8 +3660,19 @@ void runCoffWriter() {
 				}
 
 				if (section.relocations) {
+					u32 relocationCount = section.relocations->totalSize / sizeof(Relocation);
+
 					if (printDiagnostics) {
-						reportInfo("%s relocations: %u", section.header->name, section.relocations->totalSize / sizeof(Relocation));
+						reportInfo("%s relocations: %u", section.header->name, relocationCount);
+					}
+
+					if (relocationCount > UINT16_MAX) {
+						Relocation count;
+						count.virtualAddress = relocationCount + 1;
+						count.symbolTableIndex = 0;
+						count.type = IMAGE_REL_AMD64_ABSOLUTE;
+
+						doWrite(&count, sizeof(count));
 					}
 					//assert(section.header->pointerToRelocations == ftell(out));
 

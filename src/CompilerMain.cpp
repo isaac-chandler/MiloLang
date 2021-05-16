@@ -447,9 +447,7 @@ int main(int argc, char *argv[]) {
 			reportInfo("Total infers: %llu, %.1f infers/queued, %.1f iterations/infer", totalFlattenedInfers, static_cast<float>(totalFlattenedInfers) / totalQueued, static_cast<float>(totalInferIterations) / totalFlattenedInfers);
 			reportInfo("Total types: %llu, %.1f sizes/type", totalSizes, static_cast<float>(totalInferStructSizes + totalInferEnumSizes + totalInferArraySizes) / totalSizes);
 
-			if (buildOptions.backend == Build_Options::Backend::X64) {
-				reportInfo("IR Instructions: %u", irInstructions);
-			}
+			reportInfo("IR Instructions: %u", irInstructions);
 		}
 	}
 
@@ -498,22 +496,27 @@ int main(int argc, char *argv[]) {
 #endif
 
 		auto backendStart = high_resolution_clock::now();
+		decltype(backendStart) backendEnd;
 		if (buildOptions.backend == Build_Options::Backend::LLVM) {
 			runLlvm();
 
+			backendEnd = high_resolution_clock::now();
+
 			reportInfo("LLVM Time: %.1fms", duration_cast<microseconds>(duration<double>(
-				high_resolution_clock::now() - backendStart)).count() / 1000.0);
+				backendEnd - backendStart)).count() / 1000.0);
 		}
 		else if (buildOptions.backend == Build_Options::Backend::X64) {
 			runCoffWriter();
 
-			reportInfo("x64 Time: %.1fms", duration_cast<microseconds>(duration<double>(
-				high_resolution_clock::now() - backendStart)).count() / 1000.0);
+			backendEnd = high_resolution_clock::now();
 		}
+
+		reportInfo("x64 Time: %.1fms", duration_cast<microseconds>(duration<double>(
+			backendEnd - backendStart)).count() / 1000.0);
 
 
 		reportInfo("Compiler Time: %.1fms", duration_cast<microseconds>(duration<double>(
-			high_resolution_clock::now() - start)).count() / 1000.0);
+			backendEnd - start)).count() / 1000.0);
 	}
 
 #if BUILD_WINDOWS
@@ -801,7 +804,9 @@ int main(int argc, char *argv[]) {
 
 
 #if BUILD_DEBUG
-	std::cin.get();
+	if (IsDebuggerPresent()) {
+		std::cin.get();
+	}
 #endif
 
 	return hadError;

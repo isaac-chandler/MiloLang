@@ -519,7 +519,7 @@ evaluate_position :: (using state: State, player_color: Piece) -> f32 {
 	else return evaluation
 }
 
-MAX_MOVES :: 100_000
+MAX_MOVES :: 1_000_000
 
 quiesce :: (using state: State, player_color: Piece, alpha: f32, beta: f32, depth := 0) -> f32 {
 	if moves_explored == MAX_MOVES  return 0

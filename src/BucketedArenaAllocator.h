@@ -7,6 +7,7 @@ struct ArenaAllocatorBucket {
 	ArenaAllocatorBucket *next;
 	char *memory;
 	u32 remaining;
+	u32 size;
 };
 
 ArenaAllocatorBucket *makeBucket(u32 size);
@@ -32,7 +33,7 @@ struct BucketedArenaAllocator {
 			ArenaAllocatorBucket *bucket = first;
 			first = first->next;
 
-			std::free(reinterpret_cast<char *>(bucket) - bucketSize);
+			std::free(reinterpret_cast<char *>(bucket) - bucket->size);
 		}
 	}
 

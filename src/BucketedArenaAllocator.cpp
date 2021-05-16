@@ -3,23 +3,18 @@
 
 #define Align16(a) ((reinterpret_cast<u64>(a) + 15) & ~15)
 
-void expand(BucketedArenaAllocator *allocator) {
-	allocator->current->next = makeBucket(allocator->bucketSize);
+void expand(BucketedArenaAllocator *allocator, u32 size) {
+	allocator->current->next = makeBucket(size);
 	allocator->current = allocator->current->next;
 }
 
 void BucketedArenaAllocator::ensure(u32 size) {
 	if (size > current->remaining) {
-		expand(this);
+		expand(this, my_max(bucketSize, (size + 15) & ~15));
 	}
 }
 
 void *BucketedArenaAllocator::allocate(u32 size) {
-	if (size > bucketSize) {
-		assert(false);
-		return nullptr;
-	}
-
 	char *aligned = (char *) Align16(current->memory);
 
 	totalSize += static_cast<u32>(aligned - current->memory) + size;
@@ -39,11 +34,6 @@ void *BucketedArenaAllocator::allocate(u32 size) {
 }
 
 void *BucketedArenaAllocator::allocateUnaligned(u32 size) {
-	if (size > bucketSize) {
-		assert(false);
-		return nullptr;
-	}
-
 	totalSize += size;
 
 
@@ -78,13 +68,13 @@ void BucketedArenaAllocator::add(const void *value, u32 size) {
 	const u8 *bytes = static_cast<const u8 *>(value);
 	totalSize += size;
 
-	while (current->remaining < size) {
+	if (current->remaining < size) {
 		memcpy(current->memory, bytes, current->remaining);
 		bytes += current->remaining;
 		size -= current->remaining;
 		current->memory += current->remaining;
 		current->remaining = 0;
-		expand(this);
+		expand(this, bucketSize);
 	}
 
 	memcpy(current->memory, bytes, size);
@@ -149,6 +139,7 @@ ArenaAllocatorBucket *makeBucket(u32 size) {
 	result->next = nullptr;
 	result->remaining = size;
 	result->memory = block;
+	result->size = size;
 
 	return result;
 }
