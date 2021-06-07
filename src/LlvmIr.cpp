@@ -1002,6 +1002,9 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 						return state->builder.CreateFPToUI(value, getLlvmType(state->context, castTo));
 					}
 				}
+				else if (right->type->flavor == TypeFlavor::BOOL) {
+					return state->builder.CreateIntCast(value, getLlvmType(state->context, castTo), false);
+				}
 				else {
 					return state->builder.CreateIntCast(value, getLlvmType(state->context, castTo), castTo->flags & TYPE_INTEGER_IS_SIGNED ? true : false);
 				}

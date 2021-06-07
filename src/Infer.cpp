@@ -3227,7 +3227,7 @@ bool checkArgumentsForOverload(SubJob *job, Arguments *arguments, Block *block, 
 	return true;
 }
 
-bool matchPolymorphArgument(Expr *polymorphExpression, Type *type, Expr *location) {
+bool matchPolymorphArgument(Expr *polymorphExpression, Type *type, Expr *location, bool *yield, bool silent) {
 	if (polymorphExpression->flavor == ExprFlavor::IDENTIFIER && (polymorphExpression->flags & EXPR_IDENTIER_DEFINES_POLYMORPH_VARIABLE)) {
 		auto identifier = static_cast<ExprIdentifier *>(polymorphExpression);
 
@@ -3236,7 +3236,8 @@ bool matchPolymorphArgument(Expr *polymorphExpression, Type *type, Expr *locatio
 		assert(identifier->declaration->enclosingScope->flavor == BlockFlavor::CONSTANTS);
 		assert(!identifier->declaration->initialValue);
 
-		identifier->declaration->initialValue = inferMakeTypeLiteral(location->start, location->end, type);
+		if (!silent)
+			identifier->declaration->initialValue = inferMakeTypeLiteral(location->start, location->end, type);
 
 		//reportInfo("%.*s Polymorph type matched %.*s", STRING_PRINTF(identifier->name), STRING_PRINTF(type->name));
 		return true;
@@ -3246,12 +3247,14 @@ bool matchPolymorphArgument(Expr *polymorphExpression, Type *type, Expr *locatio
 
 		if (unary->op == TOKEN('*')) {
 			if (type->flavor != TypeFlavor::POINTER) {
-				reportError(location, "Error: Could not match polymorph pattern, %.*s is not a pointer", STRING_PRINTF(type->name));
-				reportError(polymorphExpression, "   ..: Here is the polymorph argument");
+				if (!silent) {
+					reportError(location, "Error: Could not match polymorph pattern, %.*s is not a pointer", STRING_PRINTF(type->name));
+					reportError(polymorphExpression, "   ..: Here is the polymorph argument");
+				}
 				return false;
 			}
 
-			return matchPolymorphArgument(unary->value, static_cast<TypePointer *>(type)->pointerTo, location);
+			return matchPolymorphArgument(unary->value, static_cast<TypePointer *>(type)->pointerTo, location, yield, silent);
 		}
 
 	}
@@ -3260,8 +3263,10 @@ bool matchPolymorphArgument(Expr *polymorphExpression, Type *type, Expr *locatio
 
 		if (binary->op == TokenT::ARRAY_TYPE) {
 			if (type->flavor != TypeFlavor::ARRAY) {
-				reportError(location, "Error: Could not match polymorph pattern, %.*s is not an array", STRING_PRINTF(type->name));
-				reportError(polymorphExpression, "   ..: Here is the polymorph argument");
+				if (!silent) {
+					reportError(location, "Error: Could not match polymorph pattern, %.*s is not an array", STRING_PRINTF(type->name));
+					reportError(polymorphExpression, "   ..: Here is the polymorph argument");
+				}
 				return false;
 			}
 
@@ -3269,58 +3274,72 @@ bool matchPolymorphArgument(Expr *polymorphExpression, Type *type, Expr *locatio
 
 			if (binary->left) {
 				if (!(array->flags & TYPE_ARRAY_IS_FIXED)) {
-					reportError(location, "Error: Could not match polymorph pattern, %.*s is not a fixed array", STRING_PRINTF(type->name));
-					reportError(polymorphExpression, "   ..: Here is the polymorph argument");
+					if (!silent) {
+						reportError(location, "Error: Could not match polymorph pattern, %.*s is not a fixed array", STRING_PRINTF(type->name));
+						reportError(polymorphExpression, "   ..: Here is the polymorph argument");
+					}
 					return false;
 				}
 			}
 			else if (binary->flags & EXPR_ARRAY_IS_DYNAMIC) {
 				if (!(array->flags & TYPE_ARRAY_IS_DYNAMIC)) {
-					reportError(location, "Error: Could not match polymorph pattern, %.*s is not a dynamic array", STRING_PRINTF(type->name));
-					reportError(polymorphExpression, "   ..: Here is the polymorph argument");
+					if (!silent) {
+						reportError(location, "Error: Could not match polymorph pattern, %.*s is not a dynamic array", STRING_PRINTF(type->name));
+						reportError(polymorphExpression, "   ..: Here is the polymorph argument");
+					}
 					return false;
 				}
 			}
 
-			return matchPolymorphArgument(binary->right, array->arrayOf, location);
+			return matchPolymorphArgument(binary->right, array->arrayOf, location, yield, silent);
 		}
 	}
 	else if (polymorphExpression->flavor == ExprFlavor::FUNCTION_PROTOTYPE) {
 		auto function = static_cast<ExprFunction *>(polymorphExpression);
-		
+
 		if (type->flavor != TypeFlavor::FUNCTION) {
-			reportError(location, "Error: Could not match polymorph pattern, %.*s is not a function", STRING_PRINTF(type->name));
-			reportError(polymorphExpression, "   ..: Here is the polymorph argument");
+			if (!silent) {
+				reportError(location, "Error: Could not match polymorph pattern, %.*s is not a function", STRING_PRINTF(type->name));
+				reportError(polymorphExpression, "   ..: Here is the polymorph argument");
+			}
 			return false;
 		}
 
 		auto functionType = static_cast<TypeFunction *>(type);
 
 		if (function->arguments.declarations.count != functionType->argumentCount) {
-			reportError(location, "Error: Could not match polymorph pattern, function argument counts mismatched for %.*s (%u arguments)", 
-				STRING_PRINTF(functionType->name), functionType->argumentCount);
-			reportError(polymorphExpression, "   ..: Wanted %u arguments", function->arguments.declarations.count);
+			if (!silent) {
+				reportError(location, "Error: Could not match polymorph pattern, function argument counts mismatched for %.*s (%u arguments)",
+					STRING_PRINTF(functionType->name), functionType->argumentCount);
+				reportError(polymorphExpression, "   ..: Wanted %u arguments", function->arguments.declarations.count);
+			}
 			return false;
 		}
 
 		if (function->returns.declarations.count != functionType->returnCount) {
-			reportError(location, "Error: Could not match polymorph pattern, function return counts mismatched for %.*s (%u returns)",
-				STRING_PRINTF(functionType->name), functionType->returnCount);
-			reportError(polymorphExpression, "   ..: Wanted %u returns", function->returns.declarations.count);
+			if (!silent) {
+				reportError(location, "Error: Could not match polymorph pattern, function return counts mismatched for %.*s (%u returns)",
+					STRING_PRINTF(functionType->name), functionType->returnCount);
+				reportError(polymorphExpression, "   ..: Wanted %u returns", function->returns.declarations.count);
+			}
 			return false;
 		}
 
 		if ((function->flags & EXPR_FUNCTION_HAS_VARARGS) && !functionType->isVarargs) {
-			reportError(location, "Error: Could not match polymorph pattern, wanted a varargs function but given %.*s", 
-				STRING_PRINTF(functionType->name));
-			reportError(polymorphExpression, "   ..: Here is the polymorph argument");
+			if (!silent) {
+				reportError(location, "Error: Could not match polymorph pattern, wanted a varargs function but given %.*s",
+					STRING_PRINTF(functionType->name));
+				reportError(polymorphExpression, "   ..: Here is the polymorph argument");
+			}
 			return false;
 		}
 
 		if (((function->flags & EXPR_FUNCTION_IS_C_CALL) != 0) != ((functionType->flags & TYPE_FUNCTION_IS_C_CALL) != 0)) {
-			reportError(location, "Error: Could not match polymorph pattern #c_call specifiers do not match for function type %.*s", 
-				STRING_PRINTF(functionType->name));
-			reportError(polymorphExpression, "   ..: Here is the polymorph argument");
+			if (!silent) {
+				reportError(location, "Error: Could not match polymorph pattern #c_call specifiers do not match for function type %.*s",
+					STRING_PRINTF(functionType->name));
+				reportError(polymorphExpression, "   ..: Here is the polymorph argument");
+			}
 			return false;
 		}
 
@@ -3328,7 +3347,7 @@ bool matchPolymorphArgument(Expr *polymorphExpression, Type *type, Expr *locatio
 			if (argument->flags & DECLARATION_DEFINES_POLYMORPH_VARIABLE) {
 				assert(argument->type);
 
-				if (!matchPolymorphArgument(argument->type, functionType->argumentTypes[argument->serial], location))
+				if (!matchPolymorphArgument(argument->type, functionType->argumentTypes[argument->serial], location, yield, silent))
 					return false;
 			}
 		}
@@ -3337,7 +3356,7 @@ bool matchPolymorphArgument(Expr *polymorphExpression, Type *type, Expr *locatio
 			if (return_->flags & DECLARATION_DEFINES_POLYMORPH_VARIABLE) {
 				assert(return_->type);
 
-				if (!matchPolymorphArgument(return_->type, functionType->returnTypes[return_->serial], location))
+				if (!matchPolymorphArgument(return_->type, functionType->returnTypes[return_->serial], location, yield, silent))
 					return false;
 			}
 		}
@@ -3345,11 +3364,12 @@ bool matchPolymorphArgument(Expr *polymorphExpression, Type *type, Expr *locatio
 		return true;
 	}
 
-	reportError(polymorphExpression, "Error: Could not match polymorphic argument pattern");
+	if (!silent)
+		reportError(polymorphExpression, "Error: Could not match polymorphic argument pattern");
 	return false;
 }
 
-bool doPolymorphMatchingForCall(Arguments *arguments, ExprFunction *function) {
+bool doPolymorphMatchingForCall(Arguments *arguments, ExprFunction *function, bool *yield) {
 	for (u32 i = 0; i < arguments->count; i++) {
 		Declaration *argument;
 
@@ -3396,7 +3416,7 @@ bool doPolymorphMatchingForCall(Arguments *arguments, ExprFunction *function) {
 				return false;
 			}
 
-			if (!matchPolymorphArgument(typeExpr, getTypeForExpr(argumentExpr), argumentExpr))
+			if (!matchPolymorphArgument(typeExpr, getTypeForExpr(argumentExpr), argumentExpr, yield, false))
 				return false;
 		}
 		
@@ -5761,8 +5781,9 @@ bool inferFlattened(SubJob *job) {
 
 				auto function = static_cast<ExprFunction *>(call->function);
 
-				if (!doPolymorphMatchingForCall(&call->arguments, function))
-					return false;
+				bool yield = false;
+				if (!doPolymorphMatchingForCall(&call->arguments, function, &yield))
+					return yield;
 
 #if BUILD_DEBUG
 				for (auto constant : function->constants.declarations) {

@@ -1203,6 +1203,10 @@ bool isFunctionType(LexerFile *lexer) {
 	return token == TokenT::ARROW;
 }
 
+u32 getPolymorphCount(LexerFile *lexer) {
+	return lexer->functionHeaderStack.count ? lexer->functionHeaderStack.peek()->constants.declarations.count : 0;
+}
+
 Declaration *parseSingleArgument(LexerFile *lexer, ExprFunction *function, bool arguments, bool named) {
 	auto token = lexer->token;
 
@@ -1222,12 +1226,18 @@ Declaration *parseSingleArgument(LexerFile *lexer, ExprFunction *function, bool 
 			return nullptr;
 	}
 	else {
+		u32 initialPolymorphCount = getPolymorphCount(lexer);
+
 		auto expr = parseExpr(lexer);
 
 		if (!expr)
 			return nullptr;
 
 		declaration = createAnonymousDeclaration(lexer, expr);
+
+		if (getPolymorphCount(lexer) != initialPolymorphCount) {
+			declaration->flags |= DECLARATION_DEFINES_POLYMORPH_VARIABLE;
+		}
 	}
 
 
@@ -1448,6 +1458,8 @@ ExprFunction *parseFunctionOrFunctionType(LexerFile *lexer, CodeLocation start, 
 	}
 	else { // This is a function type
 		function->end = lexer->previousTokenEnd;
+
+		function->body = nullptr;
 
 		if (!hadReturnType) {
 			reportError(function, "Error: A function prototype must have a return type");
@@ -2746,10 +2758,6 @@ Expr *parseBinaryOperator(LexerFile *lexer) {
 // @Incomplete: punting on ternary operator for now because I don't know whether we should actually support it
 Expr *parseExpr(LexerFile *lexer) {
 	return parseBinaryOperator(lexer);
-}
-
-u32 getPolymorphCount(LexerFile *lexer) {
-	return lexer->functionHeaderStack.count ? lexer->functionHeaderStack.peek()->constants.declarations.count : 0;
 }
 
 Declaration *parseDeclaration(LexerFile *lexer) {

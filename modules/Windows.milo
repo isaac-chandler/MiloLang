@@ -378,7 +378,7 @@ from_windows_string :: (windows_string: *u16) -> string {
 	
 	character_count := cast(u64) WideCharToMultiByte(lpWideCharStr = windows_string, lpMultiByteStr = null, cbMultiByte = 0)
 	
-	result := string.{allocate(character_count), character_count}
+	result := string.{allocate(character_count), character_count - 1}
 	
 	WideCharToMultiByte(lpWideCharStr = windows_string, lpMultiByteStr = result.data, cbMultiByte = cast() character_count)
 	
@@ -616,6 +616,9 @@ using Create_Thread_Flags :: enum_flags u32 {
 }
 
 CreateThread :: (lpThreadAttributes: *SECURITY_ATTRIBUTES = null, dwStackSize: u64 = 0, lpStartAddress: (*void) -> u32 #c_call, lpParameter := null, dwCreationFlags: Create_Thread_Flags = 0, lpThreadId: *u32 = null) -> HANDLE #external "kernel32"
+
+CreateSemaphoreA :: (lpSemaphoreAttributes: *SECURITY_ATTRIBUTES = null, lInitialCount: s32 = 0, lMaximumCount: s32, lpName: *u8 = null) -> HANDLE #external "kernel32"
+ReleaseSemaphore :: (hSemaphore: HANDLE, lReleaseCount: s32 = 1, lpPreviousCount: *s32 = null) -> bool #external "kernel32"
 
 INFINITE :: 0xFFFF_FFFF
 

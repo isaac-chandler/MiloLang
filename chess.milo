@@ -5,6 +5,7 @@
 #import "Bitmap"
 #import "File"
 #import "String"
+#import "Thread"
 
 should_quit: bool
 
@@ -188,6 +189,7 @@ State :: struct {
 		WHITE_NO_QUEENSIDE
 	}	
 
+	move_count: u16
 	castle_state: Castle
 	en_passant_position: s8 = -128
 	board: [64]s8
@@ -200,6 +202,7 @@ State :: struct {
 	pieces: [32]Piece_Info
 	white_pawn_mask: u64
 	black_pawn_mask: u64
+	player_color: Piece
 }
 
 create_mask :: (bits: [64]u64) -> u64 {
@@ -233,6 +236,19 @@ pawns_that_can_left_capture_mask :: #run create_mask(.[
 	0, 1, 1, 1, 1, 1, 1, 1,  
 	0, 1, 1, 1, 1, 1, 1, 1,  
 	0, 0, 0, 0, 0, 0, 0, 0
+])
+
+
+	
+file_mask :: #run create_mask(.[
+	1, 0, 0, 0, 0, 0, 0, 0, 
+	1, 0, 0, 0, 0, 0, 0, 0, 
+	1, 0, 0, 0, 0, 0, 0, 0, 
+	1, 0, 0, 0, 0, 0, 0, 0, 
+	1, 0, 0, 0, 0, 0, 0, 0, 
+	1, 0, 0, 0, 0, 0, 0, 0, 
+	1, 0, 0, 0, 0, 0, 0, 0, 
+	1, 0, 0, 0, 0, 0, 0, 0
 ])
 
 initialize_state :: (layout: [64]Piece) -> State {
@@ -408,6 +424,7 @@ legal_king_moves_mask :: #run () -> [64]u64 {
 
 MAX_DEPTH :: 255
 
+repetition_hash: [MAX_DEPTH + 1]u64
 legal_moves_list: [MAX_DEPTH + 1][..]Move
 legal_quiesce_moves_list: [MAX_DEPTH + 1][..]Move
 evaluation_list: [..]f32
@@ -426,7 +443,7 @@ transposition_table: [1 << 26]struct {
 	move: Move
 }
 
-evaluate_black :: (using piece: State.Piece_Info) -> f32 {
+evaluate_black :: (using state: State, using piece: State.Piece_Info) -> f32 {
 	if location == -1 return 0
 	
 	value: f32
@@ -435,7 +452,16 @@ evaluate_black :: (using piece: State.Piece_Info) -> f32 {
 		case PAWN   value = 1.0 + pawn_square_bonus  [63 - location]
 		case BISHOP value = 3.3 + bishop_square_bonus[63 - location]
 		case KNIGHT value = 3.2 + knight_square_bonus[63 - location]
-		case ROOK   value = 5.0 + rook_square_bonus  [63 - location]
+		case ROOK   
+			value = 5.0 + rook_square_bonus  [63 - location]
+			// Apply a bonus for rooks on open and semi-open files
+			mask := file_mask << cast()(location & 7)
+			if !(white_pawn_mask & mask) {
+				value += 0.3
+			}
+			if !(black_pawn_mask & mask) {
+				value += 0.3
+			}
 		case QUEEN  value = 9.0 + queen_square_bonus [63 - location]
 		case KING   value = 0.0 + king_square_bonus  [63 - location]
 	}
@@ -443,7 +469,7 @@ evaluate_black :: (using piece: State.Piece_Info) -> f32 {
 	return value
 }
 
-evaluate_white :: (using piece: State.Piece_Info) -> f32 {
+evaluate_white :: (using state: State, using piece: State.Piece_Info) -> f32 {
 	if location == -1 return 0
 	
 	value: f32
@@ -452,7 +478,16 @@ evaluate_white :: (using piece: State.Piece_Info) -> f32 {
 		case PAWN   value = 1.0 + pawn_square_bonus  [location]
 		case BISHOP value = 3.3 + bishop_square_bonus[location]
 		case KNIGHT value = 3.2 + knight_square_bonus[location]
-		case ROOK   value = 5.0 + rook_square_bonus  [location]
+		case ROOK   
+			value = 5.0 + rook_square_bonus[location]
+			// Apply a bonus for rooks on open and semi-open files
+			mask := file_mask << cast()(location & 7)
+			if !(white_pawn_mask & mask) {
+				value += 0.3
+			}
+			if !(black_pawn_mask & mask) {
+				value += 0.3
+			}
 		case QUEEN  value = 9.0 + queen_square_bonus [location]
 		case KING   value = 0.0 + king_square_bonus  [location]
 	}
@@ -460,7 +495,7 @@ evaluate_white :: (using piece: State.Piece_Info) -> f32 {
 	return value
 }
 	
-order_moves :: (using state: State, moves: []Move, old_best: Move, player_color: Piece, depth: s8 = 0, alpha: f32 = -1e9, beta: f32 = 1e9) {
+order_moves :: (using state: State, moves: []Move, old_best: Move, depth: s8 = 0, alpha: f32 = -1e9, beta: f32 = 1e9) {
 	if evaluation_list.capacity < moves.count {
 		evaluation_list.data = reallocate(evaluation_list.data, size_of(f32) * moves.count)
 		evaluation_list.capacity = moves.count
@@ -473,9 +508,13 @@ order_moves :: (using state: State, moves: []Move, old_best: Move, player_color:
 			evaluation_list[it_index] = 10000
 		}
 		else if board[it.end] != -1 {
-			if player_color == BLACK evaluation_list[it_index] = evaluate_white(pieces[board[it.end]]) - evaluate_black(pieces[it.piece_index])
-			else                     evaluation_list[it_index] = evaluate_black(pieces[board[it.end]]) - evaluate_white(pieces[it.piece_index])
+			if player_color == BLACK evaluation_list[it_index] = evaluate_white(state, pieces[board[it.end]]) - evaluate_black(state, pieces[it.piece_index])
+			else                     evaluation_list[it_index] = evaluate_black(state, pieces[board[it.end]]) - evaluate_white(state, pieces[it.piece_index])
+		} else if depth > 5 {
+			new_state := do_move(state, it)
+			evaluation_list[it_index] = -quiesce(new_state, -beta, -alpha) - 100 // offset so captures will always be ahead
 		} else {
+		
 			evaluation_list[it_index] = -10000
 		}
 	}
@@ -504,34 +543,110 @@ order_moves :: (using state: State, moves: []Move, old_best: Move, player_color:
 	}
 }
 
-evaluate_position :: (using state: State, player_color: Piece) -> f32 {	
+evaluate_position :: (using state: State) -> f32 {
+	if check_for_drawn_endgame(state)
+		return 0
+
 	evaluation: f32 = 0
+	
+	left_black_pawns: u64
+	left_white_pawns: u64
+	middle_black_pawns: u64
+	middle_white_pawns: u64
+	
+	mask := file_mask
+	
+	for 8 {
+		black_pawns := black_pawn_mask & mask
+		white_pawns := white_pawn_mask & mask
+		
+		// Bonus for passed pawns
+		if black_pawns && !white_pawns {
+			evaluation += 0.2
+		} else if white_pawns && !black_pawns {
+			evaluation -= 0.2
+		}
+		
+		// Penalty for doubled pawns (currently no extra penalty for tripled or more so we can avoid a loop)
+		if black_pawns & (black_pawns - 1) {
+			evaluation -= 0.1
+		}
+		if white_pawns & (white_pawns - 1) {
+			evaluation += 0.1
+		}
+		
+		// Penalty for isolated pawns
+		if !left_black_pawns && middle_black_pawns && !black_pawns {
+			evaluation -= 0.1
+		}
+		if !left_white_pawns && middle_white_pawns && !white_pawns {
+			evaluation += 0.1
+		}
+		
+		left_black_pawns = middle_black_pawns
+		left_white_pawns = middle_white_pawns
+		middle_black_pawns = black_pawns
+		middle_white_pawns = white_pawns
+		
+		mask <<= 1
+	}
+	
+	// Still need to check for isolated pawns on the h file
+	if !left_black_pawns && middle_black_pawns {
+		evaluation -= 0.3
+	}
+	if !left_white_pawns && middle_white_pawns {
+		evaluation += 0.3
+	}
 
 	for 0..16 {		
-		evaluation += evaluate_black(pieces[it])
+		evaluation += evaluate_black(state, pieces[it])
 	}
 	
 	for 16..32 {
-		evaluation -= evaluate_white(pieces[it])
+		evaluation -= evaluate_white(state, pieces[it])
 	}
 	
 	if player_color != BLACK return -evaluation
 	else return evaluation
 }
 
-MAX_MOVES :: 1_000_000
+MAX_MOVES :: 400_000
 
-quiesce :: (using state: State, player_color: Piece, alpha: f32, beta: f32, depth := 0) -> f32 {
+quiesce :: (using state: State, alpha: f32, beta: f32, depth := 0) -> f32 {
 	if moves_explored == MAX_MOVES  return 0
 	
-	moves_explored += 1
-	stand_pat := evaluate_position(state, player_color)
-
-	current_alpha := alpha
+	key := hash(state)
 	
-	if stand_pat >= beta
+	entry := *transposition_table[key & (transposition_table.count - 1)]
+	
+	current_alpha := alpha
+	current_beta  := beta
+	
+	if entry.hash == key && entry.depth >= 0 {
+		stats.transpositions_matched += 1
+	
+		if entry.kind == .EXACT {
+			return entry.value
+		} else if entry.kind == .LOWER_BOUND {
+			current_alpha = max(entry.value, current_alpha)
+		} else if entry.kind == .UPPER_BOUND {
+			current_beta = min(current_beta, entry.value)
+		}
+		
+		if current_alpha >= current_beta {
+			stats.beta_cutoffs += 1
+			return entry.value
+		}
+	}
+	
+	moves_explored += 1
+	stand_pat := evaluate_position(state)
+	
+	if stand_pat >= beta {
+		stats.beta_cutoffs += 1
 		return beta
-	if current_alpha < stand_pat
+	} if current_alpha < stand_pat
 		current_alpha = stand_pat
 	
 	
@@ -548,55 +663,175 @@ quiesce :: (using state: State, player_color: Piece, alpha: f32, beta: f32, dept
 		}
 	}
 	
-	
-	order_moves(state, <<legal_moves, .{0, -1}, player_color)
-	
-	best_move_value: f32 = -1e9
+	best_move: Move
 	
 	
 	for <<legal_moves {
-		if board[it.end] == -1 continue;
-	
 		new_state := do_move(state, it)
-		value := -quiesce(new_state, player_color ^ BLACK, -beta, -current_alpha, depth + 1)
+		
+		value := -quiesce(new_state, -beta, -current_alpha, depth + 1)
 	
 		if value > current_alpha {
+			best_move = it
 			current_alpha = value
 		}
 	
-		if current_alpha >= beta
+		if current_alpha >= beta {
+			stats.beta_cutoffs += 1
 			return beta
+		}
 	}
-	
+
 	return current_alpha
 }
 
-minimax :: (using state: State, player_color: Piece, depth: s8, alpha: f32 = -1e9, beta: f32 = 1e9) -> (f32, Move) {
+repetition_table: [1024]u64
+
+check_for_repetition :: (key_: u64) -> (repeated: bool, index: u64) {
+	key := key_
+	if key < 1 key = 1
+
+	slot := key & (repetition_table.count - 1)
+	
+	while repetition_table[slot] {
+		if repetition_table[slot] == key {
+			return true, slot
+		}
+		
+		slot += 1
+		slot &= repetition_table.count - 1
+	}
+	
+	
+	repetition_table[slot] = key
+	return false, slot
+}
+
+remove_repetition :: (slot: u64) {
+	
+	repetition_table[slot] = 0
+	
+	i := slot
+	
+	j := i
+	
+	while true {
+		j += 1
+		j &= repetition_table.count - 1
+		
+		if !repetition_table[j]
+			break;
+	
+		key := repetition_table[j]
+		key &= repetition_table.count - 1
+	
+		if i <= j {
+			if i < key && key <= j
+				continue
+		} else {
+			if i < key || key <= j
+				continue
+		}
+		
+		repetition_table[i] = repetition_table[j]
+		i = j
+	}
+}
+
+check_for_drawn_endgame :: (using state: State) -> bool {	
+	value: f32
+	
+	bishops := 0
+	knights := 0
+	
+	for 0..16 {
+		using _ := pieces[it]
+	
+		if location == -1 continue;
+	
+		if piece & ~BLACK == {
+			case PAWN   return false
+			case BISHOP bishops += 1
+			case KNIGHT knights += 1
+			case ROOK   return false
+			case QUEEN  return false
+		}
+	}
+	
+	if !((bishops <= 1 && knights == 0) || (knights <= 2 && bishops == 0)) {
+		return false
+	}
+	
+	bishops = 0
+	knights = 0
+	
+	for 16..32 {
+		using _ := pieces[it]
+		if location == -1 continue;
+		
+		if piece & ~BLACK == {
+			case PAWN   return false
+			case BISHOP bishops += 1
+			case KNIGHT knights += 1
+			case ROOK   return false
+			case QUEEN  return false
+		}
+	}
+	
+	return (bishops <= 1 && knights == 0) || (knights <= 2 && bishops == 0)
+}
+
+stats: struct {
+	beta_cutoffs: u64
+	transpositions_matched: u64
+}
+
+minimax :: (using state: State, depth: s8, alpha: f32 = -1e9, beta: f32 = 1e9) -> (f32, Move) {
 	if moves_explored == MAX_MOVES  return 0, .{}
 	
+	alpha_orig := alpha
 	
-	key := hash(state, player_color)
+	key := hash(state)
 	
 	entry := *transposition_table[key & (transposition_table.count - 1)]
 	
-	current_alpha := alpha
 	current_beta  := beta
-	
 	if entry.hash == key && entry.depth >= depth {
+		stats.transpositions_matched += 1
+	
 		if entry.kind == .EXACT {
 			return entry.value, entry.move
 		} else if entry.kind == .LOWER_BOUND {
-			current_alpha = max(entry.value, current_alpha)
+			alpha_orig = max(entry.value, alpha_orig)
 		} else if entry.kind == .UPPER_BOUND {
 			current_beta = min(current_beta, entry.value)
 		}
 		
-		if current_alpha >= current_beta
+		if alpha_orig >= current_beta {
+			stats.beta_cutoffs += 1
 			return entry.value, entry.move
+		}
 	}
 	
-	if depth == 0 {		
-		return quiesce(state, player_color, alpha, beta), .{}
+	current_alpha := alpha_orig
+	
+	best_move_value: f32 = -1e9
+	best_move := Move.{-1}
+	
+	defer {
+		if depth >= entry.depth {
+			entry.value = best_move_value
+			entry.hash = key
+			entry.depth = depth
+			entry.move = best_move
+			
+			if best_move_value <= alpha_orig
+				entry.kind = .UPPER_BOUND
+			else if best_move_value >= current_beta
+				entry.kind = .LOWER_BOUND
+			else
+				entry.kind = .EXACT
+		}
 	}
 
 	legal_moves := *legal_moves_list[depth]
@@ -618,23 +853,35 @@ minimax :: (using state: State, player_color: Piece, depth: s8, alpha: f32 = -1e
 		if player_color == BLACK player_king = pieces[BLACK_KING_INDEX].location
 	
 		if look_for_checks(state, player_king, player_color) {
-			return -1e6 * cast(f32) depth, .{}
+			best_move_value = -(1e3 - 0.001 * cast(f32) move_count)
+			return best_move_value, best_move
 		} else {
-			return 0, .{}
+			best_move_value = 0
+			return best_move_value, best_move
 		}
 	}
 	
-	if depth >= 1
-		order_moves(state, <<legal_moves, entry.move, player_color, depth, current_alpha, current_beta)
+	repeated, repetition_stored := check_for_repetition(key)
+	defer if !repeated remove_repetition(repetition_stored)
 	
-	best_move_value: f32 = -1e9
-	best_move := Move.{-1}
+	if repeated {
+		best_move_value = 0
+		return best_move_value, best_move
+	}
+	
+	if depth == 0 {		
+		best_move_value = quiesce(state, alpha, beta)
+		
+		return best_move_value, best_move
+	}
+	
+	if depth >= 1
+		order_moves(state, <<legal_moves, entry.move, depth, current_alpha, current_beta)
 	
 	for <<legal_moves {
 		new_state := do_move(state, it)
-		value, _ := minimax(new_state, player_color ^ BLACK, depth - 1, -current_beta, -current_alpha)
-	
-		value = -value
+		
+		value := -minimax(new_state, depth - 1, -current_beta, -current_alpha)
 
 		if value > best_move_value {
 			best_move_value = value
@@ -644,22 +891,10 @@ minimax :: (using state: State, player_color: Piece, depth: s8, alpha: f32 = -1e
 		
 		current_alpha = max(value, current_alpha)
 	
-		if current_alpha >= current_beta
+		if current_alpha >= current_beta {
+			stats.beta_cutoffs += 1
 			break
-	}
-	
-	if depth >= entry.depth {
-		entry.value = best_move_value
-		entry.hash = key
-		entry.depth = depth
-		entry.move = best_move
-		
-		if best_move_value <= alpha
-			entry.kind = .UPPER_BOUND
-		else if best_move_value >= current_beta
-			entry.kind = .LOWER_BOUND
-		else
-			entry.kind = .EXACT
+		}
 	}
 	
 	return best_move_value, best_move
@@ -1044,11 +1279,15 @@ do_move :: (state: State, using move: Move) -> State {
 		castle_state |= .WHITE_NO_KINGSIDE
 	}
 	
+	player_color ^= BLACK
+	move_count += 1
+	
 	return new_state
 }
 
-ai_moves: [..]Move
-difficulty: u64
+move_history: [..]Move
+black_difficulty: u64
+white_difficulty: u64
 
 Hashing_Data :: struct {
 	piece_positions: [16][65]u64
@@ -1057,7 +1296,7 @@ Hashing_Data :: struct {
 	black_move: u64
 }
 
-hash ::  (using state: State, player_color: Piece) -> u64 {
+hash ::  (using state: State) -> u64 {
 	hash: u64 = 0
 	
 	for pieces {
@@ -1103,21 +1342,295 @@ hashing_data :: #run precompute_hashing_data()
 
 undo_list: [..]State
 
+select_ai_move :: () -> Move {
+	stats = .{}
+	moves_explored = 0
+	
+	depth := get_player_difficulty()
+	
+	value, ai_move := minimax(global_board, cast() depth)
+	
+	total_explored := moves_explored
+	
+	
+	while outer: moves_explored < MAX_MOVES {							
+		if depth == MAX_DEPTH  break;
+	
+		moves_explored = 0
+		
+		low_delta: f32 = 0.25
+		high_delta: f32 = 0.25
+		
+		while true {
+			alpha := value - low_delta
+			beta := value + high_delta
+			
+			new_value, new_move := minimax(global_board, cast() depth, alpha, beta)
+			
+			if new_move.piece_index == -1 break outer
+			
+			print("Move: %\n", new_move)
+		
+			if moves_explored >= MAX_MOVES  break outer
+			
+			if new_value <= alpha {
+				print("Alpha fail\n")
+				low_delta *= 2
+			} else if new_value >= beta {
+				print("Beta fail\n")
+				high_delta *= 2
+			} else {
+				value = new_value
+				ai_move = new_move
+				break
+			}
+		}
+
+		total_explored += moves_explored
+		
+		if value <= -900 || value >= 900 {
+			break;
+		}
+		depth += 1
+	}
+	
+	print("%\n", ai_move)
+	print("%\n", stats)
+	print("% moves explored at depth %\n", total_explored, depth)
+	print("move valued at %\n", value)
+	
+	return ai_move
+}
+
+draw :: (moves: []Move) {
+	glViewport(0, 0, window_width, window_height)
+	glClear(GL_COLOR_BUFFER_BIT)
+	
+	glMatrixMode(GL_PROJECTION)
+	glLoadIdentity()
+	glOrtho(0, 8, 8, 0, -5, 5)
+	glMatrixMode(GL_MODELVIEW)
+	glLoadIdentity()
+	
+	glDisable(GL_TEXTURE_2D)
+	glBegin(GL_QUADS)
+	
+	for y: 8 {
+		for x: 8 {
+			if x + y & 1
+				glColor3f(0.4, 0.3, 0.2)
+			else
+				glColor3f(0.8, 0.7, 0.5)
+			
+			
+			glVertex2f(cast(f32) x, cast(f32) y)
+			glVertex2f(cast(f32) x + 1, cast(f32) y)
+			glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
+			glVertex2f(cast(f32) x, cast(f32) y + 1)
+		}
+	}
+	
+	if selected_square != -1 {
+		x, y := unpack(selected_square)
+		
+		if white_difficulty && !black_difficulty  {
+			x = 7 - x
+			y = 7 - y
+		}
+		
+		glColor4f(1, 1, 0, 0.4)
+		
+		glVertex2f(cast(f32) x, cast(f32) y)
+		glVertex2f(cast(f32) x + 1, cast(f32) y)
+		glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
+		glVertex2f(cast(f32) x, cast(f32) y + 1)
+	}
+	
+	if move_history {
+		move := array_peek(move_history)
+		
+		start := undo_list[undo_list.count - 1].pieces[move.piece_index].location
+		
+		glColor4f(0, 0, 1, 0.4)
+		
+		x, y := unpack(start)
+	
+		if white_difficulty && !black_difficulty  {
+			x = 7 - x
+			y = 7 - y
+		}
+		
+		glVertex2f(cast(f32) x, cast(f32) y)
+		glVertex2f(cast(f32) x + 1, cast(f32) y)
+		glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
+		glVertex2f(cast(f32) x, cast(f32) y + 1)
+		
+		x, y = unpack(move.end)
+		
+		if white_difficulty && !black_difficulty  {
+			x = 7 - x
+			y = 7 - y
+		}
+		
+		glVertex2f(cast(f32) x, cast(f32) y)
+		glVertex2f(cast(f32) x + 1, cast(f32) y)
+		glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
+		glVertex2f(cast(f32) x, cast(f32) y + 1)
+	}
+	
+	glColor4f(0, 1, 0, 0.4)
+	
+	for moves {
+		x, y := unpack(it.end)
+		
+		if white_difficulty && !black_difficulty  {
+			x = 7 - x
+			y = 7 - y
+		}
+		
+		glVertex2f(cast(f32) x, cast(f32) y)
+		glVertex2f(cast(f32) x + 1, cast(f32) y)
+		glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
+		glVertex2f(cast(f32) x, cast(f32) y + 1)
+	}
+	
+	glEnd()
+	
+	glColor3f(1, 1, 1)
+	
+	glEnable(GL_TEXTURE_2D)
+	glBegin(GL_QUADS)
+	
+	for global_board.pieces {
+		piece := it.piece
+		
+		if piece {
+			x, y := unpack(it.location)
+			
+			if white_difficulty && !black_difficulty  {
+				x = 7 - x
+				y = 7 - y
+			}
+			
+			y_coord: f32 = 0.5
+			x_coord: f32 = 0
+			
+			if piece & BLACK {
+				y_coord = 0
+			}
+			
+			kind := piece & ~BLACK
+			
+			if kind == {
+				case QUEEN
+					x_coord = 1.0 / 6.0
+				case BISHOP 
+					x_coord = 2.0 / 6.0
+				case KNIGHT
+					x_coord = 3.0 / 6.0
+				case ROOK
+					x_coord = 4.0 / 6.0
+				case PAWN
+					x_coord = 5.0 / 6.0
+			}
+			
+			
+			glTexCoord2f(x_coord, y_coord + 0.5)
+			glVertex2f(cast(f32) x, cast(f32) y)
+			
+			glTexCoord2f(x_coord + 1.0 / 6.0, y_coord + 0.5)
+			glVertex2f(cast(f32) x + 1, cast(f32) y)
+			
+			glTexCoord2f(x_coord + 1.0 / 6.0, y_coord)
+			glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
+			
+			glTexCoord2f(x_coord, y_coord)
+			glVertex2f(cast(f32) x, cast(f32) y + 1)
+		}
+	}
+	
+	glEnd()
+}
+
+get_player_difficulty :: () -> u64 {
+	if global_board.player_color == BLACK {
+		return black_difficulty
+	}
+	
+	return white_difficulty
+}
+
+undo_move :: () {
+	if undo_list.count {
+		global_board = array_pop(*undo_list)
+		array_pop(*move_history)
+		
+		repeated, repetition_stored := check_for_repetition(hash(global_board));
+		remove_repetition(repetition_stored)
+	}
+}
+
+make_move :: (move: Move) {
+	array_add(*undo_list, global_board)
+	
+	if check_for_repetition(hash(global_board)) {
+		game_over = true
+		print("Repetition!\n")
+	}
+
+	global_board = do_move(global_board, move)
+	array_add(*move_history, move)
+}
+
+game_over: bool
+
+ai_start_semaphore: HANDLE
+ai_stop_semaphore:  HANDLE
+
+ai_thread_proc :: (userdata: *void) -> u32 #c_call {
+	ai_move := cast(*Move) userdata
+	while true {
+		WaitForSingleObject(ai_start_semaphore);
+		
+		<<ai_move = select_ai_move()
+		
+		ReleaseSemaphore(ai_stop_semaphore)
+	}
+	
+	return 0
+}
+
 main :: () {
 	defer exit(0)
+	
+	ai_start_semaphore = CreateSemaphoreA(lMaximumCount = 1)
+	ai_stop_semaphore  = CreateSemaphoreA(lMaximumCount = 1)
+	
+	ai_move: Move
+	
+	ai_thread := create_thread(ai_thread_proc, *ai_move)
 
 	arguments := get_command_line_arguments()
 	
 	if arguments.count >= 2 {
-		difficulty = read_u64(arguments[1])
+		remaining: string
+		black_difficulty, remaining = read_u64(arguments[1])
 		
-		if !difficulty {
+		if remaining {
 			print("Invalid difficulty level %\n", arguments[1])
 			return
 		}
 	}
+	
+	if arguments.count >= 3 {
+		remaining: string
+		white_difficulty, remaining = read_u64(arguments[2])
 		
-	print("Difficulty: %\n", difficulty)
+		if remaining {
+			print("Invalid difficulty level %\n", arguments[2])
+			return
+		}
+	}
 	
 	rand_seed: s64
 	
@@ -1189,7 +1702,15 @@ main :: () {
 				x := cast(s16) lParam
 				y := cast(s16) (lParam >> 16)
 				
-				square := pack(cast() (x / 100), cast() (y / 100))
+				x /= 100
+				y /= 100
+				
+				if white_difficulty && !black_difficulty {
+					x = 7 - x
+					y = 7 - y
+				}
+				
+				square := pack(cast() x, cast() y)
 				
 				if square == selected_square
 					selected_square = -1
@@ -1287,9 +1808,9 @@ main :: () {
 	
 	QueryPerformanceCounter(*last_time)
 	
-	player_color: Piece = 0
-	
 	moves: [..]Move
+	
+	making_ai_move := false
 	
 	while !should_quit {
 		current_time: s64
@@ -1309,90 +1830,57 @@ main :: () {
 			TranslateMessage(*message)
 			DispatchMessageW(*message)
 		}
-	
-		glViewport(0, 0, window_width, window_height)
-		glClear(GL_COLOR_BUFFER_BIT)
-		
-		glMatrixMode(GL_PROJECTION)
-		glLoadIdentity()
-		glOrtho(0, 8, 8, 0, -5, 5)
-		glMatrixMode(GL_MODELVIEW)
-		glLoadIdentity()
 		
 		if undo_last_move {
 			undo_last_move = false
 			
-			if undo_list.count {
-				global_board = array_pop(*undo_list)
-				
-				
-				if difficulty && undo_list.count {
-					global_board = array_pop(*undo_list)
-				} else
-					player_color ^= BLACK
+			if (!black_difficulty || !white_difficulty) && undo_list.count {
+				undo_move()
+			
+				if get_player_difficulty() undo_move()
 			}
 		}
 		
-		if selected_square != -1 {
-			for moves {
-				if it.end == selected_square {
-					array_add(*undo_list, global_board)
-					global_board = do_move(global_board, it)
-					selected_square = -1
-					
-					if difficulty {
-						moves_explored = 0
-						value, ai_move := minimax(global_board, BLACK, cast() difficulty)
-						
-						total_explored := moves_explored
-						
-						
-						depth := difficulty
-						
-						
-						while moves_explored < MAX_MOVES {							
-							if depth == MAX_DEPTH  break;
-							depth += 1
-						
-							moves_explored = 0
-							new_value, new_move := minimax(global_board, BLACK, cast() depth)
-							
-							if moves_explored >= MAX_MOVES  break;
-							
-							value = new_value
-							ai_move = new_move
-
-							total_explored += moves_explored
-						}
-						
-						
+		if game_over
+			selected_square = -1
+		
+		if !game_over {
+			if get_player_difficulty() {
+				if making_ai_move {
+					result := WaitForSingleObject(ai_stop_semaphore, 0)
+					if result != WAIT_TIMEOUT {
 						if ai_move.piece_index == -1 {
-							print("Bad")
-							// Incomplete
+							print("Bad\n")
+							game_over = true
 						} else {
-							print("%\n", ai_move)
-							print("% moves explored at depth %\n", total_explored, depth - 1)
-							print("% move valued at\n", value)
-							array_add(*undo_list, global_board)
-							global_board = do_move(global_board, ai_move)
-							array_add(*ai_moves, ai_move)
+							make_move(ai_move)
 						}
-					} else {
-						player_color ^= BLACK
+						
+						making_ai_move = false
 					}
-					
-					break
-				}
-			} or {
-				piece := get_piece(global_board, selected_square)
-				
-				if !piece || piece & BLACK != player_color {
-					selected_square = -1
 				} else {
-					piece_index: s8
+					ReleaseSemaphore(ai_start_semaphore)
+					making_ai_move = true
+				}
+		} else if selected_square != -1 {
+				for moves {
+					if it.end == selected_square {
+						selected_square = -1
+						make_move(it)
+						
+						break
+					}
+				} or {
+					piece := get_piece(global_board, selected_square)
 					
-					moves.count = 0
-					get_moves_for_piece(global_board, *moves, global_board.board[selected_square])
+					if !piece || piece & BLACK != global_board.player_color {
+						selected_square = -1
+					} else {
+						piece_index: s8
+						
+						moves.count = 0
+						get_moves_for_piece(global_board, *moves, global_board.board[selected_square])
+					}
 				}
 			}
 		}
@@ -1401,122 +1889,7 @@ main :: () {
 			moves.count = 0
 		}
 		
-		glDisable(GL_TEXTURE_2D)
-		glBegin(GL_QUADS)
-		
-		for y: 8 {
-			for x: 8 {
-				if (x + y) & 1
-					glColor3f(0.4, 0.3, 0.2)
-				else
-					glColor3f(0.8, 0.7, 0.5)
-				
-				
-				glVertex2f(cast(f32) x, cast(f32) y)
-				glVertex2f(cast(f32) x + 1, cast(f32) y)
-				glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
-				glVertex2f(cast(f32) x, cast(f32) y + 1)
-			}
-		}
-		
-		if selected_square != -1 {
-			x, y := unpack(selected_square)
-		
-			glColor4f(1, 1, 0, 0.4)
-			
-			glVertex2f(cast(f32) x, cast(f32) y)
-			glVertex2f(cast(f32) x + 1, cast(f32) y)
-			glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
-			glVertex2f(cast(f32) x, cast(f32) y + 1)
-		}
-		
-		if ai_moves {
-			ai_move := array_peek(ai_moves)
-			
-			start := undo_list[undo_list.count - 1].pieces[ai_move.piece_index].location
-			
-			if ai_move.end != start {
-				glColor4f(0, 0, 1, 0.4)
-				
-				x, y := unpack(start)
-			
-				
-				glVertex2f(cast(f32) x, cast(f32) y)
-				glVertex2f(cast(f32) x + 1, cast(f32) y)
-				glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
-				glVertex2f(cast(f32) x, cast(f32) y + 1)
-				
-				x, y = unpack(ai_move.end)
-				
-				glVertex2f(cast(f32) x, cast(f32) y)
-				glVertex2f(cast(f32) x + 1, cast(f32) y)
-				glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
-				glVertex2f(cast(f32) x, cast(f32) y + 1)
-			}
-		}
-		
-		glColor4f(0, 1, 0, 0.4)
-		
-		for moves {
-			x, y := unpack(it.end)
-			
-			glVertex2f(cast(f32) x, cast(f32) y)
-			glVertex2f(cast(f32) x + 1, cast(f32) y)
-			glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
-			glVertex2f(cast(f32) x, cast(f32) y + 1)
-		}
-		
-		glEnd()
-		
-		glColor3f(1, 1, 1)
-		
-		glEnable(GL_TEXTURE_2D)
-		glBegin(GL_QUADS)
-		
-		for global_board.pieces {
-			piece := it.piece
-			
-			if piece {
-				x, y := unpack(it.location)
-				y_coord: f32 = 0.5
-				x_coord: f32 = 0
-				
-				if piece & BLACK {
-					y_coord = 0
-				}
-				
-				kind := piece & ~BLACK
-				
-				if kind == {
-					case QUEEN
-						x_coord = 1.0 / 6.0
-					case BISHOP 
-						x_coord = 2.0 / 6.0
-					case KNIGHT
-						x_coord = 3.0 / 6.0
-					case ROOK
-						x_coord = 4.0 / 6.0
-					case PAWN
-						x_coord = 5.0 / 6.0
-				}
-				
-				
-				glTexCoord2f(x_coord, y_coord + 0.5)
-				glVertex2f(cast(f32) x, cast(f32) y)
-				
-				glTexCoord2f(x_coord + 1.0 / 6.0, y_coord + 0.5)
-				glVertex2f(cast(f32) x + 1, cast(f32) y)
-				
-				glTexCoord2f(x_coord + 1.0 / 6.0, y_coord)
-				glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
-				
-				glTexCoord2f(x_coord, y_coord)
-				glVertex2f(cast(f32) x, cast(f32) y + 1)
-			}
-		}
-		
-		glEnd()
-		
+		draw(moves)
 		
 		if (delta > 1.0 / 55) {
 			print("%\n", delta)
@@ -1526,6 +1899,8 @@ main :: () {
 		
 		last_time = current_time
 	}
+	
+	exit(0)
 }
 
 #import "Compiler"
