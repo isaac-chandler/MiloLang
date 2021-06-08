@@ -126,6 +126,17 @@ pawn_square_bonus :: f32.[
 	0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00
 ]
 
+pawn_endgame_square_bonus :: f32.[
+	0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00,
+	1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00,
+	0.50, 0.50, 0.50, 0.50, 0.50, 0.50, 0.50, 0.50,
+	0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25,
+	0.10, 0.10, 0.10, 0.20, 0.20, 0.10, 0.10, 0.10,
+	0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00,
+	0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00,
+	0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00
+]
+
 knight_square_bonus :: f32.[
 	-0.50,-0.40,-0.30,-0.30,-0.30,-0.30,-0.40,-0.50,
 	-0.40,-0.20, 0.00, 0.00, 0.00, 0.00,-0.20,-0.40,
@@ -180,6 +191,18 @@ king_square_bonus :: f32.[
 	 0.20, 0.20, 0.00, 0.00, 0.00, 0.00, 0.20, 0.20,
 	 0.20, 0.30, 0.10, 0.00, 0.00, 0.10, 0.30, 0.20
 ]
+
+king_endgame_square_bonus :: f32.[
+	-0.50,-0.40,-0.30,-0.20,-0.20,-0.30,-0.40,-0.50,
+	-0.30,-0.20,-0.10, 0.00, 0.00,-0.10,-0.20,-0.30,
+	-0.30,-0.10, 0.20, 0.30, 0.30, 0.20,-0.10,-0.30,
+	-0.30,-0.10, 0.30, 0.40, 0.40, 0.30,-0.10,-0.30,
+	-0.30,-0.10, 0.30, 0.40, 0.40, 0.30,-0.10,-0.30,
+	-0.30,-0.10, 0.20, 0.30, 0.30, 0.20,-0.10,-0.30,
+	-0.30,-0.30, 0.00, 0.00, 0.00, 0.00,-0.30,-0.30,
+	-0.50,-0.30,-0.30,-0.30,-0.30,-0.30,-0.30,-0.50
+]
+
 
 State :: struct {
 	Castle :: enum_flags u8 {
@@ -426,6 +449,8 @@ MAX_DEPTH :: 255
 
 repetition_hash: [MAX_DEPTH + 1]u64
 legal_moves_list: [MAX_DEPTH + 1][..]Move
+killer_moves: [MAX_DEPTH]Move
+old_killer_moves: [MAX_DEPTH]Move
 legal_quiesce_moves_list: [MAX_DEPTH + 1][..]Move
 evaluation_list: [..]f32
 
@@ -443,17 +468,21 @@ transposition_table: [1 << 26]struct {
 	move: Move
 }
 
-evaluate_black :: (using state: State, using piece: State.Piece_Info) -> f32 {
+evaluate_black :: (using state: State, using piece: State.Piece_Info, endgame_weight: f32 = 0) -> f32 {
 	if location == -1 return 0
+	
+	x, y := unpack(location)
+	y = 7 - y
+	flipped_location := pack(x, y)
 	
 	value: f32
 	
 	if piece & ~BLACK == {
-		case PAWN   value = 1.0 + pawn_square_bonus  [63 - location]
-		case BISHOP value = 3.3 + bishop_square_bonus[63 - location]
-		case KNIGHT value = 3.2 + knight_square_bonus[63 - location]
+		case PAWN   value = 1.0 + pawn_square_bonus[flipped_location] * (1.0 - endgame_weight) + pawn_endgame_square_bonus[flipped_location]  * endgame_weight
+		case BISHOP value = 3.3 + bishop_square_bonus[flipped_location]
+		case KNIGHT value = 3.2 + knight_square_bonus[flipped_location]
 		case ROOK   
-			value = 5.0 + rook_square_bonus  [63 - location]
+			value = 5.0 + rook_square_bonus  [flipped_location]
 			// Apply a bonus for rooks on open and semi-open files
 			mask := file_mask << cast()(location & 7)
 			if !(white_pawn_mask & mask) {
@@ -462,20 +491,20 @@ evaluate_black :: (using state: State, using piece: State.Piece_Info) -> f32 {
 			if !(black_pawn_mask & mask) {
 				value += 0.3
 			}
-		case QUEEN  value = 9.0 + queen_square_bonus [63 - location]
-		case KING   value = 0.0 + king_square_bonus  [63 - location]
+		case QUEEN  value = 9.0 + queen_square_bonus [flipped_location]
+		case KING   value = king_square_bonus[flipped_location] * (1.0 - endgame_weight) + king_endgame_square_bonus[flipped_location]  * endgame_weight
 	}
 	
 	return value
 }
 
-evaluate_white :: (using state: State, using piece: State.Piece_Info) -> f32 {
+evaluate_white :: (using state: State, using piece: State.Piece_Info, endgame_weight: f32 = 0) -> f32 {
 	if location == -1 return 0
 	
 	value: f32
 	
 	if piece & ~BLACK == {
-		case PAWN   value = 1.0 + pawn_square_bonus  [location]
+		case PAWN   value = 1.0 + pawn_square_bonus[location] * (1.0 - endgame_weight) + pawn_endgame_square_bonus[location]  * endgame_weight
 		case BISHOP value = 3.3 + bishop_square_bonus[location]
 		case KNIGHT value = 3.2 + knight_square_bonus[location]
 		case ROOK   
@@ -489,13 +518,13 @@ evaluate_white :: (using state: State, using piece: State.Piece_Info) -> f32 {
 				value += 0.3
 			}
 		case QUEEN  value = 9.0 + queen_square_bonus [location]
-		case KING   value = 0.0 + king_square_bonus  [location]
+		case KING   value = king_square_bonus[location] * (1.0 - endgame_weight) + king_endgame_square_bonus[location]  * endgame_weight
 	}
 	
 	return value
 }
 	
-order_moves :: (using state: State, moves: []Move, old_best: Move, depth: s8 = 0, alpha: f32 = -1e9, beta: f32 = 1e9) {
+order_moves :: (using state: State, moves: []Move, old_best: Move, depth: s8, alpha: f32, beta: f32) {
 	if evaluation_list.capacity < moves.count {
 		evaluation_list.data = reallocate(evaluation_list.data, size_of(f32) * moves.count)
 		evaluation_list.capacity = moves.count
@@ -506,6 +535,12 @@ order_moves :: (using state: State, moves: []Move, old_best: Move, depth: s8 = 0
 	for moves {
 		if it.piece_index == old_best.piece_index && it.end == old_best.end {
 			evaluation_list[it_index] = 10000
+		}
+		else if it.piece_index == killer_moves[depth].piece_index && it.end == killer_moves[depth].end {
+			evaluation_list[it_index] = 9000
+		}
+		else if it.piece_index == old_killer_moves[depth].piece_index && it.end == old_killer_moves[depth].end {
+			evaluation_list[it_index] = 8000
 		}
 		else if board[it.end] != -1 {
 			if player_color == BLACK evaluation_list[it_index] = evaluate_white(state, pieces[board[it.end]]) - evaluate_black(state, pieces[it.piece_index])
@@ -544,8 +579,21 @@ order_moves :: (using state: State, moves: []Move, old_best: Move, depth: s8 = 0
 }
 
 evaluate_position :: (using state: State) -> f32 {
-	if check_for_drawn_endgame(state)
+	piece_count := count_pieces(state)
+
+	if check_for_drawn_endgame(piece_count)
 		return 0
+	
+	PIECE_PHASE  :: 1.0 / 24
+	ROOK_PHASE   :: 2.0 / 24
+	QUEEN_PHASE  :: 4.0 / 24
+	
+	endgame_weight: f32 = 1.0
+	
+	endgame_weight -= PIECE_PHASE * cast(f32) (piece_count.white_knights + piece_count.black_knights + piece_count.white_bishops + piece_count.black_bishops)
+	endgame_weight -= ROOK_PHASE *  cast(f32) (piece_count.white_rooks + piece_count.black_rooks)
+	endgame_weight -= QUEEN_PHASE * cast(f32) (piece_count.white_queens + piece_count.black_queens)
+
 
 	evaluation: f32 = 0
 	
@@ -555,6 +603,8 @@ evaluate_position :: (using state: State) -> f32 {
 	middle_white_pawns: u64
 	
 	mask := file_mask
+	
+	
 	
 	for 8 {
 		black_pawns := black_pawn_mask & mask
@@ -600,18 +650,18 @@ evaluate_position :: (using state: State) -> f32 {
 	}
 
 	for 0..16 {		
-		evaluation += evaluate_black(state, pieces[it])
+		evaluation += evaluate_black(state, pieces[it], endgame_weight)
 	}
 	
 	for 16..32 {
-		evaluation -= evaluate_white(state, pieces[it])
+		evaluation -= evaluate_white(state, pieces[it], endgame_weight)
 	}
 	
 	if player_color != BLACK return -evaluation
 	else return evaluation
 }
 
-MAX_MOVES :: 400_000
+MAX_MOVES :: 1_000_000
 
 quiesce :: (using state: State, alpha: f32, beta: f32, depth := 0) -> f32 {
 	if moves_explored == MAX_MOVES  return 0
@@ -738,47 +788,61 @@ remove_repetition :: (slot: u64) {
 	}
 }
 
-check_for_drawn_endgame :: (using state: State) -> bool {	
-	value: f32
-	
-	bishops := 0
-	knights := 0
-	
+Piece_Count :: struct {
+	white_pawns:     s8
+	white_knights:   s8
+	white_bishops:   s8
+	white_rooks:     s8
+	white_queens:    s8
+	black_pawns:     s8
+	black_knights:   s8
+	black_bishops:   s8
+	black_rooks:     s8
+	black_queens:    s8
+}
+
+count_pieces :: (using state: State) -> Piece_Count {
+	using result: Piece_Count
+
 	for 0..16 {
 		using _ := pieces[it]
 	
 		if location == -1 continue;
 	
 		if piece & ~BLACK == {
-			case PAWN   return false
-			case BISHOP bishops += 1
-			case KNIGHT knights += 1
-			case ROOK   return false
-			case QUEEN  return false
+			case PAWN   black_pawns   += 1
+			case BISHOP black_bishops += 1
+			case KNIGHT black_knights += 1
+			case ROOK   black_rooks   += 1
+			case QUEEN  black_queens  += 1
 		}
 	}
-	
-	if !((bishops <= 1 && knights == 0) || (knights <= 2 && bishops == 0)) {
-		return false
-	}
-	
-	bishops = 0
-	knights = 0
 	
 	for 16..32 {
 		using _ := pieces[it]
+	
 		if location == -1 continue;
-		
+	
 		if piece & ~BLACK == {
-			case PAWN   return false
-			case BISHOP bishops += 1
-			case KNIGHT knights += 1
-			case ROOK   return false
-			case QUEEN  return false
+			case PAWN   white_pawns   += 1
+			case BISHOP white_bishops += 1
+			case KNIGHT white_knights += 1
+			case ROOK   white_rooks   += 1
+			case QUEEN  white_queens  += 1
 		}
 	}
 	
-	return (bishops <= 1 && knights == 0) || (knights <= 2 && bishops == 0)
+	return result
+}
+
+check_for_drawn_endgame :: (using pieces: Piece_Count) -> bool {
+	if white_pawns || black_pawns || white_rooks || black_rooks || white_queens || black_queens
+		return false
+	
+	// 2 knights or 1 bishop is a draw
+	
+	return ((white_bishops <= 1 && white_knights == 0) || white_knights <= 2) && 
+		((black_bishops <= 1 && black_knights == 0) || black_knights <= 2)
 }
 
 stats: struct {
@@ -847,12 +911,14 @@ minimax :: (using state: State, depth: s8, alpha: f32 = -1e9, beta: f32 = 1e9) -
 		}
 	}
 	
-	if !legal_moves.count {
-		player_king := pieces[WHITE_KING_INDEX].location
-		
-		if player_color == BLACK player_king = pieces[BLACK_KING_INDEX].location
+	player_king := pieces[WHITE_KING_INDEX].location
 	
-		if look_for_checks(state, player_king, player_color) {
+	if player_color == BLACK player_king = pieces[BLACK_KING_INDEX].location
+	in_check := look_for_checks(state, player_king, player_color)
+	
+	if !legal_moves.count {
+	
+		if in_check {
 			best_move_value = -(1e3 - 0.001 * cast(f32) move_count)
 			return best_move_value, best_move
 		} else {
@@ -892,6 +958,9 @@ minimax :: (using state: State, depth: s8, alpha: f32 = -1e9, beta: f32 = 1e9) -
 		current_alpha = max(value, current_alpha)
 	
 		if current_alpha >= current_beta {
+			old_killer_moves[depth] = killer_moves[depth]
+			killer_moves[depth] = it
+		
 			stats.beta_cutoffs += 1
 			break
 		}
