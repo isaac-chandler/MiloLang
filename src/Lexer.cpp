@@ -447,28 +447,14 @@ charEscape:
 		c = readCharacter(this, &endOfFile, true);
 		goto charLiteralEnd;
 	}
-	else if (c == 'x') {
-		base = 16;
-		goto charHexEscape;
-	}
 	else if (c >= '0' && c <= '9') {
 		base = 10;
+		undoReadChar(this, c);
 		goto charNumericEscape;
 	}
-	else if (c == 'u') {
+	else if (c == 'u' || c == 'x') {
 		base = 16;
-		goto charHexEscape;
-	}
-	else {
-		return TokenT::INVALID;
-	}
-
-charHexEscape:
-	c = readCharacter(this, &endOfFile, true);
-
-	digit = getDigitForBase(c, base);
-
-	if (digit >= 0) {
+		goto charNumericEscape;
 	}
 	else {
 		return TokenT::INVALID;
@@ -477,9 +463,7 @@ charHexEscape:
 charNumericEscape:
 	c = readCharacter(this, &endOfFile, true);
 
-	digit = getDigitForBase(c, base);
-
-	if (digit >= 0) {
+	if (getDigitForBase(c, base) >= 0) {
 	}
 	else if (c == '\\') {
 		c = readCharacter(this, &endOfFile, true);
@@ -545,31 +529,17 @@ stringEscape:
 	else if (c == 'v') {
 		goto stringLiteral;
 	}
-	else if (c == 'x') {
+	else if (c == 'x' || c == 'u') {
 		base = 16;
-		goto stringHexEscape;
+		goto stringNumericEscape;
 	}
 	else if (c >= '0' && c <= '9') {
 		base = 10;
+		undoReadChar(this, c);
 		goto stringNumericEscape;
-	}
-	else if (c == 'u') {
-		base = 16;
-		goto stringHexEscape;
 	}
 	else {
 		goto stringLiteralRead;
-	}
-
-stringHexEscape:
-	c = readCharacter(this, &endOfFile, true);
-
-	digit = getDigitForBase(c, base);
-
-	if (digit >= 0) {
-	}
-	else {
-		return TokenT::INVALID;
 	}
 
 stringNumericEscape:
@@ -1251,40 +1221,26 @@ charEscape:
 		base = 16;
 		escapeMaxValue = UINT64_MAX;
 		escapeIsUnicode = false;
-		goto charHexEscape;
+		goto charNumericEscape;
 	}
 	else if (c >= '0' && c <= '9') {
 		base = 10;
 		token.unsignedValue = c - '0';
 		escapeMaxValue = UINT64_MAX;
 		escapeIsUnicode = false;
+		undoReadChar(this, c);
 		goto charNumericEscape;
 	}
 	else if (c == 'u') {
 		base = 16;
 		escapeMaxValue = UNICODE_MAX;
 		escapeIsUnicode = true;
-		goto charHexEscape;
+		goto charNumericEscape;
 	}
 	else {
 		token.end = location;
 		token.type = TokenT::INVALID;
 		reportError(&location, "Error: Invalid escape in character literal");
-		return;
-	}
-
-charHexEscape:
-	c = readCharacter(this, &endOfFile);
-
-	digit = getDigitForBase(c, base);
-
-	if (digit >= 0) {
-		token.unsignedValue = digit;
-	}
-	else {
-		token.end = location;
-		token.type = TokenT::INVALID;
-		reportError(&location, "Error: Invalid hex digit in escape");
 		return;
 	}
 
@@ -1303,6 +1259,7 @@ charNumericEscape:
 
 		token.unsignedValue *= base;
 		token.unsignedValue += digit;
+		goto charNumericEscape;
 	}
 	else if (c == '\\') {
 		if (token.unsignedValue > escapeMaxValue) {
@@ -1426,39 +1383,25 @@ stringEscape:
 		base = 16;
 		escapeMaxValue = 255;
 		escapeIsUnicode = false;
-		goto stringHexEscape;
+		goto stringNumericEscape;
 	}
 	else if (c >= '0' && c <= '9') {
 		base = 10;
 		token.unsignedValue = c - '0';
 		escapeMaxValue = 255;
 		escapeIsUnicode = false;
+		undoReadChar(this, c);
 		goto stringNumericEscape;
 	}
 	else if (c == 'u') {
 		base = 16;
 		escapeMaxValue = UNICODE_MAX;
 		escapeIsUnicode = true;
-		goto stringHexEscape;
+		goto stringNumericEscape;
 	}
 	else {
 		stringBuilder.add('\\');
 		goto stringLiteralRead;
-	}
-
-stringHexEscape:
-	c = readCharacter(this, &endOfFile);
-
-	digit = getDigitForBase(c, base);
-
-	if (digit >= 0) {
-		token.unsignedValue = digit;
-	}
-	else {
-		token.end = location;
-		token.type = TokenT::INVALID;
-		reportError(&location, "Error: Invalid hex digit in string escape");
-		return;
 	}
 
 stringNumericEscape:

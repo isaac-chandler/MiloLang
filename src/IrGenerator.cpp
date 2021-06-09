@@ -831,9 +831,9 @@ u32 generateEquals(IrState *state, u32 leftReg, Expr *right, bool equals) {
 		argumentInfo->argCount = 2;
 
 		argumentInfo->args[0].number = leftReg;
-		argumentInfo->args[0].type = &TYPE_STRING;
+		argumentInfo->args[0].type = TYPE_VOID_POINTER;
 		argumentInfo->args[1].number = rightReg;
-		argumentInfo->args[1].type = &TYPE_STRING;
+		argumentInfo->args[1].type = TYPE_VOID_POINTER;
 
 		argumentInfo->returnType = &TYPE_BOOL;
 
@@ -895,11 +895,7 @@ u32 generateBinary(IrState *state, ExprBinaryOperator *binary) {
 	case TokenT::NOT_EQUAL: {
 		assert(left->type == right->type);
 
-		if (left->type == &TYPE_STRING) {
-
-		}
-
-		// Fall through
+		return generateEquals(state, generateIr(state, binary->left), binary->right, binary->op == TokenT::EQUAL);
 	}
 	case TokenT::GREATER_EQUAL:
 	case TokenT::LESS_EQUAL:
@@ -1607,6 +1603,7 @@ u32 generateIr(IrState *state, Expr *expr) {
 
 		for (auto &case_ : switch_->cases) {
 			if (case_.condition) {
+				// @SwitchEqualsMess
 				auto condition = static_cast<ExprBinaryOperator *>(case_.condition);
 
 				assert(condition->flavor == ExprFlavor::BINARY_OPERATOR);

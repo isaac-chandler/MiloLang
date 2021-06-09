@@ -2741,7 +2741,7 @@ void runCoffWriter() {
 					auto block = static_cast<Block *>(ir.data);
 
 					if (block) {
-						debugSymbols.ensure(19);
+						debugSymbols.ensure(23);
 						debugSymbolsRelocations.ensure(20);
 
 						debugSymbols.add2Unchecked(21);

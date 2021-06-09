@@ -654,6 +654,9 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 					if (!condition)
 						return nullptr;
 
+					// @SwitchEqualsMess
+					// The cases for a switch statement desugar to an  == in the syntax tree so that type inference does not need to be
+					// copy-pasta'd, in code generation the condition is still only evaluated once though, even though it is present in every ==
 					auto equal = makeBinaryOperator(lexer, start, condition->end, TokenT::EQUAL, switch_->condition);
 					equal->right = condition;
 

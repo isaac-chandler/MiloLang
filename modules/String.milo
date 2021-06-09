@@ -18,6 +18,67 @@ read_line :: (s: string) -> (line: string, remaining: string) {
 	return line, remaining
 }
 
+begins_with :: (s: string, prefix: string) -> bool {
+	return prefix.count <= s.count && s[..prefix.count] == prefix
+	
+}
+
+is_whitespace :: (c: u32) -> bool {
+	if c == {
+		case ' '  #through
+		case '\n' #through
+		case '\t' #through
+		case '\r' #through
+		case '\f' #through
+		case '\v' #through
+		case '\u85' #through
+		case '\uA0' #through
+		case '\u1680' #through // not actually blank but still considered whitespace by unicode
+		case '\u2000' #through
+		case '\u2001' #through
+		case '\u2002' #through
+		case '\u2003' #through
+		case '\u2004' #through
+		case '\u2005' #through
+		case '\u2006' #through
+		case '\u2007' #through
+		case '\u2008' #through
+		case '\u2009' #through
+		case '\u200A' #through
+		case '\u2028' #through
+		case '\u2029' #through
+		case '\u202F' #through
+		case '\u205F' #through
+		case '\u3000'
+			return true
+		else
+			return false
+	}
+}
+
+trim_leading_whitespace :: (s: string) -> string {
+	remaining := s
+	
+	while remaining {
+		if remaining[0] < 128 {
+			if is_whitespace(remaining[0])
+				remaining = remaining[1..]
+			else 
+				break
+		} else {
+			// unicode slow path
+			c, after := read_character(s)
+			
+			if is_whitespace(c)
+				remaining = after
+			else
+				break
+		}
+	}
+	
+	return remaining
+}
+
 Utf8_Constants :: struct {
 	ONE_BYTE:           u8: 0b0000_0000
 	ONE_BYTE_MASK:      u8: 0b1000_0000

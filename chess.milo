@@ -97,23 +97,201 @@ using Piece :: enum_flags u8 {
 }
 
 // @Volatile: Indices of king and rooks are hardocded below, an arbitrary board state cannot be used here
-global_board := #run initialize_state(.[
-	ROOK|BLACK, KNIGHT|BLACK, BISHOP|BLACK, QUEEN|BLACK, KING|BLACK, BISHOP|BLACK, KNIGHT|BLACK, ROOK|BLACK, 
-	PAWN|BLACK, PAWN  |BLACK, PAWN  |BLACK, PAWN|BLACK , PAWN|BLACK, PAWN  |BLACK, PAWN  |BLACK, PAWN|BLACK, 
-	0,          0,            0,            0,           0,          0,            0,            0         , 
-	0,          0,            0,            0,           0,          0,            0,            0         , 
-	0,          0,            0,            0,           0,          0,            0,            0         , 
-	0,          0,            0,            0,           0,          0,            0,            0         , 
-	PAWN,       PAWN,         PAWN,         PAWN,        PAWN,       PAWN,         PAWN,         PAWN      , 
-	ROOK,       KNIGHT,       BISHOP,       QUEEN,       KING,       BISHOP,       KNIGHT,       ROOK      
-])
+global_board: State
 
-BLACK_QUEENS_ROOK_INDEX :: 0
-BLACK_KINGS_ROOK_INDEX  :: 7
-BLACK_KING_INDEX        :: 4
-WHITE_QUEENS_ROOK_INDEX :: 24
-WHITE_KINGS_ROOK_INDEX  :: 31
-WHITE_KING_INDEX        :: 28
+print_fen :: (using state: State) {
+	for y: 8 {
+		x := 0
+		
+		while x < 8 { 
+			pos := pack(cast() x, cast() y)
+			
+			if board[pos] == -1 {
+				count := 0
+			
+				while board[pos] == -1 && x < 8 {
+					count += 1
+					x += 1
+					pos = pack(cast() x, cast() y)
+				}
+				
+				print("%", count)
+			} else {
+				if pieces[board[pos]].piece == {
+					case ROOK          print("R")
+					case KNIGHT        print("N")
+					case BISHOP        print("B")
+					case KING          print("K")
+					case QUEEN         print("Q")
+					case PAWN          print("P")
+					case ROOK  |BLACK  print("r")
+					case KNIGHT|BLACK  print("n")
+					case BISHOP|BLACK  print("b")
+					case KING  |BLACK  print("k")
+					case QUEEN |BLACK  print("q")
+					case PAWN  |BLACK  print("p")
+					else assert(false)
+				}
+				
+				x += 1
+			}
+		}
+		
+		if y != 7 print("/")
+	}
+	
+	if player_color == BLACK
+		print(" b ")
+	else
+		print(" w ")
+	
+	if castle_state == cast() 0xF
+		print("-")
+	if !(castle_state & .WHITE_NO_KINGSIDE)
+		print("K")
+	if !(castle_state & .WHITE_NO_QUEENSIDE)
+		print("Q")
+	if !(castle_state & .BLACK_NO_KINGSIDE)
+		print("k")
+	if !(castle_state & .BLACK_NO_QUEENSIDE)
+		print("q")
+	
+	print(" % %", 0, move_count / 2 + 1)
+		
+
+	print("\n")
+}
+
+initialize_from_fen :: (fen: string) -> (State, bool) {
+	x: s8 = 0
+	y: s8 = 0
+	
+	layout: [64]Piece
+	
+	c: u32
+	remaining := fen
+	
+	while remaining {
+		if x > 8 || y > 7 {
+			return .{}, false
+		}
+	
+		pos := pack(x, y)
+		
+		c, remaining = read_character(remaining)
+		
+		if c ==  {
+			case cast()-1
+				return .{--}, false
+			case 'R' layout[pos] = ROOK
+			case 'N' layout[pos] = KNIGHT
+			case 'B' layout[pos] = BISHOP
+			case 'K' layout[pos] = KING
+			case 'Q' layout[pos] = QUEEN
+			case 'P' layout[pos] = PAWN
+			case 'r' layout[pos] = ROOK  |BLACK
+			case 'n' layout[pos] = KNIGHT|BLACK
+			case 'b' layout[pos] = BISHOP|BLACK
+			case 'k' layout[pos] = KING  |BLACK
+			case 'q' layout[pos] = QUEEN |BLACK
+			case 'p' layout[pos] = PAWN  |BLACK
+			case '/'
+				if x != 8  return .{}, false
+				x = 0
+				y += 1
+				if y >= 8  return .{}, false
+				continue
+			case '1'
+			case '2' x += 1
+			case '3' x += 2
+			case '4' x += 3
+			case '5' x += 4
+			case '6' x += 5
+			case '7' x += 6
+			case '8' x += 7
+			else
+				if x != 8 || y != 7 return .{}, false
+				
+				break
+		}
+	
+		x += 1
+	}
+	
+	using state := initialize_state(layout)
+	
+	remaining = trim_leading_whitespace(remaining)
+	
+	c, remaining = read_character(remaining)
+
+	if c == 'w' player_color = 0
+	else if c == 'b' player_color = BLACK
+	else return .{}, false
+	
+	castle_state |= .BLACK_NO_KINGSIDE
+	castle_state |= .BLACK_NO_QUEENSIDE
+	castle_state |= .WHITE_NO_KINGSIDE
+	castle_state |= .WHITE_NO_QUEENSIDE
+	
+	remaining = trim_leading_whitespace(remaining)
+	
+	while true {
+		c, remaining = read_character(remaining)
+		
+		if c == {
+			case 'k' castle_state &= ~.BLACK_NO_KINGSIDE
+			case 'q' castle_state &= ~.BLACK_NO_QUEENSIDE
+			case 'K' castle_state &= ~.WHITE_NO_KINGSIDE
+			case 'Q' castle_state &= ~.WHITE_NO_QUEENSIDE
+			else
+				break
+		}
+	}
+	
+	remaining = trim_leading_whitespace(remaining)
+	
+	c, remaining = read_character(remaining)
+	
+	if c != '-' {
+		if c < 'a' || c > 'h'
+			return .{}, false
+		
+		en_passant_file := c - 'a'
+		
+		c, remaining = read_character(remaining)
+		
+		if c < '1' || c > '8'
+			return .{}, false
+			
+		en_passant_rank := 7 - (c - '1') // the 1st rank is at the bottom
+		
+		en_passant_position = pack(cast() en_passant_file, cast() en_passant_rank)
+	}
+	
+	remaining = trim_leading_whitespace(remaining)
+	
+	moves: u64
+	
+	moves, remaining = read_u64(remaining) // ignore 50 move rule info for now
+	
+	remaining = trim_leading_whitespace(remaining)	
+	moves, remaining = read_u64(remaining)
+	
+	move_count = cast() (2 * (moves - 1))
+	
+	if player_color == BLACK
+		move_count += 1
+
+	
+	remaining = trim_leading_whitespace(remaining)
+	
+	if remaining return .{}, false
+	
+	return state, true
+}
+
+BLACK_KING_INDEX        :: 0
+WHITE_KING_INDEX        :: 16
 
 pawn_square_bonus :: f32.[
 	0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00,
@@ -277,7 +455,7 @@ file_mask :: #run create_mask(.[
 initialize_state :: (layout: [64]Piece) -> State {
 	using state: State
 	
-	piece_index: s8 = 0
+	piece_index: s8 = BLACK_KING_INDEX + 1
 	
 	for layout {
 		if it == PAWN {
@@ -285,13 +463,24 @@ initialize_state :: (layout: [64]Piece) -> State {
 		} else if it == PAWN|BLACK {
 			black_pawn_mask |= 1 << it_index
 		}
-	
+		
 		if it {
-			board[it_index] = piece_index
-			pieces[piece_index].piece = it
-			pieces[piece_index].location = cast() it_index
+			index := piece_index
+		
+			if it == KING {
+				index = WHITE_KING_INDEX
+			} else if it == KING|BLACK {
+				index = BLACK_KING_INDEX
+			} else {
+				piece_index += 1
 			
-			piece_index += 1
+				if piece_index == WHITE_KING_INDEX
+					piece_index += 1
+			}
+			
+			board[it_index] = index
+			pieces[index].piece = it
+			pieces[index].location = cast() it_index
 		} else {
 			board[it_index] = -1
 		}
@@ -661,10 +850,10 @@ evaluate_position :: (using state: State) -> f32 {
 	else return evaluation
 }
 
-MAX_MOVES :: 1_000_000
+max_moves: u64 = 100_000
 
 quiesce :: (using state: State, alpha: f32, beta: f32, depth := 0) -> f32 {
-	if moves_explored == MAX_MOVES  return 0
+	if moves_explored == max_moves  return 0
 	
 	key := hash(state)
 	
@@ -851,7 +1040,7 @@ stats: struct {
 }
 
 minimax :: (using state: State, depth: s8, alpha: f32 = -1e9, beta: f32 = 1e9) -> (f32, Move) {
-	if moves_explored == MAX_MOVES  return 0, .{}
+	if moves_explored == max_moves  return 0, .{}
 	
 	alpha_orig := alpha
 	
@@ -1268,10 +1457,10 @@ do_move :: (state: State, using move: Move) -> State {
 	
 	if piece & ~BLACK == KING {	
 		if distance == 2 {
-			rook: s8 = WHITE_KINGS_ROOK_INDEX
+			rook := board[63]
 			
 			if piece & BLACK {
-				rook = BLACK_KINGS_ROOK_INDEX	
+				rook = board[7]	
 			}
 			
 			pieces[rook].location = end - 1
@@ -1279,10 +1468,10 @@ do_move :: (state: State, using move: Move) -> State {
 			board[end - 1] = rook
 			board[end + 1] = -1
 		} else if distance == -2 {
-			rook: s8 = WHITE_QUEENS_ROOK_INDEX
+			rook := board[0]
 			
 			if piece & BLACK {
-				rook = BLACK_QUEENS_ROOK_INDEX	
+				rook = board[56]
 			}
 			
 			pieces[rook].location = end + 1
@@ -1355,8 +1544,8 @@ do_move :: (state: State, using move: Move) -> State {
 }
 
 move_history: [..]Move
-black_difficulty: u64
-white_difficulty: u64
+black_ai: bool
+white_ai: bool
 
 Hashing_Data :: struct {
 	piece_positions: [16][65]u64
@@ -1415,17 +1604,16 @@ select_ai_move :: () -> Move {
 	stats = .{}
 	moves_explored = 0
 	
-	depth := get_player_difficulty()
+	depth := 2
 	
+	moves_explored = 0
 	value, ai_move := minimax(global_board, cast() depth)
 	
 	total_explored := moves_explored
 	
 	
-	while outer: moves_explored < MAX_MOVES {							
+	while outer: moves_explored < max_moves {							
 		if depth == MAX_DEPTH  break;
-	
-		moves_explored = 0
 		
 		low_delta: f32 = 0.25
 		high_delta: f32 = 0.25
@@ -1435,12 +1623,12 @@ select_ai_move :: () -> Move {
 			beta := value + high_delta
 			
 			new_value, new_move := minimax(global_board, cast() depth, alpha, beta)
+		
+			if moves_explored >= max_moves  break outer
 			
 			if new_move.piece_index == -1 break outer
 			
 			print("Move: %\n", new_move)
-		
-			if moves_explored >= MAX_MOVES  break outer
 			
 			if new_value <= alpha {
 				print("Alpha fail\n")
@@ -1455,7 +1643,7 @@ select_ai_move :: () -> Move {
 			}
 		}
 
-		total_explored += moves_explored
+		total_explored = moves_explored
 		
 		if value <= -900 || value >= 900 {
 			break;
@@ -1502,7 +1690,7 @@ draw :: (moves: []Move) {
 	if selected_square != -1 {
 		x, y := unpack(selected_square)
 		
-		if white_difficulty && !black_difficulty  {
+		if white_ai && !black_ai  {
 			x = 7 - x
 			y = 7 - y
 		}
@@ -1524,7 +1712,7 @@ draw :: (moves: []Move) {
 		
 		x, y := unpack(start)
 	
-		if white_difficulty && !black_difficulty  {
+		if white_ai && !black_ai  {
 			x = 7 - x
 			y = 7 - y
 		}
@@ -1536,7 +1724,7 @@ draw :: (moves: []Move) {
 		
 		x, y = unpack(move.end)
 		
-		if white_difficulty && !black_difficulty  {
+		if white_ai && !black_ai  {
 			x = 7 - x
 			y = 7 - y
 		}
@@ -1552,7 +1740,7 @@ draw :: (moves: []Move) {
 	for moves {
 		x, y := unpack(it.end)
 		
-		if white_difficulty && !black_difficulty  {
+		if white_ai && !black_ai  {
 			x = 7 - x
 			y = 7 - y
 		}
@@ -1576,7 +1764,7 @@ draw :: (moves: []Move) {
 		if piece {
 			x, y := unpack(it.location)
 			
-			if white_difficulty && !black_difficulty  {
+			if white_ai && !black_ai  {
 				x = 7 - x
 				y = 7 - y
 			}
@@ -1621,12 +1809,12 @@ draw :: (moves: []Move) {
 	glEnd()
 }
 
-get_player_difficulty :: () -> u64 {
+player_is_ai :: () -> bool {
 	if global_board.player_color == BLACK {
-		return black_difficulty
+		return black_ai
 	}
 	
-	return white_difficulty
+	return white_ai
 }
 
 undo_move :: () {
@@ -1648,6 +1836,8 @@ make_move :: (move: Move) {
 	}
 
 	global_board = do_move(global_board, move)
+	
+	print_fen(global_board)
 	array_add(*move_history, move)
 }
 
@@ -1681,24 +1871,37 @@ main :: () {
 
 	arguments := get_command_line_arguments()
 	
-	if arguments.count >= 2 {
-		remaining: string
-		black_difficulty, remaining = read_u64(arguments[1])
-		
-		if remaining {
-			print("Invalid difficulty level %\n", arguments[1])
-			return
+	fen := "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+	
+	
+	for arguments[1..] {
+		if it == "-w" {
+			white_ai = true
+		} else if it == "-b" {
+			black_ai = true
+		} else if begins_with(it, "-moves=") {
+			before, after := split_at_first(it, '=')
+			
+			max_moves = read_u64(after)
+			
+			if max_moves < 10_000 {
+				print("Cannot run with fewer than 10,000 moves to explore")
+				return
+			}
+		} else if begins_with(it, "-fen=") {
+			before, after := split_at_first(it, '=')
+			
+			fen = after
 		}
 	}
 	
-	if arguments.count >= 3 {
-		remaining: string
-		white_difficulty, remaining = read_u64(arguments[2])
-		
-		if remaining {
-			print("Invalid difficulty level %\n", arguments[2])
-			return
-		}
+	
+	success: bool
+	global_board, success = initialize_from_fen(fen)
+	
+	if !success {
+		print("Invalid FEN string\n")
+		return
 	}
 	
 	rand_seed: s64
@@ -1774,7 +1977,7 @@ main :: () {
 				x /= 100
 				y /= 100
 				
-				if white_difficulty && !black_difficulty {
+				if white_ai && !black_ai {
 					x = 7 - x
 					y = 7 - y
 				}
@@ -1903,10 +2106,10 @@ main :: () {
 		if undo_last_move {
 			undo_last_move = false
 			
-			if (!black_difficulty || !white_difficulty) && undo_list.count {
+			if (!black_ai || !white_ai) && undo_list.count {
 				undo_move()
 			
-				if get_player_difficulty() undo_move()
+				if player_is_ai() undo_move()
 			}
 		}
 		
@@ -1914,7 +2117,7 @@ main :: () {
 			selected_square = -1
 		
 		if !game_over {
-			if get_player_difficulty() {
+			if player_is_ai() {
 				if making_ai_move {
 					result := WaitForSingleObject(ai_stop_semaphore, 0)
 					if result != WAIT_TIMEOUT {

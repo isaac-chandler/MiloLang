@@ -1673,6 +1673,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 
 
 			if (case_.condition) {
+				// @SwitchEqualsMess
 				auto condition = static_cast<ExprBinaryOperator *>(case_.condition);
 
 				assert(condition->flavor == ExprFlavor::BINARY_OPERATOR);

@@ -66,37 +66,43 @@ ExprLiteral *createIntLiteral(CodeLocation start, EndLocation end, Type *type, u
 }
 
 ExprLiteral *createInBoundsIntLiteral(CodeLocation start, EndLocation end, Type *type, u64 value) {
-	if (type == &TYPE_BOOL) {
+	auto underlying = type;
+
+	if (type->flavor == TypeFlavor::ENUM) {
+		underlying = static_cast<TypeEnum *>(type)->integerType;
+	}
+
+	if (underlying == &TYPE_BOOL) {
 		value = value != 0;
 	}
-	else if (type == &TYPE_S8) {
+	else if (underlying == &TYPE_S8) {
 		value &= 0xFF;
 
 		if (value & 0x80) {
 			value |= 0xFFFF'FFFF'FFFF'FF00;
 		}
 	}
-	else if (type == &TYPE_S16) {
+	else if (underlying == &TYPE_S16) {
 		value &= 0xFFFF;
 
 		if (value & 0x8000) {
 			value |= 0xFFFF'FFFF'FFFF'0000;
 		}
 	}
-	else if (type == &TYPE_S32) {
+	else if (underlying == &TYPE_S32) {
 		value &= 0xFFFF'FFFF;
 
 		if (value & 0x8000'0000) {
 			value |= 0xFFFF'FFFF'0000'0000;
 		}
 	}
-	else if (type == &TYPE_U8) {
+	else if (underlying == &TYPE_U8) {
 		value &= 0xFF;
 	}
-	else if (type == &TYPE_U16) {
+	else if (underlying == &TYPE_U16) {
 		value &= 0xFFFF;
 	}
-	else if (type == &TYPE_U32) {
+	else if (underlying == &TYPE_U32) {
 		value &= 0xFFFF'FFFF;
 	}
 
@@ -619,7 +625,7 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 	case ExprFlavor::BINARY_OPERATOR: {
 		ExprBinaryOperator *binary = static_cast<ExprBinaryOperator *>(*expr);
 
-		assert(!(binary->flags &EXPR_EQUALS_IS_IMPLICIT_SWITCH) || binary->op == TokenT::EQUAL);
+		assert(!(binary->flags & EXPR_EQUALS_IS_IMPLICIT_SWITCH) || binary->op == TokenT::EQUAL);
 
 		if (binary->left && !(binary->flags & EXPR_EQUALS_IS_IMPLICIT_SWITCH)) {
 			flatten(flattenTo, &binary->left);
@@ -1307,7 +1313,21 @@ bool switchCasesAreSame(Expr *a, Expr *b) {
 }
 
 bool inferUnaryDot(SubJob *job, TypeEnum *enum_, Expr **exprPointer, bool silentCheck = false) {
-	auto identifier = static_cast<ExprIdentifier *>(*exprPointer);
+	bool invert = false;
+
+	Expr **expr = exprPointer;
+
+	while ((*expr)->flavor == ExprFlavor::UNARY_OPERATOR) {
+		auto unary = static_cast<ExprUnaryOperator *>(*expr);
+
+		assert(unary->op == TOKEN('~'));
+
+		expr = &unary->value;
+
+		invert = !invert;
+	}
+
+	auto identifier = static_cast<ExprIdentifier *>(*expr);
 	assert(identifier->flavor == ExprFlavor::IDENTIFIER);
 
 	auto member = findDeclarationNoYield(&enum_->members, identifier->name);
@@ -1319,8 +1339,23 @@ bool inferUnaryDot(SubJob *job, TypeEnum *enum_, Expr **exprPointer, bool silent
 	}
 	assert(member->flags & DECLARATION_IS_CONSTANT); // All enum members should be constants
 
-	if (!silentCheck)
-		copyLiteral(exprPointer, member->initialValue);
+	if (!silentCheck) {
+		if (expr != exprPointer) {
+			if (!(enum_->flags & TYPE_ENUM_IS_FLAGS)) {
+				reportError(*exprPointer, "Error: Cannot invert an enum");
+				return false;
+			}
+
+			assert(member->initialValue->flavor == ExprFlavor::INT_LITERAL);
+
+			u64 value = static_cast<ExprLiteral *>(member->initialValue)->unsignedValue;
+
+			*exprPointer = createInBoundsIntLiteral((*exprPointer)->start, (*expr)->end, enum_, invert ? ~value : value);
+		}
+		else {
+			copyLiteral(exprPointer, member->initialValue);
+		}
+	}
 
 	return true;
 }
@@ -3542,6 +3577,11 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 	}
 
 	if (left) {
+		// @SwitchEqualsMess
+		if (binary->flags & EXPR_EQUALS_IS_IMPLICIT_SWITCH) {
+			trySolidifyNumericLiteralToDefault(left);
+		}
+
 		if (left->type->flavor == TypeFlavor::VOID) {
 			reportError(left, "Error: Cannot operate on a value of type void");
 			return false;
@@ -3551,6 +3591,12 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 			return false;
 		}
 		else if (left->type == &TYPE_AUTO_CAST) {
+			// @SwitchEqualsMess
+			if (binary->flags & EXPR_EQUALS_IS_IMPLICIT_SWITCH) {
+				reportError(left, "Error: Cannot auto cast the condition of an if == statement");
+				return false;
+			}
+
 			if (mathOp) {
 				trySolidifyNumericLiteralToDefault(right);
 
@@ -3725,12 +3771,24 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 					}
 				}
 				else if (left->type == TYPE_VOID_POINTER && (right->type->flavor == TypeFlavor::POINTER || right->type->flavor == TypeFlavor::FUNCTION)) {
-					insertImplicitCast(job->sizeDependencies, &left, right->type);
+					// @SwitchEqualsMess
+					if (binary->flags & EXPR_EQUALS_IS_IMPLICIT_SWITCH) { // In this case we cast the right to *void since we should never modify the lhs of an if == case
+						insertImplicitCast(job->sizeDependencies, &right, left->type);
+					}
+					else {
+						insertImplicitCast(job->sizeDependencies, &left, right->type);
+					}
 				}
 				else if (right->type == TYPE_VOID_POINTER && (left->type->flavor == TypeFlavor::POINTER || left->type->flavor == TypeFlavor::FUNCTION)) {
 					insertImplicitCast(job->sizeDependencies, &right, left->type);
 				}
 				else if (right->type->flavor == TypeFlavor::ENUM && left->type == &TYPE_UNARY_DOT) {
+					// @SwitchEqualsMess
+					if (binary->flags & EXPR_EQUALS_IS_IMPLICIT_SWITCH) {
+						reportError(left, "Error: Cannot use unary . in the condition of an if == statement");
+						return false;
+					}
+
 					if (!inferUnaryDot(job, static_cast<TypeEnum *>(right->type), &left)) {
 						return false;
 					}
@@ -3746,7 +3804,13 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 				}
 				else if (right->type->flavor == TypeFlavor::ENUM && (right->type->flags & TYPE_ENUM_IS_FLAGS) &&
 					left->type->flavor == TypeFlavor::INTEGER && left->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(left)->unsignedValue == 0) {
-					insertImplicitCast(job->sizeDependencies, &left, right->type);
+					// @SwitchEqualsMess
+					if (binary->flags & EXPR_EQUALS_IS_IMPLICIT_SWITCH) { // In this case we cast the right to the left since we should never modify the lhs of an if == case
+						insertImplicitCast(job->sizeDependencies, &right, left->type);
+					}
+					else {
+						insertImplicitCast(job->sizeDependencies, &left, right->type);
+					}
 				}
 				else if (left->type->flavor == TypeFlavor::FUNCTION && right->type == &TYPE_OVERLOAD_SET) {
 					if (!inferOverloadSetForNonCall(job, left->type, right, yield)) {
@@ -3754,11 +3818,23 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 					}
 				}
 				else if (left->type == &TYPE_OVERLOAD_SET && right->type->flavor == TypeFlavor::FUNCTION) {
+					// @SwitchEqualsMess
+					if (binary->flags & EXPR_EQUALS_IS_IMPLICIT_SWITCH) {
+						reportError(left, "Error: The condition of an if == statement cannot be an overloaded function");
+						return false;
+					}
+
 					if (!inferOverloadSetForNonCall(job, right->type, left, yield)) {
 						return *yield;
 					}
 				}
 				else if (left->type == &TYPE_ARRAY_LITERAL && right->type->flavor == TypeFlavor::ARRAY) {
+					// @SwitchEqualsMess
+					if (binary->flags & EXPR_EQUALS_IS_IMPLICIT_SWITCH) {
+						reportError(left, "Error: Cannot use unary . in the condition of an if == statement");
+						return false;
+					}
+				
 					*yield = inferUnaryDotArrayLiteral(job, right->type, left);
 					return *yield;
 				}
@@ -3767,6 +3843,12 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 					return *yield;
 				}
 				else if (left->type == &TYPE_STRUCT_LITERAL && (right->type->flavor == TypeFlavor::ARRAY || right->type->flavor == TypeFlavor::STRING || right->type->flavor == TypeFlavor::STRUCT)) {
+					// @SwitchEqualsMess
+					if (binary->flags & EXPR_EQUALS_IS_IMPLICIT_SWITCH) {
+						reportError(left, "Error: Cannot use unary . in the condition of an if == statement");
+						return false;
+					}
+				
 					*yield = inferUnaryDotStructLiteral(job, right->type, left);
 					return *yield;
 				}
@@ -5277,6 +5359,8 @@ bool inferFlattened(SubJob *job) {
 		case ExprFlavor::SWITCH: {
 			auto switch_ = static_cast<ExprSwitch *>(expr);
 
+			trySolidifyNumericLiteralToDefault(switch_->condition);
+
 			if (switch_->flags & EXPR_SWITCH_IS_COMPLETE) {
 				if (switch_->condition->type->flavor != TypeFlavor::ENUM || (switch_->condition->type->flags & TYPE_ENUM_IS_FLAGS)) {
 					reportError(switch_, "Error: A switch if can only be #complete if it switches on an enum");
@@ -5295,7 +5379,7 @@ bool inferFlattened(SubJob *job) {
 						return false;
 					}
 
-					for (auto it = &case_ + 1; it != switch_->cases.end(); it++) {
+					for (auto it = &case_ + 1; it < switch_->cases.end(); it++) {
 						if (it->condition) {
 							assert(it->condition->flavor == ExprFlavor::BINARY_OPERATOR);
 
@@ -5304,6 +5388,7 @@ bool inferFlattened(SubJob *job) {
 							if (switchCasesAreSame(binary->right, other->right)) {
 								reportError(it->condition, "Error: Duplicate case in switch if");
 								reportError(case_.condition, "Error: Here is the previous case");
+								return false;
 							}
 						}
 					}
@@ -6194,7 +6279,10 @@ bool inferFlattened(SubJob *job) {
 				break;
 			}
 			case TOKEN('~'): {
-				if (value->type->flavor == TypeFlavor::INTEGER) {
+				if (value->type == &TYPE_UNARY_DOT) {
+					unary->type = value->type;
+				}
+				else if (value->type->flavor == TypeFlavor::INTEGER) {
 					trySolidifyNumericLiteralToDefault(value);
 
 					unary->type = value->type;
