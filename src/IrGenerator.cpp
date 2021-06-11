@@ -81,11 +81,11 @@ struct Loop {
 	Array<u32> endPatches;
 };
 
-Array<Expr *> deferStack;
+static Array<Expr *> deferStack;
 static Block *currentBlock;
 
-Array<Loop> loopStack;
-u32 loopCount;
+static Array<Loop> loopStack;
+static u32 loopCount;
 
 static void pushLoop(IrState *state, ExprLoop *loop) {
 	if (loopCount >= loopStack.count) {
@@ -169,17 +169,19 @@ static void exitBlock(IrState *state, Block *block, bool isBreak) {
 			auto current = &loop->iteratorBlock;
 			bool found = false;
 
-			while (current) {
-				if (current == block) {
-					found = true;
-					break;
+			if (block) {
+				while (current) {
+					if (current == block) {
+						found = true;
+						break;
+					}
+
+					current = current->parentBlock;
 				}
 
-				current = current->parentBlock;
+				if (!found)
+					break;
 			}
-
-			if (!found)
-				break;
 
 			if (!isBreak) // Break statements shouldn't execute the increment
 				generateIncrement(state, loop);

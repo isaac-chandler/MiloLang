@@ -543,17 +543,19 @@ static void exitBlock(State *state, Block *block, bool isBreak) {
 			auto current = &loop->iteratorBlock;
 			bool found = false;
 
-			while (current) {
-				if (current == block) {
-					found = true;
-					break;
+			if (block) {
+				while (current) {
+					if (current == block) {
+						found = true;
+						break;
+					}
+
+					current = current->parentBlock;
 				}
 
-				current = current->parentBlock;
+				if (!found)
+					break;
 			}
-
-			if (!found)
-				break;
 
 			if (!isBreak) // Break statements shouldn't execute the increment
 				generateIncrement(state, loop);

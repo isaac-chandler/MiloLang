@@ -60,6 +60,227 @@ load_image :: (filename: string) -> u32 {
 	return texture
 }
 
+Opening_Info :: struct {
+	hash: u64
+	moves: [..]Move
+}
+
+openings: [..]Opening_Info
+
+opening_table_insert :: (hash: u64) -> *Opening_Info {
+		
+	allocate_openings :: (count: u64) {
+		openings.capacity = count
+		openings.data = allocate(openings.capacity * size_of(Opening_Info))
+		openings.count = 0
+		memory_clear(openings.data, openings.capacity * size_of(Opening_Info))
+	}
+	
+	if openings.capacity == 0 {
+		allocate_openings(1024)
+	} else if openings.count * 10 > openings.capacity * 7 {
+		old_openings := openings
+		defer deallocate(old_openings.data)
+		
+		allocate_openings(old_openings.capacity * 2)
+		
+		for old_openings.capacity {
+			if old_openings[it].hash {
+				<<opening_table_insert(old_openings[it].hash) = old_openings[it]
+			}
+		}
+	}
+	
+	key := hash
+	if key == 0
+		key = 1
+	openings.count += 1
+	
+	slot := key & (openings.capacity - 1)
+	
+	while true {
+		if openings[slot].hash == 0 {
+			openings[slot].hash = key
+			return *openings[slot]
+		}
+	
+		slot = (slot + 1) & (openings.capacity - 1)
+	}
+	
+	assert(false)
+	return null
+}
+
+opening_table_lookup :: (hash: u64) -> *Opening_Info {
+	if openings.count == 0  return null
+
+	key := hash
+	if key == 0
+		key = 1
+	
+	slot := key & (openings.capacity - 1)
+	
+	while true {
+		if openings[slot].hash == key
+			return *openings[slot]
+		else if openings[slot].hash == 0
+			return null
+	
+		slot = (slot + 1) & (openings.capacity - 1)
+	}
+	
+	assert(false)
+	return null
+}
+
+calculate_openings_table :: () -> bool {
+	file, success := read_entire_file("openings.txt")
+	
+	if !success
+		return false
+	
+	remaining := cast(string) file
+	
+	starting_board := initialize_from_fen(STARTING_BOARD)
+	legal_moves: [..]Move
+	
+	
+	while true {
+		line: string
+		line, remaining = get_line(remaining)
+		
+		if !line
+			break;
+		
+		using state := starting_board
+		
+		while true {
+			key := hash(state)
+		
+			move: string
+			move, line = split_at_first(line, ' ')
+			
+			if !move
+				break;
+			
+			move_info: Move
+			if move == "O-O" {
+				if player_color == BLACK {
+					move_info.piece_index = BLACK_KING_INDEX
+				} else {
+					move_info.piece_index = WHITE_KING_INDEX					
+				}
+				move_info.end = pieces[move_info.piece_index].location + 2
+
+				new_state, valid := checked_do_move(state, move_info)
+						
+				if valid
+					state = new_state
+				else 
+					return false
+			} else if move == "O-O-O" {
+				if player_color == BLACK {
+					move_info.piece_index = BLACK_KING_INDEX
+				} else {
+					move_info.piece_index = WHITE_KING_INDEX					
+				}
+				move_info.end = pieces[move_info.piece_index].location - 2
+
+				new_state, valid := checked_do_move(state, move_info)
+						
+				if valid
+					state = new_state
+				else 
+					return false
+			} else {
+				piece := player_color
+				
+				file: s8 = -1
+				rank: s8 = -1
+				
+				if 'a' <= move[0] && move[0] <= 'h' {
+					piece |= PAWN
+				
+					file = cast() (move[0] - 'a')
+					
+					if 'a' <= move[1] && move[1] <= 'h' {
+						move = move[1..]
+					}
+				} else if move[0] == 'R' {
+					move = move[1..]
+					piece |= ROOK
+				} else if move[0] == 'N' {
+					move = move[1..]
+					piece |= KNIGHT
+				} else if move[0] == 'B' {
+					move = move[1..]
+					piece |= BISHOP
+				} else if move[0] == 'K' {
+					move = move[1..]
+					piece |= KING
+				} else if move[0] == 'Q' {
+					move = move[1..]
+					piece |= QUEEN
+				} else {
+					return false
+				}
+				
+				if move.count > 2 && 'a' <= move[0] && move[0] <= 'h' {
+					file = cast() (move[0] - 'a')
+					move = move[1..]
+				}
+				
+				if move.count > 2 && '1' <= move[0] && move[0] <= '8' {
+					rank = cast() (7 - (move[0] - '1'))
+					move = move[1..]
+				}
+				
+				if move.count != 2
+					return false
+				
+				end := pack(cast() (move[0] - 'a'), cast() (7 - (move[1] - '1')))
+				
+				for p: pieces {
+					if p.location == -1 || p.piece != piece 
+						continue;
+					
+					x, y := unpack(p.location)
+					
+					if (file != -1 && x != file) || (rank != -1 && rank != y)
+						continue;
+					
+					legal_moves.count = 0
+					
+					get_moves_for_piece(state, *legal_moves, cast() it_index)
+					
+					for legal_moves {
+						if it.end != end  continue;
+						new_state, valid := checked_do_move(state, it)
+						
+						if valid {
+							state = new_state
+							move_info = it
+						
+							break p
+						}
+					}
+				} or {
+					return false
+				}
+				
+				
+			}
+			
+			moves := opening_table_lookup(key)
+			if !moves  moves = opening_table_insert(key)
+			
+			array_add(*moves.moves, move_info)
+		}
+	}
+	
+	return true
+}
+
 Rectangle :: struct {
 	x: f32
 	y: f32
@@ -139,6 +360,8 @@ print_fen :: (using state: State) {
 		
 		if y != 7 print("/")
 	}
+
+
 	
 	if player_color == BLACK
 		print(" b ")
@@ -155,8 +378,21 @@ print_fen :: (using state: State) {
 		print("k")
 	if !(castle_state & .BLACK_NO_QUEENSIDE)
 		print("q")
+
+	en_passant_data := u8.['-', 0]
+	en_passant := string.{en_passant_data.data, 1}
+
+	if en_passant_position >= 0 {
+		x, y := unpack(en_passant_position)
+
+		y = 7 - y
+
+		en_passant.count = 2
+		en_passant[0] = cast(u8) x + 'a'
+		en_passant[1] = cast(u8) y + '1'
+	}
 	
-	print(" % %", 0, move_count / 2 + 1)
+	print(" % % %", en_passant, 0, move_count / 2 + 1)
 		
 
 	print("\n")
@@ -400,6 +636,7 @@ State :: struct {
 		location: s8
 	}
 	
+	previous_move: Move
 	pieces: [32]Piece_Info
 	white_pawn_mask: u64
 	black_pawn_mask: u64
@@ -455,7 +692,8 @@ file_mask :: #run create_mask(.[
 initialize_state :: (layout: [64]Piece) -> State {
 	using state: State
 	
-	piece_index: s8 = BLACK_KING_INDEX + 1
+	black_index: s8 = BLACK_KING_INDEX + 1
+	white_index: s8 = WHITE_KING_INDEX + 1
 	
 	for layout {
 		if it == PAWN {
@@ -465,17 +703,19 @@ initialize_state :: (layout: [64]Piece) -> State {
 		}
 		
 		if it {
-			index := piece_index
-		
+			index := white_index
+			
+
 			if it == KING {
 				index = WHITE_KING_INDEX
 			} else if it == KING|BLACK {
 				index = BLACK_KING_INDEX
-			} else {
-				piece_index += 1
-			
-				if piece_index == WHITE_KING_INDEX
-					piece_index += 1
+			} else if it & BLACK {
+				index = black_index
+				black_index += 1
+			} 
+			else {
+				white_index += 1
 			}
 			
 			board[it_index] = index
@@ -489,58 +729,15 @@ initialize_state :: (layout: [64]Piece) -> State {
 	return state
 }
 
-add_move_if_legal :: (using state: State, moves: *[..]Move, using move: Move) {	
-	check_checks :: (using state: State, using move: Move) -> bool {
-		start := state.pieces[move.piece_index].location
-		piece := state.pieces[move.piece_index].piece
-		
-		color := piece & BLACK
-		
-		if piece & ~BLACK == KING {
-			distance := end - start
-			
-			if distance == -2 {
-				if look_for_checks(state, start, color)      return true
-				if look_for_checks(state, start - 1, color)  return true
-			} else if distance == 2 {
-				if look_for_checks(state, start, color)      return true
-				if look_for_checks(state, start + 1, color)  return true				
-			}
-		}
-	
-		new_state := do_move(state, move)
-		player_king := new_state.pieces[WHITE_KING_INDEX].location
-		
-		if color == BLACK  player_king = new_state.pieces[BLACK_KING_INDEX].location
-		
-		return look_for_checks(new_state, player_king, color)
-	}
-
+add_move_if_legal :: (using state: State, moves: *[..]Move, using move: Move) {
 	if board[end] == -1 || (move.piece_index >= 16) != (board[end] >= 16) {
-		if !check_checks(state, move) {
-		
-			array_add(moves, move)
-		}
+		array_add(moves, move)
 	}
 }
 
-add_capture_move_if_legal :: (using state: State, moves: *[..]Move, using move: Move) {	
-	check_checks :: (using state: State, using move: Move) -> bool {
-		color := state.pieces[move.piece_index].piece & BLACK
-	
-		new_state := do_move(state, move)
-		player_king := new_state.pieces[WHITE_KING_INDEX].location
-		
-		if color == BLACK  player_king = new_state.pieces[BLACK_KING_INDEX].location
-		
-		return look_for_checks(new_state, player_king, color)
-	}
-
-	if board[end] != -1 && (move.piece_index >= 16) != (board[end] >= 16) {
-		if !check_checks(state, move) {
-		
-			array_add(moves, move)
-		}
+add_capture_move_if_legal :: (using state: State, moves: *[..]Move, using move: Move) {
+	if board[end] != -1 && (move.piece_index >= 16) != (board[end] >= 16) {		
+		array_add(moves, move)
 	}
 }
 
@@ -721,26 +918,38 @@ order_moves :: (using state: State, moves: []Move, old_best: Move, depth: s8, al
 	
 	evaluation_list.count = moves.count
 	
+	killer_move := killer_moves[depth]
+	old_killer_move := old_killer_moves[depth]
+	counter_move := counter_moves[previous_move.piece_index][previous_move.end]
+	
 	for moves {
+		evaluation_list[it_index] = 0
+	
 		if it.piece_index == old_best.piece_index && it.end == old_best.end {
-			evaluation_list[it_index] = 10000
+			evaluation_list[it_index] += 10000
 		}
-		else if it.piece_index == killer_moves[depth].piece_index && it.end == killer_moves[depth].end {
-			evaluation_list[it_index] = 9000
-		}
-		else if it.piece_index == old_killer_moves[depth].piece_index && it.end == old_killer_moves[depth].end {
-			evaluation_list[it_index] = 8000
-		}
-		else if board[it.end] != -1 {
-			if player_color == BLACK evaluation_list[it_index] = evaluate_white(state, pieces[board[it.end]]) - evaluate_black(state, pieces[it.piece_index])
-			else                     evaluation_list[it_index] = evaluate_black(state, pieces[board[it.end]]) - evaluate_white(state, pieces[it.piece_index])
-		} else if depth > 5 {
-			new_state := do_move(state, it)
-			evaluation_list[it_index] = -quiesce(new_state, -beta, -alpha) - 100 // offset so captures will always be ahead
-		} else {
 		
-			evaluation_list[it_index] = -10000
+		if it.piece_index == killer_move.piece_index && it.end == killer_move.end {
+			evaluation_list[it_index] += 5000
+		} 
+		
+		if it.piece_index == old_killer_move.piece_index && it.end == old_killer_move.end {
+			evaluation_list[it_index] += 4000
+		} 
+		
+		if board[it.end] != -1 {
+			if player_color == BLACK evaluation_list[it_index] += 1000 + evaluate_white(state, pieces[board[it.end]]) - evaluate_black(state, pieces[it.piece_index])
+			else                     evaluation_list[it_index] += 1000 + evaluate_black(state, pieces[board[it.end]]) - evaluate_white(state, pieces[it.piece_index])
+		//} else if depth > 5 {
+		//	new_state := do_move(state, it)
+		//	evaluation_list[it_index] = -quiesce(new_state, -beta, -alpha) - 100 // offset so captures will always be ahead
 		}
+		
+		if it.piece_index == counter_move.piece_index && it.end == counter_move.end {
+			evaluation_list[it_index] += 1000
+		}
+		
+		evaluation_list[it_index] += history[cast(Piece.integer) pieces[it.piece_index].piece][it.end]
 	}
 
 	for moves {
@@ -850,13 +1059,14 @@ evaluate_position :: (using state: State) -> f32 {
 	else return evaluation
 }
 
-max_moves: u64 = 100_000
+max_moves: u64 = 500_000
 
 quiesce :: (using state: State, alpha: f32, beta: f32, depth := 0) -> f32 {
 	if moves_explored == max_moves  return 0
+
 	
 	key := hash(state)
-	
+
 	entry := *transposition_table[key & (transposition_table.count - 1)]
 	
 	current_alpha := alpha
@@ -885,7 +1095,9 @@ quiesce :: (using state: State, alpha: f32, beta: f32, depth := 0) -> f32 {
 	if stand_pat >= beta {
 		stats.beta_cutoffs += 1
 		return beta
-	} if current_alpha < stand_pat
+	}
+	
+	if current_alpha < stand_pat
 		current_alpha = stand_pat
 	
 	
@@ -904,20 +1116,21 @@ quiesce :: (using state: State, alpha: f32, beta: f32, depth := 0) -> f32 {
 	
 	best_move: Move
 	
-	
 	for <<legal_moves {
-		new_state := do_move(state, it)
+		new_state, valid := checked_do_move(state, it)
 		
-		value := -quiesce(new_state, -beta, -current_alpha, depth + 1)
-	
-		if value > current_alpha {
-			best_move = it
-			current_alpha = value
-		}
-	
-		if current_alpha >= beta {
-			stats.beta_cutoffs += 1
-			return beta
+		if valid {
+			value := -quiesce(new_state, -beta, -current_alpha, depth + 1)
+		
+			if value > current_alpha {
+				best_move = it
+				current_alpha = value
+			}
+		
+			if current_alpha >= beta {
+				stats.beta_cutoffs += 1
+				return beta
+			}
 		}
 	}
 
@@ -925,6 +1138,7 @@ quiesce :: (using state: State, alpha: f32, beta: f32, depth := 0) -> f32 {
 }
 
 repetition_table: [1024]u64
+repetition_count: u32
 
 check_for_repetition :: (key_: u64) -> (repeated: bool, index: u64) {
 	key := key_
@@ -941,7 +1155,7 @@ check_for_repetition :: (key_: u64) -> (repeated: bool, index: u64) {
 		slot &= repetition_table.count - 1
 	}
 	
-	
+	repetition_count += 1
 	repetition_table[slot] = key
 	return false, slot
 }
@@ -950,6 +1164,8 @@ remove_repetition :: (slot: u64) {
 	
 	repetition_table[slot] = 0
 	
+	repetition_count -= 1
+
 	i := slot
 	
 	j := i
@@ -1042,52 +1258,50 @@ stats: struct {
 minimax :: (using state: State, depth: s8, alpha: f32 = -1e9, beta: f32 = 1e9) -> (f32, Move) {
 	if moves_explored == max_moves  return 0, .{}
 	
-	alpha_orig := alpha
+	current_alpha := alpha
+	current_beta := beta
 	
 	key := hash(state)
 	
+	repeated, repetition_stored := check_for_repetition(key)
+	
+	if repeated
+		return 0, .{-1}
+
+	defer remove_repetition(repetition_stored)
+	
 	entry := *transposition_table[key & (transposition_table.count - 1)]
 	
-	current_beta  := beta
-	if entry.hash == key && entry.depth >= depth {
+
+	current_depth := depth
+	
+	if entry.hash == key && entry.depth >= current_depth {
 		stats.transpositions_matched += 1
 	
 		if entry.kind == .EXACT {
 			return entry.value, entry.move
 		} else if entry.kind == .LOWER_BOUND {
-			alpha_orig = max(entry.value, alpha_orig)
+			current_alpha = max(entry.value, current_alpha)
 		} else if entry.kind == .UPPER_BOUND {
 			current_beta = min(current_beta, entry.value)
 		}
 		
-		if alpha_orig >= current_beta {
+		if current_alpha >= current_beta {
 			stats.beta_cutoffs += 1
 			return entry.value, entry.move
 		}
 	}
 	
-	current_alpha := alpha_orig
-	
-	best_move_value: f32 = -1e9
 	best_move := Move.{-1}
+	best_move_value: f32 = -1e12
 	
-	defer {
-		if depth >= entry.depth {
-			entry.value = best_move_value
-			entry.hash = key
-			entry.depth = depth
-			entry.move = best_move
-			
-			if best_move_value <= alpha_orig
-				entry.kind = .UPPER_BOUND
-			else if best_move_value >= current_beta
-				entry.kind = .LOWER_BOUND
-			else
-				entry.kind = .EXACT
-		}
-	}
-
-	legal_moves := *legal_moves_list[depth]
+	
+	player_king := pieces[WHITE_KING_INDEX].location
+	
+	if player_color == BLACK player_king = pieces[BLACK_KING_INDEX].location
+	in_check := look_for_checks(state, player_king, player_color)
+	
+	legal_moves := *legal_moves_list[current_depth]
 	legal_moves.count = 0
 	
 	if player_color == BLACK {
@@ -1100,15 +1314,62 @@ minimax :: (using state: State, depth: s8, alpha: f32 = -1e9, beta: f32 = 1e9) -
 		}
 	}
 	
-	player_king := pieces[WHITE_KING_INDEX].location
+	if current_depth <= 0 {
+		best_move_value = quiesce(state, alpha, beta)
+		
+		return best_move_value, best_move
+	}
 	
-	if player_color == BLACK player_king = pieces[BLACK_KING_INDEX].location
-	in_check := look_for_checks(state, player_king, player_color)
+	if current_depth >= 1
+		order_moves(state, <<legal_moves, entry.move, current_depth, current_alpha, current_beta)
 	
-	if !legal_moves.count {
+	had_legal: bool
 	
+	for <<legal_moves {
+		new_state, valid := checked_do_move(state, it)
+		
+		if valid {
+			had_legal = true
+			
+			value: f32
+			
+			if it_index == 0 {
+				value = -minimax(new_state, current_depth - 1, -current_beta, -current_alpha)
+			} else {
+				value = -minimax(new_state, current_depth - 1, -current_alpha - 0.005, -current_alpha)
+				
+				if current_alpha < value && value < current_beta {
+					value = -minimax(new_state, current_depth - 1, -current_beta, -current_alpha)
+				}
+			}
+			
+			history_location := *history[cast(Piece.integer) pieces[it.piece_index].piece][it.end]
+			if value > best_move_value {
+				best_move = it
+				best_move_value = value
+				add_history(history_location, 0.01 * cast(f32) depth)
+			} else {
+				remove_history(history_location, 0.01 * cast(f32) depth)
+			}
+
+			current_alpha = max(current_alpha, value)
+		
+			if current_alpha >= current_beta {
+				old_killer_moves[depth] = killer_moves[depth]
+				killer_moves[depth] = it
+				counter_moves[previous_move.piece_index][previous_move.end] = it
+				
+				add_history(history_location, 0.01 * cast(f32) depth * cast(f32) depth)
+			
+				stats.beta_cutoffs += 1
+				break
+			}
+		}
+	}
+	
+	if !had_legal {
 		if in_check {
-			best_move_value = -(1e3 - 0.001 * cast(f32) move_count)
+			best_move_value = -(1e3 - 0.1 * cast(f32) move_count)
 			return best_move_value, best_move
 		} else {
 			best_move_value = 0
@@ -1116,44 +1377,17 @@ minimax :: (using state: State, depth: s8, alpha: f32 = -1e9, beta: f32 = 1e9) -
 		}
 	}
 	
-	repeated, repetition_stored := check_for_repetition(key)
-	defer if !repeated remove_repetition(repetition_stored)
+	entry.value = best_move_value
+	entry.hash = key
+	entry.depth = current_depth
+	entry.move = best_move
 	
-	if repeated {
-		best_move_value = 0
-		return best_move_value, best_move
-	}
-	
-	if depth == 0 {		
-		best_move_value = quiesce(state, alpha, beta)
-		
-		return best_move_value, best_move
-	}
-	
-	if depth >= 1
-		order_moves(state, <<legal_moves, entry.move, depth, current_alpha, current_beta)
-	
-	for <<legal_moves {
-		new_state := do_move(state, it)
-		
-		value := -minimax(new_state, depth - 1, -current_beta, -current_alpha)
-
-		if value > best_move_value {
-			best_move_value = value
-			
-			best_move = it
-		}
-		
-		current_alpha = max(value, current_alpha)
-	
-		if current_alpha >= current_beta {
-			old_killer_moves[depth] = killer_moves[depth]
-			killer_moves[depth] = it
-		
-			stats.beta_cutoffs += 1
-			break
-		}
-	}
+	if best_move_value <= alpha
+		entry.kind = .UPPER_BOUND
+	else if best_move_value >= current_beta
+		entry.kind = .LOWER_BOUND
+	else
+		entry.kind = .EXACT
 	
 	return best_move_value, best_move
 	
@@ -1437,9 +1671,36 @@ get_capture_moves_for_piece :: (using state: State, moves: *[..]Move, piece_inde
 selected_square: s8 = -1
 undo_last_move := false
 
+checked_do_move :: (using state: State, using move: Move) -> (State, #must bool) {
+	start := pieces[move.piece_index].location
+	piece := pieces[move.piece_index].piece
+	
+	
+	if piece & ~BLACK == KING {
+		distance := end - start
+		
+		if distance == -2 {
+			if look_for_checks(state, start, player_color)      return state, false
+			if look_for_checks(state, start - 1, player_color)  return state, false
+		} else if distance == 2 {
+			if look_for_checks(state, start, player_color)      return state, false
+			if look_for_checks(state, start + 1, player_color)  return state, false				
+		}
+	}
+
+	new_state := do_move(state, move)
+	player_king := new_state.pieces[WHITE_KING_INDEX].location
+	
+	if player_color == BLACK  player_king = new_state.pieces[BLACK_KING_INDEX].location
+	
+	return new_state, !look_for_checks(new_state, player_king, player_color)
+}
+
 do_move :: (state: State, using move: Move) -> State {
 	using new_state := state
 
+	previous_move = move
+	
 	piece_info := *pieces[piece_index]
 	
 	start := piece_info.location
@@ -1468,10 +1729,10 @@ do_move :: (state: State, using move: Move) -> State {
 			board[end - 1] = rook
 			board[end + 1] = -1
 		} else if distance == -2 {
-			rook := board[0]
+			rook := board[56]
 			
 			if piece & BLACK {
-				rook = board[56]
+				rook = board[0]
 			}
 			
 			pieces[rook].location = end + 1
@@ -1600,20 +1861,62 @@ hashing_data :: #run precompute_hashing_data()
 
 undo_list: [..]State
 
+history: [16][64]f32
+counter_moves: [32][64]Move
+
+add_history :: (value: *f32, bonus: f32) {
+	MAX_HISTORY_BONUS :: 10;
+	
+	<<value += bonus - <<value * bonus / MAX_HISTORY_BONUS
+}
+
+remove_history :: (value: *f32, penalty: f32) {
+	MAX_HISTORY_BONUS :: 10;
+	
+	<<value -= penalty - <<value * penalty / MAX_HISTORY_BONUS
+}
+
 select_ai_move :: () -> Move {
+	if use_book {
+		// Try and use a book move for the first 6 moves
+		if global_board.move_count < 12 {
+			key := hash(global_board)
+			
+			book := opening_table_lookup(key)
+			
+			if !book {
+				print("Position not found in opening book\n")
+			} else {
+				print("Playing book move\n")
+				return book.moves[random_u64(*rng) % book.moves.count]
+			}
+		}
+	}
+
+	old_max_moves := max_moves
+	// no limit on moves for the first iteration to make sure we always get at least 1
+	max_moves = cast() 1e9
+
 	stats = .{}
 	moves_explored = 0
 	
+	for * history {
+		for * <<it {
+			<<it = 0
+		}
+	}
 	depth := 2
-	
-	moves_explored = 0
 	value, ai_move := minimax(global_board, cast() depth)
 	
 	total_explored := moves_explored
 	
+	max_moves = old_max_moves
 	
-	while outer: moves_explored < max_moves {							
-		if depth == MAX_DEPTH  break;
+	
+	while outer: moves_explored < max_moves {
+		
+		if depth == MAX_DEPTH  
+			break;
 		
 		low_delta: f32 = 0.25
 		high_delta: f32 = 0.25
@@ -1624,21 +1927,25 @@ select_ai_move :: () -> Move {
 			
 			new_value, new_move := minimax(global_board, cast() depth, alpha, beta)
 		
-			if moves_explored >= max_moves  break outer
-			
-			if new_move.piece_index == -1 break outer
-			
-			print("Move: %\n", new_move)
+			if moves_explored >= max_moves 
+				break outer
 			
 			if new_value <= alpha {
 				print("Alpha fail\n")
 				low_delta *= 2
+				continue
 			} else if new_value >= beta {
 				print("Beta fail\n")
 				high_delta *= 2
+				continue
 			} else {
+				if new_move.piece_index == -1
+					break outer
+					
 				value = new_value
 				ai_move = new_move
+			
+				print("Move: %\n", new_move)
 				break
 			}
 		}
@@ -1646,6 +1953,7 @@ select_ai_move :: () -> Move {
 		total_explored = moves_explored
 		
 		if value <= -900 || value >= 900 {
+			print("Forced mate found\n")
 			break;
 		}
 		depth += 1
@@ -1653,7 +1961,7 @@ select_ai_move :: () -> Move {
 	
 	print("%\n", ai_move)
 	print("%\n", stats)
-	print("% moves explored at depth %\n", total_explored, depth)
+	print("% moves explored at depth %, (%)\n", total_explored, depth, moves_explored)
 	print("move valued at %\n", value)
 	
 	return ai_move
@@ -1738,17 +2046,23 @@ draw :: (moves: []Move) {
 	glColor4f(0, 1, 0, 0.4)
 	
 	for moves {
-		x, y := unpack(it.end)
+		_, valid := checked_do_move(global_board, it)
 		
-		if white_ai && !black_ai  {
-			x = 7 - x
-			y = 7 - y
+		if valid {
+			x, y := unpack(it.end)
+			
+			if white_ai && !black_ai  {
+				x = 7 - x
+				y = 7 - y
+			}
+			
+			
+			
+			glVertex2f(cast(f32) x, cast(f32) y)
+			glVertex2f(cast(f32) x + 1, cast(f32) y)
+			glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
+			glVertex2f(cast(f32) x, cast(f32) y + 1)
 		}
-		
-		glVertex2f(cast(f32) x, cast(f32) y)
-		glVertex2f(cast(f32) x + 1, cast(f32) y)
-		glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
-		glVertex2f(cast(f32) x, cast(f32) y + 1)
 	}
 	
 	glEnd()
@@ -1847,11 +2161,24 @@ ai_start_semaphore: HANDLE
 ai_stop_semaphore:  HANDLE
 
 ai_thread_proc :: (userdata: *void) -> u32 #c_call {
+	performance_counter_frequency: s64
+	
+	QueryPerformanceFrequency(*performance_counter_frequency)
+	
+	counter_scale := 1.0 / cast(f32) performance_counter_frequency
+
 	ai_move := cast(*Move) userdata
 	while true {
 		WaitForSingleObject(ai_start_semaphore);
 		
+		start_time: s64
+		end_time: s64
+		
+		QueryPerformanceCounter(*start_time);
 		<<ai_move = select_ai_move()
+		QueryPerformanceCounter(*end_time)
+		
+		print("Move took % s\n", cast() (end_time - start_time) * counter_scale)
 		
 		ReleaseSemaphore(ai_stop_semaphore)
 	}
@@ -1859,8 +2186,13 @@ ai_thread_proc :: (userdata: *void) -> u32 #c_call {
 	return 0
 }
 
+STARTING_BOARD :: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+
+use_book := true
+
 main :: () {
 	defer exit(0)
+	
 	
 	ai_start_semaphore = CreateSemaphoreA(lMaximumCount = 1)
 	ai_stop_semaphore  = CreateSemaphoreA(lMaximumCount = 1)
@@ -1871,7 +2203,7 @@ main :: () {
 
 	arguments := get_command_line_arguments()
 	
-	fen := "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+	fen := STARTING_BOARD
 	
 	
 	for arguments[1..] {
@@ -1879,6 +2211,8 @@ main :: () {
 			white_ai = true
 		} else if it == "-b" {
 			black_ai = true
+		} else if it == "-no_book" {
+			use_book = false
 		} else if begins_with(it, "-moves=") {
 			before, after := split_at_first(it, '=')
 			
@@ -1892,6 +2226,13 @@ main :: () {
 			before, after := split_at_first(it, '=')
 			
 			fen = after
+		}
+	}
+	
+	if use_book {
+		if !calculate_openings_table() {
+			print("Failed to read openings file\n")
+			return
 		}
 	}
 	
@@ -2106,10 +2447,12 @@ main :: () {
 		if undo_last_move {
 			undo_last_move = false
 			
-			if (!black_ai || !white_ai) && undo_list.count {
-				undo_move()
-			
-				if player_is_ai() undo_move()
+			if !making_ai_move {
+				if (!black_ai || !white_ai) && undo_list.count {
+					undo_move()
+				
+					if player_is_ai() undo_move()
+				}
 			}
 		}
 		

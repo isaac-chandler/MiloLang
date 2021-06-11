@@ -167,6 +167,14 @@ array_add :: (array: *[..]$T, value: T) {
 	(<<array)[array.count - 1] = value
 }
 
+memory_clear :: (dst: *void, count: u64) {
+	memory := cast(*u8) dst
+	
+	for count {
+		memory[it] = 0
+	}
+}
+
 array_pop :: (array: *[]$T) -> T {
 	value := (<<array)[array.count - 1]
 	array.count -= 1
