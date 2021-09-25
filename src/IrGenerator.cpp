@@ -151,6 +151,9 @@ static void generateIncrement(IrState *state, ExprLoop *loop) {
 }
 
 void addLineMarker(IrState *state, Expr *expr) {
+	if (expr->flavor == ExprFlavor::BLOCK)
+		return;
+
 	Ir &ir = state->ir.add();
 
 	ir.op = IrOp::LINE_MARKER;
@@ -1346,6 +1349,61 @@ u32 generateCall(IrState *state, ExprFunctionCall *call, ExprCommaAssignment *co
 	}
 
 	auto type = static_cast<TypeFunction *>(call->function->type);
+
+	if (call->function->flags & EXPR_FUNCTION_IS_INSTRINSIC) {
+		if (call->function->valueOfDeclaration->name == "pop_count") {
+			auto argumentType = type->argumentTypes[0];
+
+			if (argumentType->flavor != TypeFlavor::INTEGER && argumentType->flavor != TypeFlavor::ENUM) {
+				reportError(call->arguments.values[0], "Error: pop_count can only operate on integers or enums");
+				return 0;
+			}
+
+			u32 argument = generateIr(state, call->arguments.values[0]);
+
+			u32 result = allocateRegister(state);
+
+			auto &ir = state->ir.add();
+			ir.op = IrOp::POP_COUNT;
+			ir.opSize = argumentType->size;
+			ir.dest = result;
+			ir.a = argument;
+			
+			return result;
+		}
+		else if (call->function->valueOfDeclaration->name == "bit_scan_forward") {
+			auto argumentType = type->argumentTypes[0];
+
+			if (argumentType->flavor != TypeFlavor::INTEGER && argumentType->flavor != TypeFlavor::ENUM) {
+				reportError(call->arguments.values[0], "Error: bit_scan_forward can only operate on integers or enums");
+				return 0;
+			}
+
+			u32 argument = generateIr(state, call->arguments.values[0]);
+
+			u32 resultIndex = allocateRegister(state);
+			u32 resultZero = allocateRegister(state);
+
+			auto &ir = state->ir.add();
+			ir.op = IrOp::BIT_SCAN_FORWARD;
+			ir.opSize = argumentType->size;
+			ir.dest = resultIndex;
+			ir.b = resultZero;
+			ir.a = argument;
+
+			if (comma && comma->exprCount >= 2) {
+				u32 zeroAddress = loadAddressOf(state, comma->left[1]);
+
+				memop(state, IrOp::WRITE, zeroAddress, resultZero, TYPE_BOOL.size);
+			}
+
+			return resultIndex;
+		}
+		else {
+			reportError(call, "Error: Call to unknown intrinsic function: %.*s", STRING_PRINTF(call->function->valueOfDeclaration->name));
+			return 0;
+		}
+	}
 
 	u32 bigReturn = !isStandardSize(type->returnTypes[0]->size);
 

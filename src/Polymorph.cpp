@@ -497,7 +497,7 @@ ExprFunction *polymorph(ExprFunction *src) {
 	create(ExprFunction);
 	copyingFunctions.add({ dest, src });
 	copyExprInfo(dest, src);
-	dest->valueOfDeclaration = nullptr;
+	//dest->valueOfDeclaration = nullptr;
 	dest->flags &= ~EXPR_FUNCTION_IS_POLYMORPHIC;
 	dest->type = nullptr;
 

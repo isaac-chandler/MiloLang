@@ -1,4 +1,5 @@
 #import "Standard"
+#import "String"
 #import "Compiler"
 
 print :: (value: any) {
@@ -14,6 +15,9 @@ print :: (value: u8) {
 }
 
 main :: () {
+	string_buffer: [..]u8
+
+	append(*string_buffer, 'a')
 	
 	print("Hello World\n")
 	

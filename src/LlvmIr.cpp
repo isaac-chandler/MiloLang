@@ -794,6 +794,44 @@ llvm::Value *loadAddressOf(State *state, Expr *expr) {
 static llvm::Value *generateLlvmCall(State *state, ExprFunctionCall *call, ExprCommaAssignment *comma) {
 	auto function = static_cast<TypeFunction *>(call->function->type);
 
+	if (call->function->flags & EXPR_FUNCTION_IS_INSTRINSIC) {
+		if (call->function->valueOfDeclaration->name == "pop_count") {
+			auto argumentType = function->argumentTypes[0];
+
+			if (argumentType->flavor != TypeFlavor::INTEGER && argumentType->flavor != TypeFlavor::ENUM) {
+				reportError(call->arguments.values[0], "Error: pop_count can only operate on integers or enums");
+				return 0;
+			}
+
+			auto argument = generateLlvmIr(state, call->arguments.values[0]);
+
+			return state->builder.CreateIntrinsic(llvm::Intrinsic::ctpop, { getLlvmType(state->context, argumentType) }, { argument });
+		}
+		else if (call->function->valueOfDeclaration->name == "bit_scan_forward") {
+			auto argumentType = function->argumentTypes[0];
+
+			if (argumentType->flavor != TypeFlavor::INTEGER && argumentType->flavor != TypeFlavor::ENUM) {
+				reportError(call->arguments.values[0], "Error: bit_scan_forward can only operate on integers or enums");
+				return 0;
+			}
+
+			auto argument = generateLlvmIr(state, call->arguments.values[0]);
+
+			auto resultIndex = state->builder.CreateIntrinsic(llvm::Intrinsic::cttz, { getLlvmType(state->context, argumentType) }, 
+				{ argument, llvm::ConstantInt::get(llvm::Type::getInt1Ty(state->context), 1) });
+
+			if (comma && comma->exprCount >= 2) {
+				state->builder.CreateStore(state->builder.CreateICmpEQ(argument, llvm::ConstantInt::get(argument->getType(), 0)), loadAddressOf(state, comma->left[1]));
+			}
+
+			return resultIndex;
+		}
+		else {
+			reportError(call, "Error: Call to unknown intrinsic function: %.*s", STRING_PRINTF(call->function->valueOfDeclaration->name));
+			return 0;
+		}
+	}
+
 	u64 paramOffset = 0;
 	auto return_ = function->returnTypes[0];
 

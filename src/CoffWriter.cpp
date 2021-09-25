@@ -1711,6 +1711,66 @@ void runCoffWriter() {
 
 					storeFromIntRegister(function, ir.opSize, ir.dest, RAX);
 				} break;
+				case IrOp::POP_COUNT: {
+					loadIntoIntRegister(function, ir.opSize, RAX, ir.a);
+
+					// There is no 8 bit version of popcnt
+					if (ir.opSize == 1) {
+						code.add1Unchecked(0x66); // movzx ax, al
+						code.add1Unchecked(0x0f);
+						code.add1Unchecked(0xb6);
+						code.add1Unchecked(0xc0);
+					}
+
+					if (ir.opSize == 8) {
+						code.add1Unchecked(0x48);
+						code.add1Unchecked(0xf3);
+					}
+					else if (ir.opSize <= 2) {
+						code.add1Unchecked(0xf3);
+						code.add1Unchecked(0x66);
+					}
+					else {
+						code.add1Unchecked(0x66);
+					}
+
+					code.add1Unchecked(0x0F);
+					code.add1Unchecked(0xB8);
+					code.add1Unchecked(0xC0);
+
+					storeFromIntRegister(function, ir.opSize, ir.dest, RAX);
+				} break;
+				case IrOp::BIT_SCAN_FORWARD: {
+					loadIntoIntRegister(function, ir.opSize, RAX, ir.a);
+
+					// There is no 8 bit version of bsf
+					if (ir.opSize == 1) {
+						code.add1Unchecked(0x66); // movzx ax, al
+						code.add1Unchecked(0x0f);
+						code.add1Unchecked(0xb6);
+						code.add1Unchecked(0xc0);
+					}
+
+					if (ir.opSize == 8) {
+						code.add1Unchecked(0x48);
+						code.add1Unchecked(0xf3);
+					}
+					else if (ir.opSize <= 2) {
+						code.add1Unchecked(0xf3);
+						code.add1Unchecked(0x66);
+					}
+					else {
+						code.add1Unchecked(0x66);
+					}
+
+					code.add1Unchecked(0x0F);
+					code.add1Unchecked(0xBC);
+					code.add1Unchecked(0xC0);
+					
+					storeFromIntRegister(function, ir.opSize, ir.dest, RAX);
+
+					setCondition(function, ir.b, C_Z);
+				} break;
 				case IrOp::SHIFT_LEFT: {
 					loadIntoIntRegister(function, ir.opSize, RAX, ir.a);
 					loadIntoIntRegister(function, ir.opSize, RCX, ir.b);

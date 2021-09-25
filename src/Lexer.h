@@ -120,7 +120,8 @@ enum class TokenT : u8 {
 	SCOPE_MODULE, 
 	SCOPE_EXPORT, 
 	C_VARARGS, 
-	IS_CONSTANT
+	IS_CONSTANT, 
+	INTRINSIC
 };
 
 struct Token {

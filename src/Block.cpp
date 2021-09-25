@@ -178,6 +178,7 @@ bool checkForRedeclaration(Block *block, Declaration *declaration, Declaration *
 				if (previous->flags & DECLARATION_OVERLOADS_LOCKED) {
 					if (using_) {
 						reportError(declaration, "Error: Cannot import an overload into an overload set that has already been used", STRING_PRINTF(declaration->name));
+						reportError(using_, "   ..: Here is the import location");
 					}
 					else {
 						reportError(declaration, "Error: Cannot add an overload to an overload set that has already been used", STRING_PRINTF(declaration->name));

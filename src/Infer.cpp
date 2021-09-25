@@ -354,10 +354,11 @@ void addFunction(ExprFunction *function) {
 		addBlock(&function->arguments);
 		addBlock(&function->returns);
 
-		assert(function->body);
-		beginFlatten(&job->body, &function->body);
+		if (function->body) {
+			beginFlatten(&job->body, &function->body);
 
-		addSubJob(&job->body);
+			addSubJob(&job->body);
+		}
 	}
 
 	addSubJob(&job->header);
@@ -1505,6 +1506,11 @@ bool tryAutoCast(SubJob *job, Expr **cast, Type *castTo, bool *yield) {
 	autoCast->type = castTo;
 	autoCast->left = inferMakeTypeLiteral(autoCast->start, autoCast->end, castTo);
 
+	if (autoCast->right->flags & EXPR_FUNCTION_IS_INSTRINSIC) {
+		reportError(autoCast, "Error: Cannot cast an intrinsic function");
+		return false;
+	}
+
 	if (castTo == castFrom)
 		return true;
 
@@ -2481,6 +2487,20 @@ bool inferUnaryDotStructLiteral(SubJob *job, Type *correct, Expr *&given) {
 
 bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yield) {
 	*yield = false;
+
+	if (given->type->flavor == TypeFlavor::VOID) {
+		reportError(given, "Error: Cannot operate on a value of type void");
+		return false;
+	}
+	else if (given->type->flavor == TypeFlavor::MODULE) {
+		reportError(given, "Error: Cannot operate on a module");
+		return false;
+	}
+	else if (given->flags & EXPR_FUNCTION_IS_INSTRINSIC) {
+		reportError(given, "Error: Cannot operate on an intrinsic function");
+		return false;
+	}
+
 	if (correct != given->type) {
 		if (correct->flavor == given->type->flavor) {
 			switch (correct->flavor) {
@@ -3590,6 +3610,10 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 			reportError(left, "Error: Cannot operate on a module");
 			return false;
 		}
+		else if (left->flags & EXPR_FUNCTION_IS_INSTRINSIC) {
+			reportError(left, "Error: Cannot operate on an intrinsic function");
+			return false;
+		}
 		else if (left->type == &TYPE_AUTO_CAST) {
 			// @SwitchEqualsMess
 			if (binary->flags & EXPR_EQUALS_IS_IMPLICIT_SWITCH) {
@@ -3634,6 +3658,10 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 		} 
 		else if (right->type->flavor == TypeFlavor::MODULE) {
 			reportError(right, "Error: Cannot operate on a module");
+			return false;
+		}
+		else if (right->flags & EXPR_FUNCTION_IS_INSTRINSIC) {
+			reportError(right, "Error: Cannot operate on an intrinsic function");
 			return false;
 		}
 		else if (right->type == &TYPE_AUTO_CAST) {
@@ -6933,6 +6961,7 @@ bool importDeclarationIntoModule(Block *module, Declaration *declaration, Expr *
 	import->end = declaration->end;
 	import->name = declaration->name;
 	import->flags = declaration->flags;
+	import->flags &= ~DECLARATION_OVERLOADS_LOCKED;
 
 	if (declaration->flags & DECLARATION_IMPORTED_BY_USING) {
 		import->import = declaration->import;
@@ -6951,13 +6980,11 @@ bool importDeclarationIntoModule(Block *module, Declaration *declaration, Expr *
 	return true;
 }
 
-bool maybeAddDeclarationToImports(Block *block, Declaration *declaration) {
-	assert(block->module);
+bool maybeAddDeclarationToImports(Module *module, Declaration *declaration) {
+	assert(module->members.module);
 
 	if (declaration->flags & DECLARATION_IS_MODULE_SCOPE)
 		return true;
-
-	auto module = CAST_FROM_SUBSTRUCT(Module, members, block);
 
 	for (auto import : module->imports) {
 		if (!importDeclarationIntoModule(import->enclosingScope, declaration, import->import))
@@ -7062,7 +7089,7 @@ bool addDeclaration(Declaration *declaration, Module *module) {
 
 		wakeUpSleepers(&module->members.sleepingOnMe, declaration->name);
 
-		if (!maybeAddDeclarationToImports(&module->members, declaration))
+		if (!maybeAddDeclarationToImports(module, declaration))
 			return false;
 	}
 
@@ -7310,7 +7337,8 @@ bool inferImporter(SubJob *subJob) {
 
 				do {
 					if (importer->enclosingScope->module) {
-						if (!maybeAddDeclarationToImports(importer->enclosingScope, member))
+						auto module = CAST_FROM_SUBSTRUCT(Module, members, importer->enclosingScope);
+						if (!maybeAddDeclarationToImports(module, member))
 							return false;
 					}
 
@@ -7362,6 +7390,7 @@ bool inferImporter(SubJob *subJob) {
 					import->end = member->end;
 					import->name = member->name;
 					import->flags = member->flags;
+					import->flags &= ~DECLARATION_OVERLOADS_LOCKED;
 
 					if (importer->moduleScope)
 						import->flags |= DECLARATION_IS_MODULE_SCOPE;
@@ -7387,9 +7416,11 @@ bool inferImporter(SubJob *subJob) {
 
 					assert(import->name.length);
 
-					if (importer->enclosingScope->module)
-						if (!maybeAddDeclarationToImports(importer->enclosingScope, import))
+					if (importer->enclosingScope->module) {
+						auto module = CAST_FROM_SUBSTRUCT(Module, members, importer->enclosingScope);
+						if (!maybeAddDeclarationToImports(module, import))
 							return false;
+					}
 				} while (member = member->nextOverload);
 
 				wakeUpSleepers(&importer->enclosingScope->sleepingOnMe, oldMember->name);
@@ -7642,6 +7673,11 @@ bool inferDeclarationValue(SubJob *subJob) {
 				return false;
 			}
 
+			if (!(declaration->flags & DECLARATION_IS_CONSTANT) && (declaration->initialValue->flags & EXPR_FUNCTION_IS_INSTRINSIC)) {
+				reportError(declaration, "Error: An intrinsic function cannot be assigned to a variable");
+				return false;
+			}
+
 			declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, declaration->initialValue->type);
 
 			removeJob(&declarationJobs, job);
@@ -7724,12 +7760,15 @@ bool inferFunctionHeader(SubJob *subJob) {
 
 	auto function = job->function;
 
+	if (function->flags & EXPR_FUNCTION_IS_INSTRINSIC) {
+		if (!function->valueOfDeclaration || !function->valueOfDeclaration->name) {
+			reportError(function, "Error: Instrinsic functions cannot be anonymous");
+			return false;
+		}
+	}
+
 	if (function->flags & EXPR_FUNCTION_IS_POLYMORPHIC) {
 		function->type = &TYPE_POLYMORPHIC_FUNCTION;
-
-		removeJob(&functionJobs, job);
-		function->sleepingOnInfer.free();
-		freeJob(job);
 	}
 	else {
 		bool sleep = false;
@@ -7743,8 +7782,6 @@ bool inferFunctionHeader(SubJob *subJob) {
 				sleep = true;
 			}
 		}
-
-
 
 		for (auto return_ : function->returns.declarations) {
 			assert(return_);
@@ -7776,6 +7813,12 @@ bool inferFunctionHeader(SubJob *subJob) {
 		wakeUpSleepers(&function->valueOfDeclaration->sleepingOnMyValue);
 		function->valueOfDeclaration->sleepingOnMyType.free();
 		function->valueOfDeclaration->sleepingOnMyValue.free();
+	}
+
+	if ((function->flags & EXPR_FUNCTION_IS_POLYMORPHIC) || !function->body) {
+		removeJob(&functionJobs, job);
+		function->sleepingOnInfer.free();
+		freeJob(job);
 	}
 
 	if (!function->constants.declarations.count) {

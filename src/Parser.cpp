@@ -248,66 +248,65 @@ Expr *parseExprStatemenet(LexerFile *lexer, bool allowDeclarations) {
 		Array<Expr *> exprs;
 		exprs.add(expr);
 
-		while (true) {
-			comma->start = lexer->token.start;
+		do {
+			Expr *expr = parseExpr(lexer);
+
+			if (!expr)
+				return nullptr;
+
+			exprs.add(expr);
+		} while (expectAndConsume(lexer, ','));
+
+		comma->start = lexer->token.start;
+		comma->end = lexer->token.end;
+
+		if (expectAndConsume(lexer, '=')) {
+			comma->call = parseExpr(lexer);
+		}
+		else if (expectAndConsume(lexer, ':')) {
+			if (!allowDeclarations) {
+				reportError(&lexer->token, "Error: Cannot have a declaration here");
+				return nullptr;
+			}
+
+			comma->flags |= EXPR_COMMA_ASSIGNMENT_IS_DECLARATION;
 			comma->end = lexer->token.end;
 
-			if (expectAndConsume(lexer, '=')) {
-				comma->call = parseExpr(lexer);
-
-				break;
+			if (!expectAndConsume(lexer, '=')) {
+				reportExpectedError(&lexer->token, "Error: Expected = after : in multi declaration");
+				return nullptr;
 			}
-			else if (expectAndConsume(lexer, ':')) {
-				if (!allowDeclarations) {
-					reportError(&lexer->token, "Error: Cannot have a declaration here");
+
+			comma->call = parseExpr(lexer);
+
+			for (auto expr : exprs) {
+				if (expr->flavor != ExprFlavor::IDENTIFIER) {
+					reportError(expr, "Error: Multi-declarations must only assign to identifiers");
 					return nullptr;
 				}
 
-				comma->flags |= EXPR_COMMA_ASSIGNMENT_IS_DECLARATION;
-				comma->end = lexer->token.end;
+				auto identifier = static_cast<ExprIdentifier *>(expr);
 
-				if (!expectAndConsume(lexer, '=')) {
-					reportExpectedError(&lexer->token, "Error: Expected = after : in multi declaration");
+				auto declaration = PARSER_NEW(Declaration);
+
+				declaration->start = identifier->start;
+				declaration->end = identifier->end;
+				declaration->name = identifier->name;
+				declaration->flags |= DECLARATION_IS_IN_COMPOUND;
+				declaration->type = nullptr;
+				declaration->initialValue = nullptr;
+				declaration->physicalStorage = 0;
+
+				if (!addDeclarationToBlock(lexer->currentBlock, declaration, lexer->identifierSerial++)) {
 					return nullptr;
 				}
 
-				comma->call = parseExpr(lexer);
-
-				for (auto expr : exprs) {
-					if (expr->flavor != ExprFlavor::IDENTIFIER) {
-						reportError(expr, "Error: Multi-declarations must only assign to identifiers");
-						return nullptr;
-					}
-
-					auto identifier = static_cast<ExprIdentifier *>(expr);
-
-					auto declaration = PARSER_NEW(Declaration);
-
-					declaration->start = identifier->start;
-					declaration->end = identifier->end;
-					declaration->name = identifier->name;
-					declaration->flags |= DECLARATION_IS_IN_COMPOUND;
-					declaration->type = nullptr;
-					declaration->initialValue = nullptr;
-					declaration->physicalStorage = 0;
-
-					if (!addDeclarationToBlock(lexer->currentBlock, declaration, lexer->identifierSerial++)) {
-						return nullptr;
-					}
-
-					identifier->declaration = declaration;
-				}
-
-				break;
+				identifier->declaration = declaration;
 			}
-			else {
-				expr = parseExpr(lexer);
-
-				if (!expr)
-					return nullptr;
-
-				exprs.add(expr);
-			}
+		}
+		else {
+			reportExpectedError(&lexer->token, "Error: Expected ',', '=' or ':=' in multi-assignment");
+			return nullptr;
 		}
 
 		if (comma->call->flavor != ExprFlavor::FUNCTION_CALL) {
@@ -1433,6 +1432,33 @@ ExprFunction *parseFunctionOrFunctionType(LexerFile *lexer, CodeLocation start, 
 			return nullptr;
 		}
 	}
+	else if (allowBody && lexer->token.type == TokenT::INTRINSIC) {
+		if (function->constants.declarations.count) {
+			function->flags |= EXPR_FUNCTION_IS_POLYMORPHIC;
+		}
+
+		if (function->flags & EXPR_FUNCTION_IS_C_CALL) {
+			reportError(function, "Error: Intrinsic functions cannot be marked as #c_call");
+			return nullptr;
+		}
+
+		if (function->flags & EXPR_FUNCTION_IS_COMPILER) {
+			reportError(function, "Error: Intrinsic functions cannot be marked as #compiler");
+			return nullptr;
+		}
+
+		if (usingBlock) {
+			reportError(function, "Error: Intrinsic functions cannot 'using' their parameters");
+			return nullptr;
+		}
+		lexer->advance();
+
+		function->flags |= EXPR_FUNCTION_IS_INSTRINSIC;
+		function->flavor = ExprFlavor::FUNCTION;
+		function->body = nullptr;
+
+
+	}
 	else if (allowBody && lexer->token.type == TokenT::EXTERNAL) {
 		if (function->constants.declarations.count) {
 			reportError(function, "Error: External functions cannot be polymorphic");
@@ -1443,7 +1469,7 @@ ExprFunction *parseFunctionOrFunctionType(LexerFile *lexer, CodeLocation start, 
 
 		function->flavor = ExprFlavor::FUNCTION;
 
-		if (function->flags & EXPR_FUNCTION_IS_EXTERNAL) {
+		if (function->flags & EXPR_FUNCTION_IS_COMPILER) {
 			reportError(function, "Error: Compiler functions cannot be external");
 			return nullptr;
 		}
