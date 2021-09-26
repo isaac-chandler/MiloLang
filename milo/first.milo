@@ -1,5 +1,11 @@
 #import "Compiler"
 
 #run {
+	options := get_build_options()
+	
+	options.output_name = "milo"
+	
+	set_build_options(options)
+
 	add_build_file("main.milo")
 }

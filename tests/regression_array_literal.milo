@@ -1,0 +1,9 @@
+#import "Standard"
+
+main :: () {
+	for string.["s8"] {
+		print("%\n", it)
+	}
+}
+
+#run main()

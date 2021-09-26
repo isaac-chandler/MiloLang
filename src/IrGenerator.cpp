@@ -536,7 +536,23 @@ u32 loadAddressOf(IrState *state, Expr *expr, u32 offset = 0) {
 	}
 	else {
 		assert(isStoredByPointer(expr->type));
-		return generateIr(state, expr);
+		u32 address = generateIr(state, expr);
+
+		if (offset) {
+			u32 result = allocateRegister(state);
+
+			Ir &add = state->ir.add();
+			add.op = IrOp::ADD_CONSTANT;
+			add.opSize = 8;
+			add.dest = result;
+			add.a = address;
+			add.immediate = offset;
+
+			return result;
+		}
+		else {
+			return address;
+		}
 	}
 }
 
@@ -762,44 +778,53 @@ u32 generateMathBinaryOp(IrState *state, ExprBinaryOperator *binary) {
 	return result;
 }
 
-void generateAssignBinaryOp(IrState *state, ExprBinaryOperator *binary) {
+struct RMWInfo {
+	u32 address;
+	u32 value;
+};
 
-	if (binary->left->flavor == ExprFlavor::IDENTIFIER) {
-		auto identifier = static_cast<ExprIdentifier *>(binary->left);
+RMWInfo readForRMW(IrState *state, Expr *expr) {
+	RMWInfo result;
+
+	if (expr->flavor == ExprFlavor::IDENTIFIER) {
+		auto identifier = static_cast<ExprIdentifier *>(expr);
 
 		if (!identifier->structAccess && !declarationIsStoredByPointer(identifier->declaration)) {
+			result.value = identifier->declaration->registerOfStorage;
+			return result;
+		}
+	}
 
-			u32 rightReg = generateIr(state, binary->right);
+	assert(!isStoredByPointer(expr->type));
+	result.address = loadAddressOf(state, expr);
+	result.value = memop(state, IrOp::READ, allocateRegister(state), result.address, expr->type->size);
 
-			Ir &ir = state->ir.add();
-			ir.op = getOpForBinary(binary->op);
-			ir.dest = identifier->declaration->registerOfStorage;
-			ir.a = identifier->declaration->registerOfStorage;
-			ir.b = rightReg;
-			ir.opSize = binary->right->type->size;
+	return result;
+}
 
-			if (binary->left->type->flavor == TypeFlavor::FLOAT) {
-				ir.flags |= IR_FLOAT_OP;
-			}
+void writeForRMW(IrState *state, Expr *expr, RMWInfo registers) {
+	if (expr->flavor == ExprFlavor::IDENTIFIER) {
+		auto identifier = static_cast<ExprIdentifier *>(expr);
 
-			if (binary->left->type->flags & TYPE_INTEGER_IS_SIGNED) {
-				assert(binary->right->type->flags & TYPE_INTEGER_IS_SIGNED);
-
-				ir.flags |= IR_SIGNED_OP;
-			}
-
+		if (!identifier->structAccess && !declarationIsStoredByPointer(identifier->declaration)) {
+			// No op, result has already been written here
 			return;
 		}
 	}
-	u32 address = loadAddressOf(state, binary->left);
-	u32 result = memop(state, IrOp::READ, allocateRegister(state), address, binary->left->type->size);
+
+	assert(!isStoredByPointer(expr->type));
+	memop(state, IrOp::WRITE, registers.address, registers.value, expr->type->size);
+}
+
+void generateAssignBinaryOp(IrState *state, ExprBinaryOperator *binary) {
+	RMWInfo registers = readForRMW(state, binary->left);
 
 	u32 rightReg = generateIr(state, binary->right);
 
 	Ir &ir = state->ir.add();
 	ir.op = getOpForBinary(binary->op);
-	ir.dest = result;
-	ir.a = result;
+	ir.dest = registers.value;
+	ir.a = registers.value;
 	ir.b = rightReg;
 	ir.opSize = binary->right->type->size;
 
@@ -813,9 +838,7 @@ void generateAssignBinaryOp(IrState *state, ExprBinaryOperator *binary) {
 		ir.flags |= IR_SIGNED_OP;
 	}
 
-	memop(state, IrOp::WRITE, address, result, binary->left->type->size);
-
-	
+	writeForRMW(state, binary->left, registers);
 }
 
 u32 generateEquals(IrState *state, u32 leftReg, Expr *right, bool equals) {
@@ -1004,8 +1027,7 @@ u32 generateBinary(IrState *state, ExprBinaryOperator *binary) {
 		if (left->type->flavor == TypeFlavor::POINTER) {
 			auto pointer = static_cast<TypePointer *>(left->type);
 
-			u32 address = loadAddressOf(state, left);
-			u32 leftReg = memop(state, IrOp::READ, allocateRegister(state), address, 8);
+			RMWInfo registers = readForRMW(state, left);
 			u32 offset = generateIr(state, right);
 
 			if (pointer->pointerTo->size != 1) {
@@ -1024,12 +1046,12 @@ u32 generateBinary(IrState *state, ExprBinaryOperator *binary) {
 
 			Ir &add = state->ir.add();
 			add.op = IrOp::ADD;
-			add.dest = leftReg;
-			add.a = leftReg;
+			add.dest = registers.value;
+			add.a = registers.value;
 			add.b = offset;
 			add.opSize = 8;
 
-			memop(state, IrOp::WRITE, address, leftReg, 8);
+			writeForRMW(state, left, registers);
 			return 0;
 		}
 		else {

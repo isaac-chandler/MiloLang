@@ -6,7 +6,6 @@
 #import "File"
 #import "String"
 #import "Thread"
-#import "Intrinsics"
 
 should_quit: bool
 
@@ -166,10 +165,12 @@ calculate_openings_table :: () -> bool {
 			
 			move_info: Move
 			if move == "O-O" {
-				move_info.piece = get_piece_of_color(BLACK_KING, player_color)
-				
-				move_info.start = find_first_piece(move_info.piece)
-				move_info.end = move_info.start + 2
+				if player_color == BLACK {
+					move_info.piece_index = BLACK_KING_INDEX
+				} else {
+					move_info.piece_index = WHITE_KING_INDEX					
+				}
+				move_info.end = pieces[move_info.piece_index].location + 2
 
 				new_state, valid := checked_do_move(state, move_info)
 						
@@ -178,10 +179,12 @@ calculate_openings_table :: () -> bool {
 				else 
 					return false
 			} else if move == "O-O-O" {
-				move_info.piece = get_piece_of_color(BLACK_KING, player_color)
-				
-				move_info.start = find_first_piece(move_info.piece)
-				move_info.end = move_info.start + 2
+				if player_color == BLACK {
+					move_info.piece_index = BLACK_KING_INDEX
+				} else {
+					move_info.piece_index = WHITE_KING_INDEX					
+				}
+				move_info.end = pieces[move_info.piece_index].location - 2
 
 				new_state, valid := checked_do_move(state, move_info)
 						
@@ -189,12 +192,14 @@ calculate_openings_table :: () -> bool {
 					state = new_state
 				else 
 					return false
-			} else {				
+			} else {
+				piece := player_color
+				
 				file: s8 = -1
 				rank: s8 = -1
 				
 				if 'a' <= move[0] && move[0] <= 'h' {
-					move_info.piece = get_piece_of_color(BLACK_PAWN, player_color)
+					piece |= PAWN
 				
 					file = cast() (move[0] - 'a')
 					
@@ -203,20 +208,19 @@ calculate_openings_table :: () -> bool {
 					}
 				} else if move[0] == 'R' {
 					move = move[1..]
-					move_info.piece = get_piece_of_color(BLACK_ROOK, player_color)
+					piece |= ROOK
 				} else if move[0] == 'N' {
 					move = move[1..]
-					move_info.piece = get_piece_of_color(BLACK_KNIGHT, player_color)
+					piece |= KNIGHT
 				} else if move[0] == 'B' {
 					move = move[1..]
-					move_info.piece = get_piece_of_color(BLACK_BISHOP, player_color)
+					piece |= BISHOP
 				} else if move[0] == 'K' {
 					move = move[1..]
-					move_info.piece = get_piece_of_color(BLACK_KING, player_color)
+					piece |= KING
 				} else if move[0] == 'Q' {
 					move = move[1..]
 					piece |= QUEEN
-					move_info.piece = get_piece_of_color(BLACK_QUEEN, player_color)
 				} else {
 					return false
 				}
@@ -234,12 +238,11 @@ calculate_openings_table :: () -> bool {
 				if move.count != 2
 					return false
 				
-				move_info.end = pack(cast() (move[0] - 'a'), cast() (7 - (move[1] - '1')))
+				end := pack(cast() (move[0] - 'a'), cast() (7 - (move[1] - '1')))
 				
-				location, found, piece_mask := find_first_piece(cast(Piece.integer) move_info.piece)
-				
-				while found {
-					defer location, found, piece_mask = find_first_piece(piece_mask)
+				for p: pieces {
+					if p.location == -1 || p.piece != piece 
+						continue;
 					
 					x, y := unpack(p.location)
 					
@@ -248,15 +251,15 @@ calculate_openings_table :: () -> bool {
 					
 					legal_moves.count = 0
 					
-					get_moves_for_piece(state, *legal_moves, move_info.piece, move_info.start)
+					get_moves_for_piece(state, *legal_moves, cast() it_index)
 					
 					for legal_moves {
-						if it.end != move_info.end  continue;
+						if it.end != end  continue;
 						new_state, valid := checked_do_move(state, it)
 						
 						if valid {
 							state = new_state
-							move_info.start = location
+							move_info = it
 						
 							break p
 						}
@@ -299,46 +302,20 @@ unpack :: (postion: s8) -> (s8, s8) {
 }
 
 Move :: struct {
-	start: s8
-	piece: Piece
+	piece_index: s8
 	end: s8
 }
 
-using Piece :: enum u8 {
-	NONE :: 0
-	BLACK_ROOK   :: 1
-	BLACK_KNIGHT :: 2
-	BLACK_BISHOP :: 3
-	BLACK_QUEEN  :: 4
-	BLACK_KING   :: 5
-	BLACK_PAWN   :: 6
-	WHITE_ROOK   :: 7
-	WHITE_KNIGHT :: 8
-	WHITE_BISHOP :: 9
-	WHITE_QUEEN  :: 10
-	WHITE_KING   :: 11
-	WHITE_PAWN   :: 12
+using Piece :: enum_flags u8 {
+	ROOK   :: 0x1
+	BISHOP :: 0x2
+	QUEEN  :: 0x3
+	KING   :: 0x4
+	KNIGHT :: 0x5
+	PAWN   :: 0x6
+	
+	BLACK  :: 0x8
 }
-
-using Color :: enum u8 {
-	BLACK :: 0
-	WHITE :: 1
-}
-
-get_color :: (piece: Piece) -> Color {
-	if cast(Piece.integer) piece <= cast(Piece.integer) BLACK_PAWN
-		return BLACK
-	else
-		return white
-}
-
-get_other_color :: (color: Color) -> Color {
-	if color == BLACK
-		return WHITE
-	else
-		return BLACK
-}
-
 
 // @Volatile: Indices of king and rooks are hardocded below, an arbitrary board state cannot be used here
 global_board: State
@@ -353,7 +330,7 @@ print_fen :: (using state: State) {
 			if board[pos] == -1 {
 				count := 0
 			
-				while get_piece(state, pos) == NONE && x < 8 {
+				while board[pos] == -1 && x < 8 {
 					count += 1
 					x += 1
 					pos = pack(cast() x, cast() y)
@@ -361,19 +338,19 @@ print_fen :: (using state: State) {
 				
 				print("%", count)
 			} else {
-				if get_piece(state, pos) == {
-					case WHITE_ROOK    print("R")
-					case WHITE_KNIGHT  print("N")
-					case WHITE_BISHOP  print("B")
-					case WHITE_KING    print("K")
-					case WHITE_QUEEN   print("Q")
-					case WHITE_PAWN    print("P")
-					case BLACK_ROOK    print("r")
-					case BLACK_KNIGHT  print("n")
-					case BLACK_BISHOP  print("b")
-					case BLACK_KING    print("k")
-					case BLACK_QUEEN   print("q")
-					case BLACK_PAWN    print("p")
+				if pieces[board[pos]].piece == {
+					case ROOK          print("R")
+					case KNIGHT        print("N")
+					case BISHOP        print("B")
+					case KING          print("K")
+					case QUEEN         print("Q")
+					case PAWN          print("P")
+					case ROOK  |BLACK  print("r")
+					case KNIGHT|BLACK  print("n")
+					case BISHOP|BLACK  print("b")
+					case KING  |BLACK  print("k")
+					case QUEEN |BLACK  print("q")
+					case PAWN  |BLACK  print("p")
 					else assert(false)
 				}
 				
@@ -442,18 +419,18 @@ initialize_from_fen :: (fen: string) -> (State, bool) {
 		if c ==  {
 			case cast()-1
 				return .{--}, false
-			case 'R' layout[pos] = WHITE_ROOK
-			case 'N' layout[pos] = WHITE_KNIGHT
-			case 'B' layout[pos] = WHITE_BISHOP
-			case 'K' layout[pos] = WHITE_KING
-			case 'Q' layout[pos] = WHITE_QUEEN
-			case 'P' layout[pos] = WHITE_PAWN
-			case 'r' layout[pos] = BLACK_ROOK  
-			case 'n' layout[pos] = BLACK_KNIGHT
-			case 'b' layout[pos] = BLACK_BISHOP
-			case 'k' layout[pos] = BLACK_KING  
-			case 'q' layout[pos] = BLACK_QUEEN 
-			case 'p' layout[pos] = BLACK_PAWN  
+			case 'R' layout[pos] = ROOK
+			case 'N' layout[pos] = KNIGHT
+			case 'B' layout[pos] = BISHOP
+			case 'K' layout[pos] = KING
+			case 'Q' layout[pos] = QUEEN
+			case 'P' layout[pos] = PAWN
+			case 'r' layout[pos] = ROOK  |BLACK
+			case 'n' layout[pos] = KNIGHT|BLACK
+			case 'b' layout[pos] = BISHOP|BLACK
+			case 'k' layout[pos] = KING  |BLACK
+			case 'q' layout[pos] = QUEEN |BLACK
+			case 'p' layout[pos] = PAWN  |BLACK
 			case '/'
 				if x != 8  return .{}, false
 				x = 0
@@ -548,6 +525,9 @@ initialize_from_fen :: (fen: string) -> (State, bool) {
 	
 	return state, true
 }
+
+BLACK_KING_INDEX        :: 0
+WHITE_KING_INDEX        :: 16
 
 pawn_square_bonus :: f32.[
 	0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00,
@@ -651,12 +631,16 @@ State :: struct {
 	en_passant_position: s8 = -128
 	board: [64]s8
 	
-	piece_masks: [16]u64
-	color_masks:  [2]u64
-	
+	Piece_Info :: struct {
+		piece: Piece
+		location: s8
+	}
 	
 	previous_move: Move
-	player_color: Color
+	pieces: [32]Piece_Info
+	white_pawn_mask: u64
+	black_pawn_mask: u64
+	player_color: Piece
 }
 
 create_mask :: (bits: [64]u64) -> u64 {
@@ -708,10 +692,37 @@ file_mask :: #run create_mask(.[
 initialize_state :: (layout: [64]Piece) -> State {
 	using state: State
 	
+	black_index: s8 = BLACK_KING_INDEX + 1
+	white_index: s8 = WHITE_KING_INDEX + 1
+	
 	for layout {
+		if it == PAWN {
+			white_pawn_mask |= 1 << it_index
+		} else if it == PAWN|BLACK {
+			black_pawn_mask |= 1 << it_index
+		}
 		
 		if it {
-			<<get_pieces_mask(*state, it) |= 1 << it_index
+			index := white_index
+			
+
+			if it == KING {
+				index = WHITE_KING_INDEX
+			} else if it == KING|BLACK {
+				index = BLACK_KING_INDEX
+			} else if it & BLACK {
+				index = black_index
+				black_index += 1
+			} 
+			else {
+				white_index += 1
+			}
+			
+			board[it_index] = index
+			pieces[index].piece = it
+			pieces[index].location = cast() it_index
+		} else {
+			board[it_index] = -1
 		}
 	}
 	
@@ -719,17 +730,13 @@ initialize_state :: (layout: [64]Piece) -> State {
 }
 
 add_move_if_legal :: (using state: State, moves: *[..]Move, using move: Move) {
-	end_mask := 1 << cast(u64) move.end
-
-	if !(color_masks[cast(Color.integer) player_color] & end_mask) {
+	if board[end] == -1 || (move.piece_index >= 16) != (board[end] >= 16) {
 		array_add(moves, move)
 	}
 }
 
 add_capture_move_if_legal :: (using state: State, moves: *[..]Move, using move: Move) {
-	end_mask := 1 << cast(u64) move.end
-
-	if color_masks[cast(Color.integer) get_other_color(player_color)] & end_mask {
+	if board[end] != -1 && (move.piece_index >= 16) != (board[end] >= 16) {		
 		array_add(moves, move)
 	}
 }
@@ -847,32 +854,20 @@ transposition_table: [1 << 26]struct {
 	move: Move
 }
 
-Piece_Info :: struct {
-	piece: Piece
-	location: s8
-}
-
-evaluate :: (using state: State, using info: Piece_Info, endgame_weight: f32 = 0) -> f32 {
-	adjusted_location := location
-
+evaluate_black :: (using state: State, using piece: State.Piece_Info, endgame_weight: f32 = 0) -> f32 {
+	if location == -1 return 0
 	
-	if get_color(piece) == BLACK {
-		x, y := unpack(location)
-		y = 7 - y
-		adjusted_location := pack(x, y)
-	}
+	x, y := unpack(location)
+	y = 7 - y
+	flipped_location := pack(x, y)
 	
 	value: f32
 	
-	if piece == {
-		case WHITE_PAWN #through
-		case BLACK_PAWN   value = 1.0 + pawn_square_bonus[flipped_location] * (1.0 - endgame_weight) + pawn_endgame_square_bonus[flipped_location]  * endgame_weight
-		case WHITE_BISHOP #through
-		case BLACK_BISHOP value = 3.3 + bishop_square_bonus[flipped_location]
-		case WHITE_KNIGHT #through
-		case BLACK_KNIGHT value = 3.2 + knight_square_bonus[flipped_location]
-		case WHITE_ROOK #through
-		case BLACK_ROOK   
+	if piece & ~BLACK == {
+		case PAWN   value = 1.0 + pawn_square_bonus[flipped_location] * (1.0 - endgame_weight) + pawn_endgame_square_bonus[flipped_location]  * endgame_weight
+		case BISHOP value = 3.3 + bishop_square_bonus[flipped_location]
+		case KNIGHT value = 3.2 + knight_square_bonus[flipped_location]
+		case ROOK   
 			value = 5.0 + rook_square_bonus  [flipped_location]
 			// Apply a bonus for rooks on open and semi-open files
 			mask := file_mask << cast()(location & 7)
@@ -882,10 +877,34 @@ evaluate :: (using state: State, using info: Piece_Info, endgame_weight: f32 = 0
 			if !(black_pawn_mask & mask) {
 				value += 0.3
 			}
-		case WHITE_QUEEN #through
-		case BLACK_QUEEN  value = 9.0 + queen_square_bonus [flipped_location]
-		case WHITE_KING #through
-		case BLACK_KING   value = king_square_bonus[flipped_location] * (1.0 - endgame_weight) + king_endgame_square_bonus[flipped_location]  * endgame_weight
+		case QUEEN  value = 9.0 + queen_square_bonus [flipped_location]
+		case KING   value = king_square_bonus[flipped_location] * (1.0 - endgame_weight) + king_endgame_square_bonus[flipped_location]  * endgame_weight
+	}
+	
+	return value
+}
+
+evaluate_white :: (using state: State, using piece: State.Piece_Info, endgame_weight: f32 = 0) -> f32 {
+	if location == -1 return 0
+	
+	value: f32
+	
+	if piece & ~BLACK == {
+		case PAWN   value = 1.0 + pawn_square_bonus[location] * (1.0 - endgame_weight) + pawn_endgame_square_bonus[location]  * endgame_weight
+		case BISHOP value = 3.3 + bishop_square_bonus[location]
+		case KNIGHT value = 3.2 + knight_square_bonus[location]
+		case ROOK   
+			value = 5.0 + rook_square_bonus[location]
+			// Apply a bonus for rooks on open and semi-open files
+			mask := file_mask << cast()(location & 7)
+			if !(white_pawn_mask & mask) {
+				value += 0.3
+			}
+			if !(black_pawn_mask & mask) {
+				value += 0.3
+			}
+		case QUEEN  value = 9.0 + queen_square_bonus [location]
+		case KING   value = king_square_bonus[location] * (1.0 - endgame_weight) + king_endgame_square_bonus[location]  * endgame_weight
 	}
 	
 	return value
@@ -901,7 +920,7 @@ order_moves :: (using state: State, moves: []Move, old_best: Move, depth: s8, al
 	
 	killer_move := killer_moves[depth]
 	old_killer_move := old_killer_moves[depth]
-	counter_move := counter_moves[previous_move.start][previous_move.end]
+	counter_move := counter_moves[previous_move.piece_index][previous_move.end]
 	
 	for moves {
 		evaluation_list[it_index] = 0
@@ -911,22 +930,23 @@ order_moves :: (using state: State, moves: []Move, old_best: Move, depth: s8, al
 		}
 		
 		if it.piece_index == killer_move.piece_index && it.end == killer_move.end {
-			evaluation_list[it_index] += 500
+			evaluation_list[it_index] += 5000
 		} 
 		
 		if it.piece_index == old_killer_move.piece_index && it.end == old_killer_move.end {
-			evaluation_list[it_index] += 400
+			evaluation_list[it_index] += 4000
 		} 
 		
 		if board[it.end] != -1 {
-			evaluation_list[it_index] += 1000 + evaluate(state, .{get_piece(state, it.end), it.end}) - evaluate(state, .{it.piece, it.start})
+			if player_color == BLACK evaluation_list[it_index] += 1000 + evaluate_white(state, pieces[board[it.end]]) - evaluate_black(state, pieces[it.piece_index])
+			else                     evaluation_list[it_index] += 1000 + evaluate_black(state, pieces[board[it.end]]) - evaluate_white(state, pieces[it.piece_index])
 		//} else if depth > 5 {
 		//	new_state := do_move(state, it)
 		//	evaluation_list[it_index] = -quiesce(new_state, -beta, -alpha) - 100 // offset so captures will always be ahead
 		}
 		
 		if it.piece_index == counter_move.piece_index && it.end == counter_move.end {
-			evaluation_list[it_index] += 600
+			evaluation_list[it_index] += 1000
 		}
 		
 		evaluation_list[it_index] += history[cast(Piece.integer) pieces[it.piece_index].piece][it.end]
@@ -1235,7 +1255,7 @@ stats: struct {
 	transpositions_matched: u64
 }
 
-minimax :: (using state: State, depth: s8, alpha: f32 = -1e4, beta: f32 = 1e4, allow_null_moves := false, disable_repetition := false) -> (f32, Move) {
+minimax :: (using state: State, depth: s8, alpha: f32 = -1e9, beta: f32 = 1e9) -> (f32, Move) {
 	if moves_explored == max_moves  return 0, .{}
 	
 	current_alpha := alpha
@@ -1243,25 +1263,19 @@ minimax :: (using state: State, depth: s8, alpha: f32 = -1e4, beta: f32 = 1e4, a
 	
 	key := hash(state)
 	
-	repeated: bool
-	repetition_stored: u64
+	repeated, repetition_stored := check_for_repetition(key)
 	
-	if !disable_repetition {
-		repeated, repetition_stored = check_for_repetition(key)
-	
-		if repeated
-			return 0, .{-1}
-	}
+	if repeated
+		return 0, .{-1}
 
-	defer if !disable_repetition remove_repetition(repetition_stored)
+	defer remove_repetition(repetition_stored)
 	
 	entry := *transposition_table[key & (transposition_table.count - 1)]
 	
-	first_move := Move.{-1}
+
+	current_depth := depth
 	
-	if entry.hash == key && entry.depth >= depth {
-		first_move = entry.move
-	
+	if entry.hash == key && entry.depth >= current_depth {
 		stats.transpositions_matched += 1
 	
 		if entry.kind == .EXACT {
@@ -1281,31 +1295,13 @@ minimax :: (using state: State, depth: s8, alpha: f32 = -1e4, beta: f32 = 1e4, a
 	best_move := Move.{-1}
 	best_move_value: f32 = -1e12
 	
-	if depth <= 0 {
-		best_move_value = quiesce(state, alpha, beta)
-		
-		return best_move_value, best_move
-	}
-	
 	
 	player_king := pieces[WHITE_KING_INDEX].location
 	
 	if player_color == BLACK player_king = pieces[BLACK_KING_INDEX].location
 	in_check := look_for_checks(state, player_king, player_color)
 	
-	if allow_null_moves && !in_check {
-		new_state := state
-		new_state.player_color ^= BLACK
-		
-		value := -minimax(new_state, depth - 3, -current_beta, -current_beta + 0.005, allow_null_moves = true)
-		
-		if value >= current_beta {
-			best_move_value = current_beta
-			return best_move_value, best_move
-		}
-	}
-	
-	legal_moves := *legal_moves_list[depth]
+	legal_moves := *legal_moves_list[current_depth]
 	legal_moves.count = 0
 	
 	if player_color == BLACK {
@@ -1317,34 +1313,35 @@ minimax :: (using state: State, depth: s8, alpha: f32 = -1e4, beta: f32 = 1e4, a
 			if pieces[it].location != -1 get_moves_for_piece(state, legal_moves, cast() it)		
 		}
 	}
-
-	if first_move.piece_index == -1 && depth >= 5 {
-		value: f32
 	
-		value, first_move = minimax(state, depth - 3, current_alpha, current_beta, allow_null_moves = true, disable_repetition = true)
+	if current_depth <= 0 {
+		best_move_value = quiesce(state, alpha, beta)
+		
+		return best_move_value, best_move
 	}
 	
-	order_moves(state, <<legal_moves, first_move, depth, current_alpha, current_beta)
+	if current_depth >= 1
+		order_moves(state, <<legal_moves, entry.move, current_depth, current_alpha, current_beta)
 	
 	had_legal: bool
 	
 	for <<legal_moves {
 		new_state, valid := checked_do_move(state, it)
 		
-		if valid {		
+		if valid {
+			had_legal = true
+			
 			value: f32
 			
-			if !had_legal {
-				value = -minimax(new_state, depth - 1, -current_beta, -current_alpha, allow_null_moves = true)
+			if it_index == 0 {
+				value = -minimax(new_state, current_depth - 1, -current_beta, -current_alpha)
 			} else {
-				value = -minimax(new_state, depth - 1, -current_alpha - 0.005, -current_alpha, allow_null_moves = true)
+				value = -minimax(new_state, current_depth - 1, -current_alpha - 0.005, -current_alpha)
 				
 				if current_alpha < value && value < current_beta {
-					value = -minimax(new_state, depth - 1, -current_beta, -current_alpha, allow_null_moves = true)
+					value = -minimax(new_state, current_depth - 1, -current_beta, -current_alpha)
 				}
 			}
-
-			had_legal = true
 			
 			history_location := *history[cast(Piece.integer) pieces[it.piece_index].piece][it.end]
 			if value > best_move_value {
@@ -1380,42 +1377,25 @@ minimax :: (using state: State, depth: s8, alpha: f32 = -1e4, beta: f32 = 1e4, a
 		}
 	}
 	
-	if depth >= entry.depth {
-		entry.value = best_move_value
-		entry.hash = key
-		entry.depth = depth
-		entry.move = best_move
-		
-		if best_move_value <= alpha
-			entry.kind = .UPPER_BOUND
-		else if best_move_value >= current_beta
-			entry.kind = .LOWER_BOUND
-		else
-			entry.kind = .EXACT
-	}
+	entry.value = best_move_value
+	entry.hash = key
+	entry.depth = current_depth
+	entry.move = best_move
+	
+	if best_move_value <= alpha
+		entry.kind = .UPPER_BOUND
+	else if best_move_value >= current_beta
+		entry.kind = .LOWER_BOUND
+	else
+		entry.kind = .EXACT
 	
 	return best_move_value, best_move
 	
 }
 
 get_piece :: (using state: State, index: s8) -> Piece {
-	for piece_masks {
-		if it & (1 << cast(u64) index)
-			return cast(Piece) it_index
-	}
-	
-	return NONE
-}
-
-get_piece_of_color :: (piece: Piece, color: Color) -> Piece {
-	value := cast(Piece.integer) piece
-	
-	if value > cast() BLACK_PAWN value -= 6
-	
-	if color == WHITE
-		value += 6
-		
-	return cast() value
+	if board[index] == -1 return 0
+	else return pieces[board[index]].piece
 }
 
 print_mask :: (mask: u64) {
@@ -1431,16 +1411,15 @@ print_mask :: (mask: u64) {
 	}
 }
 
-look_for_checks :: (using state: State, king_position: s8, king_color: Color) -> bool {
-	enemy_color := get_other_color(king_color)
-	king_position: s8
+look_for_checks :: (using state: State, king_position: s8, king_color: Piece) -> bool {
+	enemy_color := king_color ^ BLACK
 	
-	if king_color == BLACK {
-		if (get_pieces_mask(WHITE_PAWN) & pawns_that_can_right_capture_mask) >> 7 | 
-		    (get_pieces_mask(WHITE_PAWN) & pawns_that_can_left_capture_mask) >> 9) & 
+	if king_color == BLACK {		
+		if ((white_pawn_mask & pawns_that_can_right_capture_mask) >> 7 | 
+		    (white_pawn_mask & pawns_that_can_left_capture_mask) >> 9) & 
 			(1 << cast(u64) king_position) return true
 			
-		if legal_king_moves_mask[king_position] & pieces_masks[] return true
+		if legal_king_moves_mask[pieces[WHITE_KING_INDEX].location] & 1 << cast(u64) king_position return true
 	} else {
 		if ((black_pawn_mask & pawns_that_can_left_capture_mask) << 7 | 
 		    (black_pawn_mask & pawns_that_can_right_capture_mask) << 9) & 
@@ -1448,8 +1427,6 @@ look_for_checks :: (using state: State, king_position: s8, king_color: Color) ->
 		
 		if legal_king_moves_mask[pieces[BLACK_KING_INDEX].location] & 1 << cast(u64) king_position return true
 	}
-	
-	if 
 
 	for legal_knight_moves[king_position] {
 		if it == -1  break;
@@ -1694,27 +1671,12 @@ get_capture_moves_for_piece :: (using state: State, moves: *[..]Move, piece_inde
 selected_square: s8 = -1
 undo_last_move := false
 
-get_pieces_mask :: (using state: *State, piece: Piece) -> *u64 {
-	return <<state.pieces_masks[cast(Piece.integer) - 1]
-}
-
-get_pieces_mask :: (using state: State, piece: Piece) -> u64 {
-	return state.pieces_masks[cast(Piece.integer) - 1]
-}
-
-find_first_piece :: (using state: State, piece: Piece) -> (location: s8, found: bool, next_mask: bool) {
-	mask := get_pieces_mask(piece)
-	location, found := bit_scan_foward(mask)
-	return cast(s8) location, found, mask & mask - 1
-}
-
-find_first_piece :: (mask: u64) -> (location: s8, found: bool, next_mask: bool) {
-	location, found := bit_scan_foward(mask)
-	return cast(s8) location, found, mask & mask - 1
-}
-
 checked_do_move :: (using state: State, using move: Move) -> (State, #must bool) {
-	if piece == BLACK_KING || piece == WHITE_KING {
+	start := pieces[move.piece_index].location
+	piece := pieces[move.piece_index].piece
+	
+	
+	if piece & ~BLACK == KING {
 		distance := end - start
 		
 		if distance == -2 {
@@ -1727,18 +1689,24 @@ checked_do_move :: (using state: State, using move: Move) -> (State, #must bool)
 	}
 
 	new_state := do_move(state, move)
-	player_king := WHITE_KING
+	player_king := new_state.pieces[WHITE_KING_INDEX].location
 	
-	if player_color == BLACK  player_king = BLACK_KING
+	if player_color == BLACK  player_king = new_state.pieces[BLACK_KING_INDEX].location
 	
-	return new_state, !look_for_checks(new_state, player_king, find_first_piece(player_king))
+	return new_state, !look_for_checks(new_state, player_king, player_color)
 }
 
 do_move :: (state: State, using move: Move) -> State {
 	using new_state := state
 
 	previous_move = move
-		
+	
+	piece_info := *pieces[piece_index]
+	
+	start := piece_info.location
+	piece_info.location = end
+	piece := piece_info.piece
+	
 	if board[end] != -1 {
 		pieces[board[end]].location = -1
 	}
@@ -1894,7 +1862,7 @@ hashing_data :: #run precompute_hashing_data()
 undo_list: [..]State
 
 history: [16][64]f32
-counter_moves: [64][64]Move
+counter_moves: [32][64]Move
 
 add_history :: (value: *f32, bonus: f32) {
 	MAX_HISTORY_BONUS :: 10;
@@ -1941,19 +1909,17 @@ select_ai_move :: () -> Move {
 	value, ai_move := minimax(global_board, cast() depth)
 	
 	total_explored := moves_explored
-	explored_depth := depth
 	
 	max_moves = old_max_moves
 	
 	
 	while outer: moves_explored < max_moves {
-		depth += 1
-
+		
 		if depth == MAX_DEPTH  
 			break;
 		
-		low_delta: f32 = 0.35
-		high_delta: f32 = 0.35
+		low_delta: f32 = 0.25
+		high_delta: f32 = 0.25
 		
 		while true {
 			alpha := value - low_delta
@@ -1975,7 +1941,7 @@ select_ai_move :: () -> Move {
 			} else {
 				if new_move.piece_index == -1
 					break outer
-				
+					
 				value = new_value
 				ai_move = new_move
 			
@@ -1985,17 +1951,17 @@ select_ai_move :: () -> Move {
 		}
 
 		total_explored = moves_explored
-		explored_depth = depth
 		
 		if value <= -900 || value >= 900 {
 			print("Forced mate found\n")
 			break;
 		}
+		depth += 1
 	}
 	
 	print("%\n", ai_move)
 	print("%\n", stats)
-	print("% moves explored at depth %, (%)\n", total_explored, explored_depth, moves_explored)
+	print("% moves explored at depth %, (%)\n", total_explored, depth, moves_explored)
 	print("move valued at %\n", value)
 	
 	return ai_move
@@ -2048,9 +2014,11 @@ draw :: (moves: []Move) {
 	if move_history {
 		move := array_peek(move_history)
 		
+		start := undo_list[undo_list.count - 1].pieces[move.piece_index].location
+		
 		glColor4f(0, 0, 1, 0.4)
 		
-		x, y := unpack(move.start)
+		x, y := unpack(start)
 	
 		if white_ai && !black_ai  {
 			x = 7 - x
@@ -2520,7 +2488,7 @@ main :: () {
 				} or {
 					piece := get_piece(global_board, selected_square)
 					
-					if piece == NONE || piece & BLACK != global_board.player_color {
+					if !piece || piece & BLACK != global_board.player_color {
 						selected_square = -1
 					} else {
 						piece_index: s8

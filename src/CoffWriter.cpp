@@ -501,12 +501,16 @@ void addPointerRelocation(BucketedArenaAllocator *relocations, u32 address, u32 
 	relocations->add2Unchecked(IMAGE_REL_AMD64_ADDR64);
 }
 
+Symbol *allocateSymbol() {
+	return reinterpret_cast<Symbol *>(symbols.allocator.allocateUnaligned(sizeof(Symbol)));
+}
+
 u32 createSymbolForFunction(ExprFunction *function) {
 	if (!(function->flags & EXPR_HAS_STORAGE)) {
 		function->flags |= EXPR_HAS_STORAGE;
 
 		function->physicalStorage = static_cast<u32>(symbols.count());
-		function->symbol = reinterpret_cast<Symbol *>(symbols.allocator.allocateUnaligned(sizeof(Symbol)));
+		function->symbol = allocateSymbol();
 	}
 
 	return function->physicalStorage;
@@ -537,7 +541,7 @@ u32 createSymbolForString(ExprStringLiteral *string) {
 		string->flags |= EXPR_HAS_STORAGE;
 
 		string->physicalStorage = static_cast<u32>(symbols.count());
-		string->symbol = reinterpret_cast<Symbol *>(symbols.allocator.allocateUnaligned(sizeof(Symbol)));
+		string->symbol = allocateSymbol();
 
 		setSymbolName(&string->symbol->name, symbols.count());
 		string->symbol->storageClass = IMAGE_SYM_CLASS_STATIC;
@@ -582,7 +586,7 @@ void markUsedTypeInfoInExpr(Expr *expr) {
 
 void createSymbolForType(Type *type) {
 	type->physicalStorage = symbols.count();
-	type->symbol = reinterpret_cast<Symbol *>(symbols.allocator.allocateUnaligned(sizeof(Symbol)));
+	type->symbol = allocateSymbol();
 }
 
 void markUsedTypeInfoInType(Type *type) {
@@ -661,7 +665,7 @@ u32 createSymbolForDeclaration(Declaration *declaration) {
 	if (!(declaration->flags & DECLARATION_HAS_STORAGE)) {
 		declaration->flags |= DECLARATION_HAS_STORAGE;
 		declaration->physicalStorage = symbols.count();
-		declaration->symbol = reinterpret_cast<Symbol *>(symbols.allocator.allocateUnaligned(sizeof(Symbol)));
+		declaration->symbol = allocateSymbol();
 	}
 
 	return static_cast<u32>(declaration->physicalStorage);
@@ -1039,20 +1043,21 @@ void runCoffWriter() {
 
 				auto symbol = function->symbol;
 
-				if (function->valueOfDeclaration) {
-					if (function->valueOfDeclaration->enclosingScope->flavor == BlockFlavor::GLOBAL && function->valueOfDeclaration->name == "main") {
-						symbol->storageClass = IMAGE_SYM_CLASS_EXTERNAL;
-						if (linkLibC) {
-							setSymbolName(&symbol->name, "__main");
-						}
-						else {
-							setSymbolName(&symbol->name, "main");
-						}
+				if (function == entryPointFunction) {
+					symbol->storageClass = IMAGE_SYM_CLASS_EXTERNAL;
+					if (linkLibC) {
+						setSymbolName(&symbol->name, "__main");
 					}
 					else {
-						symbol->storageClass = IMAGE_SYM_CLASS_STATIC;
-						setSymbolName(&symbol->name, function->valueOfDeclaration->name);
+						setSymbolName(&symbol->name, "main");
 					}
+				}
+				else if (function->valueOfDeclaration) {
+					String name = function->valueOfDeclaration->name;
+
+					if (name == "main") name = "_main"; // Rename any functions that are called main that aren't meant to be the entry point
+					symbol->storageClass = IMAGE_SYM_CLASS_STATIC;
+					setSymbolName(&symbol->name, function->valueOfDeclaration->name);
 				}
 				else {
 					symbol->storageClass = IMAGE_SYM_CLASS_STATIC;
@@ -2737,9 +2742,9 @@ void runCoffWriter() {
 						array->flags |= EXPR_HAS_STORAGE;
 
 						array->physicalStorage = static_cast<u32>(symbols.count());
-						array->symbol = reinterpret_cast<Symbol *>(symbols.allocator.allocateUnaligned(sizeof(Symbol)));
+						array->symbol = allocateSymbol();
 
-						rdata.allocateUnaligned(AlignPO2(rdata.totalSize, array->type->alignment) - rdata.totalSize);
+						alignAllocator(&rdata, array->type->alignment);
 
 						setSymbolName(&array->symbol->name, symbols.count());
 						array->symbol->storageClass = IMAGE_SYM_CLASS_STATIC;
@@ -2748,7 +2753,10 @@ void runCoffWriter() {
 						array->symbol->type = 0;
 						array->symbol->numberOfAuxSymbols = 0;
 
-						writeValue(rdata.totalSize, static_cast<u8 *>(rdata.allocateUnaligned(array->type->size)), &rdataRelocations, array);
+						u32 offset = rdata.totalSize; // do this in a separate statement because within a c++ statement, subexpressions can execute in any order
+						                              // which meant that allocateUnaligned happened _before_ rdata.totalSize was evaluated, causing the addresses 
+						                              // for any patch applied to the literal to be wrong
+						writeValue(offset, static_cast<u8 *>(rdata.allocateUnaligned(array->type->size)), &rdataRelocations, array);
 					}
 
 					codeRelocations.ensure(10);
@@ -2771,7 +2779,7 @@ void runCoffWriter() {
 						literal->flags |= EXPR_HAS_STORAGE;
 
 						literal->physicalStorage = static_cast<u32>(symbols.count());
-						literal->symbol = reinterpret_cast<Symbol *>(symbols.allocator.allocateUnaligned(sizeof(Symbol)));
+						literal->symbol = allocateSymbol();
 
 						rdata.allocateUnaligned(AlignPO2(rdata.totalSize, literal->type->alignment) - rdata.totalSize);
 
@@ -2782,7 +2790,10 @@ void runCoffWriter() {
 						literal->symbol->type = 0;
 						literal->symbol->numberOfAuxSymbols = 0;
 
-						writeValue(rdata.totalSize, static_cast<u8 *>(rdata.allocateUnaligned(literal->type->size)), &rdataRelocations, literal);
+						u32 offset = rdata.totalSize; // do this in a separate statement because within a c++ statement, subexpressions can execute in any order
+													  // which meant that allocateUnaligned happened _before_ rdata.totalSize was evaluated, causing the addresses 
+													  // for any patch applied to the literal to be wrong
+						writeValue(offset, static_cast<u8 *>(rdata.allocateUnaligned(literal->type->size)), &rdataRelocations, literal);
 					}
 
 					codeRelocations.ensure(10);
@@ -2884,6 +2895,13 @@ void runCoffWriter() {
 
 			code.add1Unchecked(0x5F); // pop rdi
 			code.add1Unchecked(0x5E); // pop rsi
+
+
+			// @Hack Make sure main returns 0 by default
+			if (function == entryPointFunction) {
+				code.add1Unchecked(0x31); // xor eax, eax
+				code.add1Unchecked(0xC0);
+			}
 
 			code.add1Unchecked(0xC3);
 
@@ -3328,7 +3346,7 @@ void runCoffWriter() {
 						if (!member->initialValue) continue;
 
 						auto type = getTypeForExpr(member->initialValue);
-
+						
 						if (member->initialValue->flavor == ExprFlavor::TYPE_LITERAL && static_cast<ExprLiteral *>(member->initialValue)->typeValue->flavor == TypeFlavor::MODULE)
 							continue;
 

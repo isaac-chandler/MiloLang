@@ -303,8 +303,10 @@ static llvm::Constant *createConstant(State *state, Expr *expr) {
 
 		return createIntLiteral(state, literal);
 	}
+	case ExprFlavor::STRING_LITERAL: {
+		return createLlvmString(state, static_cast<ExprStringLiteral *>(expr)->string);
+	}
 	case ExprFlavor::FLOAT_LITERAL:
-	case ExprFlavor::STRING_LITERAL:
 	case ExprFlavor::FUNCTION:
 	case ExprFlavor::TYPE_LITERAL: {
 		return static_cast<llvm::Constant *>(generateLlvmIr(state, expr));
@@ -591,7 +593,14 @@ static Block externalsBlock;
 
 static llvm::Function *createLlvmFunction(State *state, ExprFunction *function) {
 	if (!function->llvmStorage) {
-		auto type = getLlvmType(state->context, function->type);
+		llvm::Type *type;
+		
+		if (function == entryPointFunction) {
+			type = llvm::PointerType::getUnqual(llvm::FunctionType::get(llvm::Type::getInt32Ty(state->context), false));
+		}
+		else {
+			type = getLlvmType(state->context, function->type);
+		}
 
 		assert(type->isPointerTy());
 		assert(type->getPointerElementType()->isFunctionTy());
@@ -1857,7 +1866,13 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 		}
 		else {
 			exitBlock(state, nullptr, true);
-			state->builder.CreateRetVoid();
+			
+			if (return_->returnsFrom == entryPointFunction) {
+				state->builder.CreateRet(llvm::ConstantInt::get(llvm::Type::getInt32Ty(state->context), 0));
+			}
+			else {
+				state->builder.CreateRetVoid();
+			}
 		}
 
 		auto postBlock = llvm::BasicBlock::Create(state->context, "return.post", state->function);

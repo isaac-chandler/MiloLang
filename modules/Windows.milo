@@ -303,9 +303,6 @@ using Stock_Object :: enum u32 {
 
 GetClientRect :: (hWnd: HWND, lpRect: *RECT) -> s32 #external "user32"
 
-STD_INPUT_HANDLE  :: cast(u32) -10
-STD_ERROR_HANDLE  :: cast(u32) -12
-
 GetLastError :: () -> u32 #external "kernel32"
 
 GetModuleHandleW :: (lpModuleName: *u8) -> HMODULE #external "kernel32"
@@ -502,7 +499,10 @@ OVERLAPPED :: struct {
 	hEvent: HANDLE
 }
 
+STD_INPUT_HANDLE  :: cast(u32) -10
 STD_OUTPUT_HANDLE :: cast(u32) -11
+STD_ERROR_HANDLE  :: cast(u32) -12
+
 
 GetStdHandle :: (nStdHandle: u32) -> HANDLE #external "kernel32"
 GetProcessHeap :: () -> HANDLE #external "kernel32"
@@ -517,19 +517,48 @@ GetFileSizeEx :: (hFile: HANDLE, lpFileSize: *s64) -> s32 #external "kernel32"
 ReadFile :: (hFile: HANDLE, lpBuffer: *void, nNumberOfBytesToRead: u32, lpNumberOfBytesRead: *u32, lpOverlapped: *OVERLAPPED = null) -> s32 #external "kernel32"
 WriteFile :: (hFile: HANDLE, lpBuffer: *void, nNumberOfBytesToWrite: u32, lpNumberOfBytesWritten: *u32, lpOverlapped: *OVERLAPPED = null) -> s32 #external "kernel32"
 
+FindFirstFileW :: (lpFileName: *u16, lpFindFileData: *WIN32_FIND_DATAW) -> HANDLE #external "kernel32"
+FindNextFileW :: (lpFindFile: HANDLE, lpFindFileData: *WIN32_FIND_DATAW) -> s32 #external "kernel32"
+FindClose :: (lpFindFile: HANDLE) -> s32 #external "kernel32"
+
+FILETIME :: struct {
+	dwLowDateTime:  u32
+	dwHighDateTime: u32
+}
+
+WIN32_FIND_DATAW :: struct {
+	dwFileAttributes: File_Flag
+	ftCreationTime:   FILETIME
+	ftLastAccessTime: FILETIME
+	ftLastWriteTime:  FILETIME
+	nFileSizeHigh: u32
+	nFileSizeLow:  u32
+	dwReserved0: u32
+	dwReserved1: u32
+	cFileName: [260]u16
+	cAlternateFileName: [14]u16
+	
+	/* these are #if'ed out in minwinbase.h (unless running on 68k or PowerPC?!?) but appear on MS documentation (with no description)
+	dwFileType: u32
+	dwCreatorType: u32
+	wFinderFlags: u16
+	*/
+}
+
+
 INVALID_HANDLE_VALUE :: cast(HANDLE) -1
 
 using Access_Flags :: enum_flags u32 {
-	GENERIC_READ    :: 0x8000_0000
-	GENERIC_WRITE   :: 0x4000_0000
-	GENERIC_EXECUTE :: 0x2000_0000
 	GENERIC_ALL     :: 0x1000_0000
+	GENERIC_EXECUTE :: 0x2000_0000
+	GENERIC_WRITE   :: 0x4000_0000
+	GENERIC_READ    :: 0x8000_0000
 }
 
 using File_Share_Flag :: enum_flags u32 {
-	FILE_SHARE_DELETE :: 0x4
-	FILE_SHARE_READ   :: 0x2
 	FILE_SHARE_WRITE  :: 0x1
+	FILE_SHARE_READ   :: 0x2
+	FILE_SHARE_DELETE :: 0x4
 }
 
 using File_Create_Option :: enum u32 {
@@ -541,17 +570,27 @@ using File_Create_Option :: enum u32 {
 }
 
 using File_Flag :: enum_flags u32 {
-	FILE_ATTRIBUTE_READONLY  :: 0x0000_0001
-	FILE_ATTRIBUTE_HIDDEN    :: 0x0000_0002
-	FILE_ATTRIBUTE_SYSTEM    :: 0x0000_0004
-	FILE_ATTRIBUTE_ARCHIVE   :: 0x0000_0020
-	FILE_ATTRIBUTE_NORMAL    :: 0x0000_0080
-	FILE_ATTRIBUTE_TEMPORARY :: 0x0000_0100
-	FILE_ATTRIBUTE_OFFLINE   :: 0x0000_1000
-	FILE_ATTRIBUTE_ENCRYPTED :: 0x0000_4000
+	FILE_ATTRIBUTE_READONLY              :: 0x0000_0001
+	FILE_ATTRIBUTE_HIDDEN                :: 0x0000_0002
+	FILE_ATTRIBUTE_SYSTEM                :: 0x0000_0004
+	FILE_ATTRIBUTE_DIRECTORY             :: 0x0000_0010
+	FILE_ATTRIBUTE_ARCHIVE               :: 0x0000_0020
+	FILE_ATTRIBUTE_DEVICE                :: 0x0000_0040
+	FILE_ATTRIBUTE_NORMAL                :: 0x0000_0080
+	FILE_ATTRIBUTE_TEMPORARY             :: 0x0000_0100
+	FILE_ATTRIBUTE_SPARSE_FILE           :: 0x0000_0200
+	FILE_ATTRIBUTE_REPARSE_POINT         :: 0x0000_0400
+	FILE_ATTRIBUTE_COMPRESSED            :: 0x0000_0800
+	FILE_ATTRIBUTE_OFFLINE               :: 0x0000_1000
+	FILE_ATTRIBUTE_NOT_CONTENT_INDEXED   :: 0x0000_2000
+	FILE_ATTRIBUTE_ENCRYPTED             :: 0x0000_4000
+	FILE_ATTRIBUTE_INTEGRITY_STREAM      :: 0x0000_8000
+	FILE_ATTRIBUTE_VIRTUAL               :: 0x0001_0000
+	FILE_ATTRIBUTE_NO_SCRUB_DATA         :: 0x0002_0000
+	FILE_ATTRIBUTE_RECALL_ON_OPEN        :: 0x0004_0000	FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS :: 0x0040_0000 // This is not a mistake, there is a file attribute in the middle of the file flags range
 
 	FILE_FLAG_OPEN_NO_RECALL     :: 0x0010_0000
-	FILE_FLAG_OPEN_REPARSE_POINT :: 0x0020_0000
+	FILE_FLAG_OPEN_REPARSE_POINT :: 0x0020_0000	// This gap contains FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS for some reason
 	FILE_FLAG_SESSION_AWARE      :: 0x0080_0000
 	FILE_FLAG_POSIX_SEMANCTICS   :: 0x0100_0000
 	FILE_FLAG_BACKUP_SEMANTICS   :: 0x0200_0000
@@ -637,3 +676,26 @@ GUID :: struct {
 	Data3: u16
 	Data4: [8]u8
 }
+
+using Console_Mode :: enum_flags u32 {
+	// These flags apply to input handles (stdin)
+	ENABLE_PROCESSED_INPUT        :: 0x0001
+	ENABLE_LINE_INPUT             :: 0x0002
+	ENABLE_ECHO_INPUT             :: 0x0004
+	ENABLE_WINDOW_INPUT           :: 0x0008
+	ENABLE_MOUSE_INPUT            :: 0x0010
+	ENABLE_INSERT_MODE            :: 0x0020
+	ENABLE_QUICK_EDIT_MODE        :: 0x0040
+	ENABLE_VIRTUAL_TERMINAL_INPUT :: 0x0200
+	
+	// These flags apply to outut handles (stdout, stderr)
+	ENABLE_PROCESSED_OUTPUT            :: 0x0001
+	ENABLE_WRAP_AT_EOL_OUTPUT          :: 0x0002
+	ENABLE_VIRTUAL_TERMINAL_PROCESSING :: 0x0004
+	DISABLE_NEWLINE_AUTO_RETURN        :: 0x0008
+	ENABLE_LVB_GRID_WORLDWIDE          :: 0x0010
+}
+
+
+SetConsoleMode :: (hConsoleHandle: HANDLE, dwMode:  Console_Mode) -> s32 #external "kernel32"
+GetConsoleMode :: (hConsoleHandle: HANDLE, lpMode: *Console_Mode) -> s32 #external "kernel32"

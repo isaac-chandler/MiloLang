@@ -53,6 +53,8 @@
 
 #define DECLARATION_IS_POINTED_TO 0x20'0000
 
+#define DECLARATION_IS_ENTRY_POINT 0x40'0000
+
 struct Declaration {
 	CodeLocation start;
 	EndLocation end;

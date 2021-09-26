@@ -37,7 +37,7 @@ main :: () {
 		return
 	}
 
-	array_add(*filenames, "test.milo")
+	array_add(*filenames, arguments[1])
 	
 	file, success := read_entire_file(filenames[0])
 	

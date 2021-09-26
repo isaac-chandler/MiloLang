@@ -134,7 +134,8 @@ eat_whitespace_and_comments :: (using lexer: *Lexer) -> #must bool {
 
 is_identifier_character :: (c: u8) -> bool {
 	return ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9') || c == '_' || c >= 128
-}
+}
+
 // Indicates failure by returning the empty string
 read_identifier :: (using lexer: *Lexer) -> string {
 	identifier := data
@@ -788,7 +789,8 @@ advance_token :: (using lexer: *Lexer) -> (token: Token, #must success := true) 
 			return token, false
 		}
 		
-		if !eat_character_if_present(lexer, '\'') {			token.l1 = line
+		if !eat_character_if_present(lexer, '\'') {
+			token.l1 = line
 			token.c1 = column
 			report_error(token.location, "Error: Character literal was never closed")
 			return token, false
@@ -961,14 +963,16 @@ Token :: struct {
 		
 		STRING
 		BOOL
-		VOID		TYPE
+		VOID
+		TYPE
 		
 		STRUCT
 		UNION
 		ENUM
 		ENUM_FLAGS
 		
-		TRUE		FALSE
+		TRUE
+		FALSE
 		
 		NULL
 		
@@ -978,11 +982,14 @@ Token :: struct {
 		
 		FOR
 		WHILE
-		OR		BREAK
+		OR
+		BREAK
 		CONTINUE
 		REMOVE
 		IF
-		ELSE		RETURN		DEFER
+		ELSE
+		RETURN
+		DEFER
 		CASE
 		
 		CAST
@@ -1004,13 +1011,15 @@ Token :: struct {
 		DIVIDE_EQUALS
 		MOD_EQUALS
 		
-		AND_EQUALS		OR_EQUALS
+		AND_EQUALS
+		OR_EQUALS
 		XOR_EQUALS
 		
 		SHIFT_LEFT_EQUALS
 		SHIFT_RIGHT_EQUALS
 		
-		DOUBLE_DASH		DOUBLE_DOT
+		DOUBLE_DASH
+		DOUBLE_DOT
 		ARROW
 		
 		
@@ -1024,7 +1033,9 @@ Token :: struct {
 		COMPLETE
 		STATIC_IF
 		RUN
-		C_CALL		IMPORT		SCOPE_MODULE
+		C_CALL
+		IMPORT
+		SCOPE_MODULE
 		SCOPE_EXPORT
 	}
 }

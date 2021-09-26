@@ -1311,11 +1311,6 @@ bool parseArgumentList(LexerFile *lexer, ExprFunction *function, bool arguments,
 	Declaration *hadVarargs = nullptr;
 
 	do {
-		if (hadVarargs) {
-			reportError(hadVarargs, "Error: Only the final arugment can be varargs");
-			return false;
-		}
-
 		auto declaration = parseSingleArgument(lexer, function, arguments, named);
 
 		if (!declaration)

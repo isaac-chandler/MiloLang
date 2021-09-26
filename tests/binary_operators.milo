@@ -1,0 +1,50 @@
+#import "Standard"
+
+unsigned_binary_operators :: (dummy: $T) {
+	a: T = 3
+	b: T = 16
+	
+	assert(a + b == 19)
+	assert(b + a == 19)
+	assert(b - a == 13)
+	assert(a * b == 48)
+	assert(b * a == 48)
+	assert(a / b == 0)
+	assert(b / a == 5)
+	assert(a % b == 3)
+	assert(b % a == 1)
+}
+
+signed_binary_operators :: (dummy: $T) {
+	a: T = -3
+	b: T = 16
+	
+	assert(a + b == 13)
+	assert(b + a == 13)
+	assert(b - a == 19)
+	assert(a - b == -19)
+	assert(a * b == -48)
+	assert(b * a == -48)
+	assert(a / b == 0)
+	assert(b / a == -5)
+	assert(a % b == -3)
+	assert(b % a == 1)
+}
+
+main :: () {
+	unsigned_binary_operators(cast(u8)  0)
+	unsigned_binary_operators(cast(u16) 0)
+	unsigned_binary_operators(cast(u32) 0)
+	unsigned_binary_operators(cast(u64) 0)
+	unsigned_binary_operators(cast(s8)  0)
+	unsigned_binary_operators(cast(s16) 0)
+	unsigned_binary_operators(cast(s32) 0)
+	unsigned_binary_operators(cast(s64) 0)
+	
+	signed_binary_operators(cast(s8) 0)
+	signed_binary_operators(cast(s16) 0)
+	signed_binary_operators(cast(s32) 0)
+	signed_binary_operators(cast(s64) 0)
+}
+
+#run main()

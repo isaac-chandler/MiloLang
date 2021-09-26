@@ -96,7 +96,7 @@ run_command :: (command: string) -> u32 {
 	windows_command := to_windows_string(command)
 	defer deallocate(windows_command)
 	
-	if !CreateProcessW(lpCommandLine = windows_command, lpStartupInfo = *startup, lpProcessInformation = *info)
+	if !CreateProcessW(lpCommandLine = windows_command, lpStartupInfo = *startup, lpProcessInformation = *info, bInheritHandles = 1)
 		return cast() -1
 	
 	CloseHandle(info.hThread)
@@ -111,6 +111,21 @@ run_command :: (command: string) -> u32 {
 	CloseHandle(info.hProcess)
 	
 	return exit_code
+}
+
+enable_console_colors :: () -> bool {
+	console := GetStdHandle(STD_OUTPUT_HANDLE);
+	if (console != INVALID_HANDLE_VALUE) {
+		mode: Console_Mode
+
+		if GetConsoleMode(console, *mode) {
+			if SetConsoleMode(console, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING) {
+				return true
+			}
+		}
+	}
+	
+	return false
 }
 
 #scope_module

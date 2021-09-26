@@ -235,3 +235,31 @@ append :: (string_buffer: *[..]u8, codepoint: u32) {
 		assert(false)
 	}
 }
+
+concatenate :: (s: string.., delimiter: string = "") -> string {
+	total_size: u64 = 0
+	
+	for s  total_size += it.count
+	
+	if s
+		total_size += delimiter.count * (s.count - 1)
+	
+	if !total_size
+		return ""
+	
+	result := string.{allocate(total_size), total_size}
+	
+	cursor := result.data
+	
+	for s {
+		memory_copy(cursor, it.data, it.count)
+		cursor += it.count
+		
+		if it_index + 1 != s.count {
+			memory_copy(cursor, delimiter.data, delimiter.count)
+			cursor += delimiter.count
+		}
+	}
+	
+	return result
+}

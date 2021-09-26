@@ -353,12 +353,6 @@ void addFunction(ExprFunction *function) {
 	if (!(function->flags & EXPR_FUNCTION_IS_POLYMORPHIC)) {
 		addBlock(&function->arguments);
 		addBlock(&function->returns);
-
-		if (function->body) {
-			beginFlatten(&job->body, &function->body);
-
-			addSubJob(&job->body);
-		}
 	}
 
 	addSubJob(&job->header);
@@ -1406,7 +1400,7 @@ bool usingConversionIsValid(SubJob *job, Type *correct, Expr *given, bool *yield
 bool tryUsingConversion(SubJob *job, Type *correct, Expr **exprPointer) {
 	auto given = *exprPointer;
 
-	assert(correct != given->type);
+	if (correct == given->type) return false;
 
 	bool onlyConstants = false;
 	auto struct_ = getExpressionNamespace(given, &onlyConstants, nullptr);
@@ -3063,7 +3057,7 @@ bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char 
 		Expr **sortedArguments = INFER_NEW_ARRAY(Expr *, block->declarations.count){};
 
 		for (u32 i = 0; i < arguments->count; i++) {
-			auto argument = block->declarations[i];
+			Declaration *argument;
 
 			u32 argIndex = i;
 			if (arguments->names && arguments->names[i].length) {
@@ -3078,6 +3072,9 @@ bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char 
 			else if (hadNamed) {
 				reportError(arguments->values[i], "Error: Cannot have unnamed arguments after named arguments");
 				return false;
+			}
+			else {
+				argument = block->declarations[i];
 			}
 
 			argIndex = argument->serial;
@@ -3101,6 +3098,7 @@ bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char 
 
 				for (; i < arguments->count; i++) {
 					if (arguments->names && arguments->names[i].length) {
+						i--;
 						break;
 					}
 
@@ -4626,6 +4624,8 @@ bool inferFlattened(SubJob *job) {
 						}
 						identifier->declaration = member;
 
+						// @Incomplete: Constant evaluate accesses of struct literals
+
 						if (!(identifier->declaration->flags & DECLARATION_IS_CONSTANT)) {
 							addSizeDependency(job->sizeDependencies, struct_);
 						}
@@ -4816,9 +4816,11 @@ bool inferFlattened(SubJob *job) {
 						address->start = identifier->start;
 						address->end = identifier->end;
 						address->value = identifier->structAccess;
-						address->type = identifier->type;
+						address->type = getPointer(identifier->structAccess->type);
 
 						*exprPointer = address;
+
+						insertImplicitCast(job->sizeDependencies, exprPointer, identifier->type);
 					}
 					else if (identifier->structAccess->type->flavor == TypeFlavor::POINTER &&
 						(static_cast<TypePointer *>(identifier->structAccess->type)->pointerTo->flags & TYPE_ARRAY_IS_FIXED)) {
@@ -5023,7 +5025,7 @@ bool inferFlattened(SubJob *job) {
 						member = findDeclarationNoYield(block, literal->initializers.names[i]);
 
 						if (!member) {
-							reportError(initializer, "Error: %.*s does not have member %.*s", STRING_PRINTF(literal->type->name), literal->initializers.names[i]);
+							reportError(initializer, "Error: %.*s does not have member %.*s", STRING_PRINTF(literal->type->name), STRING_PRINTF(literal->initializers.names[i]));
 							return false;
 						}
 
@@ -7087,6 +7089,16 @@ bool addDeclaration(Declaration *declaration, Module *module) {
 			return false;
 		}
 
+		if (declaration->name == "main") {
+			if (entryPoint) {
+				reportError(declaration, "Error: Cannot define multiple entry points");
+				reportError(entryPoint, "   ..: Here is the previous declaration");
+				return false;
+			}
+
+			entryPoint = declaration;
+		}
+
 		wakeUpSleepers(&module->members.sleepingOnMe, declaration->name);
 
 		if (!maybeAddDeclarationToImports(module, declaration))
@@ -7815,13 +7827,18 @@ bool inferFunctionHeader(SubJob *subJob) {
 		function->valueOfDeclaration->sleepingOnMyValue.free();
 	}
 
-	if ((function->flags & EXPR_FUNCTION_IS_POLYMORPHIC) || !function->body) {
+	if (!(function->flags & EXPR_FUNCTION_IS_POLYMORPHIC) && function->body) {
+		beginFlatten(&job->body, &function->body);
+
+		addSubJob(&job->body);
+	}
+	else {
 		removeJob(&functionJobs, job);
 		function->sleepingOnInfer.free();
 		freeJob(job);
 	}
 
-	if (!function->constants.declarations.count) {
+	if (!(function->flags & EXPR_FUNCTION_IS_POLYMORPHIC)) {
 		for (auto argument : function->arguments.declarations) {
 			addSizeDependency(&job->sizeDependencies, getDeclarationType(argument));
 		}
@@ -8166,7 +8183,7 @@ bool findTypeInfoInExprRecurse(RunJob *job, ArraySet<Type *> *types, Expr *expr)
 
 		return true;
 	}
-	case ExprFlavor::STRING_LITERAL: {
+	case ExprFlavor::STRUCT_LITERAL: {
 		auto struct_ = static_cast<ExprStructLiteral *>(expr);
 
 		for (u64 i = 0; i < struct_->initializers.count; i++) {
@@ -9171,6 +9188,59 @@ void runInfer(String inputFile) {
 		reportInfo("Infer memory used: %ukb", inferArena.totalSize / 1024);
 		reportInfo("Type table memory used: %ukb", typeArena.totalSize / 1024);
 	}
+
+	assert(entryPoint->flags & DECLARATION_TYPE_IS_READY);
+	assert(entryPoint->flags & DECLARATION_VALUE_IS_READY);
+
+	if (!entryPoint) {
+		reportError("Error: No entry point was declared");
+		goto error;
+	}
+
+	if (!(entryPoint->flags & DECLARATION_IS_CONSTANT)) {
+		reportError(entryPoint, "Error: The entry point must be defined as constant");
+		goto error;
+	}
+
+	{
+
+		assert(entryPoint->initialValue->flavor == ExprFlavor::FUNCTION);
+
+		entryPointFunction = static_cast<ExprFunction *>(entryPoint->initialValue);
+		auto entryPointType = static_cast<TypeFunction *>(entryPointFunction->type);
+
+		if (entryPointType == &TYPE_POLYMORPHIC_FUNCTION) {
+			reportError(entryPointFunction, "Error: The entry point cannot be polymorphic");
+			goto error;
+		}
+
+		if (entryPointType->flavor != TypeFlavor::FUNCTION) {
+			reportError(entryPointFunction, "Error: The entry point must be a function");
+			goto error;
+		}
+
+		if (entryPointType->returnCount != 1 || entryPointType->returnTypes[0] != &TYPE_VOID) {
+			reportError(entryPointFunction, "Error: The entry point cannot have return values");
+			goto error;
+		}
+
+		if (entryPointType->argumentCount != 0) {
+			reportError(entryPointFunction, "Error: The entry point cannot have arguments");
+			goto error;
+		}
+
+		if (entryPointFunction->flags & EXPR_FUNCTION_IS_EXTERNAL) {
+			reportError(entryPointFunction, "Error: The entry point cannot be #external");
+			goto error;
+		}
+
+		if (entryPointFunction->flags & EXPR_FUNCTION_IS_INSTRINSIC) {
+			reportError(entryPointFunction, "Error: The entry point cannot be #intrinsic");
+			goto error;
+		}
+	}
+
+	
 
 	irGeneratorQueue.add(nullptr);
 	parserQueue.add(nullptr);

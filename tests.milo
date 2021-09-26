@@ -1,0 +1,154 @@
+#import "Standard"
+#import "File"
+#import "Windows"
+#import "String"
+
+COMPILER_PATH :: #run get_command_line_arguments()[0]
+
+messages: struct {
+	passed: string
+	failed: string
+	summary_failed: string
+	summary_passed: string
+}
+
+run_command_to_file :: (command: string, file: string) -> u32 {
+	windows_file := to_windows_string(file)
+	defer deallocate(windows_file)
+	
+	inheritable := SECURITY_ATTRIBUTES.{ bInheritHandle = 1 }
+	
+	output := CreateFileW(windows_file, GENERIC_WRITE, FILE_SHARE_READ, *inheritable, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL)
+	defer CloseHandle(output)
+
+	startup: STARTUPINFOW
+	startup.dwFlags = STARTF_USESTDHANDLES
+	startup.hStdInput  = null
+	startup.hStdOutput = output
+	startup.hStdError  = output
+	
+	info: PROCESS_INFORMATION = --
+	
+	windows_command := to_windows_string(command)
+	defer deallocate(windows_command)
+	
+	if !CreateProcessW(lpCommandLine = windows_command, lpStartupInfo = *startup, bInheritHandles = 1, lpProcessInformation = *info)
+		return cast() -1
+	
+	defer CloseHandle(info.hProcess)
+	defer CloseHandle(info.hThread)
+	
+	WaitForSingleObject(info.hProcess)
+	
+	
+	
+	exit_code: u32 = --
+	
+	if !GetExitCodeProcess(info.hProcess, *exit_code)
+		return cast() -2
+	
+	
+	return exit_code
+}
+
+execute_test :: (file: string, compile_flags: string) -> #must string {
+	path := concatenate("tests", file, delimiter = "/")
+	defer deallocate(path.data)
+	
+	test_name := remove_extension(path)
+	
+	log_path := concatenate(test_name, ".log")
+	
+	print("Compiling %... ", path)
+	
+	compile_command := concatenate(COMPILER_PATH, path, compile_flags, delimiter = " ")
+	defer deallocate(compile_command.data)
+	
+	exit_code := run_command_to_file(compile_command, log_path)
+	
+	if exit_code {
+		print(messages.failed)
+		return log_path
+	} else {
+		print(messages.passed)
+	}
+	
+	exe_path := concatenate(test_name, ".exe")
+	defer deallocate(exe_path.data)
+	print("Running   %... ", exe_path)
+
+	exit_code = run_command_to_file(exe_path, log_path)
+	
+	if exit_code {
+		print(messages.failed)
+		return log_path
+	} else {
+		print(messages.passed)
+	}
+	
+	deallocate(log_path.data)
+	return ""
+}
+
+main :: () {
+	pcf: s64
+	QueryPerformanceFrequency(*pcf)
+	
+	start: s64
+	QueryPerformanceCounter(*start)
+
+	if enable_console_colors() {
+		messages = .{
+			passed = "[\e[32mPASSED\e[0m]\n", 
+			failed = "[\e[31mFAILED\e[0m]\n", 
+			summary_failed = "\e[31m%/%\e[0m passed. Took % s\n", 
+			summary_passed = "%/% passed. Took % s\n"
+		}
+	} else {
+		messages = .{
+			passed = "[PASSED]\n", 
+			failed = "[FAILED]\n", 
+			summary_failed = "%/% passed. Took % s\n", 
+			summary_passed = "%/% passed. Took % s\n"
+		}
+	}
+
+	compile_flags := concatenate(..get_command_line_arguments()[1..], delimiter = " ")
+	print("Running tests with % %\n", COMPILER_PATH, compile_flags)
+
+	test_files := get_files_in_directory("tests", include_folders = true)
+	defer deallocate(test_files.data)
+	
+	num_tests := 0
+	num_passed := 0
+	
+	for test_files {
+		defer deallocate(it.data)
+		
+		if get_extension(it) == "milo" {
+			log_file := execute_test(it, compile_flags)
+			
+			num_tests += 1
+			
+			if log_file {			
+				log := cast(string) read_entire_file(log_file)
+				print("\n%\n\n", log)
+				
+				deallocate(log.data)
+				deallocate(log_file.data)
+			} else {
+				num_passed += 1
+			}
+		}
+	}
+	
+	end: s64
+	QueryPerformanceCounter(*end)
+	time_taken := cast(f64) (end - start) / cast(f64) pcf
+	
+	message := messages.summary_passed
+	
+	if num_passed != num_tests message = messages.summary_failed
+	
+	print(message, num_passed, num_tests, time_taken)
+}

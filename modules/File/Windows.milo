@@ -1,4 +1,5 @@
 #import "Windows"
+#import "String"
 
 // @Incomplete add multiple return values 
 read_entire_file :: (file: string) -> (#must result: []u8, success := true) {
@@ -86,4 +87,43 @@ write_entire_file :: (file: string, data: []u8) -> bool {
 	}
 	
 	return true
+}
+
+get_files_in_directory :: (file: string, include_folders := false) -> []string {
+	filter :: (using find_data: *WIN32_FIND_DATAW, include_folders: bool) -> bool {
+		if include_folders {
+			if dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY {
+				if cFileName[0] == '.' && cFileName[1] == 0                         return false  // Ignore the .  directory listed by FindFirstFile
+				if cFileName[0] == '.' && cFileName[1] == '.' && cFileName[2] == 0  return false  // Ignore the .. directory listed by FindFirstFile
+			}
+		
+			return true
+		} else {
+			return !(dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+		}
+	}
+
+	pattern := concatenate(file, "*", delimiter = "\\")
+	defer deallocate(pattern.data)
+
+	files: [..]string
+	
+	find_data: WIN32_FIND_DATAW
+	
+	windows_string := to_windows_string(pattern)
+	defer deallocate(windows_string)
+	
+	find_handle := FindFirstFileW(windows_string, *find_data)
+	
+	if find_handle != INVALID_HANDLE_VALUE {
+		defer FindClose(find_handle)
+		
+		if filter(*find_data, include_folders)  array_add(*files, from_windows_string(find_data.cFileName.data))
+		
+		while FindNextFileW(find_handle, *find_data) {
+			if filter(*find_data, include_folders)  array_add(*files, from_windows_string(find_data.cFileName.data))
+		}
+	}
+	
+	return files
 }

@@ -156,7 +156,11 @@ void createRuntimeValue(Expr *value, void *dest) {
 		memcpy(dest, &static_cast<ExprLiteral *>(value)->typeValue->runtimeTypeInfo, sizeof(Type_Info *));
 	}
 	else if (value->flavor == ExprFlavor::STRING_LITERAL) {
-		memcpy(dest, &static_cast<ExprStringLiteral *>(value)->string, sizeof(String));
+		auto destString = static_cast<MiloString *>(dest);
+		auto srcString = static_cast<ExprStringLiteral *>(value)->string;
+
+		destString->data = (u8 *)srcString.characters;
+		destString->count = srcString.length;
 	}
 	else {
 		assert(false);

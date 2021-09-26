@@ -153,7 +153,7 @@ void addImplicitImport(Block *block, ExprIdentifier *identifier) {
 	block->implicitImports.add(identifier);
 }
 
-void addToOverloads(Block *block, Declaration *overload, Declaration *add) {	
+void addToOverloads(Block *block, Declaration *overload, Declaration *add) {
 	while (overload->nextOverload) {
 		overload = overload->nextOverload;
 	}

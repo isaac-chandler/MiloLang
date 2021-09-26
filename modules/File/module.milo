@@ -6,3 +6,39 @@
 } else {
 	unsupported_os: u64 = "error"
 }
+
+remove_extension :: (path: string) -> string {
+	last_slash := -1
+	last_dot := -1
+	
+	for path {
+		if it == '.'
+			last_dot = cast() it_index
+		else if it == '/' || it == '\\'
+			last_slash = cast() it_index
+	}
+	
+	if last_dot > last_slash {
+		return path[..last_dot]
+	} else {	
+		return path
+	}
+}
+
+get_extension :: (path: string) -> string {
+	last_slash := -1
+	last_dot := -1
+	
+	for path {
+		if it == '.'
+			last_dot = cast() it_index
+		else if it == '/' || it == '\\'
+			last_slash = cast() it_index
+	}
+	
+	if last_dot > last_slash {
+		return path[last_dot + 1..]
+	} else {	
+		return ""
+	}
+}
