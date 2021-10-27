@@ -1,4 +1,9 @@
-// The definitions in this file are required for all the compiler features to successfully run, modify with care!
+// The definitions in this file are required for all the compiler features to work correctly, modify with care!
+// Changes in function signatures or struct formats will likely result in corrupted output and crashes
+#if TARGET_WINDOWS {
+	#load "Windows.milo"
+}
+
 
 // These are the struct definitions for the values returned by type_info
 Type_Info :: struct {
@@ -105,7 +110,9 @@ any :: struct {
 }
 
 // The function called to remove an item from an array when a remove statement is encountered
-__remove :: (array: *[]u8, value: *u8, size: u64) -> *u8 {
+// The __remove function is marked #c_call so the remove keyword can be used from #c_call functions without
+// requiring a push_context
+__remove :: (array: *[]u8, value: *u8, size: u64) -> *u8 #c_call {
 	array.count -= 1
 	
 	end := array.data + array.count * size
@@ -118,7 +125,9 @@ __remove :: (array: *[]u8, value: *u8, size: u64) -> *u8 {
 }
 
 // The function called when the == operator is used on two string types
-__strings_equal :: (a: string, b: string) -> bool {
+// The __strings_equal function is marked #c_call so string == can be used from #c_call functions without
+// requiring a push_context
+__strings_equal :: (a: string, b: string) -> bool #c_call {
 	if a.count != b.count return false
 	
 
@@ -126,3 +135,54 @@ __strings_equal :: (a: string, b: string) -> bool {
 
 	return true
 }
+
+Source_Location :: struct {
+	filename: string
+	line: u64
+}
+
+Stack_Trace :: struct {
+	caller: *Stack_Trace
+	using info: *struct {
+		function_name: string
+		call_site: Source_Location
+	}
+}
+
+// The code within __program_start _should_ be safe to modify
+__program_start :: () -> s32 #c_call {
+	new_context: Context
+	
+	push_context new_context {
+		#if #entry_point {
+			#entry_point()	
+		}
+	}
+	
+	return 0 // Return the exit code, C-style
+}
+
+
+	
+Allocator :: struct {
+	
+	using Mode :: enum u8 {
+		ALLOCATE
+		EXPAND
+		FREE
+		FREE_ALL
+	}
+	
+	allocator: (mode: Mode, allocator_data: *void, size: u64, alignment: u64, pointer: *void) -> *void
+	allocator_data: *void
+}
+
+Context_Base :: struct {
+	stack_trace: *Stack_Trace
+	
+	using allocator_info: Allocator
+	
+	assertion_failed_handler: (location: Source_Location) -> void
+}
+
+#add_context using base: Context_Base

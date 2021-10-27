@@ -234,7 +234,7 @@ void runFunction(VMState *state, ExprFunction *expr, Ir *caller, DCArgs *dcArgs,
 			name->flavor = ExprFlavor::STRING_LITERAL;
 			name->start = {};
 			name->end = {};
-			name->string = *reinterpret_cast<String *>(callerStack[callerArguments->args[0].number]);
+			name->string = *reinterpret_cast<String *>(callerStack[callerArguments->args[1].number]);
 			name->type = &TYPE_STRING;
 
 			auto load = new ExprLoad;
@@ -250,7 +250,7 @@ void runFunction(VMState *state, ExprFunction *expr, Ir *caller, DCArgs *dcArgs,
 			inferInput.add(InferQueueJob(import, runningDirective->module));
 		}
 		else if (expr->valueOfDeclaration->name == "set_build_options") {
-			auto options = *reinterpret_cast<Build_Options *>(callerStack[callerArguments->args[0].number]);
+			auto options = *reinterpret_cast<Build_Options *>(callerStack[callerArguments->args[1].number]);
 
 			if (options.backend != Build_Options::Backend::X64 && options.backend != Build_Options::Backend::LLVM) {
 				reportError(caller, "Error: Unrecognized backend %llu in set_build_options", options.backend);
@@ -1016,20 +1016,21 @@ Expr *getReturnValueFromBytes(CodeLocation start, EndLocation end, Type *type, v
 
 Expr *runFunctionRoot(VMState *state, ExprRun *directive) {
 	PROFILE_FUNC();
-	u64 returnStore[32];
-	char argumentsStore[sizeof(FunctionCall) + sizeof(Argument)];
+	char argumentsStore[sizeof(FunctionCall) + sizeof(Argument) * 2];
+
+	u64 argumentData[2];
 
 	runningDirective = directive;
 
 	auto function = static_cast<ExprFunction *>(directive->function);
 
-	u64 *returnPointer = returnStore;
-
 	auto returnType = getDeclarationType(function->returns.declarations[0]);
 
-	if (returnType->size > sizeof(returnStore)) {
-		returnPointer = static_cast<u64 *>(malloc(returnType->size));
-	}
+	auto returnPointer = malloc(returnType->size);
+	auto contextPointer = malloc(TYPE_CONTEXT.size);
+
+	assert(TYPE_CONTEXT.defaultValue);
+	createRuntimeValue(TYPE_CONTEXT.defaultValue, contextPointer);
 
 	u32 bigReturn = !isStandardSize(returnType->size);
 
@@ -1037,13 +1038,21 @@ Expr *runFunctionRoot(VMState *state, ExprRun *directive) {
 	dummyOp.op = IrOp::CALL;
 	FunctionCall *arguments = reinterpret_cast<FunctionCall *>(argumentsStore);
 
+	arguments->args[0].number = 0;
+	arguments->args[0].type = TYPE_VOID_POINTER;
+
 	if (bigReturn) {
-		arguments->argCount = 1;
-		arguments->args[0].number = 0;
-		arguments->args[0].type = TYPE_VOID_POINTER;
+		arguments->argCount = 2;
+		arguments->args[1].number = 1;
+		arguments->args[1].type = TYPE_VOID_POINTER;
+
+		argumentData[0] = reinterpret_cast<u64>(returnPointer);
+		argumentData[1] = reinterpret_cast<u64>(contextPointer);
 	}
 	else {
-		arguments->argCount = 0;
+		arguments->argCount = 1;
+
+		argumentData[0] = reinterpret_cast<u64>(contextPointer);
 	}
 
 	arguments->returnType = bigReturn ? &TYPE_VOID : returnType;
@@ -1053,13 +1062,12 @@ Expr *runFunctionRoot(VMState *state, ExprRun *directive) {
 
 	u64 argument = reinterpret_cast<u64>(returnPointer);
 
-	runFunction(state, function, &dummyOp, nullptr, bigReturn ? &argument : returnPointer);
+	runFunction(state, function, &dummyOp, nullptr, argumentData);
 
 	auto result = getReturnValueFromBytes(function->start, function->end, returnType, returnPointer);
 
-	if (returnType->size > sizeof(returnStore)) {
-		free(returnPointer);
-	}
+	free(returnPointer);
+	free(contextPointer);
 
 	return result;
 }

@@ -3,6 +3,7 @@
 #import "String"
 
 #load "lexer.milo"
+#load "types.milo"
 
 Location :: struct {
 	file_index: u32

@@ -2,7 +2,7 @@
 #import "String"
 
 allocate :: (size: u64) -> #must *void {
-	if !process_heap process_heap = GetProcessHeap()
+	init_process_heap()
 	return HeapAlloc(process_heap, 0, size)
 }
 
@@ -12,13 +12,13 @@ reallocate :: (block: *void, size: u64) -> #must *void {
 	if block == null
 		return allocate(size)
 	else {			
-		if !process_heap process_heap = GetProcessHeap()
+		init_process_heap()
 		return HeapReAlloc(process_heap, 0, block, size)
 	}
 }
 
 deallocate :: (block: *void) {
-	if !process_heap process_heap = GetProcessHeap()
+	init_process_heap()
 	HeapFree(process_heap, 0, block)
 }
 
@@ -28,21 +28,13 @@ exit :: (code: u32 = 0) {
 
 // @Unicode
 print_buffer :: (buffer: []u8) {
-	if !std_out {
-		std_out = GetStdHandle(STD_OUTPUT_HANDLE)
-		SetConsoleOutputCP(CP_UTF8)
-	}
-	
+	init_std_out()
 	bytes_written: u32
 	WriteFile(std_out, buffer.data, cast() buffer.count, *bytes_written)
 }
 
 print_buffer :: (c: *Concatenator) {
-	if !std_out {
-		std_out = GetStdHandle(STD_OUTPUT_HANDLE)
-		SetConsoleOutputCP(CP_UTF8)
-	}
-	
+	init_std_out()
 	bucket := c.current_bucket
 	
 	while bucket {
@@ -114,12 +106,13 @@ run_command :: (command: string) -> u32 {
 }
 
 enable_console_colors :: () -> bool {
-	console := GetStdHandle(STD_OUTPUT_HANDLE);
-	if (console != INVALID_HANDLE_VALUE) {
+	init_std_out()
+	
+	if (std_out != INVALID_HANDLE_VALUE) {
 		mode: Console_Mode
 
-		if GetConsoleMode(console, *mode) {
-			if SetConsoleMode(console, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING) {
+		if GetConsoleMode(std_out, *mode) {
+			if SetConsoleMode(std_out, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING) {
 				return true
 			}
 		}
@@ -128,7 +121,64 @@ enable_console_colors :: () -> bool {
 	return false
 }
 
+ // @Incomplete: This is probably the slowest read_line function ever written, what is the correct way to do this in win32?
+read_line :: () -> (string, bool) {
+	init_std_in()
+
+	result: [..]u8
+
+	while true {
+		c: u8
+		bytes_read: u32
+
+		if !ReadFile(std_in, *c, 1, *bytes_read, null) || bytes_read == 0
+			break
+
+		if c == '\n' {
+			if had_carriage_return {
+				had_carriage_return = false
+				continue
+			}
+		}
+
+		had_carriage_return = c == '\r'
+
+
+		if c == '\n' || c == '\r' {
+			return .{result.data, result.count}, true
+		}
+
+		array_add(*result, c)
+	}
+
+	return "", false
+}
+
 #scope_module
 
+had_carriage_return: bool
+
+input_buffer: []u8
+input_buffer_data: [4096]u8
+
+std_in: HANDLE
 std_out: HANDLE
 process_heap: HANDLE
+
+init_std_out :: () {
+	if !std_out {
+		std_out = GetStdHandle(STD_OUTPUT_HANDLE)
+		SetConsoleOutputCP(CP_UTF8)
+	}
+}
+
+init_std_in :: () {
+	if !std_in {
+		std_in = GetStdHandle(STD_INPUT_HANDLE)
+		SetConsoleOutputCP(CP_UTF8)
+	}
+}
+
+init_process_heap :: () {
+	if !process_heap  process_heap = GetProcessHeap()
+}

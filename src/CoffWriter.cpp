@@ -1043,25 +1043,19 @@ void runCoffWriter() {
 
 				auto symbol = function->symbol;
 
-				if (function == entryPointFunction) {
+				if (function == programStart) {
 					symbol->storageClass = IMAGE_SYM_CLASS_EXTERNAL;
-					if (linkLibC) {
-						setSymbolName(&symbol->name, "__main");
-					}
-					else {
-						setSymbolName(&symbol->name, "main");
-					}
-				}
-				else if (function->valueOfDeclaration) {
-					String name = function->valueOfDeclaration->name;
-
-					if (name == "main") name = "_main"; // Rename any functions that are called main that aren't meant to be the entry point
-					symbol->storageClass = IMAGE_SYM_CLASS_STATIC;
-					setSymbolName(&symbol->name, function->valueOfDeclaration->name);
 				}
 				else {
 					symbol->storageClass = IMAGE_SYM_CLASS_STATIC;
+				}
+				
+				if (function->valueOfDeclaration) {
+					String name = function->valueOfDeclaration->name;
 
+					setSymbolName(&symbol->name, function->valueOfDeclaration->name);
+				}
+				else {
 					setSymbolName(&symbol->name, symbols.count());
 				}
 
@@ -1120,22 +1114,42 @@ void runCoffWriter() {
 
 			debugSymbols.add(&frame, sizeof(frame));
 
-			u32 paramOffset;
+			u32 paramOffset = 0;
 
 			code.ensure(256);
 
-			if (!isStandardSize(getDeclarationType(function->returns.declarations[0])->size)) {
-				paramOffset = 1;
 
-				code.add1Unchecked(0x48); // mov qword ptr[rsp + 8], rcx
+			constexpr u8 intRegisters[4] = { 0x4C, 0x54, 0x44, 0x4C };
+			if (!isStandardSize(getDeclarationType(function->returns.declarations[0])->size)) {
+				code.add1Unchecked(0x48);
 				code.add1Unchecked(0x89);
-				code.add1Unchecked(0x4C);
+				code.add1Unchecked(intRegisters[paramOffset]);
 				code.add1Unchecked(0x24);
-				code.add1Unchecked(0x08);
+				code.add1Unchecked((paramOffset + 1) << 3);
+				paramOffset++;
 			}
-			else {
-				paramOffset = 0;
+			
+			if (!(function->flags & EXPR_FUNCTION_IS_C_CALL)) {
+				code.add1Unchecked(0x48);
+				code.add1Unchecked(0x89);
+				code.add1Unchecked(intRegisters[paramOffset]);
+				code.add1Unchecked(0x24);
+				code.add1Unchecked((paramOffset + 1) << 3);
+				paramOffset++;
+
+				REGREL32 contextInfo;
+
+				contextInfo.off = getRegisterOffset(function, function->state.contextRegister);
+				contextInfo.typind = 0;
+
+				debugSymbols.ensure(2 + sizeof(contextInfo));
+				debugSymbols.add2Unchecked(static_cast<u16>(sizeof(contextInfo) + 1 + 7));
+				REGREL32 *patch = (REGREL32 *) debugSymbols.addUnchecked(&contextInfo, sizeof(contextInfo));
+				coffTypePatches.add({ &patch->typind, &TYPE_CONTEXT });
+
+				debugSymbols.addNullTerminatedString("context");
 			}
+			
 
 			for (u32 i = 0; i < function->arguments.declarations.count; i++) {
 				auto argument = function->arguments.declarations[i];
@@ -1159,8 +1173,6 @@ void runCoffWriter() {
 
 				debugSymbols.addNullTerminatedString(argument->name);
 			}
-
-			constexpr u8 intRegisters[4] = { 0x4C, 0x54, 0x44, 0x4C };
 
 			for (u32 i = 0; i < my_min(4 - paramOffset, function->arguments.declarations.count + function->returns.declarations.count - 1); i++) {
 				Type *type;
@@ -2895,13 +2907,6 @@ void runCoffWriter() {
 
 			code.add1Unchecked(0x5F); // pop rdi
 			code.add1Unchecked(0x5E); // pop rsi
-
-
-			// @Hack Make sure main returns 0 by default
-			if (function == entryPointFunction) {
-				code.add1Unchecked(0x31); // xor eax, eax
-				code.add1Unchecked(0xC0);
-			}
 
 			code.add1Unchecked(0xC3);
 

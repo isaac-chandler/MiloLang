@@ -126,9 +126,10 @@ struct Ir {
 
 struct IrState {
 	u32 nextRegister = 0;
+	u32 contextRegister = 0;
+	u32 parameters = 0;
 	u32 stackSpace = 0;
 	u32 maxCallArguments = 0;
-	u32 parameters = 0;
 	Array<Ir> ir;
 
 	BucketedArenaAllocator allocator;
@@ -181,7 +182,12 @@ enum class ExprFlavor : u8 {
 	OVERLOAD_SET, 
 
 	ARRAY_LITERAL, 
-	STRUCT_LITERAL
+	STRUCT_LITERAL, 
+
+	CONTEXT, 
+	PUSH_CONTEXT, 
+	ENTRY_POINT,
+	ADD_CONTEXT
 };
 
 struct Declaration;
@@ -207,6 +213,11 @@ struct ExprOverloadSet : Expr {
 	
 	Declaration *currentOverload;
 	Block *block;
+};
+
+struct ExprAddContext : Expr {
+	Declaration *declaration;
+	Importer *using_;
 };
 
 struct ExprSlice : Expr {
@@ -300,7 +311,7 @@ struct ExprDefer : Expr {
 #define EXPR_INVERT_UNARY_DOT 0x800'0000
 
 #define EXPR_FUNCTION_IS_INSTRINSIC 0x1000'0000
-#define EXPR_IS_CALLED 0x2000'0000
+#define EXPR_CONTEXT_AVAILABLE 0x2000'0000
 
 #define ENUM_SPECIAL_MEMBER_COUNT 1
 

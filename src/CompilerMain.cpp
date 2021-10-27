@@ -431,6 +431,7 @@ int main(int argc, char *argv[]) {
 
 		runInfer(input);
 
+		reportInfo("Lines parsed: %ld", totalLines);
 		reportInfo("Frontend Time: %.1fms", duration_cast<microseconds>(duration<double>(
 			high_resolution_clock::now() - start)).count() / 1000.0);
 
@@ -708,7 +709,8 @@ int main(int argc, char *argv[]) {
 
 
 			linkerCommand = mprintf(L"\"%s\" %S -nodefaultlib -out:%.*S /debug %S %S%s \"-libpath:%s\" \"-libpath:%s\" \"-libpath:%s\" -incremental:no -nologo -natvis:%Smilo.natvis",
-				linkerPath, objectFileName, STRING_PRINTF(outputFileName), libBuffer, modulePath, linkLibC ? L"__milo_cmain.obj" : L"__milo_chkstk.obj -entry:main", windowsLibPath, crtLibPath, ucrtLibPath, modulePath);
+				linkerPath, objectFileName, STRING_PRINTF(outputFileName), libBuffer, modulePath, linkLibC ? L"__milo_cmain.obj" : 
+				L"__milo_chkstk.obj -entry:__program_start -SUBSYSTEM:CONSOLE", windowsLibPath, crtLibPath, ucrtLibPath, modulePath);
 		}
 
 

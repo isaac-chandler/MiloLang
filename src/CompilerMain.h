@@ -81,5 +81,6 @@ inline bool linkLibC = false;
 
 inline char modulePath[1024];
 
-inline struct Declaration *entryPoint;
-inline struct ExprFunction *entryPointFunction;
+#define PROGRAM_START "__program_start"
+inline struct ExprFunction *programStart;
+inline volatile long totalLines;

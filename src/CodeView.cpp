@@ -278,12 +278,19 @@ u32 createTypeImpl(Type *type, CodeViewTypeInfo *codeView) {
 	else if (type->flavor == TypeFlavor::FUNCTION) {
 		auto function = static_cast<TypeFunction *>(type);
 
+		u32 extraParams = 0;
+
+		if (!(function->flags & TYPE_FUNCTION_IS_C_CALL)) {
+			createTypeOrForwardDeclaration(&TYPE_CONTEXT);
+			extraParams++;
+		}
+
 		for (u32 i = 0; i < function->argumentCount; i++) {
-			createType(function->argumentTypes[i]);
+			createTypeOrForwardDeclaration(function->argumentTypes[i]);
 		}
 
 		for (u32 i = 0; i < function->returnCount; i++) {
-			createType(function->returnTypes[i]);
+			createTypeOrForwardDeclaration(function->returnTypes[i]);
 		}
 
 		u32 firstReturn = debugTypeId;
@@ -297,10 +304,16 @@ u32 createTypeImpl(Type *type, CodeViewTypeInfo *codeView) {
 			};
 		}
 
+		u32 argCount = extraParams + function->argumentCount + function->returnCount - 1;
+
 		u32 argList = DEBUG_LEAF{
-			debugTypes->ensure(6 + (function->argumentCount + function->returnCount - 1) * 4);
+			debugTypes->ensure(6 + argCount * 4);
 			debugTypes->add2Unchecked(0x1201); // LF_ARGLIST
-			debugTypes->add4Unchecked(function->argumentCount + function->returnCount - 1);
+			debugTypes->add4Unchecked(argCount);
+
+			if (!(function->flags & TYPE_FUNCTION_IS_C_CALL)) {
+				debugTypes->add4Unchecked(getCoffTypeIndex(&TYPE_CONTEXT));
+			}
 
 			for (u32 i = 0; i < function->argumentCount; i++) {
 				debugTypes->add4Unchecked(getCoffTypeIndex(function->argumentTypes[i]));
@@ -317,7 +330,7 @@ u32 createTypeImpl(Type *type, CodeViewTypeInfo *codeView) {
 			debugTypes->add4Unchecked(getCoffTypeIndex(function->returnTypes[0]));
 			debugTypes->add1Unchecked(0); // C near call
 			debugTypes->add1Unchecked(0);
-			debugTypes->add2Unchecked(function->argumentCount + function->returnCount - 1); // 0 parameters
+			debugTypes->add2Unchecked(argCount);
 			debugTypes->add4Unchecked(argList);
 		};
 

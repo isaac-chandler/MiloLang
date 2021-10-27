@@ -363,9 +363,7 @@ void addFunction(ExprFunction *function) {
 	addJob(&functionJobs, job);
 }
 
-void addTypeBlock(Expr *expr) {
-	auto type = static_cast<ExprLiteral *>(expr)->typeValue;
-
+void addTypeBlock(Type *type, Declaration *valueOfDeclaration) {
 	if (type->flavor == TypeFlavor::STRUCT) {
 		if (!type->sizeJob) {
 			auto struct_ = static_cast<TypeStruct *>(type);
@@ -376,11 +374,11 @@ void addTypeBlock(Expr *expr) {
 
 			job->type = type;
 
-			if (expr->valueOfDeclaration && (expr->valueOfDeclaration->flags & DECLARATION_IS_CONSTANT)) {
-				type->name = expr->valueOfDeclaration->name;
-				struct_->enclosingScope = expr->valueOfDeclaration->enclosingScope;
+			if (valueOfDeclaration && (valueOfDeclaration->flags & DECLARATION_IS_CONSTANT)) {
+				type->name = valueOfDeclaration->name;
+				struct_->enclosingScope = valueOfDeclaration->enclosingScope;
 			}
-			else {
+			else if (type != &TYPE_CONTEXT) { // The context is passed into addTypeBlock but does not have a declaration. It is already given a name so don't rename to anonymous
 				type->name = (type->flags & TYPE_STRUCT_IS_UNION) ? "union" : "struct";
 				struct_->enclosingScope = &runtimeModule->members;
 				type->flags |= TYPE_IS_ANONYMOUS;
@@ -408,9 +406,9 @@ void addTypeBlock(Expr *expr) {
 
 			job->type = type;
 
-			if (expr->valueOfDeclaration && (expr->valueOfDeclaration->flags & DECLARATION_IS_CONSTANT)) {
-				type->name = expr->valueOfDeclaration->name;
-				enum_->enclosingScope = expr->valueOfDeclaration->enclosingScope;
+			if (valueOfDeclaration && (valueOfDeclaration->flags & DECLARATION_IS_CONSTANT)) {
+				type->name = valueOfDeclaration->name;
+				enum_->enclosingScope = valueOfDeclaration->enclosingScope;
 			}
 			else {
 				type->name = (type->flags & TYPE_ENUM_IS_FLAGS) ? "enum_flags" : "enum";
@@ -445,6 +443,12 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 			flatten(flattenTo, &identifier->structAccess);
 		}
 
+		flattenTo.add(expr);
+		break;
+	}
+	case ExprFlavor::ENTRY_POINT:
+	case ExprFlavor::CONTEXT:
+	case ExprFlavor::ADD_CONTEXT: {
 		flattenTo.add(expr);
 		break;
 	}
@@ -594,7 +598,10 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 		break;
 	}
 	case ExprFlavor::TYPE_LITERAL: {
-		addTypeBlock(*expr);
+		auto literal = static_cast<ExprLiteral *>(*expr);
+
+		if (literal->typeValue != &TYPE_CONTEXT)
+			addTypeBlock(literal->typeValue, literal->valueOfDeclaration);
 
 		break;
 	}
@@ -615,6 +622,14 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 			flattenTo.add(expr);
 		}
 
+		break;
+	}
+	case ExprFlavor::PUSH_CONTEXT: {
+		ExprBinaryOperator *pushContext = static_cast<ExprBinaryOperator *>(*expr);
+
+		flatten(flattenTo, &pushContext->left);
+		flattenTo.add(expr);
+		flatten(flattenTo, &pushContext->right);
 		break;
 	}
 	case ExprFlavor::BINARY_OPERATOR: {
@@ -1991,16 +2006,15 @@ bool defaultValueIsZero(SubJob *job, Type *type, bool *yield) {
 Expr *getDefaultValue(SubJob *job, Type *type, bool *shouldYield);
 
 Expr *createDefaultValue(SubJob *job, Type *type, bool *shouldYield) {
-	bool yield = false;
+	*shouldYield = false;
 
-	if (defaultValueIsZero(job, type, &yield)) {
+	if (defaultValueIsZero(job, type, shouldYield)) {
 		return createIntLiteral({}, {}, type, 0);
 	}
 
-	if (yield) {
-		*shouldYield = true;
+	if (*shouldYield)
 		return nullptr;
-	}
+
 
 	switch (type->flavor) {
 	case TypeFlavor::BOOL:
@@ -2059,10 +2073,9 @@ Expr *createDefaultValue(SubJob *job, Type *type, bool *shouldYield) {
 	case TypeFlavor::ARRAY: {
 		auto array = static_cast<TypeArray *>(type);
 			
-		Expr *value = getDefaultValue(job, array->arrayOf, &yield);
+		Expr *value = getDefaultValue(job, array->arrayOf, shouldYield);
 
-		if (yield) {
-			*shouldYield = true;
+		if (*shouldYield) {
 			return nullptr;
 		}
 
@@ -3482,7 +3495,7 @@ bool constantsBlockMatches(Block *original, Block *polymorph) {
 	assert(original->declarations.count == polymorph->declarations.count);
 
 	for (u64 i = 0; i < original->declarations.count; i++) {
-		auto originalDeclaration = original->declarations[i];
+		auto originalDeclaration  = original->declarations[i];
 		auto polymorphDeclaration = polymorph->declarations[i];
 
 		assert(originalDeclaration->name == polymorphDeclaration->name);
@@ -4560,6 +4573,11 @@ void markDeclarationsAsPointedTo(Expr *expr) {
 	}
 }
 
+static Declaration *entryPoint;
+static Array<SubJob *> waitingOnEntryPoint;
+
+static bool contextIsLocked;
+
 bool inferFlattened(SubJob *job) {
 	PROFILE_FUNC();
 	++totalFlattenedInfers;
@@ -4578,6 +4596,35 @@ bool inferFlattened(SubJob *job) {
 		++totalInferIterations;
 
 		switch (expr->flavor) {
+		case ExprFlavor::CONTEXT: {
+			addSizeDependency(job->sizeDependencies, &TYPE_CONTEXT);
+
+			break;
+		}
+		case ExprFlavor::ENTRY_POINT: {
+			if (!entryPoint) {
+				goToSleep(job, &waitingOnEntryPoint, "Waiting for entry point");
+				return true;
+			}
+
+			if (!(entryPoint->flags & DECLARATION_VALUE_IS_READY)) {
+				goToSleep(job, &entryPoint->sleepingOnMyValue, "Waiting for entry point value");
+				return true;
+			}
+
+			*exprPointer = entryPoint->initialValue;
+			break;
+		}
+		case ExprFlavor::PUSH_CONTEXT: {
+			auto pushContext = static_cast<ExprBinaryOperator *>(expr);
+
+			bool yield;
+			if (!assignOp(job, pushContext->left, &TYPE_CONTEXT, pushContext->left, &yield)) {
+				return yield;
+			}
+
+			break;
+		}
 		case ExprFlavor::IDENTIFIER: {
 
 			auto identifier = static_cast<ExprIdentifier *>(expr);
@@ -4608,13 +4655,18 @@ bool inferFlattened(SubJob *job) {
 						bool yield;
 						auto member = findDeclaration(&struct_->members, identifier->name, &yield);
 
-						if (yield) {
+						if (yield) { // Check for importers even if we did find the member in case the import adds more overloads
 							goToSleep(job, &struct_->members.sleepingOnMe, "Struct access scope has importers", identifier->name);
 
 							return true;
 						}
 
 						if (!member) {
+							if (struct_ == &TYPE_CONTEXT && !contextIsLocked) {
+								goToSleep(job, &TYPE_CONTEXT.members.sleepingOnMe, "Struct access waiting for potential #add_context");
+								return true;
+							}
+
 							reportError(identifier, "Error: %.*s does not have member %.*s", STRING_PRINTF(struct_->name), STRING_PRINTF(identifier->name));
 							return false;
 						}
@@ -5944,6 +5996,11 @@ bool inferFlattened(SubJob *job) {
 				return false;
 			}
 
+			if (!(call->function->type->flags & TYPE_FUNCTION_IS_C_CALL) && !(call->flags & EXPR_CONTEXT_AVAILABLE)) {
+				reportError(call, "Error: Can only call #c_call functions without an active context. Use push_context to add a context");
+				return false;
+			}
+
 			auto function = static_cast<TypeFunction *>(call->function->type);
 
 			expr->type = function->returnTypes[0];
@@ -6885,6 +6942,10 @@ bool checkStructDeclaration(Declaration *declaration, Type *&value, String name)
 
 bool checkFunctionDeclaration(Declaration *declaration, ExprFunction *&value, String name) {
 	if (declaration->name == name) {
+		if (value) {
+			reportError(declaration, "Internal Compiler Error: Cannot declare %.*s more than once", STRING_PRINTF(name));
+		}
+
 		if (!(declaration->flags & DECLARATION_IS_CONSTANT)) {
 			reportError(declaration, "Internal Compiler Error: Declaration for %.*s must be a constant", STRING_PRINTF(name));
 			return false;
@@ -6912,6 +6973,7 @@ else if (!checkStructDeclaration(declaration, value, name)) {	\
 }                                             
 	if (false);
 	FUNCTION_DECLARATION(removeFunction, "__remove")
+		FUNCTION_DECLARATION(programStart, PROGRAM_START)
 		FUNCTION_DECLARATION(stringsEqualFunction, "__strings_equal")
 		STRUCT_DECLARATION(TYPE_ANY, "any")
 		STRUCT_DECLARATION(TYPE_TYPE_INFO, "Type_Info")
@@ -7038,7 +7100,10 @@ void forceAddDeclaration(Declaration *declaration) {
 		else if (declaration->type && declaration->type->flavor == ExprFlavor::TYPE_LITERAL && !declaration->initialValue && (declaration->flags & (DECLARATION_IS_ARGUMENT | DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_RETURN))) {
 			declaration->flags |= DECLARATION_TYPE_IS_READY;
 
-			addTypeBlock(declaration->type);
+			auto type = static_cast<ExprLiteral *>(declaration->type);
+
+			if (type->typeValue != &TYPE_CONTEXT)
+				addTypeBlock(type->typeValue, declaration);
 
 			wakeUpSleepers(&declaration->sleepingOnMyType);
 			declaration->sleepingOnMyType.free();
@@ -7096,7 +7161,13 @@ bool addDeclaration(Declaration *declaration, Module *module) {
 				return false;
 			}
 
+			if (!(declaration->flags & DECLARATION_IS_CONSTANT)) {
+				reportError(declaration, "Error: The entry point must be a constant declaration");
+				return false;
+			}
+
 			entryPoint = declaration;
+			wakeUpSleepers(&waitingOnEntryPoint);
 		}
 
 		wakeUpSleepers(&module->members.sleepingOnMe, declaration->name);
@@ -7846,6 +7917,10 @@ bool inferFunctionHeader(SubJob *subJob) {
 		for (auto return_ : function->returns.declarations) {
 			addSizeDependency(&job->sizeDependencies, getDeclarationType(return_));
 		}
+
+		if (!(function->flags & EXPR_FUNCTION_IS_C_CALL)) {
+			addSizeDependency(&job->sizeDependencies, &TYPE_CONTEXT);
+		}
 	}
 
 	return true;
@@ -8583,6 +8658,22 @@ bool inferRun(SubJob *subJob) {
 
 	auto function = static_cast<TypeFunction *>(run->function->type);
 
+	if (!contextIsLocked) {
+		goToSleep(job, &TYPE_CONTEXT.members.sleepingOnMe, "#run directive waiting for context to be locked");
+		return true;
+	}
+
+	bool yield;
+
+	createDefaultValue(job, &TYPE_CONTEXT, &yield);
+
+	if (yield)
+		return true;
+
+	if (!ensureTypeInfos(job, TYPE_CONTEXT.defaultValue))
+		return true;
+
+
 	assert(function->argumentCount == 0);
 	assert(function->returnCount == 1);
 	assert(!(function->flags & TYPE_FUNCTION_IS_C_CALL));
@@ -8836,6 +8927,30 @@ bool doSubJobs(u64 *irGenerationPending) {
 	return true;
 }
 
+bool addContext(ExprAddContext *addContext) {
+	if (contextIsLocked) {
+		reportError(addContext, "Error: Cannot add more members to the context after the context has been used");
+		return false;
+	}
+
+	if (!addDeclarationToBlock(&TYPE_CONTEXT.members, addContext->declaration, TYPE_CONTEXT.members.declarations.count)) {
+		return false;
+	}
+
+	if (!addDeclaration(addContext->declaration, nullptr)) {
+		return false;
+	}
+
+
+	if (addContext->using_) {
+		addImporter(addContext->using_, nullptr);
+	}
+
+	wakeUpSleepers(&TYPE_CONTEXT.members.sleepingOnMe, addContext->declaration->name);
+
+	return true;
+}
+
 void runInfer(String inputFile) {
 	PROFILE_FUNC();
 
@@ -8885,18 +9000,31 @@ void runInfer(String inputFile) {
 
 				loadsPending--;
 			}
-			else if (job.type == InferJobType::RUN) {
-				addRunJob(job.run);
+			else if (job.type == InferJobType::EXPR) {
+				if (job.expr->flavor == ExprFlavor::RUN) {
+					addRunJob(static_cast<ExprRun *>(job.expr));
+				}
+				else if (job.expr->flavor == ExprFlavor::FUNCTION) {
+					assert(irGenerationPending > 0);
+					irGenerationPending--;
+
+					auto function = static_cast<ExprFunction *>(job.expr);
+
+					wakeUpSleepers(&function->sleepingOnIr);
+				}
+				else if (job.expr->flavor == ExprFlavor::ADD_CONTEXT) {
+					if (!addContext(static_cast<ExprAddContext *>(job.expr))) {
+						goto error;
+					}
+				}
+				else {
+					assert(false);
+				}
 			}
 			else {
-				assert(job.type == InferJobType::FUNCTION_IR);
+				assert(false);
 
-				assert(irGenerationPending > 0);
-				irGenerationPending--;
-
-				auto function = job.function;
-
-				wakeUpSleepers(&function->sleepingOnIr);
+				
 			}
 
 			if (!doSubJobs(&irGenerationPending))
@@ -8904,7 +9032,14 @@ void runInfer(String inputFile) {
 		}
 
 		while (loadsPending == 0 && irGenerationPending == 0) {
-			if (overloadsWaitingForLock.count) {
+			if (!contextIsLocked) {
+				contextIsLocked = true;
+				addTypeBlock(&TYPE_CONTEXT, nullptr);
+
+				// Wake up any job that is still looking for a member in the context so it can report a member not found error
+				wakeUpSleepers(&TYPE_CONTEXT.sleepingOnMe);
+			} 
+			else if (overloadsWaitingForLock.count) {
 				for (auto waiting : overloadsWaitingForLock) {
 					waiting.overloadSet->flags |= DECLARATION_OVERLOADS_LOCKED;
 					waiting.waiting->sleepCount = 0;
@@ -8921,7 +9056,7 @@ void runInfer(String inputFile) {
 			}
 		}
 	}
-	outer:
+outer:
 
 	if ((sizeJobs || functionJobs || declarationJobs || runJobs || importerJobs) && !hadError) { // We didn't complete type inference, check for undeclared identifiers or circular dependencies! If we already had an error don't spam more
 		// Check for undeclared identifiers
@@ -9189,55 +9324,19 @@ void runInfer(String inputFile) {
 		reportInfo("Type table memory used: %ukb", typeArena.totalSize / 1024);
 	}
 
-	assert(entryPoint->flags & DECLARATION_TYPE_IS_READY);
-	assert(entryPoint->flags & DECLARATION_VALUE_IS_READY);
-
-	if (!entryPoint) {
-		reportError("Error: No entry point was declared");
-		goto error;
-	}
-
-	if (!(entryPoint->flags & DECLARATION_IS_CONSTANT)) {
-		reportError(entryPoint, "Error: The entry point must be defined as constant");
-		goto error;
-	}
-
-	{
-
-		assert(entryPoint->initialValue->flavor == ExprFlavor::FUNCTION);
-
-		entryPointFunction = static_cast<ExprFunction *>(entryPoint->initialValue);
-		auto entryPointType = static_cast<TypeFunction *>(entryPointFunction->type);
-
-		if (entryPointType == &TYPE_POLYMORPHIC_FUNCTION) {
-			reportError(entryPointFunction, "Error: The entry point cannot be polymorphic");
+	if (!hadError) {
+		if (!entryPoint) {
+			reportError("Error: No entry point was declared");
 			goto error;
 		}
 
-		if (entryPointType->flavor != TypeFlavor::FUNCTION) {
-			reportError(entryPointFunction, "Error: The entry point must be a function");
+		if (!programStart) {
+			reportError("Error: No declaration was found for the program start");
 			goto error;
 		}
 
-		if (entryPointType->returnCount != 1 || entryPointType->returnTypes[0] != &TYPE_VOID) {
-			reportError(entryPointFunction, "Error: The entry point cannot have return values");
-			goto error;
-		}
-
-		if (entryPointType->argumentCount != 0) {
-			reportError(entryPointFunction, "Error: The entry point cannot have arguments");
-			goto error;
-		}
-
-		if (entryPointFunction->flags & EXPR_FUNCTION_IS_EXTERNAL) {
-			reportError(entryPointFunction, "Error: The entry point cannot be #external");
-			goto error;
-		}
-
-		if (entryPointFunction->flags & EXPR_FUNCTION_IS_INSTRINSIC) {
-			reportError(entryPointFunction, "Error: The entry point cannot be #intrinsic");
-			goto error;
-		}
+		assert(entryPoint->flags & DECLARATION_TYPE_IS_READY);
+		assert(entryPoint->flags & DECLARATION_VALUE_IS_READY);
 	}
 
 	

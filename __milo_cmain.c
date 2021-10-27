@@ -1,6 +1,5 @@
-extern void __main(void);
+extern int __program_start(void);
 
 int main(int argc, char **argv) {
-	__main();
-	return 0;
+	return __program_start();
 }

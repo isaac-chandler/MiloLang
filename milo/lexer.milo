@@ -963,7 +963,7 @@ Token :: struct {
 		
 		STRING
 		BOOL
-		VOID
+		MEMORY
 		TYPE
 		
 		STRUCT
@@ -1037,6 +1037,8 @@ Token :: struct {
 		IMPORT
 		SCOPE_MODULE
 		SCOPE_EXPORT
+		SCOPE_FILE
+		INTINSIC
 	}
 }
 
@@ -1058,7 +1060,7 @@ keywords :: Keyword.[
 	.{.F64,        "f64"       }, 
 	.{.STRING,     "string"    }, 
 	.{.BOOL,       "bool"      }, 
-	.{.VOID,       "void"      }, 
+	.{.MEMORY,     "memory"    }, 
 	.{.TYPE,       "type"      }, 
 	.{.STRUCT,     "struct"    }, 
 	.{.UNION,      "union"     }, 
@@ -1097,5 +1099,7 @@ directives :: Keyword.[
 	.{.C_CALL,       "c_call"      }, 
 	.{.IMPORT,       "import"      }, 
 	.{.SCOPE_MODULE, "scope_module"}, 
-	.{.SCOPE_EXPORT, "scope_export"}
+	.{.SCOPE_EXPORT, "scope_export"}, 
+	.{.SCOPE_FILE,   "scope_file"}
+	.{.INTRINSIC,    "intrinsic"}
 ]

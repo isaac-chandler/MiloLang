@@ -15,6 +15,12 @@ unsigned_binary_operators :: (dummy: $T) {
 	assert(b % a == 1)
 }
 
+floats_are_equal :: (a: $T, b: T, epsilon: T) -> bool {
+	abs :: (val: T) -> T { if val < 0 return -val else return val}
+	
+	return abs(a - b) <= epsilon
+}
+
 signed_binary_operators :: (dummy: $T) {
 	a: T = -3
 	b: T = 16
@@ -31,6 +37,20 @@ signed_binary_operators :: (dummy: $T) {
 	assert(b % a == 1)
 }
 
+float_binary_operators :: (dummy: $T) {
+	a: T = -3
+	b: T = 16
+	
+	assert(floats_are_equal(a + b,  13, 1e-4))
+	assert(floats_are_equal(b + a,  13, 1e-4))
+	assert(floats_are_equal(a - b, -19, 1e-4))
+	assert(floats_are_equal(b - a,  19, 1e-4))
+	assert(floats_are_equal(a * b, -48, 1e-4))
+	assert(floats_are_equal(b * a, -48, 1e-4))
+	assert(floats_are_equal(a / b, -0.1875, 1e-4))
+	assert(floats_are_equal(b / a, -5.3333333, 1e-4))
+}
+
 main :: () {
 	unsigned_binary_operators(cast(u8)  0)
 	unsigned_binary_operators(cast(u16) 0)
@@ -45,6 +65,9 @@ main :: () {
 	signed_binary_operators(cast(s16) 0)
 	signed_binary_operators(cast(s32) 0)
 	signed_binary_operators(cast(s64) 0)
+	
+	float_binary_operators(cast(f32) 0)
+	float_binary_operators(cast(f64) 0)
 }
 
 #run main()

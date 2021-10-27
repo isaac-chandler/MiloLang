@@ -11,11 +11,13 @@ Concatenator :: struct {
 		next: *Bucket
 	}
 	
+	total_count: u64
 	current_bucket: *Bucket
 	first_bucket: Bucket
 }
 
 reset :: (using c: *Concatenator) {
+	total_count = 0
 	first_bucket.offset = 0
 }
 
@@ -55,12 +57,14 @@ append :: (using c: *Concatenator, character: u8) {
 	
 	data[offset] = character
 	offset += 1
+	total_count += 1
 }
 
 append :: (using c: *Concatenator, s: string) {
 	using current_bucket
 	
 	remaining := s
+	total_count += s.count
 	
 	while true {
 		next_bucket(c)

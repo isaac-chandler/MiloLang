@@ -4,6 +4,7 @@
 #include "TypeTable.h"
 #include "Ast.h"
 #include "CoffWriter.h"
+#include "CompilerMain.h"
 
 BucketedArenaAllocator typeArena(1024 * 1024);
 
@@ -536,6 +537,9 @@ void setupTypeTable() {
 	typeTableEntries = new TypeTableEntry[typeTableCapacity];
 	count = 0;
 
+	TYPE_CONTEXT.members.flavor = BlockFlavor::STRUCT;
+	TYPE_CONTEXT.enclosingScope = &runtimeModule->members;
+
 	insertIntoTable(&TYPE_VOID);
 
 	insertIntoTable(&TYPE_U8);
@@ -554,6 +558,8 @@ void setupTypeTable() {
 	insertIntoTable(&TYPE_BOOL);
 	insertIntoTable(&TYPE_STRING);
 	insertIntoTable(&TYPE_TYPE);
+
+	addStruct(&TYPE_CONTEXT);
 
 	auto u64Type = TYPE_NEW(ExprLiteral);
 	u64Type->flavor = ExprFlavor::TYPE_LITERAL;

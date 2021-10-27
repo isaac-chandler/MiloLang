@@ -587,10 +587,12 @@ using File_Flag :: enum_flags u32 {
 	FILE_ATTRIBUTE_INTEGRITY_STREAM      :: 0x0000_8000
 	FILE_ATTRIBUTE_VIRTUAL               :: 0x0001_0000
 	FILE_ATTRIBUTE_NO_SCRUB_DATA         :: 0x0002_0000
-	FILE_ATTRIBUTE_RECALL_ON_OPEN        :: 0x0004_0000	FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS :: 0x0040_0000 // This is not a mistake, there is a file attribute in the middle of the file flags range
+	FILE_ATTRIBUTE_RECALL_ON_OPEN        :: 0x0004_0000
+	FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS :: 0x0040_0000 // This is not a mistake, there is a file attribute in the middle of the file flags range
 
 	FILE_FLAG_OPEN_NO_RECALL     :: 0x0010_0000
-	FILE_FLAG_OPEN_REPARSE_POINT :: 0x0020_0000	// This gap contains FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS for some reason
+	FILE_FLAG_OPEN_REPARSE_POINT :: 0x0020_0000
+	// This gap contains FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS for some reason
 	FILE_FLAG_SESSION_AWARE      :: 0x0080_0000
 	FILE_FLAG_POSIX_SEMANCTICS   :: 0x0100_0000
 	FILE_FLAG_BACKUP_SEMANTICS   :: 0x0200_0000

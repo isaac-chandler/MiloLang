@@ -121,7 +121,12 @@ enum class TokenT : u8 {
 	SCOPE_EXPORT, 
 	C_VARARGS, 
 	IS_CONSTANT, 
-	INTRINSIC
+	INTRINSIC,
+	CONTEXT,
+	PUSH_CONTEXT,
+	ENTRY_POINT, 
+	ADD_CONTEXT, 
+	CONTEXT_TYPE
 };
 
 struct Token {
@@ -163,8 +168,9 @@ struct LexerSave {
 struct LexerFile {
 	BucketedArenaAllocator parserArena;
 	Block *currentBlock;
-	Array<struct ExprFunction *> functionHeaderStack;
-	Array<Expr *> inDeferStack;
+	struct ExprFunction * currentFunctionHeader = nullptr;
+	Expr *inDefer = nullptr;
+	bool contextAvailable = false;
 	struct Module *module;
 	u32 identifierSerial;
 	bool moduleScope;
@@ -181,6 +187,10 @@ struct LexerFile {
 
 	CodeLocation undoLocation;
 	EndLocation previousTokenEnd;
+
+	u32 totalLines = 0;
+	u32 lastLineWithToken = 0;
+	u32 linesWithToken = 0;
 
 	LexerFile() : parserArena(65536) {}
 

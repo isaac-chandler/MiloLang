@@ -83,6 +83,7 @@ struct Type {
 
 	struct Expr *defaultValue = nullptr;
 	class llvm::GlobalVariable *llvmStorage = nullptr;
+	class llvm::DIType *llvmDebugType = nullptr;
 	struct Type_Info *runtimeTypeInfo = nullptr;
 };
 
@@ -162,6 +163,7 @@ inline Type TYPE_ARRAY_LITERAL        = { 0, 0, "<array literal>",        73, TY
 inline Type TYPE_STRUCT_LITERAL       = { 0, 0, "<struct literal>" ,      79, TYPE_IS_INTERNAL, TypeFlavor::AUTO_CAST };
 inline Type TYPE_OVERLOAD_SET         = { 0, 0, "<overload set>",         83, TYPE_IS_INTERNAL, TypeFlavor::AUTO_CAST };
 inline Type TYPE_POLYMORPHIC_FUNCTION = { 0, 0, "<polymorhpic function>", 89, TYPE_IS_INTERNAL, TypeFlavor::AUTO_CAST };
+inline TypeStruct TYPE_CONTEXT        = { 0, 0, "context",                0, 0, TypeFlavor::STRUCT };
 
 
 inline Type *TYPE_VOID_POINTER;

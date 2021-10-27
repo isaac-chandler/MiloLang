@@ -54,6 +54,7 @@
 #include <llvm/InitializePasses.h>
 #include <llvm/Support/CommandLine.h>
 #include <llvm/CodeGen/CommandFlags.h>
+#include <llvm/DebugInfo/PDB/PDB.h>
 #pragma warning(pop)
 
 #pragma warning(error: 4715)

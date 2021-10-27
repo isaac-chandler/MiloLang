@@ -62,6 +62,16 @@ u32 copyOrRead(IrState *state, u32 dest, u32 src, Type *type, u32 offset = 0) {
 	return memop(state, isStoredByPointer(type) ? IrOp::COPY : IrOp::READ, dest, src, type->size, offset);
 }
 
+u32 set(IrState *state, u32 dest, u32 src, u32 size) {
+	Ir &set = state->ir.add();
+	set.op = IrOp::SET;
+	set.dest = dest;
+	set.a = src;
+	set.opSize = size;
+
+	return dest;
+}
+
 u32 constant(IrState *state, u32 dest, u32 size, u64 value) {
 	Ir &constant = state->ir.add();
 	constant.op = IrOp::IMMEDIATE;
@@ -1009,11 +1019,7 @@ u32 generateBinary(IrState *state, ExprBinaryOperator *binary) {
 
 			if (!identifier->structAccess && !declarationIsStoredByPointer(identifier->declaration)) {
 				u32 value = generateIr(state, right);
-				Ir &set = state->ir.add();
-				set.op = IrOp::SET;
-				set.dest = identifier->declaration->registerOfStorage;
-				set.a = value;
-				set.opSize = identifier->type->size;
+				set(state, identifier->declaration->registerOfStorage, value, identifier->type->size);
 				
 				return 0;
 			}
@@ -1065,11 +1071,7 @@ u32 generateBinary(IrState *state, ExprBinaryOperator *binary) {
 
 
 		u32 leftReg = generateIr(state, left);
-		Ir &set1 = state->ir.add();
-		set1.op = IrOp::SET;
-		set1.dest = result;
-		set1.a = leftReg;
-		set1.opSize = 1;
+		set(state, result, leftReg, 1);
 
 		u32 patch = state->ir.count;
 
@@ -1080,11 +1082,7 @@ u32 generateBinary(IrState *state, ExprBinaryOperator *binary) {
 
 		//addLineMarker(state, right);
 		u32 rightReg = generateIr(state, right);
-		Ir &set2 = state->ir.add();
-		set2.op = IrOp::SET;
-		set2.dest = result;
-		set2.a = rightReg;
-		set2.opSize = 1;
+		set(state, result, rightReg, 1);
 
 		state->ir[patch].b = state->ir.count;
 
@@ -1260,11 +1258,7 @@ void generateFor(IrState *state, ExprLoop *loop) {
 		loop->arrayPointer = loadAddressOf(state, begin);
 
 		if (loop->forBegin->type->flags & TYPE_ARRAY_IS_FIXED) {
-			Ir &set = state->ir.add();
-			set.op = IrOp::SET;
-			set.dest = loop->irPointer;
-			set.a = loop->arrayPointer;
-			set.opSize = 8;
+			set(state, loop->irPointer, loop->arrayPointer, 8);
 		}
 		else {
 			memop(state, IrOp::READ, loop->irPointer, loop->arrayPointer, 8);
@@ -1272,11 +1266,7 @@ void generateFor(IrState *state, ExprLoop *loop) {
 	}
 	else {
 		u32 reg = generateIr(state, loop->forBegin);
-		Ir &set = state->ir.add();
-		set.op = IrOp::SET;
-		set.dest = loop->irPointer;
-		set.a = reg;
-		set.opSize = 8;
+		set(state, loop->irPointer, reg, 8);
 	}
 
 	constant(state, it_indexReg, 8, 0);
@@ -1427,12 +1417,26 @@ u32 generateCall(IrState *state, ExprFunctionCall *call, ExprCommaAssignment *co
 		}
 	}
 
-	u32 bigReturn = !isStandardSize(type->returnTypes[0]->size);
+	u32 extraParams = 0;
+	bool bigReturn = !isStandardSize(type->returnTypes[0]->size);
 
-	u32 argCount = bigReturn + call->arguments.count + type->returnCount - 1;
+	if (bigReturn) {
+		extraParams++;
+	}
+
+	if (!(type->flags & TYPE_FUNCTION_IS_C_CALL)) {
+		extraParams++;
+	}
+
+	u32 argCount = extraParams + call->arguments.count + type->returnCount - 1;
 	FunctionCall *argumentInfo = static_cast<FunctionCall *>(state->allocator.allocate(sizeof(FunctionCall) + 
 		sizeof(argumentInfo->args[0]) * argCount));
 	argumentInfo->argCount = argCount;
+
+	u32 contextArgumentIndex = bigReturn ? 1 : 0;
+
+	argumentInfo->args[contextArgumentIndex].number = state->contextRegister;
+	argumentInfo->args[contextArgumentIndex].type   = TYPE_VOID_POINTER;
 
 	u32 unusedReturnSize = 0;
 	u32 unusedReturnAlignment = 0;
@@ -1457,19 +1461,19 @@ u32 generateCall(IrState *state, ExprFunctionCall *call, ExprCommaAssignment *co
 				if (!identifier->structAccess && !declarationIsStoredByPointer(identifier->declaration)) {
 					u32 address = allocateStackSpaceAndLoadAddress(state, comma->left[i]->type);
 
-					argumentInfo->args[call->arguments.count + bigReturn + i - 1].number = address;
-					argumentInfo->args[call->arguments.count + bigReturn + i - 1].type = TYPE_VOID_POINTER;
+					argumentInfo->args[call->arguments.count + extraParams + i - 1].number = address;
+					argumentInfo->args[call->arguments.count + extraParams + i - 1].type = TYPE_VOID_POINTER;
 					continue;
 				}
 			}
 			u32 address = loadAddressOf(state, comma->left[i]);
 
-			argumentInfo->args[call->arguments.count + bigReturn + i - 1].number = address;
-			argumentInfo->args[call->arguments.count + bigReturn + i - 1].type = TYPE_VOID_POINTER;
+			argumentInfo->args[call->arguments.count + extraParams + i - 1].number = address;
+			argumentInfo->args[call->arguments.count + extraParams + i - 1].type = TYPE_VOID_POINTER;
 		}
 		else {
-			argumentInfo->args[call->arguments.count + bigReturn + i - 1].number = unusedReturnReg;
-			argumentInfo->args[call->arguments.count + bigReturn + i - 1].type = TYPE_VOID_POINTER;
+			argumentInfo->args[call->arguments.count + extraParams + i - 1].number = unusedReturnReg;
+			argumentInfo->args[call->arguments.count + extraParams + i - 1].type = TYPE_VOID_POINTER;
 		}
 	}
 
@@ -1492,16 +1496,16 @@ u32 generateCall(IrState *state, ExprFunctionCall *call, ExprCommaAssignment *co
 
 		
 		if (!isStandardSize(arg->type->size)) {
-			argumentInfo->args[i + bigReturn].number = memop(state, IrOp::COPY, allocateStackSpaceAndLoadAddress(state, arg->type->size, 16), argument, arg->type->size);
-			argumentInfo->args[i + bigReturn].type = TYPE_VOID_POINTER;
+			argumentInfo->args[i + extraParams].number = memop(state, IrOp::COPY, allocateStackSpaceAndLoadAddress(state, arg->type->size, 16), argument, arg->type->size);
+			argumentInfo->args[i + extraParams].type = TYPE_VOID_POINTER;
 		}
 		else if (isStoredByPointer(call->arguments.values[i]->type)) {
-			argumentInfo->args[i + bigReturn].number = memop(state, IrOp::READ, allocateRegister(state), argument, arg->type->size);
-			argumentInfo->args[i + bigReturn].type = arg->type;
+			argumentInfo->args[i + extraParams].number = memop(state, IrOp::READ, allocateRegister(state), argument, arg->type->size);
+			argumentInfo->args[i + extraParams].type = arg->type;
 		}
 		else {
-			argumentInfo->args[i + bigReturn].number = argument;
-			argumentInfo->args[i + bigReturn].type = arg->type;
+			argumentInfo->args[i + extraParams].number = argument;
+			argumentInfo->args[i + extraParams].type = arg->type;
 		}
 	}
 
@@ -1532,7 +1536,7 @@ u32 generateCall(IrState *state, ExprFunctionCall *call, ExprCommaAssignment *co
 				auto identifier = static_cast<ExprIdentifier *>(comma->left[i]);
 
 				if (!identifier->structAccess && !declarationIsStoredByPointer(identifier->declaration)) {
-					u32 address = argumentInfo->args[call->arguments.count + bigReturn + i - 1].number;
+					u32 address = argumentInfo->args[call->arguments.count + extraParams + i - 1].number;
 
 					memop(state, IrOp::READ, identifier->declaration->registerOfStorage, address, identifier->type->size);
 				}
@@ -1805,11 +1809,7 @@ u32 generateIr(IrState *state, Expr *expr) {
 			if (!identifier->structAccess && !declarationIsStoredByPointer(identifier->declaration)) {
 				u32 result = generateCall(state, static_cast<ExprFunctionCall *>(comma->call), comma);
 
-				Ir &set = state->ir.add();
-				set.op = IrOp::SET;
-				set.dest = identifier->declaration->registerOfStorage;
-				set.a = result;
-				set.opSize = identifier->type->size;
+				set(state, identifier->declaration->registerOfStorage, result, identifier->type->size);
 
 				return 0;
 			}
@@ -2102,6 +2102,21 @@ u32 generateIr(IrState *state, Expr *expr) {
 			return addressReg;
 		}
 	}
+	case ExprFlavor::CONTEXT: {
+		return state->contextRegister;
+	}
+	case ExprFlavor::PUSH_CONTEXT: {
+		auto pushContext = static_cast<ExprBinaryOperator *>(expr);
+
+		auto oldContext = set(state, allocateRegister(state), state->contextRegister, 8);
+
+		set(state, state->contextRegister, generateIr(state, pushContext->left), 8);
+
+		generateIr(state, pushContext->right);
+
+		set(state, state->contextRegister, oldContext, 8);
+		return 0;
+	}
 	case ExprFlavor::RUN: // Statement level runs are not removed from the ast but shouldn't generate code
 	case ExprFlavor::STATIC_IF: {
 		return 0; // In the event that the static if returns false and there is no else block, we just leave the static if expression in the tree, 
@@ -2125,26 +2140,31 @@ void generateCCallPreamble(ExprFunction *function) {
 }
 
 bool generateIrForFunction(ExprFunction *function) {
-	u32 bigReturn = !isStandardSize(getDeclarationType(function->returns.declarations[0])->size);
+	function->state.nextRegister = 0;
 
-	if (bigReturn) {
-		function->returns.declarations[0]->registerOfStorage = 0;
+	if (!isStandardSize(getDeclarationType(function->returns.declarations[0])->size)) {
+		function->returns.declarations[0]->registerOfStorage = function->state.nextRegister++;
 	}
+
+	if (!(function->flags & EXPR_FUNCTION_IS_C_CALL)) {
+		function->state.contextRegister = function->state.nextRegister++;
+	}
+
 
 	for (u32 i = 0; i < function->arguments.declarations.count; i++) {
 		auto declaration = function->arguments.declarations[i];
 		auto type = getDeclarationType(declaration);
 
-		declaration->registerOfStorage = i + bigReturn;
+		declaration->registerOfStorage = function->state.nextRegister++;
 	}
 
 	for (u32 i = 1; i < function->returns.declarations.count; i++) {
 		auto declaration = function->returns.declarations[i];
 
-		declaration->registerOfStorage = function->arguments.declarations.count + i - 1 + bigReturn;
+		declaration->registerOfStorage = function->state.nextRegister++;
 	}
 
-	function->state.nextRegister = function->state.parameters = bigReturn + function->arguments.declarations.count + function->returns.declarations.count - 1;
+	function->state.parameters = function->state.nextRegister;
 
 	generateCCallPreamble(function);
 	generateIr(&function->state, function->body);
@@ -2157,7 +2177,7 @@ bool generateIrForFunction(ExprFunction *function) {
 
 	function->flags |= EXPR_FUNCTION_RUN_READY;
 	_ReadWriteBarrier();
-	inferQueue.add(InferQueueJob(function));
+	inferQueue.add(InferQueueJob(function, nullptr));
 
 	CoffJob job;
 	job.function = function;

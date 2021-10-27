@@ -63,7 +63,12 @@ static const Keyword keywords[] = {
 	{"#scope_export", TokenT::SCOPE_EXPORT}, 
 	{"#c_varargs", TokenT::C_VARARGS}, 
 	{"is_constant", TokenT::IS_CONSTANT}, 
-	{"#intrinsic", TokenT::INTRINSIC}
+	{"#intrinsic", TokenT::INTRINSIC}, 
+	{"context", TokenT::CONTEXT}, 
+	{"push_context", TokenT::PUSH_CONTEXT}, 
+	{"#entry_point", TokenT::ENTRY_POINT}, 
+	{"#add_context", TokenT::ADD_CONTEXT}, 
+	{"Context", TokenT::CONTEXT_TYPE}
 };
 
 void BigInt::zero() {
@@ -893,6 +898,7 @@ whitespace:
 whitespaceAlreadyRead:
 	if (endOfFile) {
 	fileEnd:
+		++totalLines;
 		token.start = location;
 		token.end = location;
 		token.type = TokenT::END_OF_FILE;
@@ -1530,6 +1536,7 @@ dot:
 newLine:
 	location.column = 0;
 	++location.line;
+	totalLines++;
 
 	goto whitespace;
 
@@ -1539,6 +1546,7 @@ carriageReturn:
 
 	location.column = 0;
 	++location.line;
+	++totalLines;
 
 	if (c == '\n')
 		goto whitespace;
@@ -1597,6 +1605,7 @@ blockCommentAlreadyRead:
 	blockCommentNewLine:
 		location.column = 0;
 		++location.line;
+		totalLines++;
 	}
 
 	goto blockComment;
@@ -1606,6 +1615,7 @@ blockCommentCarriageReturn:
 
 	location.column = 0;
 	++location.line;
+	totalLines++;
 
 	if (c == '\n')
 		goto blockComment;
@@ -1857,7 +1867,7 @@ exponent:
 			if (exponent > 1023) {
 				token.end = location;
 				token.type = TokenT::INVALID;
-				reportError(&location, "Error: Float literal exponent to large, the minimum is 1023");
+				reportError(&location, "Error: Float literal exponent too large, the minimum is 1023");
 				return;
 			}
 		}

@@ -16,10 +16,29 @@ static llvm::Type *getLlvmType(llvm::LLVMContext &context, Type *type) {
 	return type->llvmType;
 }
 
+
+static llvm::DIFile **files;
+static llvm::DICompileUnit *compileUnit;
+static llvm::DIBuilder *dib;
+
+
 extern bool isStandardSize(u64 size);
 
 llvm::StringRef stringRef(const String &string) {
 	return llvm::StringRef(string.characters, string.length);
+}
+
+template<typename T>
+llvm::ArrayRef<T> arrayRef(Array<T> array) {
+	return { array.begin(), array.end() };
+}
+
+template<typename T>
+llvm::ArrayRef<T> arrayRef(std::initializer_list<T> array) {
+	auto data = new T[array.end() - array.begin()];
+	std::copy(array.begin(), array.end(), data);
+
+	return { data, (size_t) (array.end() - array.begin()) };
 }
 
 static llvm::Type *createLlvmType(llvm::LLVMContext &context, Type *type) {
@@ -79,10 +98,12 @@ static llvm::Type *createLlvmType(llvm::LLVMContext &context, Type *type) {
 		}
 	}
 	else if (type->flavor == TypeFlavor::STRUCT) {
+		auto struct_ = static_cast<TypeStruct *>(type);
+		llvm::StructType *llvmType = llvm::StructType::create(context, stringRef(struct_->name));
+
+		type->llvmType = llvmType; // Put the empty struct on the type so that if we have a struct that points to itself we don't infinitely recurse
 
 		if (type->flags & TYPE_STRUCT_IS_UNION) {
-			auto struct_ = static_cast<TypeStruct *>(type);
-
 			Type *mainMember = nullptr;
 
 			for (auto member : struct_->members.declarations) {
@@ -102,26 +123,17 @@ static llvm::Type *createLlvmType(llvm::LLVMContext &context, Type *type) {
 				return llvm::StructType::create(stringRef(struct_->name), llvm::ArrayType::get(llvm::IntegerType::get(context, type->alignment * 8), type->size / type->alignment));
 			}
 			else {
-				llvm::ArrayRef<llvm::Type *> members;
-
 				if (struct_->size == mainMember->size) {
-					members = llvm::ArrayRef(new llvm::Type * [1]{ getLlvmType(context, mainMember)}, 1);
-
+					llvmType->setBody(getLlvmType(context, mainMember));
 				}
 				else {
-					members = llvm::ArrayRef(new llvm::Type * [2]{ getLlvmType(context, mainMember), 
-						llvm::ArrayType::get(llvm::Type::getInt8Ty(context), struct_->size - mainMember->size) }, 2);
+					llvmType->setBody(getLlvmType(context, mainMember), llvm::ArrayType::get(llvm::Type::getInt8Ty(context), struct_->size - mainMember->size));
 				}
 
-				return llvm::StructType::create(members, stringRef(struct_->name), struct_->flags & TYPE_STRUCT_IS_PACKED ? true : false);
+				return llvmType;
 			}
 		}
 		else {
-			auto struct_ = static_cast<TypeStruct *>(type);
-
-			llvm::StructType *llvmType = llvm::StructType::create(context, stringRef(struct_->name));
-
-			type->llvmType = llvmType; // Put the empty struct on the type so that if we have a struct that points to itself we don't infinitely recurse
 
 			u32 count = 0;
 			for (auto member : struct_->members.declarations) {
@@ -140,7 +152,7 @@ static llvm::Type *createLlvmType(llvm::LLVMContext &context, Type *type) {
 				body.add(getLlvmType(context, getDeclarationType(member)));
 			}
 
-			llvmType->setBody(llvm::ArrayRef(body.begin(), body.end()), struct_->flags & TYPE_STRUCT_IS_PACKED ? true : false);
+			llvmType->setBody(arrayRef(body), struct_->flags & TYPE_STRUCT_IS_PACKED ? true : false);
 
 			return llvmType;
 		}
@@ -151,19 +163,29 @@ static llvm::Type *createLlvmType(llvm::LLVMContext &context, Type *type) {
 		// LLVM doesn't support multiple return values, so the extra return values are passed by pointer after the other arguments
 
 
-		u64 paramOffset = 0;
+		u32 paramOffset = 0;
 		auto return_ = function->returnTypes[0];
 
 		if (!isStandardSize(return_->size)) {
-			paramOffset = 1;
+			paramOffset++;
 		}
 
-		u64 count = function->argumentCount + function->returnCount + paramOffset - 1;
+		if (!(function->flags & TYPE_FUNCTION_IS_C_CALL)) {
+			paramOffset++;
+		}
+
+		u32 count = function->argumentCount + function->returnCount + paramOffset - 1;
 
 		llvm::Type **arguments = new llvm::Type * [count];
 
-		if (paramOffset) {
-			arguments[0] = llvm::PointerType::getUnqual(getLlvmType(context, return_));
+		paramOffset = 0;
+
+		if (!isStandardSize(return_->size)) {
+			arguments[paramOffset++] = llvm::PointerType::getUnqual(getLlvmType(context, return_));
+		}
+
+		if (!(function->flags & TYPE_FUNCTION_IS_C_CALL)) {
+			arguments[paramOffset++] = llvm::PointerType::getUnqual(getLlvmType(context, &TYPE_CONTEXT));
 		}
 
 		for (u64 i = 0; i < function->argumentCount; i++) {
@@ -186,7 +208,7 @@ static llvm::Type *createLlvmType(llvm::LLVMContext &context, Type *type) {
 
 		llvm::Type *retType;
 
-		if (return_ == &TYPE_VOID || paramOffset) {
+		if (return_ == &TYPE_VOID || !isStandardSize(return_->size)) {
 			retType = llvm::Type::getVoidTy(context);
 		}
 		else if (return_->flavor == TypeFlavor::STRUCT || return_->flavor == TypeFlavor::ARRAY) {
@@ -210,7 +232,219 @@ struct State {
 	llvm::Module &module;
 	llvm::Function *function;
 	llvm::BasicBlock *entryBlock;
+	llvm::Value *contextValue;
 };
+
+
+static llvm::DIType *createLlvmDebugType(Type *type);
+
+static llvm::DIType *getLlvmDebugType(Type *type) {
+	if (!type->llvmDebugType) {
+		type->llvmDebugType = createLlvmDebugType(type);
+	}
+
+	return type->llvmDebugType;
+}
+
+static llvm::DIType *createMemberType(Declaration *declaration, llvm::DIScope *enclosing) {
+	auto type = getDeclarationType(declaration);
+
+	return dib->createMemberType(enclosing, stringRef(declaration->name), files[declaration->start.fileUid], declaration->start.line,
+		type->size * 8, type->alignment * 8, declaration->physicalStorage * 8, llvm::DINode::DIFlags::FlagZero, getLlvmDebugType(type));
+}
+
+static llvm::DIType *createLlvmDebugType(Type *type) {
+	
+	if (type == &TYPE_VOID) {
+		return nullptr; // ??? LLVM debug metadata represents void as null !!!
+	}
+	else if (type == &TYPE_BOOL) {
+		return dib->createBasicType("bool", 8, llvm::dwarf::DW_ATE_boolean);
+	}
+	else if (type->flavor == TypeFlavor::INTEGER) {
+		return dib->createBasicType(stringRef(type->name), type->size * 8, type->flags & TYPE_INTEGER_IS_SIGNED ? llvm::dwarf::DW_ATE_signed : llvm::dwarf::DW_ATE_unsigned);
+	}
+	else if (type->flavor == TypeFlavor::FLOAT) {
+		return dib->createBasicType(stringRef(type->name), type->size * 8, llvm::dwarf::DW_ATE_float);
+	}
+	else if (type == &TYPE_TYPE) {
+		auto structType = dib->createStructType(nullptr, "type", files[0], 0, type->size * 8, type->alignment * 8, llvm::DINode::DIFlags::FlagTypePassByValue, nullptr,
+			llvm::DINodeArray());
+		type->llvmDebugType = structType;
+
+		auto memberType = dib->createMemberType(type->llvmDebugType, "value", files[0], 0, type->size * 8, type->alignment * 8, 0, llvm::DINode::DIFlags::FlagZero, 
+			getLlvmDebugType(TYPE_VOID_POINTER));
+
+		dib->replaceArrays(structType, dib->getOrCreateArray(arrayRef<llvm::Metadata *>({ memberType })));
+
+		return structType;
+    }
+	else if (type == &TYPE_STRING) {
+		auto structType = dib->createStructType(nullptr, "string", files[0], 0, type->size * 8, type->alignment * 8, llvm::DINode::DIFlags::FlagTypePassByValue, nullptr,
+			llvm::DINodeArray());
+		type->llvmDebugType = structType;
+
+		auto dataType = createMemberType(TYPE_STRING.members.declarations[0], structType);
+		auto countType = createMemberType(TYPE_STRING.members.declarations[1], structType);
+
+		dib->replaceArrays(structType, dib->getOrCreateArray(arrayRef<llvm::Metadata *>({dataType, countType })));
+
+		return structType;
+	}
+	else if (type->flavor == TypeFlavor::POINTER) {
+		return dib->createPointerType(getLlvmDebugType(static_cast<TypePointer *>(type)->pointerTo), type->size * 8);
+	}
+	else if (type->flavor == TypeFlavor::ENUM) {
+		auto enum_ = static_cast<TypeEnum *>(type);
+		auto integerType = getLlvmDebugType(enum_->integerType);
+
+		if (enum_->flags & TYPE_ENUM_IS_FLAGS) {
+			auto structType = dib->createStructType(nullptr, stringRef(enum_->name), files[0], 0,
+				enum_->size * 8, enum_->alignment * 8, llvm::DINode::DIFlags::FlagTypePassByValue, nullptr,
+				llvm::DINodeArray());
+			type->llvmDebugType = structType;
+
+			Array<llvm::Metadata *> members;
+
+			for (auto declaration : enum_->members.declarations) {
+				if (!(declaration->flags & DECLARATION_IS_ENUM_VALUE))
+					continue;
+
+				assert(declaration->initialValue->flavor == ExprFlavor::INT_LITERAL);
+				assert(!(declaration->initialValue->type->flags & TYPE_INTEGER_IS_SIGNED));
+
+				u64 value = static_cast<ExprLiteral *>(declaration->initialValue)->unsignedValue;
+
+				if (value && !(value & value - 1)) { // If exactly one bit is set
+					unsigned long bit;
+
+					_BitScanForward64(&bit, value);
+
+					members.add(dib->createMemberType(structType, stringRef(declaration->name), files[declaration->start.fileUid], declaration->start.line,
+						1, 1, bit, llvm::DINode::DIFlags::FlagBitField, integerType));
+				}
+			}
+
+			dib->replaceArrays(structType, dib->getOrCreateArray(arrayRef(members)));
+			return structType;
+		}
+		else {
+			Array<llvm::Metadata *> members;
+
+
+			for (auto declaration : enum_->members.declarations) {
+				if (!(declaration->flags & DECLARATION_IS_ENUM_VALUE))
+					continue;
+
+				assert(declaration->initialValue->flavor == ExprFlavor::INT_LITERAL);
+				assert(!(declaration->initialValue->type->flags & TYPE_INTEGER_IS_SIGNED));
+
+				auto value = static_cast<ExprLiteral *>(declaration->initialValue)->unsignedValue;
+
+				members.add(dib->createEnumerator(stringRef(declaration->name), value, true));
+			}
+
+			auto enumType = dib->createEnumerationType(nullptr, stringRef(enum_->name), files[0], 0, enum_->size * 8, enum_->alignment * 8,
+				dib->getOrCreateArray(arrayRef(members)), integerType);
+
+			return enumType;
+		}
+	}
+	else if (type->flavor == TypeFlavor::ARRAY) {
+		auto array = static_cast<TypeArray *>(type);
+
+		if (array->flags & TYPE_ARRAY_IS_FIXED) {
+			auto arrayOf = getLlvmDebugType(array->arrayOf);
+
+			return dib->createArrayType(array->size * 8, array->alignment * 8, arrayOf,
+				dib->getOrCreateArray(arrayRef<llvm::Metadata *>({ dib->getOrCreateSubrange(0, array->count) })));
+		}
+		else {
+			auto structType = dib->createStructType(nullptr, stringRef(type->name), files[0], 0,
+				type->size * 8, type->alignment * 8, llvm::DINode::DIFlags::FlagTypePassByValue, nullptr,
+				llvm::DINodeArray());
+			type->llvmDebugType = structType;
+
+			auto dataType = createMemberType(array->members.declarations[0], structType);
+			auto countType = createMemberType(array->members.declarations[1], structType);
+
+			if (array->flags & TYPE_ARRAY_IS_DYNAMIC) {
+				auto capacityType = createMemberType(array->members.declarations[2], structType);
+				dib->replaceArrays(structType, dib->getOrCreateArray(arrayRef<llvm::Metadata *>({ dataType, countType, capacityType })));
+			}
+			else {
+				dib->replaceArrays(structType, dib->getOrCreateArray(arrayRef<llvm::Metadata *>({ dataType, countType })));
+			}
+
+			return structType;
+		}
+	}
+	else if (type->flavor == TypeFlavor::STRUCT) {
+		auto struct_ = static_cast<TypeStruct *>(type);
+
+		auto structType = dib->createStructType(nullptr, stringRef(type->name), files[0], 0,
+			type->size * 8, type->alignment * 8, llvm::DINode::DIFlags::FlagTypePassByValue, nullptr,
+			llvm::DINodeArray());
+		type->llvmDebugType = structType;
+
+		Array<llvm::Metadata *> members;
+
+		for (auto member : struct_->members.declarations) {
+			if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING))
+				continue;
+
+			members.add(createMemberType(member, structType));
+		}
+
+		dib->replaceArrays(structType, dib->getOrCreateArray(arrayRef(members)));
+
+		return structType;
+	}
+	else if (type->flavor == TypeFlavor::FUNCTION) {
+		auto function = static_cast<TypeFunction *>(type);
+
+		// LLVM doesn't support multiple return values, so the extra return values are passed by pointer after the other arguments
+
+
+		u32 paramOffset = 1;
+		auto return_ = function->returnTypes[0];
+
+		if (!(function->flags & TYPE_FUNCTION_IS_C_CALL)) {
+			paramOffset++;
+		}
+
+		u32 count = function->argumentCount + function->returnCount + paramOffset - 1;
+
+		llvm::Metadata **arguments = new llvm::Metadata * [count];
+
+		arguments[0] = getLlvmDebugType(function->returnTypes[0]);
+
+		paramOffset = 1;
+
+		if (!(function->flags & TYPE_FUNCTION_IS_C_CALL)) {
+			//arguments[paramOffset++] = getLlvmDebugType(&TYPE_CONTEXT);
+		}
+
+		for (u64 i = 0; i < function->argumentCount; i++) {
+			auto argument = function->argumentTypes[i];
+
+			//arguments[i + paramOffset] = getLlvmDebugType(argument);
+		}
+
+		for (u64 i = 1; i < function->returnCount; i++) {
+			//arguments[function->argumentCount + paramOffset + i - 1] = getLlvmDebugType(function->returnTypes[i]);
+		}
+
+		//auto functionType = dib->createSubroutineType(dib->getOrCreateTypeArray(llvm::ArrayRef(arguments, count)));
+		auto functionType = dib->createSubroutineType(dib->getOrCreateTypeArray(arrayRef<llvm::Metadata *>({ nullptr })));
+
+		return dib->createPointerType(functionType, function->size * 8);
+	}
+	
+
+	assert(false);
+	return nullptr;
+}
 
 llvm::Constant *createLlvmString(State *state, String string) {
 	return llvm::ConstantStruct::get(static_cast<llvm::StructType *>(getLlvmType(state->context, &TYPE_STRING)),
@@ -593,40 +827,26 @@ static Block externalsBlock;
 
 static llvm::Function *createLlvmFunction(State *state, ExprFunction *function) {
 	if (!function->llvmStorage) {
-		llvm::Type *type;
-		
-		if (function == entryPointFunction) {
-			type = llvm::PointerType::getUnqual(llvm::FunctionType::get(llvm::Type::getInt32Ty(state->context), false));
-		}
-		else {
-			type = getLlvmType(state->context, function->type);
-		}
+		auto type = getLlvmType(state->context, function->type);
 
 		assert(type->isPointerTy());
 		assert(type->getPointerElementType()->isFunctionTy());
 
 		auto functionType = static_cast<llvm::FunctionType *>(type->getPointerElementType());
 
-		if (function->flags & EXPR_FUNCTION_IS_EXTERNAL) {
-			function->llvmStorage = llvm::Function::Create(functionType, llvm::Function::ExternalLinkage, stringRef(function->valueOfDeclaration->name), state->module);
-		}
-		else if (function->valueOfDeclaration) {
-			if (function->valueOfDeclaration->enclosingScope->flavor == BlockFlavor::GLOBAL && function->valueOfDeclaration->name == "main") {
-				if (linkLibC) {
-					function->llvmStorage = llvm::Function::Create(functionType, llvm::Function::ExternalLinkage, "__main", state->module);
-				}
-				else {
-					function->llvmStorage = llvm::Function::Create(functionType, llvm::Function::ExternalLinkage, "main", state->module);
-				}
-			}
-			else {
-				function->llvmStorage = llvm::Function::Create(functionType, llvm::Function::PrivateLinkage, stringRef(function->valueOfDeclaration->name), state->module);
-			}
-		}
-		else {
-			function->llvmStorage = llvm::Function::Create(functionType, llvm::Function::PrivateLinkage, "", state->module);
+		auto linkage = llvm::Function::PrivateLinkage;
+		auto name = llvm::StringRef("");
+
+		if (function->valueOfDeclaration) {
+			name = stringRef(function->valueOfDeclaration->name);
 		}
 
+		if (function == programStart || function->flags & EXPR_FUNCTION_IS_EXTERNAL) {
+			linkage = llvm::Function::ExternalLinkage;
+		}
+
+		function->llvmStorage = llvm::Function::Create(functionType, linkage, name, state->module);
+		
 		function->llvmStorage->setCallingConv(llvm::CallingConv::Win64);
 	}
 
@@ -814,7 +1034,7 @@ static llvm::Value *generateLlvmCall(State *state, ExprFunctionCall *call, ExprC
 
 			auto argument = generateLlvmIr(state, call->arguments.values[0]);
 
-			return state->builder.CreateIntrinsic(llvm::Intrinsic::ctpop, { getLlvmType(state->context, argumentType) }, { argument });
+			return state->builder.CreateIntrinsic(llvm::Intrinsic::ctpop, arrayRef({ getLlvmType(state->context, argumentType) }), arrayRef({ argument }));
 		}
 		else if (call->function->valueOfDeclaration->name == "bit_scan_forward") {
 			auto argumentType = function->argumentTypes[0];
@@ -826,8 +1046,8 @@ static llvm::Value *generateLlvmCall(State *state, ExprFunctionCall *call, ExprC
 
 			auto argument = generateLlvmIr(state, call->arguments.values[0]);
 
-			auto resultIndex = state->builder.CreateIntrinsic(llvm::Intrinsic::cttz, { getLlvmType(state->context, argumentType) }, 
-				{ argument, llvm::ConstantInt::get(llvm::Type::getInt1Ty(state->context), 1) });
+			auto resultIndex = state->builder.CreateIntrinsic(llvm::Intrinsic::cttz, arrayRef({ getLlvmType(state->context, argumentType) }), 
+				arrayRef<llvm::Value *>({ argument, llvm::ConstantInt::get(llvm::Type::getInt1Ty(state->context), 1) }));
 
 			if (comma && comma->exprCount >= 2) {
 				state->builder.CreateStore(state->builder.CreateICmpEQ(argument, llvm::ConstantInt::get(argument->getType(), 0)), loadAddressOf(state, comma->left[1]));
@@ -845,7 +1065,11 @@ static llvm::Value *generateLlvmCall(State *state, ExprFunctionCall *call, ExprC
 	auto return_ = function->returnTypes[0];
 
 	if (!isStandardSize(return_->size)) {
-		paramOffset = 1;
+		paramOffset++;
+	}
+
+	if (!(function->flags & TYPE_FUNCTION_IS_C_CALL)) {
+		paramOffset++;
 	}
 
 	u64 count = function->argumentCount + function->returnCount + paramOffset - 1;
@@ -882,15 +1106,21 @@ static llvm::Value *generateLlvmCall(State *state, ExprFunctionCall *call, ExprC
 		}
 	}
 
-	if (paramOffset) {
-		arguments[0] = allocateType(state, return_);
+	paramOffset = 0;
+
+	if (!isStandardSize(return_->size)) {
+		arguments[paramOffset++] = allocateType(state, return_);
+	}
+
+	if (!(function->flags & TYPE_FUNCTION_IS_C_CALL)) {
+		arguments[paramOffset++] = state->contextValue;
 	}
 
 	auto ir = state->builder.CreateCall(static_cast<llvm::FunctionType *>(functionIr->getType()->getPointerElementType()), 
 		functionIr, llvm::ArrayRef(arguments, count));
 	ir->setCallingConv(llvm::CallingConv::Win64);
 
-	if (paramOffset) {
+	if (!isStandardSize(return_->size)) {
 		return arguments[0];
 	}
 	else if (return_->flavor == TypeFlavor::ARRAY || return_->flavor == TypeFlavor::STRUCT) {
@@ -916,9 +1146,7 @@ static llvm::Value *generateLlvmEqual(State *state, bool equal, llvm::Value *l, 
 			exit(1); // @Cleanup Forceful exit since we don't have good error handling here and its an internal compiler error
 		}
 
-		auto args = new llvm::Value * [2]{ l, generateLlvmIr(state, right) };
-
-		auto result = state->builder.CreateCall(createLlvmFunction(state, stringsEqualFunction), llvm::ArrayRef(args, 2));
+		auto result = state->builder.CreateCall(createLlvmFunction(state, stringsEqualFunction), arrayRef({ l, generateLlvmIr(state, right) }));
 
 		result->setCallingConv(llvm::CallingConv::Win64);
 
@@ -1835,19 +2063,18 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 			auto result = generateLlvmIr(state, return_->returns.values[0]);
 
 			auto retType = return_->returns.values[0]->type;
-			u32 paramOffset = isStandardSize(retType->size) ? 0 : 1;
 
 			for (u32 i = 1; i < return_->returns.count; i++) {
 				auto store = generateIrAndLoadIfStoredByPointer(state, return_->returns.values[i]);
 
-				state->builder.CreateStore(store, state->function->getArg(return_->returnsFrom->arguments.declarations.count + paramOffset + i - 1));
+				state->builder.CreateStore(store, return_->returnsFrom->returns.declarations[i]->llvmStorage);
 			}
 
 			exitBlock(state, nullptr, true);
 
 
-			if (paramOffset) {
-				state->builder.CreateStore(state->builder.CreateLoad(result), return_->returnsFrom->llvmStorage->getArg(0));
+			if (!isStandardSize(retType->size)) {
+				state->builder.CreateStore(state->builder.CreateLoad(result), return_->returnsFrom->returns.declarations[0]->llvmStorage);
 
 				state->builder.CreateRetVoid();
 			}
@@ -1867,12 +2094,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 		else {
 			exitBlock(state, nullptr, true);
 			
-			if (return_->returnsFrom == entryPointFunction) {
-				state->builder.CreateRet(llvm::ConstantInt::get(llvm::Type::getInt32Ty(state->context), 0));
-			}
-			else {
-				state->builder.CreateRetVoid();
-			}
+			state->builder.CreateRetVoid();
 		}
 
 		auto postBlock = llvm::BasicBlock::Create(state->context, "return.post", state->function);
@@ -2031,7 +2253,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 					auto phi = state->builder.CreatePHI(llvm::Type::getInt64Ty(state->context), 2);
 					phi->addIncoming(llvm::ConstantInt::get(i64, arrayType->count - i), preBlock);
 
-					state->builder.CreateStore(value, state->builder.CreateGEP(storage, { llvm::ConstantInt::get(i64, 0), phi }));
+					state->builder.CreateStore(value, state->builder.CreateGEP(storage, arrayRef<llvm::Value *>({ llvm::ConstantInt::get(i64, 0), phi })));
 
 					auto sub = state->builder.CreateSub(phi, llvm::ConstantInt::get(i64, 1));
 					phi->addIncoming(sub, loopBlock);
@@ -2048,6 +2270,19 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 
 			return storage;
 		}
+	}
+
+	case ExprFlavor::CONTEXT: {
+		return state->contextValue;
+	}
+	case ExprFlavor::PUSH_CONTEXT: {
+		auto pushContext = static_cast<ExprBinaryOperator *>(expr);
+
+		auto oldContext = state->contextValue;
+		state->contextValue = generateLlvmIr(state, pushContext->left);
+		generateLlvmIr(state, pushContext->right);
+		state->contextValue = oldContext;
+		return nullptr;
 	}
 	case ExprFlavor::STATIC_IF: {
 		return nullptr; // In the event that the static if returns false and there is no else block, we just leave the static if expression in the tree, 
@@ -2081,6 +2316,10 @@ OptLevel("O",
 
 static llvm::cl::opt<std::string>
 TargetTriple("mtriple", llvm::cl::desc("Override target triple for module"));
+
+static llvm::DIFile *getDebugFile(CodeLocation location) {
+	return files[location.fileUid];
+}
 
 void runLlvm() {
 
@@ -2159,6 +2398,8 @@ void runLlvm() {
 	case ' ': break;
 	}
 
+	bool optimized = optLevel != llvm::CodeGenOpt::None || sizeLevel > 0;
+
 	llvm::Optional<llvm::Reloc::Model> relocModel = llvm::codegen::getExplicitRelocModel();
 
 	
@@ -2176,6 +2417,8 @@ void runLlvm() {
 	else {
 		triple = llvm::Triple(llvm::Triple::normalize(TargetTriple));
 	}
+
+	llvmModule.setTargetTriple(triple.getTriple());
 	
 	std::string errorString;
 	target = llvm::TargetRegistry::lookupTarget(llvm::codegen::getMArch(), triple, errorString);
@@ -2192,20 +2435,46 @@ void runLlvm() {
 
 	targetMachine = target->createTargetMachine(triple.getTriple(), cpuStr, featuresStr, options, relocModel, llvm::codegen::getExplicitCodeModel(), optLevel);
 
+	llvmModule.addModuleFlag(llvm::Module::Warning, "CodeView", 1); // I hate LLVM
+
 	if (!targetMachine) {
 		reportError("LLVM Error: Failed to allocate target machine", errorString.c_str());
 		return;
 	}
 
 	llvm::IRBuilder<> builder(context);
-	llvm::DIBuilder debug(llvmModule);
-
+	
 	State state{ context, builder, llvmModule };
 
 	std::error_code errorCode;
 	std::string verifyOutput;
 
 	llvm::raw_string_ostream verifyStream(verifyOutput);
+
+	files = new llvm::DIFile * [compilerFiles.count];
+
+	dib = new llvm::DIBuilder(llvmModule);
+
+	for (u32 i = 0; i < compilerFiles.count; i++) {
+		auto file = compilerFiles[i];
+
+		char buffer[1024]; // @Robustness
+		char *name;
+		GetFullPathNameA(toCString(file->path) /* @Leak */, sizeof(buffer), buffer, &name);
+
+		if (name != buffer) {
+			name[-1] = 0;
+		}
+#if BUILD_WINDOWS
+		const char *compilerName = "Milo Compiler 0.1.1 (Windows-x64)";
+#endif
+
+		if (i == 0) {
+			compileUnit = dib->createCompileUnit(llvm::dwarf::DW_LANG_C_plus_plus_11, dib->createFile(name, buffer), compilerName, optimized, "", 0);
+		}
+
+		files[i] = dib->createFile(name, buffer);
+	}
 
 	{
 		llvmModule.setDataLayout(targetMachine->createDataLayout());
@@ -2222,19 +2491,43 @@ void runLlvm() {
 				}
 
 				if (!(function->flags & EXPR_FUNCTION_IS_EXTERNAL)) {
+
+					auto llvmFile = getDebugFile(function->start);
+
 					auto llvmFunction = createLlvmFunction(&state, function);
 					auto functionType = static_cast<llvm::FunctionType *>(llvmFunction->getType()->getPointerElementType());
+					auto debugType = static_cast<llvm::DISubroutineType *>(static_cast<llvm::DIDerivedType *>(getLlvmDebugType(function->type))->getBaseType());
+
+					auto debugFunction = dib->createFunction(nullptr, function->valueOfDeclaration ? stringRef(function->valueOfDeclaration->name) : "(function)",
+						llvmFunction->getName(), llvmFile, function->start.line, debugType, 
+						function->start.line, llvm::DINode::DIFlags::FlagPrototyped, llvm::DISubprogram::DISPFlags::SPFlagDefinition);
+
+					llvmFunction->setSubprogram(debugFunction);
+
+					
 
 					auto entry = llvm::BasicBlock::Create(context, "entry", llvmFunction);
 
 					auto code = llvm::BasicBlock::Create(context, "code", llvmFunction);
 
 					builder.SetInsertPoint(code);
+					builder.SetCurrentDebugLocation(llvm::DILocation::get(context, function->start.line, function->start.column, debugFunction));
 
 					state.function = llvmFunction;
 					state.entryBlock = entry;
 
-					u32 paramOffset = isStandardSize(getDeclarationType(function->returns.declarations[0])->size) ? 0 : 1;
+					u32 paramOffset = 0; 
+					
+					if (!isStandardSize(getDeclarationType(function->returns.declarations[0])->size)) {
+						function->returns.declarations[0]->llvmStorage = llvmFunction->getArg(paramOffset++);
+					}
+
+					if (!(function->flags & EXPR_FUNCTION_IS_C_CALL)) {
+						state.contextValue = llvmFunction->getArg(paramOffset++);
+					}
+					else {
+						state.contextValue = nullptr;
+					}
 
 					for (u32 i = 0; i < function->arguments.declarations.count; i++) {
 						auto argument = function->arguments.declarations[i];
@@ -2261,6 +2554,10 @@ void runLlvm() {
 						}
 					}
 
+					for (u32 i = 1; i < function->returns.declarations.count; i++) {
+						function->returns.declarations[i]->llvmStorage = llvmFunction->getArg(paramOffset + function->arguments.declarations.count - 1 + i);
+					}
+
 					generateLlvmIr(&state, function->body);
 
 					if (!builder.GetInsertBlock()->getTerminator()) {
@@ -2277,12 +2574,13 @@ void runLlvm() {
 
 					builder.CreateBr(code);
 
+					dib->finalizeSubprogram(debugFunction);
 #if BUILD_DEBUG
 					if (llvm::verifyFunction(*llvmFunction, &verifyStream)) {
 						verifyStream.flush();
 
 						reportError("LLVM Error in %s: %s", function->valueOfDeclaration ? toCString(function->valueOfDeclaration->name) : "(function)", verifyOutput.c_str());
-						llvmFunction->print(llvm::errs());
+						llvmModule.dump();
 
 						return;
 					}
@@ -2682,6 +2980,7 @@ void runLlvm() {
 			fpm.doFinalization();
 
 			pass.run(llvmModule);
+			dib->finalize();
 
 			//llvmModule.print(irOut, nullptr);
 

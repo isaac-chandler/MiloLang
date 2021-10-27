@@ -152,6 +152,39 @@ void parseModuleOrExportScope(LexerFile *lexer) {
 	}
 }
 
+ExprAddContext *parseAddContext(LexerFile *lexer) {
+	if (lexer->currentBlock && lexer->currentBlock->flavor != BlockFlavor::GLOBAL) {
+		reportError("Error: #add_context directives can only be in global scopes");
+		return nullptr;
+	}
+
+	auto addContext = PARSER_NEW(ExprAddContext);
+	addContext->flavor = ExprFlavor::ADD_CONTEXT;
+	addContext->start = lexer->token.start;
+	addContext->type = nullptr;
+
+	lexer->advance();
+
+	addContext->declaration = parseDeclaration(lexer);
+
+	if (!addContext->declaration)
+		return nullptr;
+
+	// @Hack The declaration thinks its at the top level so will have MODULE_SCOPE set if applicable, struct members shouldn't have this flag set
+	addContext->flags &= ~DECLARATION_IS_MODULE_SCOPE;
+
+	addContext->end = lexer->previousTokenEnd;
+
+	if (addContext->flags & DECLARATION_MARKED_AS_USING) {
+		addContext->using_ = createImporterForUsing(lexer, addContext->declaration);
+	}
+	else {
+		addContext->using_ = nullptr;
+	}
+
+	return addContext;
+}
+
 ExprIf *parseStaticIf(LexerFile *lexer) {
 	auto staticIf = PARSER_NEW(ExprIf);
 	staticIf->flavor = ExprFlavor::STATIC_IF;
@@ -534,6 +567,29 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 
 		return loop;
 	}
+	else if (lexer->token.type == TokenT::PUSH_CONTEXT) {
+		ExprBinaryOperator *pushContext = PARSER_NEW(ExprBinaryOperator);
+		pushContext->flavor = ExprFlavor::PUSH_CONTEXT;
+		pushContext->op = TokenT::PUSH_CONTEXT;
+		pushContext->start = lexer->token.start;
+		pushContext->type = nullptr;
+
+		lexer->advance();
+
+		pushContext->left = parseExpr(lexer);
+
+		if (!pushContext)
+			return nullptr;
+
+		pushContext->end = lexer->previousTokenEnd;
+
+		bool oldContext = lexer->contextAvailable;
+		lexer->contextAvailable = true;
+		pushContext->right = parseStatement(lexer, false);
+		lexer->contextAvailable = oldContext;
+
+		return pushContext;
+	}
 	else if (lexer->token.type == TOKEN('{')) {
 		return parseBlock(lexer, false);
 	}
@@ -786,6 +842,14 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 
 		continue_->start = lexer->token.start;
 
+		if (lexer->inDefer && lexer->token.type != TokenT::REMOVE) {
+			continue_->end = lexer->token.end;
+
+			reportError(continue_, "Error: Cannot have a %s inside a defer", lexer->token.type == TokenT::CONTINUE ? "continue" : "break");
+			reportError(lexer->inDefer, "");
+			return nullptr;
+		}
+
 		lexer->advance();
 
 		if (lexer->token.type == TokenT::IDENTIFIER) {
@@ -851,11 +915,9 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 			if (block->flavor == BlockFlavor::ARGUMENTS) {
 				return_->returnsFrom = CAST_FROM_SUBSTRUCT(ExprFunction, arguments, block);
 
-				auto inDefer = lexer->inDeferStack[lexer->inDeferStack.count - 1];
-
-				if (inDefer) {
+				if (lexer->inDefer) {
 					reportError(return_, "Error: Cannot have a return inside a defer");
-					reportError(inDefer, "");
+					reportError(lexer->inDefer, "");
 					return nullptr;
 				}
 
@@ -937,10 +999,10 @@ ExprBlock *parseBlock(LexerFile *lexer, bool isCase, ExprBlock *block) {
 			lexer->advance();
 			defer->end = lexer->previousTokenEnd;
 			
-			auto oldInDefer = lexer->inDeferStack[lexer->inDeferStack.count - 1];
-			lexer->inDeferStack[lexer->inDeferStack.count - 1] = defer;
+			auto oldInDefer = lexer->inDefer;
+			lexer->inDefer = defer;
 			defer->expr = parseStatement(lexer, false);
-			lexer->inDeferStack[lexer->inDeferStack.count - 1] = oldInDefer;
+			lexer->inDefer = oldInDefer;
 
 			if (!defer->expr) {
 				return nullptr;
@@ -960,6 +1022,14 @@ ExprBlock *parseBlock(LexerFile *lexer, bool isCase, ExprBlock *block) {
 
 			parseModuleOrExportScope(lexer);
 			continue;
+		}
+		else if (lexer->token.type == TokenT::ADD_CONTEXT) {
+			auto addContext = parseAddContext(lexer);
+
+			if (!addContext)
+				return nullptr;
+
+			block->exprs.add(addContext);
 		}
 		else if (lexer->token.type == TokenT::USING || lexer->token.type == TokenT::IDENTIFIER) {
 			TokenT peek[2];
@@ -1206,7 +1276,7 @@ bool isFunctionType(LexerFile *lexer) {
 }
 
 u32 getPolymorphCount(LexerFile *lexer) {
-	return lexer->functionHeaderStack.count ? lexer->functionHeaderStack.peek()->constants.declarations.count : 0;
+	return lexer->currentFunctionHeader ? lexer->currentFunctionHeader->constants.declarations.count : 0;
 }
 
 Declaration *parseSingleArgument(LexerFile *lexer, ExprFunction *function, bool arguments, bool named) {
@@ -1353,12 +1423,13 @@ ExprFunction *parseFunctionOrFunctionType(LexerFile *lexer, CodeLocation start, 
 	pushBlock(lexer, &function->constants);
 	pushBlock(lexer, &function->arguments);
 
-	lexer->functionHeaderStack.add(function);
+	auto previousFunction = lexer->currentFunctionHeader;
+	lexer->currentFunctionHeader = function;
 
 	if (!parseArgumentList(lexer, function, true, &usingBlock))
 		return nullptr;
 
-	lexer->functionHeaderStack.pop();
+	lexer->currentFunctionHeader = previousFunction;
 
 	bool hadReturnType = true;
 
@@ -1420,9 +1491,14 @@ ExprFunction *parseFunctionOrFunctionType(LexerFile *lexer, CodeLocation start, 
 
 		function->flavor = ExprFlavor::FUNCTION;
 
-		lexer->inDeferStack.add(nullptr); // The defer stack is used to determine if there is a defer inside a return, but it is fine if there is a return inside a function inside a defer
+		auto oldInDefer = lexer->inDefer; // inDefer is used to determine if there is a defer inside a return, but it is fine if there is a return inside a function inside a defer
+		lexer->inDefer = nullptr;
+		bool oldContext = lexer->contextAvailable;
+		lexer->contextAvailable = function->flags & EXPR_FUNCTION_IS_C_CALL ? false : true;
+
 		function->body = parseBlock(lexer, false, usingBlock);
-		lexer->inDeferStack.pop();
+		lexer->contextAvailable = oldContext;
+		lexer->inDefer = oldInDefer;
 		if (!function->body) {
 			return nullptr;
 		}
@@ -1491,13 +1567,13 @@ ExprFunction *parseFunctionOrFunctionType(LexerFile *lexer, CodeLocation start, 
 		}
 
 		if (function->constants.declarations.count) {
-			if (lexer->functionHeaderStack.count) {
+			if (lexer->currentFunctionHeader) {
 				if (lexer->currentBlock->flavor != BlockFlavor::ARGUMENTS && lexer->currentBlock->flavor != BlockFlavor::RETURNS) {
 					reportError(function->constants.declarations[0], "Error: Cannot have a polymorph variable declartion outside a function header");
 					return nullptr;
 				}
 
-				auto outerFunction = lexer->functionHeaderStack.peek();
+				auto outerFunction = lexer->currentFunctionHeader;
 
 
 				for (auto declaration : function->constants.declarations) {
@@ -1812,7 +1888,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		declaration->end = lexer->token.end;
 		declaration->initialValue = nullptr;
 
-		if (!lexer->functionHeaderStack.count) {
+		if (!lexer->currentFunctionHeader) {
 			reportError(declaration, "Error: Cannot have a polymorph variable declartion outside a function header");
 			return nullptr;
 		}
@@ -1824,7 +1900,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 			return nullptr;
 		}
 
-		auto function = lexer->functionHeaderStack.peek();
+		auto function = lexer->currentFunctionHeader;
 
 		if (!addDeclarationToBlock(&function->constants, declaration, function->constants.declarations.count)) {
 			return nullptr;
@@ -1889,6 +1965,34 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 	}
 	else if (lexer->token.type == TokenT::INT_LITERAL) {
 		expr = makeIntegerLiteral(lexer, start, end, lexer->token.unsignedValue, &TYPE_UNSIGNED_INT_LITERAL);
+
+		lexer->advance();
+	}
+	else if (lexer->token.type == TokenT::CONTEXT) {
+		if (!lexer->currentBlock || lexer->currentBlock->flavor != BlockFlavor::IMPERATIVE) {
+			reportError(&lexer->token, "Error: The context can only be referenced in imperative scopes");
+			return nullptr;
+		}
+
+		if (!lexer->contextAvailable) {
+			reportError(&lexer->token, "Error: The no context is available inside a #c_call function, push a new one using push_context");
+			return nullptr;
+		}
+
+		expr = PARSER_NEW(Expr);
+		expr->start = start;
+		expr->end = end;
+		expr->type = &TYPE_CONTEXT;
+		expr->flavor = ExprFlavor::CONTEXT;
+
+		lexer->advance();
+	}
+	else if (lexer->token.type == TokenT::ENTRY_POINT) {
+		expr = PARSER_NEW(Expr);
+		expr->start = start;
+		expr->end = end;
+		expr->type = nullptr;
+		expr->flavor = ExprFlavor::ENTRY_POINT;
 
 		lexer->advance();
 	}
@@ -2021,6 +2125,9 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 	}
 	else if (expectAndConsume(lexer, TokenT::STRING)) {
 		expr = parserMakeTypeLiteral(lexer, start, end, &TYPE_STRING);
+	}
+	else if (expectAndConsume(lexer, TokenT::CONTEXT_TYPE)) {
+		expr = parserMakeTypeLiteral(lexer, start, end, &TYPE_CONTEXT);
 	}
 	else if (lexer->token.type == TokenT::STRUCT || lexer->token.type == TokenT::UNION) {
 		TokenT tokenType = lexer->token.type;
@@ -2259,6 +2366,10 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 			call->flavor = ExprFlavor::FUNCTION_CALL;
 			call->end = lexer->token.end;
 
+			if (lexer->contextAvailable) {
+				call->flags |= EXPR_CONTEXT_AVAILABLE;
+			}
+
 			if (expectAndConsume(lexer, ')')) {
 				call->arguments.count = 0;
 				call->arguments.values = nullptr;
@@ -2487,6 +2598,8 @@ Expr *parsePrefixExpr(LexerFile *lexer, CodeLocation plusStart) {
 		Expr *type = nullptr;
 		Expr *returnValue = nullptr;
 
+		bool oldContext = lexer->contextAvailable;
+		lexer->contextAvailable = function->flags & EXPR_FUNCTION_IS_C_CALL ? false : true;
 		if (lexer->token.type == TOKEN('{')) {
 			auto block = parseBlock(lexer, false);
 			if (!block)
@@ -2515,6 +2628,7 @@ Expr *parsePrefixExpr(LexerFile *lexer, CodeLocation plusStart) {
 
 			function->body = block;
 		}
+		lexer->contextAvailable = oldContext;
 
 		popBlock(lexer, &function->arguments);
 		popBlock(lexer, &function->constants);
@@ -3045,18 +3159,26 @@ void runParser() {
 
 				inferQueue.add(InferQueueJob(importer, lexer->module));
 			}
+			else if (lexer->token.type == TokenT::ADD_CONTEXT) {
+				auto addContext = parseAddContext(lexer);
+
+				if (!addContext)
+					break;
+
+				inferQueue.add(InferQueueJob(addContext, lexer->module));
+			}
 			else if (lexer->token.type == TokenT::RUN) {
 				auto run = parseExpr(lexer);
 
 				if (!run)
 					break;
 
-				if (run->flavor != ExprFlavor::RUN) {
+				if (run->flavor != ExprFlavor::RUN) { // Even though we saw a #run there could be a postfix operator
 					reportError(run, "Error: Expected run directive at top level");
 					break;
 				}
 
-				inferQueue.add(InferQueueJob(static_cast<ExprRun *>(run), lexer->module));
+				inferQueue.add(InferQueueJob(run, lexer->module));
 			}
 			else if (expectAndConsume(lexer, ';')) {
 				// We have consumed the semicolon we are done
@@ -3068,6 +3190,8 @@ void runParser() {
 		}
 
 
+		InterlockedAdd(&totalLines, lexer->totalLines);
+		lexer->totalLines = 0;
 		inferQueue.add(InferQueueJob(file->fileUid, lexer->module));
 
 		if (hadError) {
