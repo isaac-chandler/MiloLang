@@ -1,0 +1,25 @@
+#import "Standard"
+
+Node :: struct {
+	next: *Node
+	data: s64
+}
+
+main :: () {
+	one: Node
+
+	one.data = 1
+
+	two: Node
+	two.data = 2
+
+	one.next = *two
+
+	current := *one
+
+	while current {
+		defer current = current.next
+
+		print("%\n", current.data)
+	}
+}

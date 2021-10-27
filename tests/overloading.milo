@@ -1,0 +1,49 @@
+#import "Standard"
+#import "String"
+#import "Compiler"
+
+print :: (value: any) -> type {
+	print("any print - %\n", value)
+	return type_of(value)
+}
+
+print :: (value: u64) -> type {
+	print("u64 print - %\n", value)
+	return type_of(value)
+}
+
+print :: (value: u8) -> type {
+	print("u8 print - %\n", value)
+	return type_of(value)
+}
+
+main :: () {
+	string_buffer: [..]u8
+
+	append(*string_buffer, 'a')
+	
+	assert(type_of(print("Hello World\n")) == void)
+	
+	assert(print(4) == u8)
+	
+	v: Vector2
+	v.x = 4
+	v.y = 10
+	
+	assert(print(cast() v) == any)
+	
+	{
+		print := 10
+		{
+			assert(print(10) == f32)
+			assert(print(1.5) == f32)
+			
+			print :: (value: f32) -> type {
+				print("f32 print - %\n", value)
+				return f32
+			}
+		}
+	}
+}
+
+#run main()

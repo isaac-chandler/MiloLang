@@ -1,0 +1,412 @@
+#import "Standard"
+#import "String"
+#import "Intrinsics"
+
+State :: struct {
+	xs: s64
+	os: s64
+	x_score: s16
+	o_score: s16
+	xs_turn: bool
+}
+
+get_index :: (r : s64, c: s64) -> s64 {
+	return r * 8 + c
+}
+
+get_mask :: (r: s64, c: s64) -> s64 {
+	return 1 << get_index(r, c)
+}
+
+print_state :: (using state: State) {
+	EMPTY_LINE :: "\n+-+-+-+-+-+-+-+\n"
+	
+	print(EMPTY_LINE)
+	
+	for r: 6 {
+		print("|")
+		
+		for c: 7 {
+			mask := get_mask(r, c)
+
+			if xs & mask {
+				print("X")
+			} else if os & mask {
+				print("O")
+			} else {
+				print(" ")
+			}
+			
+			print("|")
+		}
+		
+		print(EMPTY_LINE)
+	}
+
+	print("O: % X: %\n", state.o_score, state.x_score)
+}
+
+drop_down :: (using state: *State) {
+	for 5 {
+		occupied := xs | os | (-1 << 48)
+		occupied &= occupied >> 8
+		occupied &= occupied >> 16
+		occupied &= occupied >> 32
+
+		os = (os & occupied) | ((os << 8) & ~occupied)
+		xs = (xs & occupied) | ((xs << 8) & ~occupied)
+	}
+}
+
+place_cell :: (using state: *State, c: s64, display := false) -> bool  {
+	mask := get_mask(0, c)
+
+	if (os | xs) & mask
+		return false
+
+	if xs_turn
+		state.xs |= mask
+	else
+		state.os |= mask
+
+	drop_down(state)
+
+	if !find_and_remove_winning(state, display)
+		xs_turn = !xs_turn
+
+	return true
+}
+
+precompute_masks :: () -> [6 * 4 + 3 * 7 + 3 * 4 + 3 * 4]s64 {
+	mask_buffer: type_of(precompute_masks())
+	masks := [..]s64.{mask_buffer.data, 0, mask_buffer.count}
+
+	mask := (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3)
+	for 6 {
+		for 4 {
+			array_add(*masks, mask)
+
+			mask <<= 1
+		}
+
+		mask <<= 4
+	}
+
+	mask = (1 << 0) | (1 << 8) | (1 << 16) | (1 << 24)
+	for 3 {
+		for 7 {
+			array_add(*masks, mask)
+
+			mask <<= 1
+		}
+
+		mask <<= 1
+	}
+
+	mask = (1 << 0) | (1 << 9) | (1 << 18) | (1 << 27)
+
+	for 3 {
+		for 4 {
+			array_add(*masks, mask)
+
+			mask <<= 1
+		}
+
+		mask <<= 4
+	}
+
+	mask = (1 << 3) | (1 << 10) | (1 << 17) | (1 << 24)
+
+	for 3 .. 6 {
+		for 4 {
+			array_add(*masks, mask)
+
+			mask <<= 1
+		}
+
+		mask <<= 4
+	}
+
+	return mask_buffer
+}
+
+masks :: #run precompute_masks()
+
+find_and_remove_winning :: (using state: *State, display: bool) -> bool {
+	scored := false
+
+	while true {
+		remove_mask: s64
+
+		for masks {
+			if xs & it == it {
+				remove_mask |= it
+				x_score += 1
+			} else if os & it == it {
+				remove_mask |= it
+				o_score += 1
+			}
+		}
+
+		if remove_mask {
+			if display
+				print_state(<<state)
+
+			os &= ~remove_mask
+			xs &= ~remove_mask
+
+			if display
+				print_state(<<state)
+
+			drop_down(state)
+
+			scored = true
+		} else {
+			break
+		}
+	}
+
+	return scored
+}
+
+is_full :: (using state: *State) -> bool {
+	return xs | os == 0x7F_7F_7F_7F_7F_7F
+}
+
+hash :: (using state: *State) -> u64 {
+	a := cast(u64) xs | (cast(u64) x_score << 48) | (cast(u64) xs_turn << 8)
+	b := cast(u64) (os << 16) | cast(u64) o_score
+
+	h := (a + b) * (a + b + 1) >> 1 + b
+
+	h ^= h >> 33
+	h *= 0xff51afd7ed558ccd
+	h ^= h >> 33
+	h *= 0xc4ceb9fe1a85ec53
+	h ^= h >> 33
+
+	return h
+}
+
+transposition_table: [1 << 24]struct {
+	hash: u64
+	value: s32
+	kind: enum u8 {
+		LOWER_BOUND
+		UPPER_BOUND
+		EXACT
+	}
+	depth: s8
+	move:  s8
+}
+
+stats: struct {
+	cutoffs: s64
+	leaves: s64
+	transposition_matches: s64
+}
+
+
+
+swap :: (array: []$T, i: u64, j: u64) {
+	temp := array[i]
+	array[i] = array[j]
+	array[j] = temp
+}
+
+
+minimax :: (using state: *State, depth: s32, alpha: s32 = -10000000, beta: s32 = 10000000) -> (evaluation: s32, column: s8) {
+	if stats.leaves >= 1_000_000
+		return 0, -1
+
+	if is_full(state) {
+		stats.leaves += 1
+		evaluation: s32
+
+		if state.x_score > o_score
+			evaluation = 100000 * depth
+		else if state.o_score > state.x_score
+			evaluation = -100000 * depth
+		else
+			evaluation = 0
+
+		if xs_turn
+			return evaluation, -1
+		else
+			return -evaluation, -1
+
+		return evaluation, -1
+	} else if depth == 0 {
+		stats.leaves += 1
+		evaluation := cast(s32) (state.x_score - state.o_score) * 1024
+
+		evaluation += cast(s32) (pop_count(state.xs & 0x41_41_41_41_41_41) - pop_count(state.os & 0x41_41_41_41_41_41)) * 1
+		evaluation += cast(s32) (pop_count(state.xs & 0x22_22_22_22_22_22) - pop_count(state.os & 0x22_22_22_22_22_22)) * 2
+		evaluation += cast(s32) (pop_count(state.xs & 0x14_14_14_14_14_14) - pop_count(state.os & 0x14_14_14_14_14_14)) * 4
+		evaluation += cast(s32) (pop_count(state.xs & 0x08_08_08_08_08_08) - pop_count(state.os & 0x08_08_08_08_08_08)) * 8
+
+		values :: s32.[0, 0, 16, 128, 0]
+
+		for masks {
+			if !(os & it) {
+				evaluation += values[pop_count(xs & it)]
+			} else if !(xs & it) {
+				evaluation -= values[pop_count(os & it)]
+			}
+
+		}
+
+
+		if xs_turn
+			return evaluation, -1
+		else
+			return -evaluation, -1
+	}
+
+	best_move: s8 = -1
+	best_move_value: s32 = -10000000
+	current_alpha := alpha
+	current_beta  := beta
+
+	key := hash(state)
+	entry := *transposition_table[key & (transposition_table.count - 1)]
+
+	if entry.hash == key && entry.depth >= depth {
+		stats.transposition_matches += 1
+
+		if entry.kind == .EXACT {
+			return entry.value, entry.move
+		} else if entry.kind == .LOWER_BOUND {
+			current_alpha = max(entry.value, current_alpha)
+		} else if entry.kind == .UPPER_BOUND {
+			current_beta = min(current_beta, entry.value)
+		}
+		
+		if current_alpha >= current_beta {
+			stats.cutoffs += 1
+			return entry.value, entry.move
+		}
+	}
+
+	move_indices :: s8.[5, 3, 1, 0, 2, 4, 6]
+	moves := s8.[3, 2, 4, 1, 5, 0, 6]
+
+	if entry.hash == key {
+		moves[move_indices[entry.move]] = moves[0]
+		moves[0] = entry.move
+	}
+
+	for moves {
+		new_state := <<state
+
+		if !place_cell(*new_state, it)
+			continue;
+
+		evaluation: s32
+
+		if new_state.xs_turn == xs_turn
+			evaluation = minimax(*new_state, depth - 1, current_alpha, current_beta)
+		else
+			evaluation = -minimax(*new_state, depth - 1, -current_beta, -current_alpha)
+
+		if evaluation > best_move_value {
+			current_alpha = max(evaluation, current_alpha)
+			best_move_value = evaluation
+			best_move = it
+		}
+
+		if current_alpha >= current_beta {
+			stats.cutoffs += 1
+			break
+		}
+	}
+
+	entry.value = best_move_value
+	entry.hash = key
+	entry.depth = cast() depth
+	entry.move = best_move
+	
+	if best_move_value <= alpha
+		entry.kind = .UPPER_BOUND
+	else if best_move_value >= current_beta
+		entry.kind = .LOWER_BOUND
+	else
+		entry.kind = .EXACT
+
+	return best_move_value, best_move
+}
+
+main :: () {
+	state: State
+
+	print_state(state)
+	
+	while !is_full(*state) {
+		
+		if state.xs_turn {
+			_, best_move := minimax(*state, 5)
+
+			depth: s32 = 6
+
+			while depth <= 100 {
+				_, new_best := minimax(*state, depth)
+
+				if new_best == -1 {
+					break
+				} else {
+					depth += 1
+					best_move = new_best
+				}
+			}
+			print("% depth %\n", depth - 1, stats)
+			print("---%---\n", best_move)
+
+			stats = .{}	
+
+			place_cell(*state, best_move, display = true)
+		} else {
+			while true {
+				print("O to move: ")
+
+				line := read_line()
+
+				if line == "exit" {
+					return
+				} else if line {
+					selected_column, remaining := read_u64(line)
+
+					if !remaining && selected_column < 7 && place_cell(*state, cast() selected_column, display = true)
+						break
+				}
+
+				defer if line  deallocate(line.data)
+			}
+		}
+
+		print_state(state)
+	}
+
+	if state.x_score > state.o_score {
+		print("X wins!\n")
+	} else if state.o_score > state.x_score {
+		print("O wins!\n")
+	} else {
+		print("Draw.\n")
+	}
+}
+
+#import "Compiler"
+
+setup_build :: () {
+	arguments := get_build_arguments()
+	
+	if arguments {
+		options := get_build_options()
+		options.backend = .LLVM
+		options.llvm_options = arguments
+		
+		set_build_options(options)
+	}
+}
+
+#run setup_build()		
