@@ -1682,7 +1682,6 @@ u32 generateIr(IrState *state, Expr *expr) {
 	case ExprFlavor::SWITCH: {
 		auto switch_ = static_cast<ExprSwitch *>(expr);
 
-		addLineMarker(state, expr);
 		u32 value = generateIr(state, switch_->condition);
 
 		ExprSwitch::Case *else_ = nullptr;
@@ -1749,7 +1748,6 @@ u32 generateIr(IrState *state, Expr *expr) {
 	case ExprFlavor::IF: {
 		auto ifElse = static_cast<ExprIf *>(expr);
 
-		addLineMarker(state, expr);
 		u32 conditionReg = generateIr(state, ifElse->condition);
 
 		if (ifElse->ifBody && ifElse->elseBody) {
@@ -1824,8 +1822,7 @@ u32 generateIr(IrState *state, Expr *expr) {
 	}
 	case ExprFlavor::RETURN: {
 		auto return_ = static_cast<ExprReturn *>(expr);
-
-		addLineMarker(state, expr);
+		
 		u32 result = 0;
 
 		if (return_->returns.count) {
@@ -2026,6 +2023,7 @@ u32 generateIr(IrState *state, Expr *expr) {
 		state->ir[patch].b = state->ir.count;
 
 		if (loop->completedBody) {
+			addLineMarker(state, loop->completedBody);
 			generateIr(state, loop->completedBody);
 		}
 
@@ -2108,13 +2106,14 @@ u32 generateIr(IrState *state, Expr *expr) {
 	case ExprFlavor::PUSH_CONTEXT: {
 		auto pushContext = static_cast<ExprBinaryOperator *>(expr);
 
-		auto oldContext = set(state, allocateRegister(state), state->contextRegister, 8);
+		auto oldContext = state->contextRegister;
 
-		set(state, state->contextRegister, generateIr(state, pushContext->left), 8);
+		state->contextRegister = generateIr(state, pushContext->left);
 
+		addLineMarker(state, pushContext->right);
 		generateIr(state, pushContext->right);
 
-		set(state, state->contextRegister, oldContext, 8);
+		state->contextRegister = oldContext;
 		return 0;
 	}
 	case ExprFlavor::RUN: // Statement level runs are not removed from the ast but shouldn't generate code

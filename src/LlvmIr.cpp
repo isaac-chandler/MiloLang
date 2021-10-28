@@ -218,6 +218,7 @@ static llvm::Type *createLlvmType(llvm::LLVMContext &context, Type *type) {
 			retType = getLlvmType(context, return_);
 		}
 
+
 		return llvm::PointerType::getUnqual(llvm::FunctionType::get(retType, llvm::ArrayRef(arguments, arguments + count), false));
 	}
 	else {
@@ -233,6 +234,7 @@ struct State {
 	llvm::Function *function;
 	llvm::BasicBlock *entryBlock;
 	llvm::Value *contextValue;
+	Array<llvm::Metadata *> debugScopeStack;
 };
 
 
@@ -768,6 +770,10 @@ static void generateIncrement(State *state, ExprLoop *loop) {
 	}
 }
 
+static void addLineMarker(State *state, Expr *expr) {
+	state->builder.SetCurrentDebugLocation(llvm::DILocation::get(state->context, expr->start.line, expr->start.column, state->debugScopeStack.peek()));
+}
+
 
 static void exitBlock(State *state, Block *block, bool isBreak) {
 	for (u32 i = deferStack.count; i-- != 0;) {
@@ -818,6 +824,7 @@ static void exitBlock(State *state, Block *block, bool isBreak) {
 					break;
 			}
 
+			addLineMarker(state, defer);
 			generateLlvmIr(state, defer->expr);
 		}
 	}
@@ -846,7 +853,42 @@ static llvm::Function *createLlvmFunction(State *state, ExprFunction *function) 
 		}
 
 		function->llvmStorage = llvm::Function::Create(functionType, linkage, name, state->module);
-		
+
+		{
+			auto type = static_cast<TypeFunction *>(function->type);
+			u64 paramOffset = 0;
+
+			if (!isStandardSize(type->returnTypes[0]->size)) {
+				auto paramType = functionType->getParamType(paramOffset);
+				function->llvmStorage->addParamAttrs(paramOffset, llvm::AttrBuilder()
+					.addStructRetAttr(paramType->getPointerElementType())
+					.addAttribute(llvm::Attribute::NoCapture)
+					.addAttribute(llvm::Attribute::NoAlias));
+				paramOffset++;
+			}
+
+			if (!(function->flags & EXPR_FUNCTION_IS_C_CALL)) {
+				function->llvmStorage->addParamAttrs(paramOffset, llvm::AttrBuilder()
+					.addAttribute(llvm::Attribute::NoCapture));
+				paramOffset++;
+			}
+
+			for (u32 i = 0; i < type->argumentCount; i++) {
+				if (!isStandardSize(type->argumentTypes[i]->size)) {
+					function->llvmStorage->addParamAttrs(i + paramOffset, llvm::AttrBuilder()
+						.addAttribute(llvm::Attribute::NoCapture)
+						.addByRefAttr(functionType->getParamType(i + paramOffset)->getPointerElementType()));
+				}
+			}
+
+			for (u32 i = 1; i < type->returnCount; i++) {
+				if (!isStandardSize(type->returnTypes[i]->size)) {
+					function->llvmStorage->addParamAttrs(i + paramOffset + type->argumentCount - 1, llvm::AttrBuilder()
+						.addAttribute(llvm::Attribute::NoCapture));
+				}
+			}
+		}
+
 		function->llvmStorage->setCallingConv(llvm::CallingConv::Win64);
 	}
 
@@ -1694,6 +1736,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 		}
 
 		for (auto subExpr : block->exprs) {
+			addLineMarker(state, subExpr);
 			generateLlvmIr(state, subExpr);
 		}
 
@@ -1850,6 +1893,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 		state->builder.SetInsertPoint(testBlock);
 
 		pushLoop(state, loop);
+		addLineMarker(state, loop);
 
 		llvm::Value *compare;
 
@@ -1885,6 +1929,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 		deferStack.add(loop);
 
 		if (loop->body) {
+			addLineMarker(state, loop->body);
 			generateLlvmIr(state, loop->body);
 		}
 
@@ -1898,6 +1943,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 
 		if (loop->completedBody) {
 			state->builder.SetInsertPoint(completedBlock);
+			addLineMarker(state, loop->completedBody);
 			generateLlvmIr(state, loop->completedBody);
 			state->builder.CreateBr(postBlock);
 		}
@@ -1934,7 +1980,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 	}
 	case ExprFlavor::SWITCH: {
 		auto switch_ = static_cast<ExprSwitch *>(expr);
-
+		
 		auto value = generateLlvmIr(state, switch_->condition);
 
 		ExprSwitch::Case *else_ = nullptr;
@@ -2013,10 +2059,12 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 			auto postBlock = llvm::BasicBlock::Create(state->context, "if.post", state->function);
 
 			state->builder.SetInsertPoint(trueBlock);
+			addLineMarker(state, ifElse->ifBody);
 			generateLlvmIr(state, ifElse->ifBody);
 			state->builder.CreateBr(postBlock);
 
 			state->builder.SetInsertPoint(falseBlock);
+			addLineMarker(state, ifElse->elseBody);
 			generateLlvmIr(state, ifElse->elseBody);
 			state->builder.CreateBr(postBlock);
 
@@ -2024,6 +2072,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 		}
 		else if (ifElse->ifBody) {
 			state->builder.SetInsertPoint(trueBlock);
+			addLineMarker(state, ifElse->ifBody);
 			generateLlvmIr(state, ifElse->ifBody);
 			state->builder.CreateBr(falseBlock);
 
@@ -2031,6 +2080,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 		}
 		else if (ifElse->elseBody) {
 			state->builder.SetInsertPoint(falseBlock);
+			addLineMarker(state, ifElse->elseBody);
 			generateLlvmIr(state, ifElse->elseBody);
 			state->builder.CreateBr(trueBlock);
 
@@ -2200,6 +2250,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 
 		state->builder.SetInsertPoint(bodyBlock);
 		if (loop->body) {
+			addLineMarker(state, loop->body);
 			generateLlvmIr(state, loop->body);
 		}
 
@@ -2207,6 +2258,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 
 		if (loop->completedBody) {
 			state->builder.SetInsertPoint(completedBlock);
+			addLineMarker(state, loop->completedBody);
 			generateLlvmIr(state, loop->completedBody);
 			state->builder.CreateBr(postBlock);
 		}
@@ -2279,6 +2331,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 		auto pushContext = static_cast<ExprBinaryOperator *>(expr);
 
 		auto oldContext = state->contextValue;
+		addLineMarker(state, pushContext->right);
 		state->contextValue = generateLlvmIr(state, pushContext->left);
 		generateLlvmIr(state, pushContext->right);
 		state->contextValue = oldContext;
@@ -2298,21 +2351,36 @@ static void addDiscriminatorsPass(const llvm::PassManagerBuilder &Builder, llvm:
 	PM.add(llvm::createAddDiscriminatorsPass());
 }
 
-static llvm::codegen::RegisterCodeGenFlags CGF;
+llvm::codegen::RegisterCodeGenFlags CGF;
 
 // General options for llc.  Other pass-specific options are specified
 // within the corresponding llc passes, and target-specific options
 // and back-end code generation options are specified with the target machine.
 //
 
+enum OptLevel {
+	O0, 
+	O1, 
+	O2, 
+	O3, 
+	Os, 
+	Oz
+};
+
 // Determine optimization level.
-static llvm::cl::opt<char>
-OptLevel("O",
-	llvm::cl::desc("Optimization level. [-O0, -O1, -O2, -O3, -Os or -Oz] "
+static llvm::cl::opt<OptLevel>
+OptLevel(llvm::cl::desc("Optimization level. [-O0, -O1, -O2, -O3, -Os or -Oz] "
 		"(default = '-O2')"),
-	llvm::cl::Prefix,
-	llvm::cl::ZeroOrMore,
-	llvm::cl::init(' '));
+	llvm::cl::values(
+		clEnumVal(O0, "No optimization"),
+		clEnumVal(O1, "Enable simple optimizations"), 
+		clEnumVal(O2, "Enable default optimizations"), 
+		clEnumVal(O3, "Enable expensive optimizations"), 
+		clEnumVal(Os, "Optimize for size"), 
+		clEnumVal(Oz, "Agressively optimize for size")
+
+	), 
+	llvm::cl::init(O2));
 
 static llvm::cl::opt<std::string>
 TargetTriple("mtriple", llvm::cl::desc("Override target triple for module"));
@@ -2389,19 +2457,18 @@ void runLlvm() {
 	default:
 		reportError("Error: Invalid LLVM optimization level O%c", OptLevel.getValue());
 		return;
-	case '0': optLevel = llvm::CodeGenOpt::None; break;
-	case '1': optLevel = llvm::CodeGenOpt::Less; break;
-	case '2': optLevel = llvm::CodeGenOpt::Default; break;
-	case '3': optLevel = llvm::CodeGenOpt::Aggressive; break;
-	case 's': sizeLevel = 1;
-	case 'z': sizeLevel = 2;
-	case ' ': break;
+	case O0: optLevel = llvm::CodeGenOpt::None; break;
+	case O1: optLevel = llvm::CodeGenOpt::Less; break;
+	case O2: optLevel = llvm::CodeGenOpt::Default; break;
+	case O3: optLevel = llvm::CodeGenOpt::Aggressive; break;
+	case Os: sizeLevel = 1;
+	case Oz: sizeLevel = 2;
 	}
 
 	bool optimized = optLevel != llvm::CodeGenOpt::None || sizeLevel > 0;
 
-	llvm::Optional<llvm::Reloc::Model> relocModel = llvm::codegen::getExplicitRelocModel();
-
+	auto relocModel = llvm::codegen::getExplicitRelocModel();
+	auto codeModel = llvm::codegen::getExplicitCodeModel();
 	
 
 	const llvm::Target *target = nullptr;
@@ -2433,7 +2500,7 @@ void runLlvm() {
 		options.FloatABIType = llvm::codegen::getFloatABIForCalls();
 	}
 
-	targetMachine = target->createTargetMachine(triple.getTriple(), cpuStr, featuresStr, options, relocModel, llvm::codegen::getExplicitCodeModel(), optLevel);
+	targetMachine = target->createTargetMachine(triple.getTriple(), cpuStr, featuresStr, options, relocModel, codeModel, optLevel);
 
 	llvmModule.addModuleFlag(llvm::Module::Warning, "CodeView", 1); // I hate LLVM
 
@@ -2504,6 +2571,9 @@ void runLlvm() {
 
 					llvmFunction->setSubprogram(debugFunction);
 
+					state.debugScopeStack.add(debugFunction);
+					addLineMarker(&state, function);
+
 					
 
 					auto entry = llvm::BasicBlock::Create(context, "entry", llvmFunction);
@@ -2511,7 +2581,6 @@ void runLlvm() {
 					auto code = llvm::BasicBlock::Create(context, "code", llvmFunction);
 
 					builder.SetInsertPoint(code);
-					builder.SetCurrentDebugLocation(llvm::DILocation::get(context, function->start.line, function->start.column, debugFunction));
 
 					state.function = llvmFunction;
 					state.entryBlock = entry;
@@ -2574,6 +2643,7 @@ void runLlvm() {
 
 					builder.CreateBr(code);
 
+					state.debugScopeStack.pop();
 					dib->finalizeSubprogram(debugFunction);
 #if BUILD_DEBUG
 					if (llvm::verifyFunction(*llvmFunction, &verifyStream)) {
@@ -2917,7 +2987,7 @@ void runLlvm() {
 
 			llvm::PassManagerBuilder *pmbuilder = new llvm::PassManagerBuilder;
 			pmbuilder->OptLevel = targetMachine->getOptLevel();
-			pmbuilder->SizeLevel = 0;
+			pmbuilder->SizeLevel = pmbuilder->SizeLevel;
 			pmbuilder->DisableTailCalls = llvm::codegen::getDisableTailCalls();
 			pmbuilder->DisableUnrollLoops = pmbuilder->OptLevel == 0;
 			pmbuilder->SLPVectorize = pmbuilder->OptLevel > 1 && pmbuilder->SizeLevel < 2;
@@ -2982,7 +3052,7 @@ void runLlvm() {
 			pass.run(llvmModule);
 			dib->finalize();
 
-			//llvmModule.print(irOut, nullptr);
+			llvmModule.print(irOut, nullptr);
 
 			output.flush();
 		}

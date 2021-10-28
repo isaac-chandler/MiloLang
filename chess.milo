@@ -2161,29 +2161,31 @@ ai_start_semaphore: HANDLE
 ai_stop_semaphore:  HANDLE
 
 ai_thread_proc :: (userdata: *void) -> u32 #c_call {
-	performance_counter_frequency: s64
-	
-	QueryPerformanceFrequency(*performance_counter_frequency)
-	
-	counter_scale := 1.0 / cast(f32) performance_counter_frequency
+	push_context .{} {
+		performance_counter_frequency: s64
+		
+		QueryPerformanceFrequency(*performance_counter_frequency)
+		
+		counter_scale := 1.0 / cast(f32) performance_counter_frequency
 
-	ai_move := cast(*Move) userdata
-	while true {
-		WaitForSingleObject(ai_start_semaphore);
+		ai_move := cast(*Move) userdata
+		while true {
+			WaitForSingleObject(ai_start_semaphore);
+			
+			start_time: s64
+			end_time: s64
+			
+			QueryPerformanceCounter(*start_time);
+			<<ai_move = select_ai_move()
+			QueryPerformanceCounter(*end_time)
+			
+			print("Move took % s\n", cast() (end_time - start_time) * counter_scale)
+			
+			ReleaseSemaphore(ai_stop_semaphore)
+		}
 		
-		start_time: s64
-		end_time: s64
-		
-		QueryPerformanceCounter(*start_time);
-		<<ai_move = select_ai_move()
-		QueryPerformanceCounter(*end_time)
-		
-		print("Move took % s\n", cast() (end_time - start_time) * counter_scale)
-		
-		ReleaseSemaphore(ai_stop_semaphore)
+		return 0
 	}
-	
-	return 0
 }
 
 STARTING_BOARD :: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
@@ -2272,73 +2274,75 @@ main :: () {
 	window_class: WNDCLASSW
 	
 	window_class.style = CS_OWNDC | CS_VREDRAW | CS_HREDRAW
-	window_class.lpfnWndProc = (hwnd: HWND, uMsg: MSG.Message, wParam: u64, lParam: s64) -> s64 #c_call {	
-		if uMsg == {
-			case WM_CLOSE
+	window_class.lpfnWndProc = (hwnd: HWND, uMsg: MSG.Message, wParam: u64, lParam: s64) -> s64 #c_call {
+		push_context .{} {
+			if uMsg == {
+				case WM_CLOSE
 
-				DestroyWindow(hwnd)
-				
-				print("Closing\n")
-				
-			case WM_DESTROY
-				glFinish()
-				
-				dc := wglGetCurrentDC()
-				
-				if !wglDeleteContext(gl_context)
-					print("Failed to delete gl context\n")
+					DestroyWindow(hwnd)
 					
-				if !ReleaseDC(hwnd, dc)
-					print("Failed to delete device context\n")
-				
-				PostQuitMessage(0)
-				
-			case WM_PAINT
-				paint: PAINTSTRUCT = --
-				
-				dc := BeginPaint(hwnd, *paint)
-				EndPaint(hwnd, *paint)
-				
-			case WM_SIZE
-				client_rect: RECT = --
-				
-				GetClientRect(hwnd, *client_rect)
-				
-				window_width = client_rect.right - client_rect.left
-				window_height = client_rect.bottom - client_rect.top
-				
-				print("%x%\n", window_width, window_height)
-				print("----------\n")
-				
-			case WM_LBUTTONDOWN
-				
-				x := cast(s16) lParam
-				y := cast(s16) (lParam >> 16)
-				
-				x /= 100
-				y /= 100
-				
-				if white_ai && !black_ai {
-					x = 7 - x
-					y = 7 - y
-				}
-				
-				square := pack(cast() x, cast() y)
-				
-				if square == selected_square
-					selected_square = -1
+					print("Closing\n")
+					
+				case WM_DESTROY
+					glFinish()
+					
+					dc := wglGetCurrentDC()
+					
+					if !wglDeleteContext(gl_context)
+						print("Failed to delete gl context\n")
+						
+					if !ReleaseDC(hwnd, dc)
+						print("Failed to delete device context\n")
+					
+					PostQuitMessage(0)
+					
+				case WM_PAINT
+					paint: PAINTSTRUCT = --
+					
+					dc := BeginPaint(hwnd, *paint)
+					EndPaint(hwnd, *paint)
+					
+				case WM_SIZE
+					client_rect: RECT = --
+					
+					GetClientRect(hwnd, *client_rect)
+					
+					window_width = client_rect.right - client_rect.left
+					window_height = client_rect.bottom - client_rect.top
+					
+					print("%x%\n", window_width, window_height)
+					print("----------\n")
+					
+				case WM_LBUTTONDOWN
+					
+					x := cast(s16) lParam
+					y := cast(s16) (lParam >> 16)
+					
+					x /= 100
+					y /= 100
+					
+					if white_ai && !black_ai {
+						x = 7 - x
+						y = 7 - y
+					}
+					
+					square := pack(cast() x, cast() y)
+					
+					if square == selected_square
+						selected_square = -1
+					else
+						selected_square = square
+						
+				case WM_RBUTTONDOWN
+					
+					undo_last_move = true
+					
 				else
-					selected_square = square
-					
-			case WM_RBUTTONDOWN
-				
-				undo_last_move = true
-				
-			else
-				return DefWindowProcW(hwnd, uMsg, wParam, lParam)
+					return DefWindowProcW(hwnd, uMsg, wParam, lParam)
+			}
+			
+			return 0
 		}
-		
-		return 0
 	}
 	window_class.hInstance = instance
 	window_class.lpszClassName = class_name

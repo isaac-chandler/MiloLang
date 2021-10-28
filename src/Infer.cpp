@@ -7830,6 +7830,9 @@ bool checkGuaranteedReturn(Expr *expr) {
 
 		return hasElse;
 	}
+	case ExprFlavor::PUSH_CONTEXT: {
+		return checkGuaranteedReturn(static_cast<ExprBinaryOperator *>(expr)->right);
+	}
 	default:
 		return false;
 	}
@@ -9038,6 +9041,8 @@ void runInfer(String inputFile) {
 
 				// Wake up any job that is still looking for a member in the context so it can report a member not found error
 				wakeUpSleepers(&TYPE_CONTEXT.sleepingOnMe);
+				if (!doSubJobs(&irGenerationPending))
+					goto error;
 			} 
 			else if (overloadsWaitingForLock.count) {
 				for (auto waiting : overloadsWaitingForLock) {

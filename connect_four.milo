@@ -1,6 +1,7 @@
 #import "Standard"
 #import "String"
 #import "Intrinsics"
+#import "Windows"
 
 State :: struct {
 	xs: s64
@@ -344,6 +345,14 @@ main :: () {
 	while !is_full(*state) {
 		
 		if state.xs_turn {
+			pcf: s64
+
+			QueryPerformanceFrequency(*pcf)
+
+			counter_scale := 1.0 / cast(f32) pcf
+
+			start_time: s64
+			QueryPerformanceCounter(*start_time);
 			_, best_move := minimax(*state, 5)
 
 			depth: s32 = 6
@@ -358,8 +367,12 @@ main :: () {
 					best_move = new_best
 				}
 			}
+			end_time: s64
+			QueryPerformanceCounter(*end_time)
 			print("% depth %\n", depth - 1, stats)
 			print("---%---\n", best_move)
+			
+			print("Move took % s\n", cast() (end_time - start_time) * counter_scale)
 
 			stats = .{}	
 
