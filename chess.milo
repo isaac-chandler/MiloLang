@@ -650,7 +650,7 @@ create_mask :: (bits: [64]u64) -> u64 {
 		if it
 			mask |= 1 << it_index
 	}
-	
+
 	return mask
 }
 
@@ -1554,7 +1554,7 @@ get_moves_for_piece :: (using state: State, moves: *[..]Move, piece_index: s8) {
 		
 		if (color == BLACK && !(castle_state & .BLACK_NO_KINGSIDE)) || (color != BLACK && !(castle_state & .WHITE_NO_KINGSIDE)) {
 			if board[position + 1] == -1 && board[position + 2] == -1 {
-			add_move_if_legal(state, moves, .{piece_index, position + 2})
+				add_move_if_legal(state, moves, .{piece_index, position + 2})
 			}
 		}
 		
@@ -1918,8 +1918,8 @@ select_ai_move :: () -> Move {
 		if depth == MAX_DEPTH  
 			break;
 		
-		low_delta: f32 = 0.25
-		high_delta: f32 = 0.25
+		low_delta: f32 = 0.5
+		high_delta: f32 = 0.5
 		
 		while true {
 			alpha := value - low_delta
@@ -2228,6 +2228,9 @@ main :: () {
 			before, after := split_at_first(it, '=')
 			
 			fen = after
+		} else {
+			print("Unknown argument: %\n", it)
+			return
 		}
 	}
 	
@@ -2499,6 +2502,13 @@ main :: () {
 						
 						moves.count = 0
 						get_moves_for_piece(global_board, *moves, global_board.board[selected_square])
+
+						for moves {
+							new_state, valid := checked_do_move(global_board, it)
+
+							if !valid
+								remove
+						}
 					}
 				}
 			}

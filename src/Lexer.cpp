@@ -38,6 +38,7 @@ static const Keyword keywords[] = {
 	{"false", TokenT::FALSE},
 	{"null", TokenT::NULL_}, 
 	{"size_of", TokenT::SIZE_OF},
+	{"align_of", TokenT::ALIGN_OF},
 	{"type_of", TokenT::TYPE_OF},
 	{"#external", TokenT::EXTERNAL}, 
 	{"#load", TokenT::LOAD}, 

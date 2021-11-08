@@ -1,0 +1,18 @@
+#import "Standard"
+
+f :: () {
+	print("Hello, World!\n")
+}
+
+F :: struct {
+	f_ptr : () -> void = f
+}
+
+main :: () {
+	f_struct: F
+	f_ptr: () -> void = f
+
+	f()
+	f_ptr()
+	f_struct.f_ptr()
+}

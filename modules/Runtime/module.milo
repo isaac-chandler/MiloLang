@@ -163,24 +163,8 @@ __program_start :: () -> s32 #c_call {
 }
 
 
-	
-Allocator :: struct {
-	
-	using Mode :: enum u8 {
-		ALLOCATE
-		EXPAND
-		FREE
-		FREE_ALL
-	}
-	
-	allocator: (mode: Mode, allocator_data: *void, size: u64, alignment: u64, pointer: *void) -> *void
-	allocator_data: *void
-}
-
 Context_Base :: struct {
 	stack_trace: *Stack_Trace
-	
-	using allocator_info: Allocator
 	
 	assertion_failed_handler: (location: Source_Location) -> void
 }

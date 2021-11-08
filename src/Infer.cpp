@@ -351,6 +351,7 @@ void addFunction(ExprFunction *function) {
 	job->function = function;
 
 	if (!(function->flags & EXPR_FUNCTION_IS_POLYMORPHIC)) {
+		addBlock(&function->constants);
 		addBlock(&function->arguments);
 		addBlock(&function->returns);
 	}
@@ -635,17 +636,14 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 	case ExprFlavor::BINARY_OPERATOR: {
 		ExprBinaryOperator *binary = static_cast<ExprBinaryOperator *>(*expr);
 
-		assert(!(binary->flags & EXPR_EQUALS_IS_IMPLICIT_SWITCH) || binary->op == TokenT::EQUAL);
-
-		if (binary->left && !(binary->flags & EXPR_EQUALS_IS_IMPLICIT_SWITCH)) {
+		if (binary->left)
 			flatten(flattenTo, &binary->left);
-		}
 
-		if (!(binary->flags & EXPR_ASSIGN_IS_IMPLICIT_INITIALIZER)) {
+		if (binary->right) {
 			flatten(flattenTo, &binary->right);
 		}
 
-		if (binary->op == TokenT::CAST && !binary->left) {
+		if (binary->type == &TYPE_AUTO_CAST) {
 			// Don't add auto-casts to the flattened list, there is nothing to infer
 		}
 		else {
@@ -1144,6 +1142,42 @@ void doConstantCast(Expr **cast) {
 	}
 }
 
+void markDeclarationsAsPointedTo(Expr *expr) {
+	while (true) {
+		if (expr->flavor == ExprFlavor::IDENTIFIER) {
+			auto identifier = static_cast<ExprIdentifier *>(expr);
+			if (identifier->structAccess) {
+				// If a struct access is by pointer, we are not pointing to any new declarations
+				if (identifier->structAccess->type->flavor == TypeFlavor::POINTER) {
+					break;
+				}
+
+				expr = identifier->structAccess;
+			}
+			else {
+				identifier->declaration->flags |= DECLARATION_IS_POINTED_TO;
+				break;
+			}
+		}
+		else if (expr->flavor == ExprFlavor::BINARY_OPERATOR) {
+			auto binary = static_cast<ExprBinaryOperator *>(expr);
+
+			if (binary->op != TOKEN('[')) {
+				break;
+			}
+
+			if (!(binary->left->type->flags & TYPE_ARRAY_IS_FIXED)) {
+				break;
+			}
+
+			expr = binary->left;
+		}
+		else {
+			break;
+		}
+	}
+}
+
 void insertImplicitCast(Array<Type *> *sizeDependencies, Expr **castFrom, Type *castTo) {
 	ExprBinaryOperator *cast = INFER_NEW(ExprBinaryOperator);
 	cast->flavor = ExprFlavor::BINARY_OPERATOR;
@@ -1160,9 +1194,14 @@ void insertImplicitCast(Array<Type *> *sizeDependencies, Expr **castFrom, Type *
 	if (cast->right->flags & EXPR_IS_SPREAD) cast->flags |= EXPR_IS_SPREAD;
 
 
+	if (((*castFrom)->type->flags & TYPE_ARRAY_IS_FIXED) && castTo->flavor == TypeFlavor::ARRAY && !(castTo->flags & TYPE_ARRAY_IS_FIXED)) {
+		markDeclarationsAsPointedTo(*castFrom);
+	}
+
 	*castFrom = cast;
 
 	addSizeDependency(sizeDependencies, castTo);
+
 
 
 	assert(isValidCast(castTo, cast->right->type));
@@ -1316,8 +1355,55 @@ bool switchCasesAreSame(Expr *a, Expr *b) {
 		return static_cast<ExprStringLiteral *>(a)->string == static_cast<ExprStringLiteral *>(b)->string;
 	case ExprFlavor::FUNCTION:
 		return a == b;
+	case ExprFlavor::ARRAY_LITERAL: {
+		auto arrayA = static_cast<ExprArrayLiteral *>(a);
+		auto arrayB = static_cast<ExprArrayLiteral *>(b);
+
+		if (arrayA->count != arrayB->count)
+			return false;
+
+		if (arrayA->typeValue && arrayB->typeValue && !switchCasesAreSame(arrayA->typeValue, arrayB->typeValue))
+			return false;
+
+		for (u32 i = 0; i < arrayA->count; i++) {
+			if (!switchCasesAreSame(arrayA->values[i], arrayB->values[i]))
+				return false;
+		}
+
+		return true;
+	}
+	case ExprFlavor::STRUCT_LITERAL: {
+		auto structA = static_cast<ExprStructLiteral *>(a);
+		auto structB = static_cast<ExprStructLiteral *>(b);
+
+		if (structA->initializers.count != structB->initializers.count)
+			return false;
+
+		if ((structA->flags & EXPR_STRUCT_LITERAL_UNSPECIFIED_MEMBERS_UNINITIALZIED) != (structB->flags & EXPR_STRUCT_LITERAL_UNSPECIFIED_MEMBERS_UNINITIALZIED))
+			return false;
+
+		if (structA->typeValue && structB->typeValue && !switchCasesAreSame(structA->typeValue, structB->typeValue))
+			return false;
+
+		if (!structA->initializers.declarations != !structB->initializers.declarations)
+			return false;
+
+		for (u32 i = 0; i < structA->initializers.count; i++) {
+			if (structA->initializers.declarations && structA->initializers.declarations[i] != structB->initializers.declarations[i])
+				return false;
+			else if (structA->initializers.names && structA->initializers.names[i] != structB->initializers.names[i])
+				return false;
+
+			if (!structA->initializers.values[i] != !structB->initializers.values[i])
+				return false;
+
+			if (!switchCasesAreSame(structA->initializers.values[i], structB->initializers.values[i]))
+				return false;
+		}
+
+		return true;
+	}
 	default:
-		assert(false);
 		return false;
 	}
 }
@@ -1531,6 +1617,10 @@ bool tryAutoCast(SubJob *job, Expr **cast, Type *castTo, bool *yield) {
 			
 			if (!*yield) reportError(autoCast, "Error: Cannot cast from %.*s to %.*s", STRING_PRINTF(autoCast->right->type->name), STRING_PRINTF(castTo->name));
 			return false;
+		}
+
+		if ((castFrom->flags & TYPE_ARRAY_IS_FIXED) && castTo->flavor == TypeFlavor::ARRAY && !(castTo->flags & TYPE_ARRAY_IS_FIXED)) {
+			markDeclarationsAsPointedTo(autoCast->right);
 		}
 
 		addSizeDependency(job->sizeDependencies, castTo);
@@ -2005,8 +2095,16 @@ bool defaultValueIsZero(SubJob *job, Type *type, bool *yield) {
 
 Expr *getDefaultValue(SubJob *job, Type *type, bool *shouldYield);
 
+static bool contextIsLocked;
+
 Expr *createDefaultValue(SubJob *job, Type *type, bool *shouldYield) {
 	*shouldYield = false;
+
+	if (type == &TYPE_CONTEXT && !contextIsLocked) {
+		goToSleep(job, &TYPE_CONTEXT.sleepingOnMe, "Context default value waiting for context lock");
+		*shouldYield = true;
+		return nullptr;
+	}
 
 	if (defaultValueIsZero(job, type, shouldYield)) {
 		return createIntLiteral({}, {}, type, 0);
@@ -2428,15 +2526,25 @@ bool inferPolymorphicFunctionForNonCall(Type *correct, ExprFunction *given) {
 	return false;
 }
 
-bool inferUnaryDotArrayLiteral(SubJob *job, Type *correct, Expr *&given) {
-	auto literal = static_cast<ExprArrayLiteral *>(given);
-
+bool inferUnaryDotArrayLiteral(SubJob *job, Type *correct, Expr *&given, bool *yield) {
+	*yield = false;
 	auto array = static_cast<TypeArray *>(correct);
 
 	if (array->flags & TYPE_ARRAY_IS_DYNAMIC) {
 		reportError(given, "Error: Cannot have an array literal for a dynamic array");
 		return false;
 	}
+	if (given->flavor == ExprFlavor::INT_LITERAL) {
+		assert(!(array->flags & TYPE_ARRAY_IS_FIXED));
+		assert(static_cast<ExprLiteral *>(given)->unsignedValue == 0);
+
+		addSizeDependency(job->sizeDependencies, correct);
+
+		given->type = correct;
+		return true;
+	}
+
+	auto literal = static_cast<ExprArrayLiteral *>(given);
 
 	if (array->flags & TYPE_ARRAY_IS_FIXED) {
 		if (literal->count != array->count) {
@@ -2467,10 +2575,11 @@ bool inferUnaryDotArrayLiteral(SubJob *job, Type *correct, Expr *&given) {
 		insertImplicitCast(job->sizeDependencies, &given, correct);
 	}
 
+	*yield = true;
 	beginFlatten(job, &given);
 	subJobs.add(job);
 
-	return true;
+	return false;
 }
 
 bool inferUnaryDotStructLiteral(SubJob *job, Type *correct, Expr *&given) {
@@ -2711,8 +2820,7 @@ bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yi
 				}
 			}
 			else if (given->type == &TYPE_ARRAY_LITERAL && correct->flavor == TypeFlavor::ARRAY) {
-				*yield = inferUnaryDotArrayLiteral(job, correct, given);
-				return false;
+				return inferUnaryDotArrayLiteral(job, correct, given, yield);
 			}
 			else if (given->type == &TYPE_STRUCT_LITERAL && (correct->flavor == TypeFlavor::ARRAY || correct->flavor == TypeFlavor::STRING || correct->flavor == TypeFlavor::STRUCT)) {
 				*yield = inferUnaryDotStructLiteral(job, correct, given);
@@ -3031,9 +3139,7 @@ bool isAddressable(Expr *expr) {
 	}
 }
 
-bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char *message, Expr *callLocation, Expr *functionLocation, bool *yield) {
-	*yield = false;
-
+bool sortArguments(SubJob *job, Arguments *arguments, Block *block, const char *message, Expr *callLocation, Expr *functionLocation) {
 	String functionName = "function";
 
 	if (functionLocation->valueOfDeclaration) {
@@ -3067,7 +3173,7 @@ bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char 
 	bool hadNamed = false;
 
 	if (arguments->names || arguments->count != block->declarations.count || (functionLocation->flags & EXPR_FUNCTION_HAS_VARARGS)) {
-		Expr **sortedArguments = INFER_NEW_ARRAY(Expr *, block->declarations.count){};
+		Expr **sortedArguments = INFER_NEW_ARRAY(Expr *, block->declarations.count) {};
 
 		for (u32 i = 0; i < arguments->count; i++) {
 			Declaration *argument;
@@ -3106,8 +3212,7 @@ bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char 
 				array->flavor = ExprFlavor::ARRAY_LITERAL;
 				array->start = arguments->values[i]->start;
 				array->flags |= EXPR_IS_SPREAD;
-
-				Type *varargsType = static_cast<TypeArray *>(getDeclarationType(argument))->arrayOf;
+				array->typeValue = nullptr;
 
 				for (; i < arguments->count; i++) {
 					if (arguments->names && arguments->names[i].length) {
@@ -3115,33 +3220,37 @@ bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char 
 						break;
 					}
 
-					if (!assignOp(job, arguments->values[i], varargsType, arguments->values[i], yield)) {
-						return false;
-					}
-
 					varargs.add(arguments->values[i]);
 					array->end = arguments->values[i]->end;
 				}
 
+				
+
 				array->values = varargs.storage;
 				array->count = varargs.count;
+				sortedArguments[argIndex] = array;
 
-				array->type = getStaticArray(varargsType, varargs.count);
+				if (argument->flags & DECLARATION_TYPE_POLYMORPHIC)  {
+					array->type = getStaticArray(arguments->values[i]->type, array->count);
 
-				if (array->type->size == 0 && !array->type->sizeJob) {
-					auto sizeJob = allocateSizeJob();
-					sizeJob->type = array->type;
-					sizeJob->type->sizeJob = sizeJob;
+					if (array->type->size == 0 && !array->type->sizeJob) {
+						auto sizeJob = allocateSizeJob();
+						sizeJob->type = array->type;
+						sizeJob->type->sizeJob = sizeJob;
 
-					addJob(&sizeJobs, sizeJob);
-					addSubJob(sizeJob);
-					++totalSizes;
+						addJob(&sizeJobs, sizeJob);
+						addSubJob(sizeJob);
+						++totalSizes;
+					}
+
+					addSizeDependency(job->sizeDependencies, array->type);
+
+					beginFlatten(job, &sortedArguments[argIndex]);
+				}
+				else {
+					array->type = &TYPE_ARRAY_LITERAL;
 				}
 
-
-				addSizeDependency(job->sizeDependencies, array->type);
-
-				sortedArguments[argIndex] = array;
 			}
 			else {
 				if (!(argument->flags & DECLARATION_IS_VARARGS) && (arguments->values[i]->flags & EXPR_IS_SPREAD)) {
@@ -3159,24 +3268,18 @@ bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char 
 				auto argument = block->declarations[i];
 
 				if (argument->initialValue) {
-					if (argument->flags & DECLARATION_VALUE_IS_READY) {
-						assert((argument->flags & DECLARATION_IS_RUN_RETURN) || isLiteral(argument->initialValue));
-
-						sortedArguments[i] = argument->initialValue;
-						addSizeDependency(job->sizeDependencies, argument->initialValue->type);
-					}
-					else {
-						*yield = true;
-						goToSleep(job, &argument->sleepingOnMyValue, "Default argument value not ready");
-
-						failed = true;
-					}
+					// The actual value will be filled in during inferArguments or doPolymorphMatching
 				}
 				else if (argument->flags & DECLARATION_IS_VARARGS) {
-					auto literal = createIntLiteral(argument->start, argument->end, getDeclarationType(argument), 0);
+					if (argument->flags & DECLARATION_TYPE_POLYMORPHIC) {
+						reportError(callLocation, "Error: Varargs argument '%.*s' of polymorphic type must have at least one value", STRING_PRINTF(argument->name));
+						reportError(argument, "   ..: Here is the %s", message);
+						failed = true;
+					}
+
+					auto literal = createIntLiteral(argument->start, argument->end, &TYPE_ARRAY_LITERAL, 0);
 					literal->flags |= EXPR_IS_SPREAD;
 					sortedArguments[i] = literal;
-					addSizeDependency(job->sizeDependencies, literal->type);
 				}
 				else {
 					reportError(callLocation, "Error: Required %s '%.*s' was not given", message, STRING_PRINTF(argument->name));
@@ -3194,15 +3297,38 @@ bool inferArguments(SubJob *job, Arguments *arguments, Block *block, const char 
 		arguments->count = block->declarations.count;
 	}
 
+	return true;
+}
+
+bool inferArguments(SubJob *job, Arguments *arguments, Block *block, bool *yield) {
+	*yield = false;
+
 	for (u32 i = 0; i < arguments->count; i++) {
-		Type *correct = getDeclarationType(block->declarations[i]);
+		auto argument = block->declarations[i];
+
+		if (!arguments->values[i]) {
+			assert(argument->initialValue);
+
+			if (argument->flags & DECLARATION_VALUE_IS_READY) {
+				assert((argument->flags & DECLARATION_IS_RUN_RETURN) || isLiteral(argument->initialValue));
+
+				arguments->values[i] = argument->initialValue;
+				addSizeDependency(job->sizeDependencies, argument->initialValue->type);
+			}
+			else {
+				*yield = true;
+				goToSleep(job, &argument->sleepingOnMyValue, "Default argument value not ready");
+			}
+		}
+
+		Type *correct = getDeclarationType(argument);
 
 		if (!assignOp(job, arguments->values[i], correct, arguments->values[i], yield)) { // @Incomplete: Give function call specific error messages instead of general type conversion errors
 			return false;
 		}
 	}
 
-	return true;
+	return !*yield;
 }
 
 bool checkArgumentsForOverload(SubJob *job, Arguments *arguments, Block *block, ExprFunction *function, u32 *conversions, bool *yield) {
@@ -3300,11 +3426,11 @@ bool matchPolymorphArgument(Expr *polymorphExpression, Type *type, Expr *locatio
 		assert(identifier->declaration);
 		assert(identifier->declaration->flags & DECLARATION_IS_CONSTANT);
 		assert(identifier->declaration->enclosingScope->flavor == BlockFlavor::CONSTANTS);
-		assert(!identifier->declaration->initialValue);
 
-		if (!silent)
-			identifier->declaration->initialValue = inferMakeTypeLiteral(location->start, location->end, type);
-
+		if (!silent) {
+			assert(identifier->declaration->initialValue && identifier->declaration->initialValue->flavor == ExprFlavor::TYPE_LITERAL);
+			static_cast<ExprLiteral *>(identifier->declaration->initialValue)->typeValue = type;
+		}
 		//reportInfo("%.*s Polymorph type matched %.*s", STRING_PRINTF(identifier->name), STRING_PRINTF(type->name));
 		return true;
 	}
@@ -3410,7 +3536,7 @@ bool matchPolymorphArgument(Expr *polymorphExpression, Type *type, Expr *locatio
 		}
 
 		for (auto argument : function->arguments.declarations) {
-			if (argument->flags & DECLARATION_DEFINES_POLYMORPH_VARIABLE) {
+			if (argument->flags & DECLARATION_TYPE_POLYMORPHIC) {
 				assert(argument->type);
 
 				if (!matchPolymorphArgument(argument->type, functionType->argumentTypes[argument->serial], location, yield, silent))
@@ -3419,7 +3545,7 @@ bool matchPolymorphArgument(Expr *polymorphExpression, Type *type, Expr *locatio
 		}
 
 		for (auto return_ : function->returns.declarations) {
-			if (return_->flags & DECLARATION_DEFINES_POLYMORPH_VARIABLE) {
+			if (return_->flags & DECLARATION_TYPE_POLYMORPHIC) {
 				assert(return_->type);
 
 				if (!matchPolymorphArgument(return_->type, functionType->returnTypes[return_->serial], location, yield, silent))
@@ -3435,55 +3561,35 @@ bool matchPolymorphArgument(Expr *polymorphExpression, Type *type, Expr *locatio
 	return false;
 }
 
+
 bool doPolymorphMatchingForCall(Arguments *arguments, ExprFunction *function, bool *yield) {
 	for (u32 i = 0; i < arguments->count; i++) {
-		Declaration *argument;
+		if (!arguments->values[i])
+			continue;
+
+		Declaration *argument = function->arguments.declarations[i];
+		assert(!(argument->flags & DECLARATION_IMPORTED_BY_USING));
 
 		auto argumentType = arguments->values[i]->type;
 
-		if (arguments->names && arguments->names[i].length) {
-			argument = findDeclarationNoYield(&function->arguments, arguments->names[i]);
-		}
-		else {
-			if (i >= function->arguments.declarations.count) {
-				return false;
-			}
-
-			argument = function->arguments.declarations[i];
-		}
-
-		if (!argument) {
-			return false;
-		}
-
-		assert(!(argument->flags & DECLARATION_IMPORTED_BY_USING));
 		
-		if (argument->flags & DECLARATION_DEFINES_POLYMORPH_VARIABLE) {
-			auto typeExpr = argument->type;
-			auto argumentExpr = arguments->values[i];
-			assert(typeExpr);
+		auto typeExpr = argument->type;
+		auto argumentExpr = arguments->values[i];
+		assert(typeExpr);
 
-			if ((argument->flags & DECLARATION_IS_VARARGS) && !(argumentExpr->flags & EXPR_IS_SPREAD)) {
-				assert(typeExpr->flavor == ExprFlavor::BINARY_OPERATOR);
-				auto arrayType = static_cast<ExprBinaryOperator *>(typeExpr);
-				assert(arrayType->op == TokenT::ARRAY_TYPE);
+		assert(!(argument->flags & DECLARATION_IS_VARARGS) || (argumentExpr->flags & EXPR_IS_SPREAD));
 
-				typeExpr = arrayType->right;
-
-				for (; i < arguments->count; i++) {
-					if (arguments->names && arguments->names[i].length) {
-						i--; // i will be incremented in the outer loop
-						break;
-					}
-				}
-			}
-
-			if ((argument->flags & EXPR_IS_SPREAD) && !(argument->flags & DECLARATION_IS_VARARGS)) {
-				return false;
-			}
-
+		if (argument->flags & DECLARATION_TYPE_POLYMORPHIC) {
 			if (!matchPolymorphArgument(typeExpr, getTypeForExpr(argumentExpr), argumentExpr, yield, false))
 				return false;
+		}
+
+		if (argument->flags & DECLARATION_VALUE_POLYMORPHIC) {
+			for (auto constant : function->constants.declarations) {
+				if (constant->name == argument->name) {
+					constant->initialValue = argumentExpr;
+				}
+			}
 		}
 		
 	}
@@ -3499,10 +3605,8 @@ bool constantsBlockMatches(Block *original, Block *polymorph) {
 		auto polymorphDeclaration = polymorph->declarations[i];
 
 		assert(originalDeclaration->name == polymorphDeclaration->name);
-		assert(originalDeclaration->initialValue && originalDeclaration->initialValue->flavor == ExprFlavor::TYPE_LITERAL);
-		assert(polymorphDeclaration->initialValue && polymorphDeclaration->initialValue->flavor == ExprFlavor::TYPE_LITERAL);
-
-		if (static_cast<ExprLiteral *>(originalDeclaration->initialValue)->typeValue != static_cast<ExprLiteral *>(polymorphDeclaration->initialValue)->typeValue) {
+		
+		if (!switchCasesAreSame(originalDeclaration->initialValue, polymorphDeclaration->initialValue)) {
 			return false;
 		}
 	}
@@ -3608,11 +3712,6 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 	}
 
 	if (left) {
-		// @SwitchEqualsMess
-		if (binary->flags & EXPR_EQUALS_IS_IMPLICIT_SWITCH) {
-			trySolidifyNumericLiteralToDefault(left);
-		}
-
 		if (left->type->flavor == TypeFlavor::VOID) {
 			reportError(left, "Error: Cannot operate on a value of type void");
 			return false;
@@ -3626,12 +3725,6 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 			return false;
 		}
 		else if (left->type == &TYPE_AUTO_CAST) {
-			// @SwitchEqualsMess
-			if (binary->flags & EXPR_EQUALS_IS_IMPLICIT_SWITCH) {
-				reportError(left, "Error: Cannot auto cast the condition of an if == statement");
-				return false;
-			}
-
 			if (mathOp) {
 				trySolidifyNumericLiteralToDefault(right);
 
@@ -3810,24 +3903,12 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 					}
 				}
 				else if (left->type == TYPE_VOID_POINTER && (right->type->flavor == TypeFlavor::POINTER || right->type->flavor == TypeFlavor::FUNCTION)) {
-					// @SwitchEqualsMess
-					if (binary->flags & EXPR_EQUALS_IS_IMPLICIT_SWITCH) { // In this case we cast the right to *void since we should never modify the lhs of an if == case
-						insertImplicitCast(job->sizeDependencies, &right, left->type);
-					}
-					else {
-						insertImplicitCast(job->sizeDependencies, &left, right->type);
-					}
+					insertImplicitCast(job->sizeDependencies, &left, right->type);
 				}
 				else if (right->type == TYPE_VOID_POINTER && (left->type->flavor == TypeFlavor::POINTER || left->type->flavor == TypeFlavor::FUNCTION)) {
 					insertImplicitCast(job->sizeDependencies, &right, left->type);
 				}
 				else if (right->type->flavor == TypeFlavor::ENUM && left->type == &TYPE_UNARY_DOT) {
-					// @SwitchEqualsMess
-					if (binary->flags & EXPR_EQUALS_IS_IMPLICIT_SWITCH) {
-						reportError(left, "Error: Cannot use unary . in the condition of an if == statement");
-						return false;
-					}
-
 					if (!inferUnaryDot(job, static_cast<TypeEnum *>(right->type), &left)) {
 						return false;
 					}
@@ -3843,13 +3924,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 				}
 				else if (right->type->flavor == TypeFlavor::ENUM && (right->type->flags & TYPE_ENUM_IS_FLAGS) &&
 					left->type->flavor == TypeFlavor::INTEGER && left->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(left)->unsignedValue == 0) {
-					// @SwitchEqualsMess
-					if (binary->flags & EXPR_EQUALS_IS_IMPLICIT_SWITCH) { // In this case we cast the right to the left since we should never modify the lhs of an if == case
-						insertImplicitCast(job->sizeDependencies, &right, left->type);
-					}
-					else {
-						insertImplicitCast(job->sizeDependencies, &left, right->type);
-					}
+					insertImplicitCast(job->sizeDependencies, &left, right->type);
 				}
 				else if (left->type->flavor == TypeFlavor::FUNCTION && right->type == &TYPE_OVERLOAD_SET) {
 					if (!inferOverloadSetForNonCall(job, left->type, right, yield)) {
@@ -3857,37 +3932,21 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 					}
 				}
 				else if (left->type == &TYPE_OVERLOAD_SET && right->type->flavor == TypeFlavor::FUNCTION) {
-					// @SwitchEqualsMess
-					if (binary->flags & EXPR_EQUALS_IS_IMPLICIT_SWITCH) {
-						reportError(left, "Error: The condition of an if == statement cannot be an overloaded function");
-						return false;
-					}
-
 					if (!inferOverloadSetForNonCall(job, right->type, left, yield)) {
 						return *yield;
 					}
 				}
 				else if (left->type == &TYPE_ARRAY_LITERAL && right->type->flavor == TypeFlavor::ARRAY) {
-					// @SwitchEqualsMess
-					if (binary->flags & EXPR_EQUALS_IS_IMPLICIT_SWITCH) {
-						reportError(left, "Error: Cannot use unary . in the condition of an if == statement");
-						return false;
+					if (!inferUnaryDotArrayLiteral(job, right->type, left, yield)) {
+						return *yield;
 					}
-				
-					*yield = inferUnaryDotArrayLiteral(job, right->type, left);
-					return *yield;
 				}
 				else if (right->type == &TYPE_ARRAY_LITERAL && left->type->flavor == TypeFlavor::ARRAY) {
-					*yield = inferUnaryDotArrayLiteral(job, left->type, right);
-					return *yield;
+					if (!inferUnaryDotArrayLiteral(job, left->type, right, yield)) {
+						return *yield;
+					}
 				}
 				else if (left->type == &TYPE_STRUCT_LITERAL && (right->type->flavor == TypeFlavor::ARRAY || right->type->flavor == TypeFlavor::STRING || right->type->flavor == TypeFlavor::STRUCT)) {
-					// @SwitchEqualsMess
-					if (binary->flags & EXPR_EQUALS_IS_IMPLICIT_SWITCH) {
-						reportError(left, "Error: Cannot use unary . in the condition of an if == statement");
-						return false;
-					}
-				
 					*yield = inferUnaryDotStructLiteral(job, right->type, left);
 					return *yield;
 				}
@@ -3980,8 +4039,9 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 					}
 				}
 				else if (right->type == &TYPE_ARRAY_LITERAL && left->type->flavor == TypeFlavor::ARRAY) {
-					*yield = inferUnaryDotArrayLiteral(job, left->type, right);
-					return *yield;
+					if (!inferUnaryDotArrayLiteral(job, left->type, right, yield)) {
+						return *yield;
+					}
 				}
 				else if (right->type == &TYPE_STRUCT_LITERAL && (left->type->flavor == TypeFlavor::ARRAY || left->type->flavor == TypeFlavor::STRING || left->type->flavor == TypeFlavor::STRUCT)) {
 					*yield = inferUnaryDotStructLiteral(job, left->type, right);
@@ -4021,6 +4081,10 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 			}
 
 			expr->type = castTo;
+
+			if ((right->type->flags & TYPE_ARRAY_IS_FIXED) && castTo->flavor == TypeFlavor::ARRAY && !(castTo->flags & TYPE_ARRAY_IS_FIXED)) {
+				markDeclarationsAsPointedTo(right);
+			}
 		}
 
 		break;
@@ -4537,46 +4601,9 @@ void addRunJob(ExprRun *run) {
 	subJobs.add(run->runJob);
 }
 
-void markDeclarationsAsPointedTo(Expr *expr) {
-	while (true) {
-		if (expr->flavor == ExprFlavor::IDENTIFIER) {
-			auto identifier = static_cast<ExprIdentifier *>(expr);
-			if (identifier->structAccess) {
-				// If a struct access is by pointer, we are not pointing to any new declarations
-				if (identifier->structAccess->type->flavor == TypeFlavor::POINTER) {
-					break;
-				}
-
-				expr = identifier->structAccess;
-			}
-			else {
-				identifier->declaration->flags |= DECLARATION_IS_POINTED_TO;
-				break;
-			}
-		}
-		else if (expr->flavor == ExprFlavor::BINARY_OPERATOR) {
-			auto binary = static_cast<ExprBinaryOperator *>(expr);
-
-			if (binary->op != TOKEN('[')) {
-				break;
-			}
-
-			if (!(binary->left->type->flags & TYPE_ARRAY_IS_FIXED)) {
-				break;
-			}
-
-			expr = binary->left;
-		}
-		else {
-			break;
-		}
-	}
-}
-
 static Declaration *entryPoint;
 static Array<SubJob *> waitingOnEntryPoint;
 
-static bool contextIsLocked;
 
 bool inferFlattened(SubJob *job) {
 	PROFILE_FUNC();
@@ -5443,36 +5470,64 @@ bool inferFlattened(SubJob *job) {
 
 			trySolidifyNumericLiteralToDefault(switch_->condition);
 
-			if (switch_->flags & EXPR_SWITCH_IS_COMPLETE) {
-				if (switch_->condition->type->flavor != TypeFlavor::ENUM || (switch_->condition->type->flags & TYPE_ENUM_IS_FLAGS)) {
-					reportError(switch_, "Error: A switch if can only be #complete if it switches on an enum");
-					return false;
+			// Currently switch statements work with exactly the same types as ==, 
+			// which means you can do some weird but fine stuff like switching on bools
+			// but also some highly error prone stuff like switching on floats and enum_flags
+			switch (switch_->condition->type->flavor) {
+			case TypeFlavor::INTEGER:
+			case TypeFlavor::FLOAT:
+			case TypeFlavor::POINTER:
+			case TypeFlavor::BOOL:
+			case TypeFlavor::FUNCTION:
+			case TypeFlavor::TYPE:
+			case TypeFlavor::STRING:
+				break;
+			case TypeFlavor::ENUM:
+				if (switch_->flags & EXPR_SWITCH_IS_COMPLETE) {
+					if (switch_->condition->type->flags & TYPE_ENUM_IS_FLAGS) {
+						reportError(switch_, "Error: A switch if can only be #complete if it switches on an enum");
+						return false;
+					}
 				}
+				break;
+			case TypeFlavor::ARRAY:
+			case TypeFlavor::STRUCT:
+			case TypeFlavor::MODULE:
+			case TypeFlavor::AUTO_CAST:
+			case TypeFlavor::VOID:
+				reportError(switch_->condition, "Error: Cannot switch on %ss", STRING_PRINTF(switch_->condition->type->name));
+				return false;
+			default:
+				assert(false);
 			}
 
 			for (auto &case_ : switch_->cases) {
-				if (case_.condition) {
-					assert(case_.condition->flavor == ExprFlavor::BINARY_OPERATOR);
+				if (!case_.condition)
+					continue;
 
-					auto binary = static_cast<ExprBinaryOperator *>(case_.condition);
+				bool yield = false;
+				if (!assignOp(job, case_.condition, switch_->condition->type, case_.condition, &yield)) {
+					return yield;
+				}
+			}
 
-					if (!isLiteral(binary->right)) {
-						reportError(case_.condition, "Error: Switch if case must be a constant value");
+			// @Speed switch statements could have a large number of cases so we need a non n^2 version of this
+			for (auto &case_ : switch_->cases) {
+				if (!case_.condition)
+					continue;
+
+				if (!isLiteral(case_.condition)) {
+					reportError(case_.condition, "Error: Switch if case must be a constant value");
+					return false;
+				}
+
+				for (auto it = &case_ + 1; it < switch_->cases.end(); it++) {
+					if (!it->condition)
+						continue;
+					if (switchCasesAreSame(case_.condition, it->condition)) {
+						reportError(it->condition, "Error: Duplicate case in switch if");
+						reportError(case_.condition, "Error: Here is the previous case");
 						return false;
-					}
-
-					for (auto it = &case_ + 1; it < switch_->cases.end(); it++) {
-						if (it->condition) {
-							assert(it->condition->flavor == ExprFlavor::BINARY_OPERATOR);
-
-							auto other = static_cast<ExprBinaryOperator *>(it->condition);
-
-							if (switchCasesAreSame(binary->right, other->right)) {
-								reportError(it->condition, "Error: Duplicate case in switch if");
-								reportError(case_.condition, "Error: Here is the previous case");
-								return false;
-							}
-						}
 					}
 				}
 			}
@@ -5482,7 +5537,9 @@ bool inferFlattened(SubJob *job) {
 
 				auto enum_ = static_cast<TypeEnum *>(switch_->condition->type);
 
-				bool sleep = true;
+				bool sleep = false;
+
+				Array<Declaration *> uncheckedMembers;
 
 				for (auto member : enum_->members.declarations) {
 					if (!(member->flags & DECLARATION_IS_ENUM_VALUE))
@@ -5491,30 +5548,18 @@ bool inferFlattened(SubJob *job) {
 					if (!(member->flags & DECLARATION_VALUE_IS_READY)) {
 						goToSleep(job, &member->sleepingOnMyValue, "Complete switch enum value not ready");
 						sleep = true;
-					}
-				}
-
-				if (sleep)
-					return true;
-
-				bool failed = false;
-
-				for (auto member : enum_->members.declarations) {
-					if (!(member->flags & DECLARATION_IS_ENUM_VALUE))
 						continue;
+					}
 					assert(member->initialValue->flavor == ExprFlavor::INT_LITERAL);
 
 					u64 value = static_cast<ExprLiteral *>(member->initialValue)->unsignedValue;
 
-
 					bool found = false;
 					for (auto case_ : switch_->cases) {
 						if (case_.condition) {
-							auto literal = static_cast<ExprBinaryOperator *>(case_.condition)->right;
+							assert(case_.condition->flavor == ExprFlavor::INT_LITERAL);
 
-							assert(literal->flavor == ExprFlavor::INT_LITERAL);
-
-							u64 compare = static_cast<ExprLiteral *>(literal)->unsignedValue;
+							u64 compare = static_cast<ExprLiteral *>(case_.condition)->unsignedValue;
 
 							if (value == compare) {
 								found = true;
@@ -5524,41 +5569,21 @@ bool inferFlattened(SubJob *job) {
 					}
 
 					if (!found) {
-						failed = true;
+						uncheckedMembers.add(member);
 						break;
 					}
 				}
 
-				if (failed) {
+				if (sleep) {
+					uncheckedMembers.free();
+					return true;
+				}
+
+				if (uncheckedMembers.count) {
 					reportError(switch_, "Error: Switch if that was marked as #complete does not handle all values");
 
-					for (auto member : enum_->members.declarations) {
-						if (!(member->flags & DECLARATION_IS_ENUM_VALUE))
-							continue;
-						assert(member->initialValue->flavor == ExprFlavor::INT_LITERAL);
-
-						u64 value = static_cast<ExprLiteral *>(member->initialValue)->unsignedValue;
-
-
-						bool found = false;
-						for (auto case_ : switch_->cases) {
-							if (case_.condition) {
-								auto literal = static_cast<ExprBinaryOperator *>(case_.condition)->right;
-
-								assert(literal->flavor == ExprFlavor::INT_LITERAL);
-
-								u64 compare = static_cast<ExprLiteral *>(literal)->unsignedValue;
-
-								if (value == compare) {
-									found = true;
-									break;
-								}
-							}
-						}
-
-						if (!found) {
-							reportError(member, "   ..: %.*s is not handled", STRING_PRINTF(member->name));
-						}
+					for (auto member : uncheckedMembers) {
+						reportError(member, "   ..: %.*s is not handled", STRING_PRINTF(member->name));
 					}
 
 					return false;
@@ -5943,6 +5968,58 @@ bool inferFlattened(SubJob *job) {
 				}
 			}
 
+			String functionName = call->function->valueOfDeclaration ? call->function->valueOfDeclaration->name : "function";
+
+			ExprFunction *functionForArgumentNames = nullptr;
+
+			if (call->function->flavor == ExprFlavor::FUNCTION) {
+				functionForArgumentNames = static_cast<ExprFunction *>(call->function);
+
+			}
+
+			if (call->progress.phase == InferProgress::Phase::NONE) {
+				if (functionForArgumentNames) {
+					if (call->flags & EXPR_FUNCTION_CALL_IS_STATEMENT_LEVEL) {
+						for (auto declaration : functionForArgumentNames->returns.declarations) {
+							if (declaration->flags & DECLARATION_IS_MUST) {
+								reportError(call, "Error: Cannot ignore the return value of the function call, it was marked as #must");
+								reportError(declaration, "   ..: Here is the function");
+								return false;
+							}
+						}
+					}
+					else if (!(call->flags & EXPR_FUNCTION_CALL_IS_IN_COMMA_ASSIGNMENT)) {
+						for (u32 i = 1; i < functionForArgumentNames->returns.declarations.count; i++) {
+							auto declaration = functionForArgumentNames->returns.declarations[i];
+
+							if (declaration->flags & DECLARATION_IS_MUST) {
+								reportError(call, "Error: Cannot ignore the return value of the function call, it was marked as #must");
+								reportError(declaration, "   ..: Here is the function");
+								return false;
+							}
+						}
+					}
+				} else {
+					if (call->arguments.names) {
+						reportError(call, "Error: Cannot use named arguments with a non-constant function"); // @Improvement better message
+						return false;
+					}
+				}
+
+				if (!(call->function->type->flags & TYPE_FUNCTION_IS_C_CALL) && !(call->flags & EXPR_CONTEXT_AVAILABLE)) {
+					reportError(call, "Error: Can only call #c_call functions without an active context. Use push_context to add a context");
+					return false;
+				}
+
+				if (functionForArgumentNames) {
+					if (!sortArguments(job, &call->arguments, &functionForArgumentNames->arguments, "argument", call, functionForArgumentNames)) {
+						return false;
+					}
+				}
+
+				call->progress.phase = InferProgress::Phase::ARGUMENTS_SORTED;
+			}
+
 			if (call->function->type == &TYPE_POLYMORPHIC_FUNCTION) {
 				assert(call->function->flavor == ExprFlavor::FUNCTION);
 
@@ -5952,10 +6029,17 @@ bool inferFlattened(SubJob *job) {
 				if (!doPolymorphMatchingForCall(&call->arguments, function, &yield))
 					return yield;
 
+				u32 nonPolymorphicCount = 0;
+				for (u32 i = 0; i < function->arguments.declarations.count; i++) {
+					if (!(function->arguments.declarations[i]->flags & DECLARATION_VALUE_POLYMORPHIC)) {
+						call->arguments.values[nonPolymorphicCount++] = call->arguments.values[i];
+					}
+				}
+				call->arguments.count = nonPolymorphicCount;
+
 #if BUILD_DEBUG
 				for (auto constant : function->constants.declarations) {
 					assert(constant->initialValue);
-					assert(constant->initialValue->flavor == ExprFlavor::TYPE_LITERAL);
 				}
 #endif
 
@@ -5974,30 +6058,19 @@ bool inferFlattened(SubJob *job) {
 
 					addFunction(newFunction);
 
-					for (auto constant : function->constants.declarations) {
-						constant->initialValue = nullptr;
-					}
-
 					call->function = newFunction;
 
-					beginFlatten(job, &call->function);
-					continue;
+				}
+				else {
+					call->function = existingPolymorph;
 				}
 
-				for (auto constant : function->constants.declarations) {
-					constant->initialValue = nullptr;
-				}
-
-				call->function = existingPolymorph;
+				beginFlatten(job, &call->function);
+				continue;
 			}
 
 			if (call->function->type->flavor != TypeFlavor::FUNCTION) {
 				reportError(call->function, "Error: Cannot call a %.*s", STRING_PRINTF(call->function->type->name));
-				return false;
-			}
-
-			if (!(call->function->type->flags & TYPE_FUNCTION_IS_C_CALL) && !(call->flags & EXPR_CONTEXT_AVAILABLE)) {
-				reportError(call, "Error: Can only call #c_call functions without an active context. Use push_context to add a context");
 				return false;
 			}
 
@@ -6007,47 +6080,10 @@ bool inferFlattened(SubJob *job) {
 
 			addSizeDependency(job->sizeDependencies, expr->type);
 
-			String functionName = call->function->valueOfDeclaration ? call->function->valueOfDeclaration->name : "function";
-
-			ExprFunction *functionForArgumentNames = nullptr;
-
-			if (call->function->flavor == ExprFlavor::FUNCTION) {
-				functionForArgumentNames = static_cast<ExprFunction *>(call->function);
-
-				if (call->flags & EXPR_FUNCTION_CALL_IS_STATEMENT_LEVEL) {
-					for (auto declaration : functionForArgumentNames->returns.declarations) {
-						if (declaration->flags & DECLARATION_IS_MUST) {
-							reportError(call, "Error: Cannot ignore the return value of the function call, it was marked as #must");
-							reportError(declaration, "   ..: Here is the function");
-							return false;
-						}
-					}
-				}
-				else if (!(call->flags & EXPR_FUNCTION_CALL_IS_IN_COMMA_ASSIGNMENT)) {
-					for (u32 i = 1; i < functionForArgumentNames->returns.declarations.count; i++) {
-						auto declaration = functionForArgumentNames->returns.declarations[i];
-
-						if (declaration->flags & DECLARATION_IS_MUST) {
-							reportError(call, "Error: Cannot ignore the return value of the function call, it was marked as #must");
-							reportError(declaration, "   ..: Here is the function");
-							return false;
-						}
-					}
-				}
-			}
-
-			bool hasNamedArguments = call->arguments.names != nullptr;
-
-
-			if (hasNamedArguments && !functionForArgumentNames) {
-				reportError(call, "Error: Cannot use named arguments with a non-constant function"); // @Improvement better message
-				return false;
-			}
-
 			if (functionForArgumentNames) {
 				bool yield;
 
-				if (!inferArguments(job, &call->arguments, &functionForArgumentNames->arguments, "argument", call, functionForArgumentNames, &yield)) {
+				if (!inferArguments(job, &call->arguments, &functionForArgumentNames->arguments, &yield)) {
 					return yield;
 				}
 			}
@@ -6258,9 +6294,17 @@ bool inferFlattened(SubJob *job) {
 				}
 			}
 			else {
+				if (return_->progress.phase == InferProgress::Phase::NONE) {
+					if (!sortArguments(job, &return_->returns, returnTypes, "return", return_, return_->returnsFrom)) {
+						return false;
+					}
+
+					return_->progress.phase = InferProgress::Phase::ARGUMENTS_SORTED;
+				}
+
 				bool yield;
 
-				if (!inferArguments(job, &return_->returns, returnTypes, "return", return_, return_->returnsFrom, &yield)) {
+				if (!inferArguments(job, &return_->returns, returnTypes, &yield)) {
 					return yield;
 				}
 			}
@@ -6461,6 +6505,46 @@ bool inferFlattened(SubJob *job) {
 				auto literal = createIntLiteral(unary->start, unary->end, &TYPE_UNSIGNED_INT_LITERAL, type->typeValue->size);
 				
 				
+				*exprPointer = literal;
+
+				break;
+			}
+			case TokenT::ALIGN_OF: {
+				if (value->type != &TYPE_TYPE) {
+					bool yield = false;
+					if (!assignOp(job, value, &TYPE_TYPE, value, &yield)) {
+						return yield;
+					}
+				}
+
+				if (value->flavor != ExprFlavor::TYPE_LITERAL) {
+					reportError(value, "Error: align_of type must be a constant");
+					return false;
+				}
+
+				auto type = static_cast<ExprLiteral *>(value);
+
+				if (type->typeValue == &TYPE_VOID) {
+					reportError(value, "Error: Cannot get the alignment of void");
+					return false;
+				}
+				else if (type->typeValue == &TYPE_AUTO_CAST) {
+					reportError(value, "Error: Cannot get the alignment of an auto casted value");
+					return false;
+				}
+
+				if (!type->typeValue->size) {
+					goToSleep(job, &type->typeValue->sleepingOnMe, "Alignof size not ready");
+
+					return true;
+				}
+
+				assert(type->typeValue->size);
+				assert(type->typeValue->alignment);
+
+				auto literal = createIntLiteral(unary->start, unary->end, &TYPE_UNSIGNED_INT_LITERAL, type->typeValue->alignment);
+
+
 				*exprPointer = literal;
 
 				break;
@@ -7720,27 +7804,27 @@ bool inferDeclarationValue(SubJob *subJob) {
 
 				}
 				else if (!(declaration->flags & DECLARATION_IS_RUN_RETURN) && !isLiteral(declaration->initialValue)) {
-					reportError(declaration->type, "Error: Declaration value must be a constant");
+					reportError(declaration, "Error: Declaration value must be a constant");
 					return false;
 				}
 			}
 
 			if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->initialValue->type == &TYPE_OVERLOAD_SET) {
-				assert(declaration->initialValue->flavor == ExprFlavor::IDENTIFIER);
-				auto overload = static_cast<ExprIdentifier *>(declaration->initialValue);
+				assert(declaration->initialValue->flavor == ExprFlavor::OVERLOAD_SET);
+				auto overload = static_cast<ExprOverloadSet *>(declaration->initialValue);
 
 				bool yield;
 
-				if (!checkOverloadSet(&job->value, overload->declaration, &yield)) {
+				if (!checkOverloadSet(&job->value, overload->currentOverload, &yield)) {
 					return yield;
 				}
 
-				if (overload->declaration->nextOverload) {
+				if (overload->currentOverload->nextOverload) {
 					reportError(declaration, "Error: Declaration type cannot be an overload set");
 					return false;
 				}
 				else {
-					auto overloadDecl = overload->declaration;
+					auto overloadDecl = overload->currentOverload;
 
 					if (overloadDecl->flags & DECLARATION_IMPORTED_BY_USING) {
 						overloadDecl = overloadDecl->import;
@@ -8668,7 +8752,7 @@ bool inferRun(SubJob *subJob) {
 
 	bool yield;
 
-	createDefaultValue(job, &TYPE_CONTEXT, &yield);
+	getDefaultValue(job, &TYPE_CONTEXT, &yield);
 
 	if (yield)
 		return true;
@@ -8940,13 +9024,12 @@ bool addContext(ExprAddContext *addContext) {
 		return false;
 	}
 
-	if (!addDeclaration(addContext->declaration, nullptr)) {
-		return false;
-	}
-
+	bool success = addDeclaration(addContext->declaration, runtimeModule);
+	assert(success);
 
 	if (addContext->using_) {
-		addImporter(addContext->using_, nullptr);
+		addImporterToBlock(&TYPE_CONTEXT.members, addContext->using_, addContext->declaration->serial);
+		addImporter(addContext->using_, runtimeModule);
 	}
 
 	wakeUpSleepers(&TYPE_CONTEXT.members.sleepingOnMe, addContext->declaration->name);
@@ -9037,7 +9120,17 @@ void runInfer(String inputFile) {
 		while (loadsPending == 0 && irGenerationPending == 0) {
 			if (!contextIsLocked) {
 				contextIsLocked = true;
-				addTypeBlock(&TYPE_CONTEXT, nullptr);
+
+				SizeJob *job = allocateSizeJob();
+
+				job->type = &TYPE_CONTEXT;
+				addStruct(&TYPE_CONTEXT);
+
+				TYPE_CONTEXT.sizeJob = job;
+				++totalSizes;
+
+				addJob(&sizeJobs, job);
+				addSubJob(job);
 
 				// Wake up any job that is still looking for a member in the context so it can report a member not found error
 				wakeUpSleepers(&TYPE_CONTEXT.sleepingOnMe);

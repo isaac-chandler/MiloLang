@@ -175,7 +175,7 @@ ExprAddContext *parseAddContext(LexerFile *lexer) {
 
 	addContext->end = lexer->previousTokenEnd;
 
-	if (addContext->flags & DECLARATION_MARKED_AS_USING) {
+	if (addContext->declaration->flags & DECLARATION_MARKED_AS_USING) {
 		addContext->using_ = createImporterForUsing(lexer, addContext->declaration);
 	}
 	else {
@@ -243,6 +243,8 @@ ExprIf *parseStaticIf(LexerFile *lexer) {
 				if (!body)
 					return nullptr;
 
+				if (block->declarations.flavor != BlockFlavor::GLOBAL)
+				if (block->declarations.flavor != BlockFlavor::GLOBAL)
 				if (block->declarations.flavor != BlockFlavor::GLOBAL)
 					block->exprs.add(body);
 
@@ -704,32 +706,20 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 					ExprSwitch::Case case_;
 
 					case_.fallsThrough = false;
-					auto condition = parseExpr(lexer);
+					case_.condition = condition = parseExpr(lexer);
 
-					if (!condition)
+					if (!case_.condition)
 						return nullptr;
-
-					// @SwitchEqualsMess
-					// The cases for a switch statement desugar to an  == in the syntax tree so that type inference does not need to be
-					// copy-pasta'd, in code generation the condition is still only evaluated once though, even though it is present in every ==
-					auto equal = makeBinaryOperator(lexer, start, condition->end, TokenT::EQUAL, switch_->condition);
-					equal->right = condition;
-
-					case_.condition = equal;
-					
 
 					case_.block = parseBlock(lexer, true);
 
-
-					if (!case_.block) {
+					if (!case_.block)
 						return nullptr;
-					}
 
 					auto through = lexer->token;
 
-					if (expectAndConsume(lexer, TokenT::THROUGH)) {
+					if (expectAndConsume(lexer, TokenT::THROUGH))
 						case_.fallsThrough = true;
-					}
 
 					case_.block->start = start;
 					case_.block->end = lexer->token.end;
@@ -1198,13 +1188,22 @@ void addVoidReturn(LexerFile *lexer, CodeLocation &start, EndLocation &end, Expr
 
 
 bool checkForNamedArguments(LexerFile *lexer) {
-	TokenT peek[2];
-	lexer->peekTokenTypes(2, peek);
+	TokenT peek[5];
+	peek[0] = lexer->token.type;
+	lexer->peekTokenTypes(4, peek + 1);
 
-	return lexer->token.type == TokenT::USING ||
-		(lexer->token.type == TokenT::IDENTIFIER && peek[0] == TOKEN(':')) ||
-		(lexer->token.type == TokenT::MUST && peek[0] == TokenT::USING) || // Not actually a valid combination but check for it anyway so we can provide a good error message
-		(lexer->token.type == TokenT::MUST && peek[0] == TokenT::IDENTIFIER && peek[1] == TOKEN(':'));
+	u32 index = 0;
+
+	if (peek[index] == TokenT::MUST)
+		index++;
+
+	if (peek[index] == TokenT::USING)
+		index++;
+
+	if (peek[index] == TOKEN('$'))
+		index++;
+
+	return peek[index] == TokenT::IDENTIFIER && peek[index + 1] == TOKEN(':');
 }
 
 bool isFunctionOrFunctionType(LexerFile *lexer) {
@@ -1308,10 +1307,9 @@ Declaration *parseSingleArgument(LexerFile *lexer, ExprFunction *function, bool 
 		declaration = createAnonymousDeclaration(lexer, expr);
 
 		if (getPolymorphCount(lexer) != initialPolymorphCount) {
-			declaration->flags |= DECLARATION_DEFINES_POLYMORPH_VARIABLE;
+			declaration->flags |= DECLARATION_TYPE_POLYMORPHIC;
 		}
 	}
-
 
 	if (must)
 		declaration->flags |= DECLARATION_IS_MUST;
@@ -1325,7 +1323,6 @@ Declaration *parseSingleArgument(LexerFile *lexer, ExprFunction *function, bool 
 		reportError(declaration, "Error: Cannot mark return types as using");
 		return nullptr;
 	}
-
 
 
 	if (declaration->flags & DECLARATION_IS_CONSTANT) {
@@ -1577,6 +1574,11 @@ ExprFunction *parseFunctionOrFunctionType(LexerFile *lexer, CodeLocation start, 
 
 
 				for (auto declaration : function->constants.declarations) {
+					if (declaration->flags & DECLARATION_VALUE_POLYMORPHIC) {
+						reportError(declaration, "Error: Function types cannot have polymorphic values");
+						return nullptr;
+					}
+
 					if (!addDeclarationToBlock(&outerFunction->constants, declaration, outerFunction->constants.declarations.count)) {
 						return nullptr;
 					}
@@ -1882,11 +1884,11 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 		auto declaration = PARSER_NEW(Declaration);
 		declaration->type = parserMakeTypeLiteral(lexer, start, lexer->token.end, &TYPE_TYPE);
-		declaration->flags |= DECLARATION_IS_CONSTANT | DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
+		declaration->flags |= DECLARATION_IS_CONSTANT | DECLARATION_TYPE_POLYMORPHIC;
 		declaration->start = start;
 		declaration->name = lexer->token.text;
 		declaration->end = lexer->token.end;
-		declaration->initialValue = nullptr;
+		declaration->initialValue = parserMakeTypeLiteral(lexer, start, lexer->token.end, nullptr);
 
 		if (!lexer->currentFunctionHeader) {
 			reportError(declaration, "Error: Cannot have a polymorph variable declartion outside a function header");
@@ -2010,7 +2012,18 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 		lexer->advance();
 	}
-	else if (lexer->token.type == TokenT::SIZE_OF || lexer->token.type == TokenT::TYPE_INFO) {
+	else if (lexer->token.type == TokenT::SIZE_OF || lexer->token.type == TokenT::TYPE_INFO || 
+	lexer->token.type == TokenT::ALIGN_OF || lexer->token.type == TokenT::TYPE_OF || lexer->token.type == TokenT::IS_CONSTANT) {
+		const char *kind = "<unhandled>";
+
+		switch (lexer->token.type) {
+		case TokenT::SIZE_OF: kind = "size_of";
+		case TokenT::ALIGN_OF: kind = "align_of";
+		case TokenT::TYPE_OF: kind = "type_of";
+		case TokenT::TYPE_INFO: kind = "type_info";
+		case TokenT::IS_CONSTANT: kind = "is_constant";
+		}
+
 		ExprUnaryOperator *unary = PARSER_NEW(ExprUnaryOperator);
 		unary->flavor = ExprFlavor::UNARY_OPERATOR;
 		unary->op = lexer->token.type;
@@ -2019,7 +2032,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		lexer->advance();
 
 		if (!expectAndConsume(lexer, '(')) {
-			reportExpectedError(&lexer->token, "Error: Expected '(' after size_of");
+			reportExpectedError(&lexer->token, "Error: Expected '(' after %s", kind);
 			return nullptr;
 		}
 
@@ -2030,55 +2043,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		unary->end = lexer->token.end;
 
 		if (!expectAndConsume(lexer, ')')) {
-			reportExpectedError(&lexer->token, "Error: Expected ')' after type in size_of");
-			return nullptr;
-		}
-
-		expr = unary;
-	}
-	else if (expectAndConsume(lexer, TokenT::TYPE_OF)) {
-		ExprUnaryOperator *unary = PARSER_NEW(ExprUnaryOperator);
-		unary->flavor = ExprFlavor::UNARY_OPERATOR;
-		unary->op = TokenT::TYPE_OF;
-		unary->start = start;
-
-		if (!expectAndConsume(lexer, '(')) {
-			reportExpectedError(&lexer->token, "Error: Expected '(' after type_of");
-			return nullptr;
-		}
-
-		unary->value = parseExpr(lexer);
-		if (!unary->value) {
-			return nullptr;
-		}
-		unary->end = lexer->token.end;
-
-		if (!expectAndConsume(lexer, ')')) {
-			reportExpectedError(&lexer->token, "Error: Expected ')' after type in type_of");
-			return nullptr;
-		}
-
-		expr = unary;
-	}
-	else if (expectAndConsume(lexer, TokenT::IS_CONSTANT)) {
-		ExprUnaryOperator *unary = PARSER_NEW(ExprUnaryOperator);
-		unary->flavor = ExprFlavor::UNARY_OPERATOR;
-		unary->op = TokenT::IS_CONSTANT;
-		unary->start = start;
-
-		if (!expectAndConsume(lexer, '(')) {
-			reportExpectedError(&lexer->token, "Error: Expected '(' after is_constant");
-			return nullptr;
-		}
-
-		unary->value = parseExpr(lexer);
-		if (!unary->value) {
-			return nullptr;
-		}
-		unary->end = lexer->token.end;
-
-		if (!expectAndConsume(lexer, ')')) {
-			reportExpectedError(&lexer->token, "Error: Expected ')' after value in is_constant");
+			reportExpectedError(&lexer->token, "Error: Expected ')' after expression in %s", kind);
 			return nullptr;
 		}
 
@@ -2908,12 +2873,16 @@ Declaration *parseDeclaration(LexerFile *lexer) {
 	if (lexer->moduleScope && (!lexer->currentBlock || lexer->currentBlock->flavor == BlockFlavor::GLOBAL))
 		declaration->flags |= DECLARATION_IS_MODULE_SCOPE;
 
+	declaration->start = lexer->token.start;
 	if (expectAndConsume(lexer, TokenT::USING)) {
 		declaration->flags |= DECLARATION_MARKED_AS_USING;
 	}
 
+	if (expectAndConsume(lexer, '$')) {
+		declaration->flags |= DECLARATION_VALUE_POLYMORPHIC;
+	}
+
 	declaration->name = lexer->token.text;
-	declaration->start = lexer->token.start;
 
 	if (lexer->token.type != TokenT::IDENTIFIER) {
 		reportExpectedError(&lexer->token, "Error: Expected declaration name");
@@ -2988,7 +2957,7 @@ Declaration *parseDeclaration(LexerFile *lexer) {
 		}
 
 		if (getPolymorphCount(lexer) != initialPolymorphCount) {
-			declaration->flags |= DECLARATION_DEFINES_POLYMORPH_VARIABLE;
+			declaration->flags |= DECLARATION_TYPE_POLYMORPHIC;
 		}
 
 		if (expectAndConsume(lexer, '=')) {
@@ -3017,6 +2986,12 @@ Declaration *parseDeclaration(LexerFile *lexer) {
 			}
 
 			declaration->end = lexer->previousTokenEnd;
+
+			if (declaration->flags & DECLARATION_TYPE_POLYMORPHIC) {
+				// @Incomplete: allow this
+				reportError(declaration, "Error: Polymorphic arguments cannot have default values");
+				return nullptr;
+			}
 		}
 		else if (expectAndConsume(lexer, ':')) {
 			declaration->flags |= DECLARATION_IS_CONSTANT;
@@ -3046,6 +3021,40 @@ Declaration *parseDeclaration(LexerFile *lexer) {
 		else {
 			declaration->end = lexer->previousTokenEnd;
 			declaration->initialValue = nullptr;
+		}
+	}
+
+	if (declaration->flags & DECLARATION_VALUE_POLYMORPHIC) {
+		if (!lexer->currentFunctionHeader) {
+			reportError(declaration, "Error: Cannot have a polymorph variable declartion outside a function header");
+			return nullptr;
+		}
+
+		assert(lexer->currentBlock);
+
+		if (lexer->currentBlock->flavor != BlockFlavor::ARGUMENTS) {
+			reportError(declaration, "Error: Only function arguments can be value polymorphic");
+			return nullptr;
+		}
+
+		// @Incomplete this should be allowed but isn't implemented yet
+		if (declaration->initialValue) {
+			reportError("Error: Polymorphic value arguments cannot have a default value");
+			return nullptr;
+		}
+
+		auto function = lexer->currentFunctionHeader;
+
+		auto constant = PARSER_NEW(Declaration);
+		constant->type = declaration->type;
+		constant->flags |= DECLARATION_IS_CONSTANT | DECLARATION_VALUE_POLYMORPHIC;
+		constant->start = declaration->start;
+		constant->name = declaration->name;
+		constant->end = declaration->end;
+		constant->initialValue = nullptr;
+
+		if (!addDeclarationToBlock(&function->constants, constant, function->constants.declarations.count)) {
+			return nullptr;
 		}
 	}
 

@@ -55,6 +55,7 @@ enum class TokenT : u8 {
 	NULL_, 
 
 	SIZE_OF, 
+	ALIGN_OF, 
 	TYPE_OF, 
 
 	FOR, 

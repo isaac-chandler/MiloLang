@@ -1017,8 +1017,7 @@ Expr *getReturnValueFromBytes(CodeLocation start, EndLocation end, Type *type, v
 Expr *runFunctionRoot(VMState *state, ExprRun *directive) {
 	PROFILE_FUNC();
 	char argumentsStore[sizeof(FunctionCall) + sizeof(Argument) * 2];
-
-	u64 argumentData[2];
+	u64 argumentData[3];
 
 	runningDirective = directive;
 
@@ -1026,7 +1025,7 @@ Expr *runFunctionRoot(VMState *state, ExprRun *directive) {
 
 	auto returnType = getDeclarationType(function->returns.declarations[0]);
 
-	auto returnPointer = malloc(returnType->size);
+	
 	auto contextPointer = malloc(TYPE_CONTEXT.size);
 
 	assert(TYPE_CONTEXT.defaultValue);
@@ -1038,21 +1037,24 @@ Expr *runFunctionRoot(VMState *state, ExprRun *directive) {
 	dummyOp.op = IrOp::CALL;
 	FunctionCall *arguments = reinterpret_cast<FunctionCall *>(argumentsStore);
 
-	arguments->args[0].number = 0;
+	arguments->args[0].number = 1;
 	arguments->args[0].type = TYPE_VOID_POINTER;
 
+	void *returnPointer;
 	if (bigReturn) {
+		returnPointer = malloc(returnType->size);
 		arguments->argCount = 2;
-		arguments->args[1].number = 1;
+		arguments->args[1].number = 2;
 		arguments->args[1].type = TYPE_VOID_POINTER;
 
-		argumentData[0] = reinterpret_cast<u64>(returnPointer);
-		argumentData[1] = reinterpret_cast<u64>(contextPointer);
+		argumentData[1] = reinterpret_cast<u64>(returnPointer);
+		argumentData[2] = reinterpret_cast<u64>(contextPointer);
 	}
 	else {
+		returnPointer = static_cast<void *>(argumentData);
 		arguments->argCount = 1;
 
-		argumentData[0] = reinterpret_cast<u64>(contextPointer);
+		argumentData[1] = reinterpret_cast<u64>(contextPointer);
 	}
 
 	arguments->returnType = bigReturn ? &TYPE_VOID : returnType;
@@ -1060,13 +1062,12 @@ Expr *runFunctionRoot(VMState *state, ExprRun *directive) {
 	dummyOp.opSize = bigReturn || returnType == &TYPE_VOID ? 0 : returnType->size;
 	dummyOp.dest = 0;
 
-	u64 argument = reinterpret_cast<u64>(returnPointer);
-
 	runFunction(state, function, &dummyOp, nullptr, argumentData);
 
 	auto result = getReturnValueFromBytes(function->start, function->end, returnType, returnPointer);
 
-	free(returnPointer);
+	if (bigReturn)
+		free(returnPointer);
 	free(contextPointer);
 
 	return result;

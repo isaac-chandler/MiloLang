@@ -22,6 +22,27 @@ deallocate :: (block: *void) {
 	HeapFree(process_heap, 0, block)
 }
 
+default_allocator :: (mode: Allocator.Mode, allocator_data: *void, size: u64, alignment: u64, pointer: *void, old_size: u64) -> *void {
+	init_process_heap()
+
+	if mode == #complete {
+		case .NEW
+			return HeapAlloc(process_heap, 0, size)
+		case .EXPAND
+			if !pointer
+				return HeapAlloc(process_heap, 0, size)
+			else
+				return HeapReAlloc(process_heap, 0, pointer, size)
+		case .FREE
+			HeapFree(process_heap, 0, pointer)
+			return null
+		case .FREE_ALL #through
+		else
+			assert(false)
+			return null
+	}
+}
+
 exit :: (code: u32 = 0) {
 	ExitProcess(code)
 }

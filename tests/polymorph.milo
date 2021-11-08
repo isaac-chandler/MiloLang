@@ -1,0 +1,35 @@
+#import "Standard"
+
+print_array :: (array: []$T, name: string) {
+	for array
+		print("%[%] %\n", name, it_index, it)
+}
+
+main :: () {
+	x: [..]s64
+	
+	array_add(*x, 4)
+	array_add(*x, 13)
+	array_add(*x, -5)
+	
+	print_array(x, "x")
+	
+	y: [..]f32
+	
+	array_add(*y, 3.2)
+	
+	print_array(y, "y")
+
+	s  := new(string);
+	<<s = "Hello world!"
+	print("s = % @ %\n", <<s, s)
+
+	s2 := new(s16);
+	<<s2 = 42
+	print("s2 = % @ %\n", <<s2, s2)
+
+	free(s)
+	free(s2)
+}
+
+

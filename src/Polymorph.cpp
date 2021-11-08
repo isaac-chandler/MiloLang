@@ -32,18 +32,6 @@ Array<CopyingFunction> copyingFunctions;
 #define copy_flags(mask) (dest->flags = src->flags & (mask))
 #define copy_expr(field) (dest->field = copyExpr(src->field))
 
-void copyPolymorphConstant(ExprFunction *destFunction, Declaration *src) {
-	auto dest = POLYMORPH_NEW(Declaration);
-	copy_location();
-	copy(name);
-	copy(type);
-	copy_flags(~(DECLARATION_HAS_STORAGE | DECLARATION_OVERLOADS_LOCKED));
-	copy(initialValue);
-
-
-	addDeclarationToBlockUnchecked(&destFunction->constants, dest, nullptr, src->serial);
-}
-
 Block *copyBlockReference(Block *src) {
 	if (!src)
 		return nullptr;
@@ -113,20 +101,6 @@ void copyBlockInfo(Block *dest, Block *src) {
 
 
 void copyBlock(Block *dest, Block *src);
-Expr *copyExpr(Expr *srcExpr);
-
-void copyFunctionBody(ExprFunction *dest, ExprFunction *src) {
-	copyingBlocks.add({ &dest->arguments, &src->arguments });
-	copyBlock(&dest->arguments, &src->arguments);
-
-	copyingBlocks.add({ &dest->returns, &src->returns });
-	copyBlock(&dest->returns, &src->returns);
-	copyingBlocks.pop();
-
-	copy_expr(body);
-
-	copyingBlocks.pop();
-}
 
 Expr *copyExpr(Expr *srcExpr) {
 
@@ -139,6 +113,7 @@ Expr *copyExpr(Expr *srcExpr) {
 		return nullptr;
 
 	switch (srcExpr->flavor) {
+	case ExprFlavor::PUSH_CONTEXT:
 	case ExprFlavor::BINARY_OPERATOR: {
 		c(ExprBinaryOperator);
 
@@ -275,12 +250,26 @@ Expr *copyExpr(Expr *srcExpr) {
 		c(ExprFunction);
 		copyingFunctions.add({ dest, src });
 
-		copyingBlocks.add({ &dest->constants, &src->constants });
-		copyBlock(&dest->constants, &src->constants);
+		{
+			copyingBlocks.add({ &dest->constants, &src->constants });
+			copyBlock(&dest->constants, &src->constants);
+			{
+				copyingBlocks.add({ &dest->arguments, &src->arguments });
+				copyBlock(&dest->arguments, &src->arguments);
 
-		copyFunctionBody(dest, src);
+				{
+					copyingBlocks.add({ &dest->returns, &src->returns });
+					copyBlock(&dest->returns, &src->returns);
+					copyingBlocks.pop();
+				}
 
-		copyingBlocks.pop();
+				copy_expr(body);
+
+				copyingBlocks.pop();
+			}
+
+			copyingBlocks.pop();
+		}
 
 		copyingFunctions.pop();
 
@@ -404,6 +393,8 @@ Expr *copyExpr(Expr *srcExpr) {
 			copyingBlocks.add({ &destType->members, &srcType->members });
 			copyBlock(&destType->members, &srcType->members);
 			copyingBlocks.pop();
+
+			dest->typeValue = destType;
 		}
 		else {
 			copy(typeValue);
@@ -435,8 +426,14 @@ Expr *copyExpr(Expr *srcExpr) {
 
 		return dest;
 	}
+	case ExprFlavor::CONTEXT: {
+		c(Expr);
+
+		return dest;
+	}
 	default:
-	case ExprFlavor::OVERLOAD_SET:
+	case ExprFlavor::ADD_CONTEXT:  // This should only ever exist at the top level
+	case ExprFlavor::OVERLOAD_SET: // This should never exist in something that is yet to be inferred
 		assert(false);
 		return nullptr;
 	}
@@ -449,7 +446,24 @@ void copyDeclaration(Declaration *dest, Declaration *src) {
 	copy(name);
 	copy_expr(type);
 	copy_flags(~(DECLARATION_HAS_STORAGE | DECLARATION_OVERLOADS_LOCKED | DECLARATION_VALUE_IS_READY | DECLARATION_TYPE_IS_READY));
-	copy_expr(initialValue);
+
+	if ((src->flags & DECLARATION_IS_CONSTANT) && (src->flags & DECLARATION_VALUE_POLYMORPHIC)) {
+		copy_expr(type);
+		copy(initialValue);
+	}
+	else if ((src->flags & DECLARATION_IS_CONSTANT) && (src->flags & DECLARATION_TYPE_POLYMORPHIC)) {
+		copy(type);
+
+		auto srcLiteral = static_cast<ExprLiteral *>(src->initialValue);
+		auto destLiteral = POLYMORPH_NEW(ExprLiteral);
+		copyExprInfo(destLiteral, srcLiteral);
+		destLiteral->typeValue = srcLiteral->typeValue;
+		dest->initialValue = destLiteral;
+	}
+	else {
+		copy_expr(type);
+		copy_expr(initialValue);
+	}
 }
 
 Importer *copyImporter(Importer *src) {
@@ -493,25 +507,31 @@ ExprFunction *polymorph(ExprFunction *src) {
 	assert(!copyingBlocks.count);
 	assert(src->flavor == ExprFlavor::FUNCTION);
 
+	ExprFunction *dest = static_cast<ExprFunction *>(copyExpr(src));
 
-	create(ExprFunction);
-	copyingFunctions.add({ dest, src });
-	copyExprInfo(dest, src);
-	//dest->valueOfDeclaration = nullptr;
+	// Remove all arguments that have been baked during this polymorph
+	u32 nonPolymorphicCount = 0;
+	for (u32 i = 0; i < dest->arguments.declarations.count; i++) {
+		auto argument = dest->arguments.declarations[i];
+
+		if (argument->flags & DECLARATION_VALUE_POLYMORPHIC) {
+			if (dest->arguments.table) {
+				// @Hack Since we can't remove declarations from the block hash table, just set their name to the empty string so that
+				// they can't be found and won't shadow the constants block delcarations
+				// In reality this should never matter since the hash table is only created if there are a large number of declartions in the
+				// block and there will probably never be a function with this many arguments
+				argument->name = "";
+			}
+		}
+		else {
+			argument->serial = nonPolymorphicCount;
+			dest->arguments.declarations[nonPolymorphicCount++] = argument;
+		}
+	}
+	dest->arguments.declarations.count = nonPolymorphicCount;
+
 	dest->flags &= ~EXPR_FUNCTION_IS_POLYMORPHIC;
 	dest->type = nullptr;
-
-	copyingBlocks.add({ &dest->constants, &src->constants });
-	copyBlockInfo(&dest->constants, &src->constants);
-	
-	for (auto constant : src->constants.declarations) {
-		copyPolymorphConstant(dest, constant);
-	}
-
-	copyFunctionBody(dest, src);
-	copyingBlocks.pop();
-
-	copyingFunctions.pop();
 
 	return dest;
 }

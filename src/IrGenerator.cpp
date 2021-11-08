@@ -1688,14 +1688,11 @@ u32 generateIr(IrState *state, Expr *expr) {
 
 		for (auto &case_ : switch_->cases) {
 			if (case_.condition) {
-				// @SwitchEqualsMess
-				auto condition = static_cast<ExprBinaryOperator *>(case_.condition);
+				auto condition = case_.condition;
 
-				assert(condition->flavor == ExprFlavor::BINARY_OPERATOR);
+				assert(condition->type == switch_->condition->type);
 
-				assert(condition->right->type == switch_->condition->type);
-
-				u32 result = generateEquals(state, value, condition->right, true);
+				u32 result = generateEquals(state, value, condition, true);
 
 				case_.irBranch = state->ir.count;
 

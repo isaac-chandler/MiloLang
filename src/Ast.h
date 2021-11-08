@@ -277,11 +277,6 @@ struct ExprDefer : Expr {
 // when we will want the float to be -0.0 instead of just 0
 #define EXPR_INTEGER_LITERAL_IS_NEGATIVE_ZERO 0x2000
 
-// When we generate the cases for a switch we create an == ExprBinaryOperator node
-// so that we don't have to add an extra case in typechecking, the left side is the 
-// value we are switching which is already typechecked so we don't typecheck that again
-#define EXPR_EQUALS_IS_IMPLICIT_SWITCH 0x4000
-
 // If a switch if is marked as #complete this flag is set, 
 // this means that the switch must include a case for every possible
 // value of an enum
@@ -291,6 +286,7 @@ struct ExprDefer : Expr {
 // there will be no conversion made, the bits are simply reinterpreted
 #define EXPR_CAST_IS_BITWISE 0x1'0000
 
+#define EXPR_FUNCTION_HAS_VARARGS 0x2'0000
 #define EXPR_FUNCTION_HAS_VARARGS 0x2'0000
 
 #define EXPR_FUNCTION_RUN_READY 0x8'0000
@@ -392,9 +388,18 @@ struct Arguments {
 
 };
 
+struct InferProgress {
+	enum class Phase : u8 {
+		NONE,
+		ARGUMENTS_SORTED
+	};
+	Phase phase = Phase::NONE;
+};
+
 struct ExprFunctionCall : Expr {
 	Expr *function;
 	Arguments arguments;
+	InferProgress progress;
 };
 
 struct ExprBlock : Expr {
@@ -465,6 +470,7 @@ struct ExprFunction : Expr {
 struct ExprReturn : Expr {
 	ExprFunction *returnsFrom;
 	Arguments returns;
+	InferProgress progress;
 };
 
 struct ExprLoop : Expr {

@@ -88,10 +88,11 @@ Standard modules
 Remove void 
  - Functions with no return will just have 0 return types
  - Would need syntax change for function pointers with no return value (could have parentheses recorded in Ast and make parenthesised type literals become function type literals)
+   - Having a special case for parenthesised type literals will not play nice with generated code from add_build_string or macros
  - Replace *void with another type that has the same operations, but doesn't have pointer syntax
    - Having pointer syntax makes it seem like it should be dereferencable
    - Pointer syntax means its not intuitive that it should be able to represent a function as well
-   - Call new type something like pointer or memory
+   - Call new type something like pointer/memory/address
 
 
 Allow symbols to be locally scoped to a file
@@ -214,12 +215,17 @@ Investigate LINK : fatal error LNK1285: corrupt PDB file
  - This may have been eliminated by emitting proper info for nested structs/enums (or it may now be much less common)
 
 function polymorhpism
+ - Infer polymorphic function header so we can get improved typechecking during polymorph matching (probably required for most of the others)
+ - Allow polymorph solver to yield and have one polymorphic argument be dependent on the matching of another (probably required for most of the others)
  - Allow overloaded functions to be passed to a polymorphic function with pattern matching for a function type
  - Allow polymorphic functions to be passed to a polymorphic function with pattern matching for a function type
  - Allow polymorphic functions to be overloaded
  - Allow $T/type to only match the polymorph if T is convertible to type
- - Allow function arguments to be baked
  - Allow fixed array length to be polymorphic
+ - Allow default values for polymorphic arguments (value and type polymorphism)
+ - Allow optionally baked arguments
+ - Currently it's probably possible to pass a #import statement to a value bake since it is a constant value, this should probably be illegal
+ - Allow manually baking arguments for polymorphic or non-polymorphic functions
 
 separate CoffWriter into platform independent and platform specific parts
  - CodeView/DWARF

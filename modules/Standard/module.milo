@@ -187,8 +187,64 @@ array_pop :: (array: *[]$T) -> T {
 }
 
 
+Allocator :: struct {
+	using Mode :: enum u8 {
+		NEW
+		EXPAND
+		FREE
+		FREE_ALL
+	}
+	
+	allocator: (mode: Mode, allocator_data: *void, size: u64, alignment: u64, pointer: *void, old_size: u64) -> *void = default_allocator
+	allocator_data: *void
+}
+
+#add_context using allocator_info: Allocator
+
+new :: ($T: type, initialized := true) -> *T {
+	result: *T = context.allocator(.NEW, context.allocator_data, size_of(T), align_of(T), null, 0)
+
+	if initialized {
+		default: T: ..
+		<<result = default
+	}
+
+	return result
+}
+
+new_array :: ($T: type, count: u64, initialized := true) -> []T {
+	result: []T = --
+	result.count = count
+	result.data = context.allocator(.NEW, context.allocator_data, size_of(T) * count, align_of(T), null, 0)
+
+	if initialized && count {
+		default: T: ..
+		result[0] = default
+
+		for 1 .. count {
+			result[i] = result[0]
+		}
+	}
+
+	return result
+}
+
+free :: (pointer: *$T) {
+	if pointer
+		context.allocator(.FREE, context.allocator_data, 0, align_of(T), pointer, size_of(T))
+}
+
+free_array :: (using array: []$T) {
+	if count
+		context.allocator(.FREE, context.allocator_data, 0, align_of(T), data, size_of(T) * count)
+}
+
 array_peek :: (array: []$T) -> T {
 	return array[array.count - 1]
+}
+
+array_free :: (array: []$T) {
+	if array.data  deallocate(array.data) 
 }
 
 panic :: () {
@@ -240,6 +296,47 @@ u64_to_string :: (value: u64, base: u64 = 10) -> #must string {
 	
 	result.data = allocate(result.count)
 	
+	index := result.count
+	remaining = value
+	
+	while remaining {
+		index -= 1;
+		
+		result[index] = DIGIT_TABLE[remaining % base]
+		remaining /= base
+	}
+	
+	return result
+}
+
+u64_to_string :: (value: u64, buffer: string, base: u64 = 10) -> string {
+	if base > 36 || base < 2 {
+		return ""
+	}
+
+	if value == 0 {
+		if buffer.count {
+			buffer[0] = '0'
+			return string.{buffer.data, 1}
+		} else {
+			return ""
+		}
+	}
+
+	result: string
+	remaining := value
+	
+	while remaining {
+		result.count += 1
+		
+		remaining /= base
+	}
+	
+	if buffer.count < result.count {
+		return ""
+	}
+
+	result.data = buffer.data
 	index := result.count
 	remaining = value
 	

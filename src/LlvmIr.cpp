@@ -1996,14 +1996,11 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 
 
 			if (case_.condition) {
-				// @SwitchEqualsMess
-				auto condition = static_cast<ExprBinaryOperator *>(case_.condition);
+				auto condition = case_.condition;
 
-				assert(condition->flavor == ExprFlavor::BINARY_OPERATOR);
+				assert(condition->type == switch_->condition->type);
 
-				assert(condition->right->type == switch_->condition->type);
-
-				auto result = generateLlvmEqual(state, true, value, condition->right);
+				auto result = generateLlvmEqual(state, true, value, condition);
 
 
 				auto nextCheck = llvm::BasicBlock::Create(state->context, "switch.test", state->function);
