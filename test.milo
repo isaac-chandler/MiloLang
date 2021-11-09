@@ -18,7 +18,7 @@ counter_scale: f32
 
 load_image :: (filename: string) -> u32 {	
 	file, success := read_entire_file(filename)
-	defer deallocate(file.data)
+	defer free_array(file)
 	
 	if !success {
 		print("Failed to load image ")
@@ -640,72 +640,77 @@ main :: () {
 	
 	window_class.style = CS_OWNDC | CS_VREDRAW | CS_HREDRAW
 	window_class.lpfnWndProc = (hwnd: HWND, uMsg: MSG.Message, wParam: u64, lParam: s64) -> s64 #c_call {
-		VK_SHIFT :: 0x10
-		VK_SPACE :: 0x20
-		VK_LEFT  :: 0x25
-		VK_RIGHT :: 0x27
-	
-		if uMsg == {
-			case WM_CLOSE
+		new_context: Context
 
-				DestroyWindow(hwnd)
-				
-				print("Closing\n")
-				
-			case WM_DESTROY
-				glFinish()
-				
-				dc := wglGetCurrentDC()
-				
-				if !wglDeleteContext(gl_context)
-					print("Failed to delete gl context\n")
-					
-				if !ReleaseDC(hwnd, dc)
-					print("Failed to delete device context\n")
-				
-				PostQuitMessage(0)
-				
-			case WM_PAINT
-				paint: PAINTSTRUCT = --
-				
-				dc := BeginPaint(hwnd, *paint)
-				EndPaint(hwnd, *paint)
-				
-			case WM_SIZE
-				client_rect: RECT = --
-				
-				GetClientRect(hwnd, *client_rect)
-				
-				window_width = client_rect.right - client_rect.left
-				window_height = client_rect.bottom - client_rect.top
-				
-				print("%x%\n", window_width, window_height)
-				print("----------\n")
-				
-			case WM_KEYDOWN
-				if wParam == {
-					case VK_LEFT  left_is_down  = true
-					case VK_RIGHT right_is_down = true
-					case VK_SPACE space_is_down = true
-					case VK_SHIFT shift_is_down = true
-				}
-				
-			case WM_KEYUP
-				if wParam == {
-					case VK_LEFT  left_is_down  = false
-					case VK_RIGHT right_is_down = false
-					case VK_SPACE space_is_down = false
-					case VK_SHIFT shift_is_down = false
-				}
-				
-			else
-				return DefWindowProcW(hwnd, uMsg, wParam, lParam)
-		}
+		push_context new_context {
+
+			VK_SHIFT :: 0x10
+			VK_SPACE :: 0x20
+			VK_LEFT  :: 0x25
+			VK_RIGHT :: 0x27
 		
-		return 0
+			if uMsg == {
+				case WM_CLOSE
+
+					DestroyWindow(hwnd)
+					
+					print("Closing\n")
+					
+				case WM_DESTROY
+					glFinish()
+					
+					dc := wglGetCurrentDC()
+					
+					if !wglDeleteContext(gl_context)
+						print("Failed to delete gl context\n")
+						
+					if !ReleaseDC(hwnd, dc)
+						print("Failed to delete device context\n")
+					
+					PostQuitMessage(0)
+					
+				case WM_PAINT
+					paint: PAINTSTRUCT = --
+					
+					dc := BeginPaint(hwnd, *paint)
+					EndPaint(hwnd, *paint)
+					
+				case WM_SIZE
+					client_rect: RECT = --
+					
+					GetClientRect(hwnd, *client_rect)
+					
+					window_width = client_rect.right - client_rect.left
+					window_height = client_rect.bottom - client_rect.top
+					
+					print("%x%\n", window_width, window_height)
+					print("----------\n")
+					
+				case WM_KEYDOWN
+					if wParam == {
+						case VK_LEFT  left_is_down  = true
+						case VK_RIGHT right_is_down = true
+						case VK_SPACE space_is_down = true
+						case VK_SHIFT shift_is_down = true
+					}
+					
+				case WM_KEYUP
+					if wParam == {
+						case VK_LEFT  left_is_down  = false
+						case VK_RIGHT right_is_down = false
+						case VK_SPACE space_is_down = false
+						case VK_SHIFT shift_is_down = false
+					}
+					
+				else
+					return DefWindowProcW(hwnd, uMsg, wParam, lParam)
+			}
+			
+			return 0
+		}
 	}
 	window_class.hInstance = instance
-	window_class.lpszClassName = class_name
+	window_class.lpszClassName = class_name.data
 	window_class.hbrBackground = GetStockObject(BLACK_BRUSH)
 	
 	
@@ -727,7 +732,7 @@ main :: () {
 	
 	AdjustWindowRectEx(*window_rect, window_style ^ WS_OVERLAPPED | WS_TILED)
 	
-	window_handle := CreateWindowExW(lpClassName = class_name, lpWindowName = to_windows_string("Test Window"), dwStyle = window_style, 
+	window_handle := CreateWindowExW(lpClassName = class_name.data, lpWindowName = to_windows_string("Test Window").data, dwStyle = window_style, 
 		nWidth = window_rect.right - window_rect.left, nHeight = window_rect.bottom - window_rect.top, hInstance = instance)
 	
 	if window_handle == null {

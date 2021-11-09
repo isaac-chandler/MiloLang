@@ -1,14 +1,34 @@
 #import "Windows"
+#import "Standard"
 
 Thread :: struct {
 	handle: HANDLE
 	id: u32
+	user_proc: (*Thread) -> void
+	initial_context: Context
+	allocator: Allocator
+	user_data: *void
 }
 
-create_thread :: (procedure: (*void) -> u32 #c_call, data := null) -> #must Thread {
-	thread: Thread = --
+create_thread :: (procedure: (*Thread) -> void, data := null, initial_context := Context.{}) -> #must *Thread {
+	thread := new(Thread, initialized = false)
+	thread.allocator = context.allocator_info
+	thread.user_proc = procedure
+	thread.initial_context = initial_context
+	thread.user_data = data
 
-	thread.handle = CreateThread(null, 0, procedure, data, 0, *thread.id)
+	// Create the thread suspended so that there won't be a data race if the thread wants to access its own handle
+	thread.handle = CreateThread(null, 0, thread_proc, thread, .CREATE_SUSPENDED, *thread.id)
+
+	if !thread.handle {
+		free(thread)
+		return null
+	}
+
+	if ResumeThread(thread.handle) == -1 {
+		free(thread)
+		return null
+	}
 	
 	return thread
 }
@@ -17,6 +37,24 @@ wait_for_thread :: (thread: *Thread) {
 	WaitForSingleObject(thread.handle)
 }
 
-close_thread :: (thread: *Thread) {
+close_thread :: (using thread: *Thread) {
 	CloseHandle(thread.handle)
+
+	new_context := context
+	new_context.allocator_info = thread.allocator
+
+	push_context new_context {
+		free(thread)
+	}
+}
+
+#scope_module
+
+thread_proc :: (data: *void) -> u32 #c_call {
+	thread: *Thread = data
+
+	push_context thread.initial_context {
+		thread.user_proc(thread)
+		return 0
+	}
 }

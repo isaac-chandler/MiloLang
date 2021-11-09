@@ -27,26 +27,24 @@ free_concatenator :: (using c: *Concatenator) {
 	while bucket {
 		next := bucket.next
 		
-		deallocate(bucket)
+		free(bucket)
 		
 		bucket = next
 	}
 }
 
-next_bucket :: (using c: *Concatenator) {
-	using current_bucket
-	
+next_bucket :: (using c: *Concatenator) {	
 	if !current_bucket
 		current_bucket = *first_bucket
 	
-	if offset == data.count {
-		if !next {
-			next = allocate(size_of(Bucket))
-			next.next = null
+	if current_bucket.offset == current_bucket.data.count {
+		if !current_bucket.next {
+			current_bucket.next = new(Bucket, initialized = false)
 		}
 		
-		current_bucket = next
-		offset = 0
+		current_bucket = current_bucket.next
+		current_bucket.offset = 0
+		current_bucket.next = null
 	}
 }
 
@@ -141,10 +139,8 @@ max :: (a: $T, b: T) -> #must T {
 		return b
 }
 
-copy_string :: (s: string) -> #must string {
-	result := s
-
-	result.data = allocate(s.count)
+copy_string :: (using s: string) -> #must string {
+	result := new_string(s.count, initialized = false)
 	
 	memory_copy(result.data, s.data, s.count)
 	
@@ -152,7 +148,7 @@ copy_string :: (s: string) -> #must string {
 }
 
 memory_copy :: (dst: *void, src: *void, count: u64) {
-	a : *u8 = dst
+	a: *u8 = dst
 	b: *u8 = src
 	
 	for i: 0 .. count {
@@ -160,15 +156,18 @@ memory_copy :: (dst: *void, src: *void, count: u64) {
 	}
 }
 
-array_add :: (array: *[..]$T, value: T) {
-	if array.count >= array.capacity {
-		array.capacity = max(array.count * 2, 4)
-		
-		array.data = reallocate(array.data, array.capacity * size_of(T))
+array_reserve :: (using array: *[..]$T, new_capacity: u64) {	
+	data = context.allocator(.EXPAND, context.allocator_data, new_capacity * size_of(T), align_of(T), data, capacity * size_of(T))
+	capacity = new_capacity
+}
+
+array_add :: (using array: *[..]$T, value: T) {
+	if count >= capacity {
+		array_reserve(array, max(count * 2, 4))
 	}
 	
-	array.count += 1;
-	(<<array)[array.count - 1] = value
+	count += 1;
+	(<<array)[count - 1] = value
 }
 
 memory_clear :: (dst: *void, count: u64) {
@@ -179,9 +178,9 @@ memory_clear :: (dst: *void, count: u64) {
 	}
 }
 
-array_pop :: (array: *[]$T) -> T {
-	value := (<<array)[array.count - 1]
-	array.count -= 1
+array_pop :: (using array: *[]$T) -> T {
+	value := (<<array)[count - 1]
+	count -= 1
 	
 	return value
 }
@@ -212,6 +211,11 @@ new :: ($T: type, initialized := true) -> *T {
 	return result
 }
 
+free :: (pointer: *$T) {
+	if pointer
+		context.allocator(.FREE, context.allocator_data, 0, align_of(T), pointer, size_of(T))
+}
+
 new_array :: ($T: type, count: u64, initialized := true) -> []T {
 	result: []T = --
 	result.count = count
@@ -222,16 +226,11 @@ new_array :: ($T: type, count: u64, initialized := true) -> []T {
 		result[0] = default
 
 		for 1 .. count {
-			result[i] = result[0]
+			result[it] = result[0]
 		}
 	}
 
 	return result
-}
-
-free :: (pointer: *$T) {
-	if pointer
-		context.allocator(.FREE, context.allocator_data, 0, align_of(T), pointer, size_of(T))
 }
 
 free_array :: (using array: []$T) {
@@ -239,12 +238,21 @@ free_array :: (using array: []$T) {
 		context.allocator(.FREE, context.allocator_data, 0, align_of(T), data, size_of(T) * count)
 }
 
-array_peek :: (array: []$T) -> T {
-	return array[array.count - 1]
+new_string :: (count: u64, initialized := true) -> string {
+	return cast() new_array(u8, count, initialized)
 }
 
-array_free :: (array: []$T) {
-	if array.data  deallocate(array.data) 
+free_string :: (s: string) {
+	free_array(cast([]u8) s)
+}
+
+array_peek :: (using array: []$T) -> T {
+	return array[count - 1]
+}
+
+array_free :: (using array: [..]$T) {
+	if capacity  
+		context.allocator(.FREE, context.allocator_data, 0, align_of(T), data, size_of(T) * capacity) 
 }
 
 panic :: () {
@@ -283,18 +291,17 @@ u64_to_string :: (value: u64, base: u64 = 10) -> #must string {
 		return copy_string("0")
 	}
 
-	result: string
-	digitCount: u64
+	digit_count: u64
 	
 	remaining := value
 	
 	while remaining {
-		result.count += 1
+		digit_count += 1
 		
 		remaining /= base
 	}
 	
-	result.data = allocate(result.count)
+	result := new_string(digit_count, initialized = false)
 	
 	index := result.count
 	remaining = value

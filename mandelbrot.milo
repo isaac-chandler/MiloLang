@@ -39,8 +39,8 @@ Job :: struct {
 	end_row: s64
 }
 
-thread_proc :: (data: *void) -> u32 #c_call {
-	job: *Job = data
+thread_proc :: (thread: *Thread) {
+	job: *Job = thread.user_data
 	
 	for y: job.start_row .. job.end_row {
 		for x: width {
@@ -58,8 +58,6 @@ thread_proc :: (data: *void) -> u32 #c_call {
 			job.data += 3
 		}
 	}
-	
-	return 0
 }
 
 THREAD_COUNT :: 8
@@ -68,7 +66,7 @@ main :: () {
 	assert(height % THREAD_COUNT == 0)
 
 	SIZE :: size_of(Bmp_File_Header) + size_of(Bmp_Dib_Header) + width * height * 3
-	file := []u8.{ allocate(SIZE), SIZE }
+	file := new_array(u8, SIZE)
 	
 	file_header: Bmp_File_Header
 	
@@ -87,7 +85,7 @@ main :: () {
 	
 	jobs: [THREAD_COUNT]Job
 	
-	threads: [THREAD_COUNT]Thread
+	threads: [THREAD_COUNT]*Thread
 	
 	image := *file.data[file_header.offset_to_image]
 	
@@ -111,8 +109,9 @@ main :: () {
 		<<it = create_thread(thread_proc, *jobs[it_index])
 	}
 	
-	for * threads {
+	for threads {
 		wait_for_thread(it)
+		close_thread(it)
 	}
 	
 	end_time: s64

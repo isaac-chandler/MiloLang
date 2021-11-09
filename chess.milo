@@ -14,7 +14,7 @@ window_height: s32 = 800
 
 load_image :: (filename: string) -> u32 {	
 	file, success := read_entire_file(filename)
-	defer deallocate(file.data)
+	defer free_array(file)
 	
 	if !success {
 		print("Failed to load image ")
@@ -70,17 +70,17 @@ openings: [..]Opening_Info
 opening_table_insert :: (hash: u64) -> *Opening_Info {
 		
 	allocate_openings :: (count: u64) {
-		openings.capacity = count
-		openings.data = allocate(openings.capacity * size_of(Opening_Info))
+		result := new_array(Opening_Info, count)
+		openings.data = result.data
 		openings.count = 0
-		memory_clear(openings.data, openings.capacity * size_of(Opening_Info))
+		openings.capacity = count
 	}
 	
 	if openings.capacity == 0 {
 		allocate_openings(1024)
 	} else if openings.count * 10 > openings.capacity * 7 {
 		old_openings := openings
-		defer deallocate(old_openings.data)
+		defer free_array([]Opening_Info.{old_openings.data, old_openings.capacity})
 		
 		allocate_openings(old_openings.capacity * 2)
 		
@@ -912,8 +912,7 @@ evaluate_white :: (using state: State, using piece: State.Piece_Info, endgame_we
 	
 order_moves :: (using state: State, moves: []Move, old_best: Move, depth: s8, alpha: f32, beta: f32) {
 	if evaluation_list.capacity < moves.count {
-		evaluation_list.data = reallocate(evaluation_list.data, size_of(f32) * moves.count)
-		evaluation_list.capacity = moves.count
+		array_reserve(*evaluation_list, moves.count)
 	}
 	
 	evaluation_list.count = moves.count
@@ -2160,31 +2159,27 @@ game_over: bool
 ai_start_semaphore: HANDLE
 ai_stop_semaphore:  HANDLE
 
-ai_thread_proc :: (userdata: *void) -> u32 #c_call {
-	push_context .{} {
-		performance_counter_frequency: s64
-		
-		QueryPerformanceFrequency(*performance_counter_frequency)
-		
-		counter_scale := 1.0 / cast(f32) performance_counter_frequency
+ai_thread_proc :: (thread: *Thread) {
+	performance_counter_frequency: s64
+	
+	QueryPerformanceFrequency(*performance_counter_frequency)
+	
+	counter_scale := 1.0 / cast(f32) performance_counter_frequency
 
-		ai_move := cast(*Move) userdata
-		while true {
-			WaitForSingleObject(ai_start_semaphore);
-			
-			start_time: s64
-			end_time: s64
-			
-			QueryPerformanceCounter(*start_time);
-			<<ai_move = select_ai_move()
-			QueryPerformanceCounter(*end_time)
-			
-			print("Move took % s\n", cast() (end_time - start_time) * counter_scale)
-			
-			ReleaseSemaphore(ai_stop_semaphore)
-		}
+	ai_move := cast(*Move) thread.user_data
+	while true {
+		WaitForSingleObject(ai_start_semaphore);
 		
-		return 0
+		start_time: s64
+		end_time: s64
+		
+		QueryPerformanceCounter(*start_time);
+		<<ai_move = select_ai_move()
+		QueryPerformanceCounter(*end_time)
+		
+		print("Move took % s\n", cast() (end_time - start_time) * counter_scale)
+		
+		ReleaseSemaphore(ai_stop_semaphore)
 	}
 }
 
@@ -2348,7 +2343,7 @@ main :: () {
 		}
 	}
 	window_class.hInstance = instance
-	window_class.lpszClassName = class_name
+	window_class.lpszClassName = class_name.data
 	window_class.hbrBackground = GetStockObject(BLACK_BRUSH)
 	
 	
@@ -2370,7 +2365,7 @@ main :: () {
 	
 	AdjustWindowRectEx(*window_rect, window_style ^ WS_OVERLAPPED | WS_TILED)
 	
-	window_handle := CreateWindowExW(lpClassName = class_name, lpWindowName = to_windows_string("Test Window"), dwStyle = window_style, 
+	window_handle := CreateWindowExW(lpClassName = class_name.data, lpWindowName = to_windows_string("Test Window").data, dwStyle = window_style, 
 		nWidth = window_rect.right - window_rect.left, nHeight = window_rect.bottom - window_rect.top, hInstance = instance)
 	
 	if window_handle == null {

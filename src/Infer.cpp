@@ -1408,8 +1408,9 @@ bool switchCasesAreSame(Expr *a, Expr *b) {
 	}
 }
 
-bool inferUnaryDot(SubJob *job, TypeEnum *enum_, Expr **exprPointer, bool silentCheck = false) {
+bool inferUnaryDot(SubJob *job, TypeEnum *enum_, Expr **exprPointer, bool *yield, bool silentCheck = false) {
 	bool invert = false;
+	*yield = false;
 
 	Expr **expr = exprPointer;
 
@@ -1436,6 +1437,12 @@ bool inferUnaryDot(SubJob *job, TypeEnum *enum_, Expr **exprPointer, bool silent
 	assert(member->flags & DECLARATION_IS_CONSTANT); // All enum members should be constants
 
 	if (!silentCheck) {
+		if (!(member->flags & DECLARATION_VALUE_IS_READY)) {
+			*yield = true;
+			goToSleep(job, &member->sleepingOnMyValue, "Unary dot waiting for enum value");
+			return false;
+		}
+
 		if (expr != exprPointer) {
 			if (!(enum_->flags & TYPE_ENUM_IS_FLAGS)) {
 				reportError(*exprPointer, "Error: Cannot invert an enum");
@@ -2815,7 +2822,7 @@ bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yi
 				insertImplicitCast(job->sizeDependencies, &given, correct);
 			}
 			else if (correct->flavor == TypeFlavor::ENUM && given->type == &TYPE_UNARY_DOT) {
-				if (!inferUnaryDot(job, static_cast<TypeEnum *>(correct), &given)) {
+				if (!inferUnaryDot(job, static_cast<TypeEnum *>(correct), &given, yield)) {
 					return false;
 				}
 			}
@@ -3040,7 +3047,7 @@ Conversion getConversionCost(SubJob *job, Expr *location, Type *correct, Expr *g
 		}
 		
 		if (correct->flavor == TypeFlavor::ENUM && given->type == &TYPE_UNARY_DOT) {
-			if (!inferUnaryDot(job, static_cast<TypeEnum *>(correct), &given, true)) {
+			if (!inferUnaryDot(job, static_cast<TypeEnum *>(correct), &given, yield, true)) {
 				return ConversionCost::CANNOT_CONVERT;
 			}
 
@@ -3573,13 +3580,13 @@ bool doPolymorphMatchingForCall(Arguments *arguments, ExprFunction *function, bo
 		auto argumentType = arguments->values[i]->type;
 
 		
-		auto typeExpr = argument->type;
 		auto argumentExpr = arguments->values[i];
-		assert(typeExpr);
 
 		assert(!(argument->flags & DECLARATION_IS_VARARGS) || (argumentExpr->flags & EXPR_IS_SPREAD));
 
 		if (argument->flags & DECLARATION_TYPE_POLYMORPHIC) {
+			auto typeExpr = argument->type;
+			assert(typeExpr);
 			if (!matchPolymorphArgument(typeExpr, getTypeForExpr(argumentExpr), argumentExpr, yield, false))
 				return false;
 		}
@@ -3909,13 +3916,13 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 					insertImplicitCast(job->sizeDependencies, &right, left->type);
 				}
 				else if (right->type->flavor == TypeFlavor::ENUM && left->type == &TYPE_UNARY_DOT) {
-					if (!inferUnaryDot(job, static_cast<TypeEnum *>(right->type), &left)) {
-						return false;
+					if (!inferUnaryDot(job, static_cast<TypeEnum *>(right->type), &left, yield)) {
+						return *yield;
 					}
 				}
 				else if (left->type->flavor == TypeFlavor::ENUM && right->type == &TYPE_UNARY_DOT) {
-					if (!inferUnaryDot(job, static_cast<TypeEnum *>(left->type), &right)) {
-						return false;
+					if (!inferUnaryDot(job, static_cast<TypeEnum *>(left->type), &right, yield)) {
+						return *yield;
 					}
 				}
 				else if (left->type->flavor == TypeFlavor::ENUM && (left->type->flags & TYPE_ENUM_IS_FLAGS) &&
@@ -4025,8 +4032,8 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 					insertImplicitCast(job->sizeDependencies, &right, left->type);
 				}
 				else if (left->type->flavor == TypeFlavor::ENUM && right->type == &TYPE_UNARY_DOT) {
-					if (!inferUnaryDot(job, static_cast<TypeEnum *>(left->type), &right)) {
-						return false;
+					if (!inferUnaryDot(job, static_cast<TypeEnum *>(left->type), &right, yield)) {
+						return *yield;
 					}
 				}
 				else if (left->type->flavor == TypeFlavor::ENUM && (left->type->flags & TYPE_ENUM_IS_FLAGS) &&
@@ -8746,7 +8753,7 @@ bool inferRun(SubJob *subJob) {
 	auto function = static_cast<TypeFunction *>(run->function->type);
 
 	if (!contextIsLocked) {
-		goToSleep(job, &TYPE_CONTEXT.members.sleepingOnMe, "#run directive waiting for context to be locked");
+		goToSleep(job, &TYPE_CONTEXT.sleepingOnMe, "#run directive waiting for context to be locked");
 		return true;
 	}
 

@@ -247,7 +247,7 @@ concatenate :: (s: string.., delimiter: string = "") -> string {
 	if !total_size
 		return ""
 	
-	result := string.{allocate(total_size), total_size}
+	result := new_string(total_size, initialized = false)
 	
 	cursor := result.data
 	

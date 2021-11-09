@@ -14,11 +14,11 @@ messages: struct {
 
 run_command_to_file :: (command: string, file: string) -> u32 {
 	windows_file := to_windows_string(file)
-	defer deallocate(windows_file)
+	defer free_array(windows_file)
 	
 	inheritable := SECURITY_ATTRIBUTES.{ bInheritHandle = 1 }
 	
-	output := CreateFileW(windows_file, GENERIC_WRITE, FILE_SHARE_READ, *inheritable, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL)
+	output := CreateFileW(windows_file.data, GENERIC_WRITE, FILE_SHARE_READ, *inheritable, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL)
 	defer CloseHandle(output)
 
 	startup: STARTUPINFOW
@@ -30,9 +30,9 @@ run_command_to_file :: (command: string, file: string) -> u32 {
 	info: PROCESS_INFORMATION = --
 	
 	windows_command := to_windows_string(command)
-	defer deallocate(windows_command)
+	defer free_array(windows_command)
 	
-	if !CreateProcessW(lpCommandLine = windows_command, lpStartupInfo = *startup, bInheritHandles = 1, lpProcessInformation = *info)
+	if !CreateProcessW(lpCommandLine = windows_command.data, lpStartupInfo = *startup, bInheritHandles = 1, lpProcessInformation = *info)
 		return cast() -1
 	
 	defer CloseHandle(info.hProcess)
@@ -53,7 +53,7 @@ run_command_to_file :: (command: string, file: string) -> u32 {
 
 execute_test :: (file: string, compile_flags: string) -> #must string {
 	path := concatenate("tests", file, delimiter = "/")
-	defer deallocate(path.data)
+	defer free_string(path)
 	
 	test_name := remove_extension(path)
 	
@@ -62,7 +62,7 @@ execute_test :: (file: string, compile_flags: string) -> #must string {
 	print("Compiling %... ", path)
 	
 	compile_command := concatenate(COMPILER_PATH, path, compile_flags, delimiter = " ")
-	defer deallocate(compile_command.data)
+	defer free_string(compile_command)
 	
 	exit_code := run_command_to_file(compile_command, log_path)
 	
@@ -74,7 +74,7 @@ execute_test :: (file: string, compile_flags: string) -> #must string {
 	}
 	
 	exe_path := concatenate(test_name, ".exe")
-	defer deallocate(exe_path.data)
+	defer free_string(exe_path)
 	print("Running   %... ", exe_path)
 
 	exit_code = run_command_to_file(exe_path, log_path)
@@ -86,7 +86,7 @@ execute_test :: (file: string, compile_flags: string) -> #must string {
 		print(messages.passed)
 	}
 	
-	deallocate(log_path.data)
+	free_string(log_path)
 	return ""
 }
 
@@ -117,13 +117,14 @@ main :: () {
 	print("Running tests with % %\n", COMPILER_PATH, compile_flags)
 
 	test_files := get_files_in_directory("tests", include_folders = true)
-	defer deallocate(test_files.data)
+
+	defer array_free(test_files)
 	
 	num_tests := 0
 	num_passed := 0
 	
 	for test_files {
-		defer deallocate(it.data)
+		defer free_string(it)
 		
 		if get_extension(it) == "milo" {
 			log_file := execute_test(it, compile_flags)
@@ -131,11 +132,11 @@ main :: () {
 			num_tests += 1
 			
 			if log_file {			
-				log := cast(string) read_entire_file(log_file)
-				print("\n%\n\n", log)
+				log := read_entire_file(log_file)
+				print("\n%\n\n", cast(string) log)
 				
-				deallocate(log.data)
-				deallocate(log_file.data)
+				free_array(log)
+				free_string(log_file)
 			} else {
 				num_passed += 1
 			}

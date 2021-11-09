@@ -373,29 +373,24 @@ from_windows_string :: (windows_string: *u16) -> string {
 	if !<<windows_string  return ""
 	
 	
-	character_count := cast(u64) WideCharToMultiByte(lpWideCharStr = windows_string, lpMultiByteStr = null, cbMultiByte = 0)
+	character_count := cast(u64) WideCharToMultiByte(lpWideCharStr = windows_string, lpMultiByteStr = null, cbMultiByte = 0) - 1
 	
-	result := string.{allocate(character_count), character_count - 1}
+	result := new_string(character_count, initialized = false)
 	
 	WideCharToMultiByte(lpWideCharStr = windows_string, lpMultiByteStr = result.data, cbMultiByte = cast() character_count)
 	
 	return result
 }
 
-to_windows_string :: (s: string) -> *u16 {
+to_windows_string :: (s: string) -> []u16 {
 	if !s  {
-		result := cast(*u16) allocate(size_of(u16));
-		
-		<<result = 0
-		
-		return result
+		return new_array(u16, 1)
 	}
 	
-	character_count := cast(u16) MultiByteToWideChar(lpMultiByteStr = s.data, cbMultiByte = cast() s.count, lpWideCharStr = null, ccWideChar = 0)
+	character_count := cast(u64) MultiByteToWideChar(lpMultiByteStr = s.data, cbMultiByte = cast() s.count, lpWideCharStr = null, ccWideChar = 0)
+	result := new_array(u16, character_count + 1, initialized = false)
 	
-	result := cast(*u16) allocate(size_of(u16) * (character_count + 1))
-	
-	MultiByteToWideChar(lpMultiByteStr = s.data, cbMultiByte = cast() s.count, lpWideCharStr = result, ccWideChar = cast() character_count)
+	MultiByteToWideChar(lpMultiByteStr = s.data, cbMultiByte = cast() s.count, lpWideCharStr = result.data, ccWideChar = cast() character_count)
 	
 	result[character_count] = 0
 	
@@ -657,6 +652,8 @@ using Create_Thread_Flags :: enum_flags u32 {
 }
 
 CreateThread :: (lpThreadAttributes: *SECURITY_ATTRIBUTES = null, dwStackSize: u64 = 0, lpStartAddress: (*void) -> u32 #c_call, lpParameter := null, dwCreationFlags: Create_Thread_Flags = 0, lpThreadId: *u32 = null) -> HANDLE #external "kernel32"
+ResumeThread :: (hThread: HANDLE) -> s32 #external "kernel32"
+
 
 CreateSemaphoreA :: (lpSemaphoreAttributes: *SECURITY_ATTRIBUTES = null, lInitialCount: s32 = 0, lMaximumCount: s32, lpName: *u8 = null) -> HANDLE #external "kernel32"
 ReleaseSemaphore :: (hSemaphore: HANDLE, lReleaseCount: s32 = 1, lpPreviousCount: *s32 = null) -> bool #external "kernel32"

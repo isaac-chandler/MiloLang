@@ -20,7 +20,7 @@ initialize_sound :: (hwnd: HWND, buffer_length: f32 = 2.0, latency: f32 = 1.0 / 
 	set_latency(latency)
 	buffer_sample_count = cast(u32) (buffer_length * SAMPLE_RATE)
 	
-	sample_buffer.data = allocate(buffer_sample_count * size_of(Sample))
+	sample_buffer = new_array(Sample, buffer_sample_count)
 	
 	if !initialize_sound_os(hwnd) return false
 	

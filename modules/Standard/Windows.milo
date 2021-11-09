@@ -1,27 +1,6 @@
 #import "Windows"
 #import "String"
 
-allocate :: (size: u64) -> #must *void {
-	init_process_heap()
-	return HeapAlloc(process_heap, 0, size)
-}
-
-
-
-reallocate :: (block: *void, size: u64) -> #must *void {
-	if block == null
-		return allocate(size)
-	else {			
-		init_process_heap()
-		return HeapReAlloc(process_heap, 0, block, size)
-	}
-}
-
-deallocate :: (block: *void) {
-	init_process_heap()
-	HeapFree(process_heap, 0, block)
-}
-
 default_allocator :: (mode: Allocator.Mode, allocator_data: *void, size: u64, alignment: u64, pointer: *void, old_size: u64) -> *void {
 	init_process_heap()
 
@@ -75,7 +54,7 @@ get_command_line_arguments :: () -> []string {
 		return .{}
 	}
 	
-	args := []string.{allocate(size_of(string) * cast(u64) count), cast() count}
+	args := new_array(string, cast() count, initialized = false)
 	
 	for * args {
 		<<it = from_windows_string(windows_args[it_index])
@@ -84,15 +63,15 @@ get_command_line_arguments :: () -> []string {
 	return args
 }
 
-run_command_asyncs :: (command: string) -> bool {
+run_command_async :: (command: string) -> bool {
 	startup: STARTUPINFOW
 	
 	info: PROCESS_INFORMATION = --
 	
 	windows_command := to_windows_string(command)
-	defer deallocate(windows_command)
+	defer free_array(windows_command)
 	
-	if !CreateProcessW(lpCommandLine = windows_command, lpStartupInfo = *startup, lpProcessInformation = *info)
+	if !CreateProcessW(lpCommandLine = windows_command.data, lpStartupInfo = *startup, lpProcessInformation = *info)
 		return false
 	
 	CloseHandle(info.hThread)
@@ -107,9 +86,9 @@ run_command :: (command: string) -> u32 {
 	info: PROCESS_INFORMATION = --
 	
 	windows_command := to_windows_string(command)
-	defer deallocate(windows_command)
+	defer free_array(windows_command)
 	
-	if !CreateProcessW(lpCommandLine = windows_command, lpStartupInfo = *startup, lpProcessInformation = *info, bInheritHandles = 1)
+	if !CreateProcessW(lpCommandLine = windows_command.data, lpStartupInfo = *startup, lpProcessInformation = *info, bInheritHandles = 1)
 		return cast() -1
 	
 	CloseHandle(info.hThread)
@@ -145,8 +124,8 @@ enable_console_colors :: () -> bool {
  // @Incomplete: This is probably the slowest read_line function ever written, what is the correct way to do this in win32?
 read_line :: () -> (string, bool) {
 	init_std_in()
+	input_buffer.count = 0
 
-	result: [..]u8
 
 	while true {
 		c: u8
@@ -166,10 +145,13 @@ read_line :: () -> (string, bool) {
 
 
 		if c == '\n' || c == '\r' {
-			return .{result.data, result.count}, true
+			s := new_string(input_buffer.count, initialized = false)
+			memory_copy(s.data, input_buffer.data, input_buffer.count)
+
+			return s, true
 		}
 
-		array_add(*result, c)
+		array_add(*input_buffer, c)
 	}
 
 	return "", false
@@ -179,8 +161,7 @@ read_line :: () -> (string, bool) {
 
 had_carriage_return: bool
 
-input_buffer: []u8
-input_buffer_data: [4096]u8
+input_buffer: [..]u8
 
 std_in: HANDLE
 std_out: HANDLE

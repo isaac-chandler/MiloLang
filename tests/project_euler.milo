@@ -564,14 +564,14 @@ is_palindrome :: (s: string) -> bool {
 	return true
 }
 
-prime_factors :: (n: u64) -> []u64 {
+prime_factors :: (n: u64) -> [..]u64 {
 	result: [..]u64
 
 	remainder := n
 
 	compute_primes_to := isqrt(n)
 
-	primes: []u64
+	primes: [..]u64
 	if compute_primes_to <= PRECOMPUTE_PRIMES_TO
 		primes = precomputed_primes
 	else
@@ -604,7 +604,7 @@ Prime_Factor :: struct {
 	count: u64
 }
 
-collected_prime_factors :: (n: u64) -> []Prime_Factor {
+collected_prime_factors :: (n: u64) -> [..]Prime_Factor {
 	factors := prime_factors(n)
 	defer array_free(factors)
 
@@ -630,18 +630,15 @@ collected_prime_factors :: (n: u64) -> []Prime_Factor {
 }
 
 PRECOMPUTE_PRIMES_TO :: 2_000_000
-precomputed_primes: []u64
+precomputed_primes: [..]u64
 
-primes_to :: (n: u64) -> []u64 {
+primes_to :: (n: u64) -> [..]u64 {
 	if n < 2  return .{}
 
 	seive_size := (n - 1) / 2
 
-	seive: []bool
-	seive.count = (n - 1) / 2
-	seive.data = allocate(seive.count * size_of(bool))
-	defer deallocate(seive.data)
-	memory_clear(seive.data, seive.count)
+	seive := new_array(bool, (n - 1) / 2)
+	defer free_array(seive)
 
 	result: [..]u64
 	array_add(*result, 2)
