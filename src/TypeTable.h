@@ -55,16 +55,16 @@ constexpr const char *TYPE_FLAVOR_NAMES[] = {
 
 static_assert(sizeof(TYPE_FLAVOR_NAMES) / sizeof(const char *) == static_cast<u8>(TypeFlavor::MAX));
 
-#define TYPE_INTEGER_IS_SIGNED 0x2
-#define TYPE_IS_INTERNAL      0x4 // This means that this type should never be accessible to the user, i.e. integer literals, which is special to give it casting properties, but the program should never be able to reference it
-#define TYPE_ARRAY_IS_FIXED 0x8
-#define TYPE_ARRAY_IS_DYNAMIC 0x10
-#define TYPE_STRUCT_IS_UNION 0x20
-#define TYPE_STRUCT_IS_PACKED 0x40
-#define TYPE_ENUM_IS_FLAGS 0x80
-#define TYPE_FUNCTION_IS_C_CALL 0x100
-#define TYPE_USED_IN_OUTPUT 0x200
-#define TYPE_IS_ANONYMOUS 0x400
+#define TYPE_INTEGER_IS_SIGNED 0x1
+#define TYPE_IS_INTERNAL      0x2 // This means that this type should never be accessible to the user, i.e. integer literals, which is special to give it casting properties, but the program should never be able to reference it
+#define TYPE_ARRAY_IS_FIXED 0x4
+#define TYPE_ARRAY_IS_DYNAMIC 0x8
+#define TYPE_STRUCT_IS_UNION 0x10
+#define TYPE_STRUCT_IS_PACKED 0x20
+#define TYPE_ENUM_IS_FLAGS 0x40
+#define TYPE_FUNCTION_IS_C_CALL 0x80
+#define TYPE_USED_IN_OUTPUT 0x100
+#define TYPE_IS_ANONYMOUS 0x200
 
 struct Type {
 	u32 size;

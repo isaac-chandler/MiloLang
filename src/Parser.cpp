@@ -633,7 +633,6 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 		if (expectAndConsume(lexer, ';')) {
 			loop->body = nullptr;
 
-			loop->iteratorBlock.parentBlock = lexer->currentBlock; // Since we never push the block we need to manually set the parent
 			loop->end = lexer->previousTokenEnd;
 		}
 		else {
@@ -874,6 +873,10 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 			for (Block *block = lexer->currentBlock; block && block->flavor == BlockFlavor::IMPERATIVE; block = block->parentBlock) {
 				if (block->loop) {
 					continue_->refersTo = CAST_FROM_SUBSTRUCT(ExprLoop, iteratorBlock, block);
+
+					if (continue_->flavor == ExprFlavor::BREAK) {
+						continue_->refersTo->flags |= EXPR_LOOP_HAS_BREAK;
+					}
 					return continue_;
 				}
 			}
@@ -2134,6 +2137,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 					return nullptr;
 				}
 
+				// @Bug This check doesn't account for static if, it needs to be moved to inference
 				if ((type->flags & TYPE_STRUCT_IS_UNION) && !(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_UNINITIALIZED))) {
 					if (initialized) {
 						reportError(declaration, "Error: Only one member of a union can be initialized");

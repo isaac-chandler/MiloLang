@@ -91,6 +91,26 @@ char getSigChar(Type *type) {
 
 }
 
+void createRuntimeValue(Expr *value, void *dest);
+
+void createRuntimeArrayLiteral(ExprArrayLiteral *array, void *dest) {
+	auto arrayType = static_cast<TypeArray *>(array->type);
+	u32 arrayCount = arrayType->flags & TYPE_ARRAY_IS_FIXED ? arrayType->count : array->count;
+	auto store = static_cast<u8 *>(dest);
+
+	for (u32 i = 0; i < arrayCount; i++) {
+		createRuntimeValue(array->values[i], store + i * arrayType->arrayOf->size);
+
+		if (i + 1 == array->count && arrayCount > array->count) {
+			for (u32 j = i + 1; j < arrayCount; j++) {
+				memcpy(store + j * arrayType->arrayOf->size, store + i * arrayType->arrayOf->size, arrayType->arrayOf->size);
+			}
+
+			break;
+		}
+	}
+}
+
 void createRuntimeValue(Expr *value, void *dest) {
 	PROFILE_FUNC();
 	if (value->flavor == ExprFlavor::INT_LITERAL) {
@@ -126,19 +146,17 @@ void createRuntimeValue(Expr *value, void *dest) {
 	else if (value->flavor == ExprFlavor::ARRAY_LITERAL) {
 		auto array = static_cast<ExprArrayLiteral *>(value);
 
-		auto arrayType = static_cast<TypeArray *>(value->type);
-		auto store = static_cast<u8 *>(dest);
+		if (array->type->flags & TYPE_ARRAY_IS_FIXED) {
+			createRuntimeArrayLiteral(array, dest);
+		}
+		else {
+			auto arrayType = static_cast<TypeArray *>(array->type);
+			auto data = malloc(arrayType->arrayOf->size * array->count);
 
-		for (u32 i = 0; i < arrayType->count; i++) {
-			createRuntimeValue(array->values[i], store + i * arrayType->arrayOf->size);
+			createRuntimeArrayLiteral(array, data);
 
-			if (i + 1 == array->count && arrayType->count > array->count) {
-				for (u32 j = i + 1; j < arrayType->count; j++) {
-					memcpy(store + j * arrayType->arrayOf->size, store + i * arrayType->arrayOf->size, arrayType->arrayOf->size);
-				}
-
-				break;
-			}
+			*reinterpret_cast<void **>(dest) = data;
+			reinterpret_cast<u64 *>(dest)[1] = array->count;
 		}
 	}
 	else if (value->flavor == ExprFlavor::STRUCT_LITERAL) {

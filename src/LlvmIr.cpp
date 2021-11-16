@@ -603,7 +603,6 @@ static llvm::Constant *createConstant(State *state, Expr *expr) {
 					values[i] = llvm::UndefValue::get(llvmType->getStructElementType(i));
 				}
 			}
-
 			return llvm::ConstantStruct::get(llvmType, llvm::ArrayRef(values, memberCount));
 		}
 	}
@@ -614,14 +613,16 @@ static llvm::Constant *createConstant(State *state, Expr *expr) {
 		auto arrayType = static_cast<TypeArray *>(array->type);
 		assert(arrayType->flags &TYPE_ARRAY_IS_FIXED);
 
+		u32 arrayCount = (arrayType->flags & TYPE_ARRAY_IS_FIXED) ? arrayType->count : array->count;
+
 		llvm::Constant **values = new llvm::Constant * [arrayType->count];
 
-		for (u64 i = 0; i < arrayType->count; i++) {
+		for (u64 i = 0; i < arrayCount; i++) {
 			auto value = createConstant(state, array->values[i]);
 			values[i] = value;
 
-			if (i + 1 == array->count && arrayType->count > array->count) {
-				for (u64 j = i + 1; j < arrayType->count; j++) {
+			if (i + 1 == array->count && arrayCount > array->count) {
+				for (u64 j = i + 1; j < arrayCount; j++) {
 					values[j] = value;
 				}
 
@@ -629,7 +630,24 @@ static llvm::Constant *createConstant(State *state, Expr *expr) {
 			}
 		}
 
-		return llvm::ConstantArray::get(static_cast<llvm::ArrayType *>(getLlvmType(state->context, arrayType)), llvm::ArrayRef(values, arrayType->count));
+		auto elementType = getLlvmType(state->context, arrayType->arrayOf);
+
+		auto data = llvm::ConstantArray::get(llvm::ArrayType::get(elementType, arrayCount), llvm::ArrayRef(values, arrayCount));
+
+		if (arrayType->flags & TYPE_ARRAY_IS_FIXED) {
+			return data;
+		}
+		else {
+			auto dataPointer = createUnnnamedConstant(state, data->getType());
+			dataPointer->setInitializer(data);
+
+			return llvm::ConstantStruct::get(static_cast<llvm::StructType *>(getLlvmType(state->context, arrayType)), 
+				llvm::ConstantExpr::getGetElementPtr(dataPointer->getValueType(), dataPointer, arrayRef<llvm::Value *>({
+						llvm::ConstantInt::get(llvm::Type::getInt32Ty(state->context), 0), 
+						llvm::ConstantInt::get(llvm::Type::getInt32Ty(state->context), 0)
+					})), 
+				llvm::ConstantInt::get(llvm::Type::getInt64Ty(state->context), arrayCount));
+		}
 	}
 	}
 
@@ -1205,6 +1223,50 @@ static llvm::Value *generateLlvmEqual(State *state, bool equal, llvm::Value *l, 
 	}
 }
 
+llvm::Value *generateLlvmArrayLiteral(State *state, ExprArrayLiteral *array) {
+	auto arrayType = static_cast<TypeArray *>(array->type);
+
+	auto arrayCount = arrayType->flags & TYPE_ARRAY_IS_FIXED ? arrayType->count : array->count;
+
+	auto elementType = getLlvmType(state->context, arrayType->arrayOf);
+	auto storage = allocateType(state, llvm::ArrayType::get(elementType, arrayCount));	
+
+
+	for (u64 i = 0; i < arrayCount; i++) {
+		auto value = generateIrAndLoadIfStoredByPointer(state, array->values[i]);
+
+		if (i + 1 == array->count && arrayCount > array->count) {
+			auto preBlock = state->builder.GetInsertBlock();
+
+			auto loopBlock = llvm::BasicBlock::Create(state->context, "array.fill.loop", state->function);
+			auto postBlock = llvm::BasicBlock::Create(state->context, "array.fill.post", state->function);
+
+			state->builder.CreateBr(loopBlock);
+
+			auto i64 = llvm::Type::getInt64Ty(state->context);
+
+			state->builder.SetInsertPoint(loopBlock);
+			auto phi = state->builder.CreatePHI(llvm::Type::getInt64Ty(state->context), 2);
+			phi->addIncoming(llvm::ConstantInt::get(i64, arrayCount - i), preBlock);
+
+			state->builder.CreateStore(value, state->builder.CreateGEP(storage, arrayRef<llvm::Value *>({ llvm::ConstantInt::get(i64, 0), phi })));
+
+			auto sub = state->builder.CreateSub(phi, llvm::ConstantInt::get(i64, 1));
+			phi->addIncoming(sub, loopBlock);
+
+			state->builder.CreateCondBr(state->builder.CreateICmpNE(sub, llvm::ConstantInt::get(i64, 0)), loopBlock, postBlock);
+
+			state->builder.SetInsertPoint(postBlock);
+			break;
+		}
+		else {
+			state->builder.CreateStore(value, state->builder.CreateConstGEP2_64(storage, 0, i));
+		}
+	}
+
+	return storage;
+}
+
 llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 	PROFILE_FUNC();
 	switch (expr->flavor) {
@@ -1325,7 +1387,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 					return state->builder.CreateIntCast(value, getLlvmType(state->context, castTo), false);
 				}
 				else {
-					return state->builder.CreateIntCast(value, getLlvmType(state->context, castTo), castTo->flags & TYPE_INTEGER_IS_SIGNED ? true : false);
+					return state->builder.CreateIntCast(value, getLlvmType(state->context, castTo), (castTo->flags & TYPE_INTEGER_IS_SIGNED) && (right->type->flags & TYPE_INTEGER_IS_SIGNED));
 				}
 			}
 			case TypeFlavor::ARRAY: {
@@ -2280,44 +2342,23 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 			return array->llvmStorage;
 		}
 		else {
-			auto arrayType = static_cast<TypeArray *>(array->type);
-			assert(arrayType->flags & TYPE_ARRAY_IS_FIXED);
+			auto data = generateLlvmArrayLiteral(state, array);
 
-			auto storage = allocateType(state, array->type);
-
-			for (u64 i = 0; i < arrayType->count; i++) {
-				auto value = generateIrAndLoadIfStoredByPointer(state, array->values[i]);
-
-				if (i + 1 == array->count && arrayType->count > array->count) {
-					auto preBlock = state->builder.GetInsertBlock();
-
-					auto loopBlock = llvm::BasicBlock::Create(state->context, "array.fill.loop", state->function);
-					auto postBlock = llvm::BasicBlock::Create(state->context, "array.fill.post", state->function);
-
-					state->builder.CreateBr(loopBlock);
-
-					auto i64 = llvm::Type::getInt64Ty(state->context);
-
-					state->builder.SetInsertPoint(loopBlock);
-					auto phi = state->builder.CreatePHI(llvm::Type::getInt64Ty(state->context), 2);
-					phi->addIncoming(llvm::ConstantInt::get(i64, arrayType->count - i), preBlock);
-
-					state->builder.CreateStore(value, state->builder.CreateGEP(storage, arrayRef<llvm::Value *>({ llvm::ConstantInt::get(i64, 0), phi })));
-
-					auto sub = state->builder.CreateSub(phi, llvm::ConstantInt::get(i64, 1));
-					phi->addIncoming(sub, loopBlock);
-
-					state->builder.CreateCondBr(state->builder.CreateICmpNE(sub, llvm::ConstantInt::get(i64, 0)), loopBlock, postBlock);
-
-					state->builder.SetInsertPoint(postBlock);
-					break;
-				}
-				else {
-					state->builder.CreateStore(value, state->builder.CreateConstGEP2_64(storage, 0, i));
-				}
+			if (array->type->flags & TYPE_ARRAY_IS_FIXED) {
+				return data;
 			}
+			else {
+				auto value = allocateType(state, array->type);
 
-			return storage;
+				state->builder.CreateStore(
+					state->builder.CreateConstGEP2_32(data->getType()->getPointerElementType(), data, 0, 0),
+					state->builder.CreateStructGEP(value, 0));
+				state->builder.CreateStore(
+					llvm::ConstantInt::get(llvm::Type::getInt64Ty(state->context), array->count),
+					state->builder.CreateStructGEP(value, 1));
+
+				return value;
+			}
 		}
 	}
 

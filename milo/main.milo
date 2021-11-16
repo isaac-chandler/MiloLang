@@ -4,14 +4,8 @@
 
 #load "lexer.milo"
 #load "types.milo"
-
-Location :: struct {
-	file_index: u32
-	l0:         u32
-	c0:         u32
-	l1:         u32
-	c1:         u32
-}
+#load "ast.milo"
+#load "parser.milo"
 
 filenames: [..]string
 
@@ -23,6 +17,38 @@ report_error :: (using location: Location, format: string, values: any..) {
 	print("%:%,% ", filenames[file_index], l0, c0)
 	print(format, ..values)
 	print("\n")
+}
+
+report_expected_error :: (using token: Token, format: string, values: any..) {
+	had_error = true
+
+	print("%:%,% ", filenames[file_index], l0, c0)
+	print(format, ..values)
+
+	if cast() token.kind < 128 {
+		character := cast(u8) token.kind
+
+		print(" but got '%' instead\n", string.{*character, 1})
+	} else {
+		print(" but got % instead\n", token.kind)
+	}
+}
+
+copy_loc_start :: (dst: *Location, src: Location) {
+	dst.file_index = src.file_index
+	dst.l0 = src.l0
+	dst.c0 = src.c0
+}
+
+copy_loc_end :: (dst: *Location, src: Location) {
+	assert(dst.file_index == src.file_index)
+	dst.l1 = src.l1
+	dst.c1 = src.c1
+}
+
+copy_loc :: (dst: *Location, start: Location, end: Location) {
+	copy_loc_start(dst, start)
+	copy_loc_end  (dst, end  )
 }
 
 main :: () {
@@ -41,25 +67,30 @@ main :: () {
 	array_add(*filenames, arguments[1])
 	
 	file, success := read_entire_file(filenames[0])
-	
-	lexer := Lexer.{ data = cast,bit(string) file }
+
 	
 	if !success {
 		print("Failed to open file\n")
-		return
+		exit(1)
 	}
-	
-	while true {
-		token, success := advance_token(*lexer)
-		
-		if !success
-			break
-		
-		if token.kind == .END_OF_FILE
-			break;
-		
-		if cast() token.kind < 128 {
-			print("%\n", string.{cast() *token.kind, 1})
+
+	tokens: [..]Token
+
+	lexer: Lexer
+	tokens, success = lex_string(*lexer, cast() file, 0)
+
+	if !success
+		exit(1)
+
+	if !parse(tokens)
+		exit(1)
+
+	/*
+	for token: tokens {		
+		if cast(u8) token.kind < 128 {
+			character := cast(u8) token.kind
+
+			print("%\n", string.{*character, 1})
 		} else if token.kind == .INT_LITERAL {
 			print("%\n", token.integer)
 		} else if token.kind == .FLOAT_LITERAL {
@@ -72,4 +103,5 @@ main :: () {
 			print("%\n", token.kind)
 		}
 	}
+	*/
 }

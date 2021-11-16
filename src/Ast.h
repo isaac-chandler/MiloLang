@@ -272,11 +272,6 @@ struct ExprDefer : Expr {
 // Set if a comma assignment is a := assignment not just an = assignment, so it should declare its arguments
 #define EXPR_COMMA_ASSIGNMENT_IS_DECLARATION 0x1000
 
-// This flag tells us if an integer literal 0 was a -0 that has been evaluated to 0, 
-// this is required in the case that the literal is implicitly converted to a float, 
-// when we will want the float to be -0.0 instead of just 0
-#define EXPR_INTEGER_LITERAL_IS_NEGATIVE_ZERO 0x2000
-
 // If a switch if is marked as #complete this flag is set, 
 // this means that the switch must include a case for every possible
 // value of an enum
@@ -308,6 +303,8 @@ struct ExprDefer : Expr {
 
 #define EXPR_FUNCTION_IS_INSTRINSIC 0x1000'0000
 #define EXPR_CONTEXT_AVAILABLE 0x2000'0000
+
+#define EXPR_LOOP_HAS_BREAK   0x4000'0000
 
 #define ENUM_SPECIAL_MEMBER_COUNT 1
 

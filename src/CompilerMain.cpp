@@ -251,10 +251,12 @@ int main(int argc, char *argv[]) {
 	}
 
 	tls_callback(nullptr, DLL_THREAD_ATTACH, nullptr);
-	u64 startTime;
 	u64 startTsc = __rdtsc();
+
+	u64 startTime;
 	QueryPerformanceCounter(reinterpret_cast<LARGE_INTEGER *>(&startTime));
 #endif
+
 
 	char *input = nullptr;
 
@@ -317,6 +319,29 @@ int main(int argc, char *argv[]) {
 		else if (strcmp("--", argv[i]) == 0) {
 			firstBuildArgument = i + 1;
 			break;
+		}
+		else if (strcmp("-seed", argv[i]) == 0) {
+
+			
+			u64 seed;
+			if (i + 1 < argc) {
+				char *end;
+				seed = strtol(argv[i + 1], &end, 10);
+				
+
+				if (*end)
+					QueryPerformanceCounter((LARGE_INTEGER *) &seed);
+				else
+					i++;
+			}
+			else {
+				QueryPerformanceCounter((LARGE_INTEGER *) &seed);
+			}
+
+			SHUFFLE_JOBS = true;
+
+			srand((s32) seed);
+			printf("Job ordering seed: %d\n", (s32) seed);
 		}
 		else if (argv[i][0] == '-') {
 			reportError("Option %s not recognized", argv[i]);

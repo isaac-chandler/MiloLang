@@ -723,7 +723,7 @@ u32 generateCast(IrState *state, ExprBinaryOperator *binary) {
 			conversion.b = castTo->size;
 			conversion.opSize = right->type->size;
 
-			if (right->type->flags & TYPE_INTEGER_IS_SIGNED) {
+			if ((right->type->flags & TYPE_INTEGER_IS_SIGNED) && (castTo->flags & TYPE_INTEGER_IS_SIGNED)) {
 				conversion.flags |= IR_SIGNED_OP;
 			}
 
@@ -1547,6 +1547,60 @@ u32 generateCall(IrState *state, ExprFunctionCall *call, ExprCommaAssignment *co
 	return result;
 }
 
+u32 generateArrayLiteral(IrState *state, ExprArrayLiteral *array) {
+	auto arrayType = static_cast<TypeArray *>(array->type);
+	u32 arrayCount = (arrayType->flags & TYPE_ARRAY_IS_FIXED) ? arrayType->count : array->count;
+
+	u32 addressReg = allocateStackSpaceAndLoadAddress(state, arrayType->arrayOf->size * arrayCount, arrayType->arrayOf->alignment);
+
+	for (u32 i = 0; i < arrayCount; i++) {
+		if (i + 1 == array->count && arrayCount > array->count) {
+			u32 countReg = constant(state, allocateRegister(state), 8, arrayCount - i);
+
+			Ir &address = state->ir.add();
+			address.op = IrOp::ADD_CONSTANT;
+			address.dest = addressReg;
+			address.a = addressReg;
+			address.immediate = i * arrayType->arrayOf->size;
+			address.opSize = 8;
+
+			u32 value = generateIr(state, array->values[i]);
+
+			u32 patch = state->ir.count;
+
+			copyOrWrite(state, addressReg, value, arrayType->arrayOf);
+
+			Ir &add = state->ir.add();
+			add.op = IrOp::ADD_CONSTANT;
+			add.dest = addressReg;
+			add.a = addressReg;
+			add.immediate = arrayType->arrayOf->size;
+			add.opSize = 8;
+
+			Ir &dec = state->ir.add();
+			dec.op = IrOp::ADD_CONSTANT;
+			dec.dest = countReg;
+			dec.a = countReg;
+			dec.immediate = static_cast<u64>(-1LL);
+			dec.opSize = 8;
+
+			Ir &branch = state->ir.add();
+			branch.op = IrOp::IF_NZ_GOTO;
+			branch.a = countReg;
+			branch.b = patch;
+			branch.opSize = 8;
+
+			break;
+		}
+		else {
+			u32 value = generateIr(state, array->values[i]);
+			copyOrWrite(state, addressReg, value, arrayType->arrayOf, i * arrayType->arrayOf->size);
+		}
+	}
+
+	return addressReg;
+}
+
 u32 generateIr(IrState *state, Expr *expr) {
 	PROFILE_FUNC();
 
@@ -2031,8 +2085,6 @@ u32 generateIr(IrState *state, Expr *expr) {
 	case ExprFlavor::ARRAY_LITERAL: {
 		auto array = static_cast<ExprArrayLiteral *>(expr);
 
-		assert(array->type->flags & TYPE_ARRAY_IS_FIXED);
-
 		if (arrayIsLiteral(array)) {
 
 			u32 result = allocateRegister(state);
@@ -2045,56 +2097,20 @@ u32 generateIr(IrState *state, Expr *expr) {
 			return result;
 		}
 		else {
-			auto arrayType = static_cast<TypeArray *>(array->type);
+			u32 data = generateArrayLiteral(state, array);
 
-			u32 addressReg = allocateStackSpaceAndLoadAddress(state, arrayType);
-
-			for (u32 i = 0; i < arrayType->count; i++) {
-				if (i + 1 == array->count && arrayType->count > array->count) {
-					u32 countReg = constant(state, allocateRegister(state), 8, arrayType->count - i);
-
-					Ir &address = state->ir.add();
-					address.op = IrOp::ADD_CONSTANT;
-					address.dest = addressReg;
-					address.a = addressReg;
-					address.immediate = i * arrayType->arrayOf->size;
-					address.opSize = 8;
-
-					u32 value = generateIr(state, array->values[i]);
-
-					u32 patch = state->ir.count;
-
-					copyOrWrite(state, addressReg, value, arrayType->arrayOf);
-
-					Ir &add = state->ir.add();
-					add.op = IrOp::ADD_CONSTANT;
-					add.dest = addressReg;
-					add.a = addressReg;
-					add.immediate = arrayType->arrayOf->size;
-					add.opSize = 8;
-
-					Ir &dec = state->ir.add();
-					dec.op = IrOp::ADD_CONSTANT;
-					dec.dest = countReg;
-					dec.a = countReg;
-					dec.immediate = static_cast<u64>(-1LL);
-					dec.opSize = 8;
-
-					Ir &branch = state->ir.add();
-					branch.op = IrOp::IF_NZ_GOTO;
-					branch.a = countReg;
-					branch.b = patch;
-					branch.opSize = 8;
-
-					break;
-				}
-				else {
-					u32 value = generateIr(state, array->values[i]);
-					copyOrWrite(state, addressReg, value, arrayType->arrayOf, i * arrayType->arrayOf->size);
-				}
+			if (array->type->flags & TYPE_ARRAY_IS_FIXED) {
+				return data;
 			}
+			else {				
+				u32 value = allocateStackSpaceAndLoadAddress(state, array->type);
+				memop(state, IrOp::WRITE, value, data, 8);
 
-			return addressReg;
+				u32 count = constant(state, allocateRegister(state), 8, array->count);
+				memop(state, IrOp::WRITE, value, count, 8, 8);
+
+				return value;
+			}
 		}
 	}
 	case ExprFlavor::CONTEXT: {

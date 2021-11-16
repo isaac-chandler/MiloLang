@@ -51,24 +51,24 @@ run_command_to_file :: (command: string, file: string) -> u32 {
 	return exit_code
 }
 
-execute_test :: (file: string, compile_flags: string) -> #must string {
+LOG_PATH :: "tests/log.txt"
+
+execute_test :: (file: string, compile_flags: string) -> bool {
 	path := concatenate("tests", file, delimiter = "/")
 	defer free_string(path)
 	
 	test_name := remove_extension(path)
-	
-	log_path := concatenate(test_name, ".log")
 	
 	print("Compiling %... ", path)
 	
 	compile_command := concatenate(COMPILER_PATH, path, compile_flags, delimiter = " ")
 	defer free_string(compile_command)
 	
-	exit_code := run_command_to_file(compile_command, log_path)
+	exit_code := run_command_to_file(compile_command, LOG_PATH)
 	
 	if exit_code {
 		print(messages.failed)
-		return log_path
+		return false
 	} else {
 		print(messages.passed)
 	}
@@ -77,17 +77,16 @@ execute_test :: (file: string, compile_flags: string) -> #must string {
 	defer free_string(exe_path)
 	print("Running   %... ", exe_path)
 
-	exit_code = run_command_to_file(exe_path, log_path)
+	exit_code = run_command_to_file(exe_path, LOG_PATH)
 	
 	if exit_code {
 		print(messages.failed)
-		return log_path
+		return false
 	} else {
 		print(messages.passed)
 	}
 	
-	free_string(log_path)
-	return ""
+	return true
 }
 
 main :: () {
@@ -127,16 +126,15 @@ main :: () {
 		defer free_string(it)
 		
 		if get_extension(it) == "milo" {
-			log_file := execute_test(it, compile_flags)
+			success := execute_test(it, compile_flags)
 			
 			num_tests += 1
 			
-			if log_file {			
-				log := read_entire_file(log_file)
+			if !success {			
+				log := read_entire_file(LOG_PATH)
 				print("\n%\n\n", cast(string) log)
 				
 				free_array(log)
-				free_string(log_file)
 			} else {
 				num_passed += 1
 			}

@@ -11,8 +11,8 @@ Build_Options :: struct {
 		DEBUG   :: 0x2
 		FORCED  :: 0x4
 		
-		 STATIC       :: 0
-		 STATIC_DEBUG :: STATIC  | DEBUG
+		STATIC        :: 0
+		STATIC_DEBUG  :: STATIC  | DEBUG
 		DYNAMIC_DEBUG :: DYNAMIC | DEBUG
 	}
 	

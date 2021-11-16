@@ -23,7 +23,7 @@ Type :: struct {
 		C_CALL
 	}
 	
-	size: u64
+	size: s64 = -1
 	alignment: u64
 	name: string
 	
@@ -33,54 +33,56 @@ Type :: struct {
 }
 
 Type_Pointer :: struct {
-	using base := Type.{kind = POINTER}
+	using base := Type.{kind = .POINTER}
 	element_type: *Type
 }
 
 Type_Array :: struct {
-	using base := Type.{kind = ARRAY}
+	using base := Type.{kind = .ARRAY}
 	element_type: *Type 
 	count: u64
 }
 
 Type_Struct :: struct {
-	using base := Type.{kind = STRUCT}
-	members: Block
+	using base := Type.{kind = .STRUCT}
+	definition: *Node_Struct_Definition
 }
 
 Type_Enum :: struct {
-	using base := Type.{kind = ENUM}
+	using base := Type.{kind = .ENUM}
 	integer_type: *Type
-	members: Block
+	definition: *Node_Enum_Defintion
 }
 
 Type_Function :: struct {
-	using base := Type.{kind = FUNCTION}
+	using base := Type.{kind = .FUNCTION}
 	arguments: []*Type
 	returns:   []*Type
 	varargs:   []u64   // Array with indices of varargs arguments
 }
 
-TYPE_S8  := Type.{1, 1, "s8",  .INTEGER, .SIGNED}
-TYPE_S16 := Type.{2, 2, "s16", .INTEGER, .SIGNED}
-TYPE_S32 := Type.{4, 4, "s32", .INTEGER, .SIGNED}
-TYPE_S64 := Type.{8, 8, "s64", .INTEGER, .SIGNED}
+TYPE_S8     := Type.{1, 1, "s8" , .INTEGER, .SIGNED}
+TYPE_S16    := Type.{2, 2, "s16", .INTEGER, .SIGNED}
+TYPE_S32    := Type.{4, 4, "s32", .INTEGER, .SIGNED}
+TYPE_S64    := Type.{8, 8, "s64", .INTEGER, .SIGNED}
 
-TYPE_U8  := Type.{1, 1, "u8",  .INTEGER, .SIGNED}
-TYPE_U16 := Type.{2, 2, "u16", .INTEGER, .SIGNED}
-TYPE_U32 := Type.{4, 4, "u32", .INTEGER, .SIGNED}
-TYPE_U64 := Type.{8, 8, "u64", .INTEGER, .SIGNED}
+TYPE_U8     := Type.{1, 1, "u8" , .INTEGER}
+TYPE_U16    := Type.{2, 2, "u16", .INTEGER}
+TYPE_U32    := Type.{4, 4, "u32", .INTEGER}
+TYPE_U64    := Type.{8, 8, "u64", .INTEGER}
 
-TYPE_BOOL := Type.{1, 1, "bool", .BOOL}
+TYPE_BOOL   := Type.{1, 1, "bool", .BOOL}
 
 TYPE_MEMORY := Type.{8, 8, "memory", .MEMORY}
 
-TYPE_F32 := Type.{4, 4, "f32", .FLOAT}
-TYPE_F64 := Type.{8, 8, "f64", .FLOAT}
+TYPE_F32    := Type.{4, 4, "f32", .FLOAT}
+TYPE_F64    := Type.{8, 8, "f64", .FLOAT}
 
-TYPE_TYPE := Type.{8, 8, "type", .TYPE}
+TYPE_TYPE   := Type.{8, 8, "type", .TYPE}
 
 TYPE_STRING := Type.{16, 8, "string", .STRING}
+
+TYPE_CONTEXT := Type_Struct.{.{0, 0, "context"}}
 
 // These types are initialized at startup
 TYPE_U8_POINTER: *Type

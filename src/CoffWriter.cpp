@@ -79,6 +79,7 @@ BucketArray<Symbol> symbols;
 s64 emptyStringSymbolIndex = -1;
 
 BucketedArenaAllocator code(65536);
+BucketedArenaAllocator data(65536);
 BucketedArenaAllocator rdata(65536);
 
 void setSectionName(char *header, u64 size, const char *name) {
@@ -682,8 +683,36 @@ struct TypePatch {
 	u64 *location;
 };
 
+void writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataAllocator, BucketedArenaAllocator *dataRelocations, Expr *value);
 
-void writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataRelocations, Expr *value) {
+void writeArrayLiteral(u32 dataSize, u8 *data, BucketedArenaAllocator *dataAllocator, BucketedArenaAllocator *dataRelocations, ExprArrayLiteral *array) {
+	auto arrayType = static_cast<TypeArray *>(array->type);
+
+	auto elementSize = arrayType->arrayOf->size;
+	auto arrayCount = arrayType->flags & TYPE_ARRAY_IS_FIXED ? arrayType->count : array->count;
+
+	for (u64 i = 0; i < arrayCount; i++) {
+		writeValue(dataSize, data, dataAllocator, dataRelocations, array->values[i]);
+
+		dataSize += elementSize;
+		data += elementSize;
+
+		if (i + 1 == array->count && arrayCount > array->count) {
+			for (u64 j = i + 1; j < arrayCount; j++) {
+				writeValue(dataSize, data, dataAllocator, dataRelocations, array->values[i]);
+				dataSize += elementSize;
+				data += elementSize;
+			}
+
+			break;
+		}
+	}
+}
+
+
+void writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataAllocator, BucketedArenaAllocator *dataRelocations, Expr *value) {
+	assert(dataAllocator == &rdata || dataAllocator == &::data);
+
 	auto type = getTypeForExpr(value);
 
 
@@ -712,26 +741,37 @@ void writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataRelocations,
 	}
 	else if (value->flavor == ExprFlavor::ARRAY_LITERAL) {
 		auto array = static_cast<ExprArrayLiteral *>(value);
-		auto arrayType = static_cast<TypeArray *>(value->type);
+		
+		if (array->type->flags & TYPE_ARRAY_IS_FIXED) {
+			writeArrayLiteral(dataSize, data, dataAllocator, dataRelocations, array);
+		}
+		else {
+			auto arrayType = static_cast<TypeArray *>(array->type);
 
-		assert(arrayType->flags & TYPE_ARRAY_IS_FIXED);
-		auto elementSize = arrayType->arrayOf->size;
+			u32 newSize = dataAllocator->totalSize;
+			
+			dataAllocator->allocateUnaligned(AlignPO2(rdata.totalSize, arrayType->arrayOf->alignment) - rdata.totalSize);
 
-		for (u64 i = 0; i < arrayType->count; i++) {
-			writeValue(dataSize, data, dataRelocations, array->values[i]);
+			u32 symbolId = symbols.count();
+			auto symbol = allocateSymbol();
 
-			dataSize += elementSize;
-			data += elementSize;
+			setSymbolName(&symbol->name, symbols.count());
+			symbol->storageClass = IMAGE_SYM_CLASS_STATIC;
+			symbol->value = static_cast<u32>(dataAllocator->totalSize);
+			symbol->sectionNumber = dataAllocator == &rdata ? RDATA_SECTION_NUMBER : DATA_SECTION_NUMBER;
+			symbol->type = 0;
+			symbol->numberOfAuxSymbols = 0;
 
-			if (i + 1 == array->count && arrayType->count > array->count) {
-				for (u64 j = i + 1; j < arrayType->count; j++) {
-					writeValue(dataSize, data, dataRelocations, array->values[i]);
-					dataSize += elementSize;
-					data += elementSize;
-				}
+			u32 offset = dataAllocator->totalSize; // do this in a separate statement because within a c++ statement, subexpressions can execute in any order
+										  // which meant that allocateUnaligned happened _before_ rdata.totalSize was evaluated, causing the addresses 
+										  // for any patch applied to the literal to be wrong
+			writeArrayLiteral(offset, static_cast<u8 *>(dataAllocator->allocateUnaligned(arrayType->arrayOf->size * array->count)), dataAllocator, dataRelocations, array);
 
-				break;
-			}
+
+			addPointerRelocation(dataRelocations, dataSize, symbolId);
+
+			reinterpret_cast<u64 *>(data)[0] = 0;
+			reinterpret_cast<u64 *>(data)[1] = array->count;
 		}
 	}
 	else if (value->flavor == ExprFlavor::FLOAT_LITERAL) {
@@ -767,7 +807,7 @@ void writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataRelocations,
 
 		for (u32 i = 0; i < literal->initializers.count; i++) {
 			auto offset = literal->initializers.declarations[i]->physicalStorage;
-			writeValue(dataSize + offset, data + offset, dataRelocations, literal->initializers.values[i]);
+			writeValue(dataSize + offset, data + offset, dataAllocator, dataRelocations, literal->initializers.values[i]);
 		}
 	}
 	else {
@@ -932,7 +972,6 @@ void runCoffWriter() {
 		return;
 
 	BucketedArenaAllocator codeRelocations(65536);
-	BucketedArenaAllocator data(65536);
 	BucketedArenaAllocator dataRelocations(65536);
 	BucketedArenaAllocator rdataRelocations(65536);
 	BucketedArenaAllocator debugSymbols(65536);
@@ -2768,7 +2807,7 @@ void runCoffWriter() {
 						u32 offset = rdata.totalSize; // do this in a separate statement because within a c++ statement, subexpressions can execute in any order
 						                              // which meant that allocateUnaligned happened _before_ rdata.totalSize was evaluated, causing the addresses 
 						                              // for any patch applied to the literal to be wrong
-						writeValue(offset, static_cast<u8 *>(rdata.allocateUnaligned(array->type->size)), &rdataRelocations, array);
+						writeValue(offset, static_cast<u8 *>(rdata.allocateUnaligned(array->type->size)), &rdata, &rdataRelocations, array);
 					}
 
 					codeRelocations.ensure(10);
@@ -2805,7 +2844,7 @@ void runCoffWriter() {
 						u32 offset = rdata.totalSize; // do this in a separate statement because within a c++ statement, subexpressions can execute in any order
 													  // which meant that allocateUnaligned happened _before_ rdata.totalSize was evaluated, causing the addresses 
 													  // for any patch applied to the literal to be wrong
-						writeValue(offset, static_cast<u8 *>(rdata.allocateUnaligned(literal->type->size)), &rdataRelocations, literal);
+						writeValue(offset, static_cast<u8 *>(rdata.allocateUnaligned(literal->type->size)), &rdata, &rdataRelocations, literal);
 					}
 
 					codeRelocations.ensure(10);
@@ -3071,7 +3110,7 @@ void runCoffWriter() {
 				u32 dataSize = data.totalSize;
 				u8 *allocation = static_cast<u8 *>(data.allocateUnaligned(type->size));
 
-				writeValue(dataSize, allocation, &dataRelocations, declaration->initialValue);
+				writeValue(dataSize, allocation, &data, &dataRelocations, declaration->initialValue);
 			}
 
 			symbol->numberOfAuxSymbols = 0;
@@ -3362,7 +3401,7 @@ void runCoffWriter() {
 						u32 dataSize = rdata.totalSize;
 						u8 *allocation = static_cast<u8 *>(rdata.allocateUnaligned(type->size));
 
-						writeValue(dataSize, allocation, &rdataRelocations, member->initialValue);
+						writeValue(dataSize, allocation, &rdata, &rdataRelocations, member->initialValue);
 					}
 
 					rdata.allocateUnaligned(AlignPO2(rdata.totalSize, 8) - rdata.totalSize);

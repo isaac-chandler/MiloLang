@@ -170,6 +170,24 @@ array_add :: (using array: *[..]$T, value: T) {
 	(<<array)[count - 1] = value
 }
 
+array_push :: (using array: *[..]$T, initialized := true) -> *T {
+	if count >= capacity {
+		array_reserve(array, max(count * 2, 4))
+	}
+
+	count += 1
+
+	result := *(<<array)[count - 1] 
+
+	if initialized {
+		value: T: ..
+
+		<<result = value
+	}
+
+	return result
+}
+
 memory_clear :: (dst: *void, count: u64) {
 	memory := cast(*u8) dst
 	

@@ -4,6 +4,7 @@
 #include "Basic.h"
 #include "ArraySet.h"
 
+inline bool SHUFFLE_JOBS = false;
 inline volatile bool hadError = false;
 inline std::thread::id mainThread;
 
