@@ -1,0 +1,553 @@
+
+Opening_Info :: struct {
+	hash: u64
+	moves: [..]Move
+}
+
+openings: [..]Opening_Info
+
+opening_table_insert :: (hash: u64) -> *Opening_Info {
+		
+	allocate_openings :: (count: u64) {
+		result := new_array(Opening_Info, count)
+		openings.data = result.data
+		openings.count = 0
+		openings.capacity = count
+	}
+	
+	if openings.capacity == 0 {
+		allocate_openings(1024)
+	} else if openings.count * 10 > openings.capacity * 7 {
+		old_openings := openings
+		defer free_array([]Opening_Info.{old_openings.data, old_openings.capacity})
+		
+		allocate_openings(old_openings.capacity * 2)
+		
+		for old_openings.capacity {
+			if old_openings[it].hash {
+				<<opening_table_insert(old_openings[it].hash) = old_openings[it]
+			}
+		}
+	}
+	
+	key := hash
+	if key == 0
+		key = 1
+	openings.count += 1
+	
+	slot := key & (openings.capacity - 1)
+	
+	while true {
+		if openings[slot].hash == 0 {
+			openings[slot].hash = key
+			return *openings[slot]
+		}
+	
+		slot = (slot + 1) & (openings.capacity - 1)
+	}
+	
+	assert(false)
+	return null
+}
+
+opening_table_lookup :: (hash: u64) -> *Opening_Info {
+	if openings.count == 0  return null
+
+	key := hash
+	if key == 0
+		key = 1
+	
+	slot := key & (openings.capacity - 1)
+	
+	while true {
+		if openings[slot].hash == key
+			return *openings[slot]
+		else if openings[slot].hash == 0
+			return null
+	
+		slot = (slot + 1) & (openings.capacity - 1)
+	}
+	
+	assert(false)
+	return null
+}
+
+calculate_openings_table :: () -> bool {
+	file, success := read_entire_file("openings.txt")
+	
+	if !success
+		return false
+	
+	remaining := cast(string) file
+	
+	starting_board := initialize_from_fen(STARTING_BOARD)
+	
+	
+	while true {
+		line: string
+		line, remaining = get_line(remaining)
+		
+		if !line
+			break;
+		
+		using state := starting_board
+		
+		while true {
+
+			move: string
+			move, line = split_at_first(line, ' ')
+			
+			if !move
+				break;
+			
+			move_info: Move				
+			file: s8 = -1
+			rank: s8 = -1
+
+			if move == "O-O" {
+				if white_move {
+					move_info.start_piece = WHITE_KING
+					move_info.end = 62
+				} else {
+					move_info.start_piece = BLACK_KING
+					move_info.end = 6
+				}
+			} else if move == "O-O-O" {
+				if white_move {
+					move_info.start_piece = WHITE_KING
+					move_info.end = 58
+				} else {
+					move_info.start_piece = BLACK_KING
+					move_info.end = 2
+				}
+			} else {
+				if 'a' <= move[0] && move[0] <= 'h' {
+					move_info.start_piece = BLACK_PAWN
+				
+					file = cast() (move[0] - 'a')
+					
+					if 'a' <= move[1] && move[1] <= 'h' {
+						move = move[1..]
+					}
+				} else if move[0] == 'R' {
+					move = move[1..]
+					move_info.start_piece = BLACK_ROOK
+				} else if move[0] == 'N' {
+					move = move[1..]
+					move_info.start_piece = BLACK_KNIGHT
+				} else if move[0] == 'B' {
+					move = move[1..]
+					move_info.start_piece = BLACK_BISHOP
+				} else if move[0] == 'K' {
+					move = move[1..]
+					move_info.start_piece = BLACK_KING
+				} else if move[0] == 'Q' {
+					move = move[1..]
+					move_info.start_piece = BLACK_QUEEN
+				} else {
+					return false
+				}
+
+				if white_move {
+					move_info.start_piece += WHITE_PAWN
+				}
+				
+				if move.count > 2 && 'a' <= move[0] && move[0] <= 'h' {
+					file = cast() (move[0] - 'a')
+					move = move[1..]
+				}
+				
+				if move.count > 2 && '1' <= move[0] && move[0] <= '8' {
+					rank = cast() (7 - (move[0] - '1'))
+					move = move[1..]
+				}
+				
+				if move.count != 2
+					return false
+				
+				move_info.end = pack(cast() (move[0] - 'a'), cast() ('8' - move[1]))
+			}
+
+			key := hash
+
+			moves_buffer: [200]Move = --
+			moves := backed_array(moves_buffer)
+
+			get_all_legal_moves_slow(state, *moves)
+
+			for moves {
+				x, y := unpack(it.start)
+
+				if it.start_piece == move_info.start_piece && (file == -1 || x == file) && (rank == -1 || y == rank) && it.end == move_info.end {
+					move_info = it
+					state = do_move(state, it)
+					break
+				}
+			} or {
+				return false
+			}
+			
+			opening_moves := opening_table_lookup(key)
+			if !opening_moves  opening_moves = opening_table_insert(key)
+			
+			array_add(*opening_moves.moves, move_info)
+		}
+	}
+	
+	return true
+}
+
+print_fen :: (using state: State) {
+	for y: 8 {
+		x := 0
+		
+		while x < 8 { 
+			pos := pack(cast() x, cast() y)
+
+			piece := get_piece(state, pos)
+			
+			if piece == -1 {
+				count := 0
+			
+				while get_piece(state, pos) == -1 && x < 8 {
+					count += 1
+					x += 1
+					pos = pack(cast() x, cast() y)
+				}
+				
+				print("%", count)
+			} else {
+				if piece == {
+					case WHITE_ROOK    print("R")
+					case WHITE_KNIGHT  print("N")
+					case WHITE_BISHOP  print("B")
+					case WHITE_KING    print("K")
+					case WHITE_QUEEN   print("Q")
+					case WHITE_PAWN    print("P")
+					case BLACK_ROOK    print("r")
+					case BLACK_KNIGHT  print("n")
+					case BLACK_BISHOP  print("b")
+					case BLACK_KING    print("k")
+					case BLACK_QUEEN   print("q")
+					case BLACK_PAWN    print("p")
+					else assert(false)
+				}
+				
+				x += 1
+			}
+		}
+		
+		if y != 7 print("/")
+	}
+
+
+	
+	if white_move
+		print(" w ")
+	else
+		print(" b ")
+	
+	if castle_state == cast() 0xF
+		print("-")
+	if !(castle_state & .WHITE_NO_KINGSIDE)
+		print("K")
+	if !(castle_state & .WHITE_NO_QUEENSIDE)
+		print("Q")
+	if !(castle_state & .BLACK_NO_KINGSIDE)
+		print("k")
+	if !(castle_state & .BLACK_NO_QUEENSIDE)
+		print("q")
+
+	en_passant_data := u8.['-', 0]
+	en_passant := string.{en_passant_data.data, 1}
+
+	if en_passant_position {
+		x, y := unpack(en_passant_position)
+
+		y = 7 - y
+
+		en_passant.count = 2
+		en_passant[0] = cast(u8) x + 'a'
+		en_passant[1] = cast(u8) y + '1'
+	}
+	
+	print(" % % %", en_passant, move_count, ply / 2 + 1)
+		
+
+	print("\n")
+}
+
+initialize_from_fen :: (fen: string) -> (State, bool) {
+	x: s8 = 0
+	y: s8 = 0
+	
+	state: State
+	
+	c: u32
+	remaining := fen
+	
+	while remaining {
+		if x > 8 || y > 7 {
+			return .{}, false
+		}
+	
+		pos := pack(x, y)
+		
+		c, remaining = read_character(remaining)
+		
+		if c ==  {
+			case cast()-1
+				return .{--}, false
+			case 'R' state.pieces[WHITE_ROOK]   |= 1 << cast(u64) pos
+			case 'N' state.pieces[WHITE_KNIGHT] |= 1 << cast(u64) pos
+			case 'B' state.pieces[WHITE_BISHOP] |= 1 << cast(u64) pos
+			case 'K' state.pieces[WHITE_KING]   |= 1 << cast(u64) pos
+			case 'Q' state.pieces[WHITE_QUEEN]  |= 1 << cast(u64) pos
+			case 'P' state.pieces[WHITE_PAWN]   |= 1 << cast(u64) pos
+			case 'r' state.pieces[BLACK_ROOK]   |= 1 << cast(u64) pos
+			case 'n' state.pieces[BLACK_KNIGHT] |= 1 << cast(u64) pos
+			case 'b' state.pieces[BLACK_BISHOP] |= 1 << cast(u64) pos
+			case 'k' state.pieces[BLACK_KING]   |= 1 << cast(u64) pos
+			case 'q' state.pieces[BLACK_QUEEN]  |= 1 << cast(u64) pos
+			case 'p' state.pieces[BLACK_PAWN]   |= 1 << cast(u64) pos
+			case '/'
+				if x != 8  return .{}, false
+				x = 0
+				y += 1
+				if y >= 8  return .{}, false
+				continue
+			case '1'
+			case '2' x += 1
+			case '3' x += 2
+			case '4' x += 3
+			case '5' x += 4
+			case '6' x += 5
+			case '7' x += 6
+			case '8' x += 7
+			else
+				if x != 8 || y != 7 return .{}, false
+				
+				break
+		}
+	
+		x += 1
+	}
+	
+	remaining = trim_leading_whitespace(remaining)
+	
+	c, remaining = read_character(remaining)
+
+	if c == 'w' state.white_move = true
+	else if c == 'b' state.white_move = false
+	else return .{}, false
+	
+	state.castle_state |= .BLACK_NO_KINGSIDE
+	state.castle_state |= .BLACK_NO_QUEENSIDE
+	state.castle_state |= .WHITE_NO_KINGSIDE
+	state.castle_state |= .WHITE_NO_QUEENSIDE
+	
+	remaining = trim_leading_whitespace(remaining)
+	
+	while true {
+		c, remaining = read_character(remaining)
+		
+		if c == {
+			case 'k' state.castle_state &= ~.BLACK_NO_KINGSIDE
+			case 'q' state.castle_state &= ~.BLACK_NO_QUEENSIDE
+			case 'K' state.castle_state &= ~.WHITE_NO_KINGSIDE
+			case 'Q' state.castle_state &= ~.WHITE_NO_QUEENSIDE
+			else
+				break
+		}
+	}
+	
+	remaining = trim_leading_whitespace(remaining)
+	
+	c, remaining = read_character(remaining)
+	
+	if c != '-' {
+		if c < 'a' || c > 'h'
+			return .{}, false
+		
+		en_passant_file := c - 'a'
+		
+		c, remaining = read_character(remaining)
+		
+		if c < '1' || c > '8'
+			return .{}, false
+			
+		en_passant_rank := 7 - (c - '1') // the 1st rank is at the bottom
+		
+		state.en_passant_position = pack(cast() en_passant_file, cast() en_passant_rank)
+	}
+	
+	remaining = trim_leading_whitespace(remaining)
+	
+	moves: u64
+	
+	moves, remaining = read_u64(remaining)
+
+	state.move_count = cast() moves
+	
+	remaining = trim_leading_whitespace(remaining)	
+	moves, remaining = read_u64(remaining)
+
+	state.ply = cast() (2 * (moves - 1))
+	
+	if !state.white_move
+		state.ply += 1
+	
+	remaining = trim_leading_whitespace(remaining)
+	
+	if remaining return .{}, false
+
+	state.hash = hash(state)
+	
+	return state, true
+}
+
+format_move :: (using state: State, move: Move, output_buffer: []u8) -> string {
+	get_piece_character :: (piece: s8) -> u8 {
+		if piece == {
+			case WHITE_KING #through
+			case BLACK_KING return 'K'
+			case WHITE_QUEEN #through
+			case BLACK_QUEEN return 'Q'
+			case WHITE_ROOK #through
+			case BLACK_ROOK return 'R'
+			case WHITE_BISHOP #through
+			case BLACK_BISHOP return 'B'
+			case WHITE_KNIGHT #through
+			case BLACK_KNIGHT return 'N'
+			else return 0
+		}
+	}
+
+	result := string.{ output_buffer.data, 0 }
+
+	moves_buffer: [200]Move = --
+	moves := backed_array(moves_buffer)
+
+	if move.start_piece == -1 {
+		result[result.count] = 'I'
+		result.count += 1
+		result[result.count] = 'n'
+		result.count += 1
+		result[result.count] = 'v'
+		result.count += 1
+		result[result.count] = 'a'
+		result.count += 1
+		result[result.count] = 'l'
+		result.count += 1
+		result[result.count] = 'i'
+		result.count += 1
+		result[result.count] = 'd'
+		result.count += 1
+	} else if move.end_piece == BLACK_KINGSIDE_CASTLE || move.end_piece == WHITE_KINGSIDE_CASTLE {
+		result[result.count] = 'O'
+		result.count += 1
+		result[result.count] = '-'
+		result.count += 1
+		result[result.count] = 'O'
+		result.count += 1
+	} else if move.end_piece == BLACK_QUEENSIDE_CASTLE || move.end_piece == WHITE_QUEENSIDE_CASTLE {
+		result[result.count] = 'O'
+		result.count += 1
+		result[result.count] = '-'
+		result.count += 1
+		result[result.count] = 'O'
+		result.count += 1
+		result[result.count] = '-'
+		result.count += 1
+		result[result.count] = 'O'
+		result.count += 1
+	} else {
+		piece_character := get_piece_character(move.start_piece)
+
+
+		if piece_character {
+			result[result.count] = piece_character
+			result.count += 1
+
+			get_all_legal_moves_slow(state, *moves)
+
+			multiple_moves := false
+			multiple_rank  := false
+			multiple_file  := false
+
+			for moves {
+				if it.start_piece != move.start_piece || it.end_piece != move.end_piece || it.end != move.end || moves_equal(it, move)
+					continue;
+
+				multiple_moves = true
+
+				if (it.start >> 3) == (move.start >> 3)
+					multiple_rank = true
+				else if (it.start & 7) == (move.start & 7)
+					multiple_file = true
+			}
+
+			if multiple_moves {
+				file := move.start & 7
+				rank := 7 - (move.start >> 3)
+				if multiple_rank && multiple_file {
+					result[result.count] = 'a' + cast(u8) file
+					result.count += 1
+					result[result.count] = '1' + cast(u8) rank
+					result.count += 1
+				} else if multiple_file {
+					result[result.count] = '1' + cast(u8) rank
+					result.count += 1
+				} else {
+					result[result.count] = 'a' + cast(u8) file
+					result.count += 1
+				}
+			}
+
+			moves.count = 0
+		} else if (move.start & 7) != (move.end & 7) {
+			result[result.count] = 'a' + cast(u8) (move.start & 7)
+			result.count += 1
+		}
+
+		if move.end_piece == WHITE_EN_PASSANT || move.end_piece == BLACK_EN_PASSANT || get_piece(state, move.end) != -1 {
+			result[result.count] = 'x'
+			result.count += 1
+		}
+
+
+		file := move.end & 7
+		rank := 7 - (move.end >> 3)
+		result[result.count] = 'a' + cast(u8) file
+		result.count += 1
+		result[result.count] = '1' + cast(u8) rank
+		result.count += 1
+
+		if move.end_piece > move.start_piece {
+			result[result.count] = '='
+			result.count += 1
+			result[result.count] = get_piece_character(move.end_piece)
+			result.count += 1			
+		}
+	}
+
+
+
+	new_state := do_move(state, move)
+
+	is_check := is_in_check(new_state)
+
+	if is_check {
+		get_all_legal_moves_slow(new_state, *moves)
+
+		if !moves {
+			result[result.count] = '#'
+			result.count += 1			
+		} else {
+			result[result.count] = '+'
+			result.count += 1
+		}
+	}
+
+	return result
+}

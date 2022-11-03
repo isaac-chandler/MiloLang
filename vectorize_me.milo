@@ -1,0 +1,26 @@
+a: [1024]f32
+b: [1024]f32
+
+main :: () {
+	for * a {
+		<<it += b[it_index]
+	}
+}
+
+
+#scope_module
+#import "Compiler"
+
+#run setup_build()
+
+setup_build :: () {
+	arguments := get_build_arguments()
+	
+	if arguments {
+		options := get_build_options()
+		options.backend = .LLVM
+		options.llvm_options = arguments
+		
+		set_build_options(options)
+	}
+}

@@ -1,0 +1,9 @@
+Magic_Table :: struct {
+	rook_mul:    [64]u64
+	rook_mask:   [64]u64
+	bishop_mul:  [64]u64
+	bishop_mask: [64]u64
+
+	rook_table:   [64][4096]u64
+	bishop_table: [64][512]u64
+}

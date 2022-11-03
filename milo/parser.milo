@@ -593,6 +593,60 @@ create_int_literal :: (using parser: *Parser, value: u64, type_: *Type) -> *Node
 	return literal
 }
 
+is_function_header :: (using parser: *Parser) -> bool {
+	if token.kind == cast() ')'
+		return true
+
+
+	if check_for_named_arguments(parser)
+		return true
+
+	paren_count := 0
+
+	for tokens {
+		if it.kind == {
+		case cast() ')'
+			if paren_count == 0
+				break;
+
+			paren_count -= 1
+		case cast() '('
+			paren_count += 1
+		case cast() ','
+			if paren_count == 0
+				return true
+
+		}
+	} or {
+		return false
+	}
+
+	return token.kind == .ARROW || token.kind == .EXTERNAL || token.kind == .COMPILER || 
+		   token.kind == .C_CALL || token.kind == .INTRINSIC
+}
+
+check_for_named_arguments(using parser: *Parser) -> bool {
+	index := 0
+
+	if get_token(parser, index) == .MUST
+		index += 1
+
+	if get_token(parser, index) == .USING
+		index += 1
+
+	if get_token(parser, index) == cast() '$'
+		index += 1
+
+	return get_token(parser, index    ).kind == .IDENTIFIER && 
+		   get_token(parser, index + 1).kind == cast() ':'
+}
+
+parse_function_or_function_type :: (using parser: *Parser, start: Location, allow_body: bool) -> *Node_Function {
+	function := create_node(parser, Node_Fucntion)
+	copy_loc_start(function, start)
+
+}
+
 parse_primary_expr :: (using parser: *Parser) -> *Node {
 	start := token.loc
 
@@ -600,12 +654,17 @@ parse_primary_expr :: (using parser: *Parser) -> *Node {
 	if token.kind == {
 	case cast() '('
 		advance(parser)
-		expr := parse_expr(parser)
 
-		if !consume(parser, ')') {
-			report_error(token, "Error: Expected ')' after expression")
+		if is_function_header(parser) {
+			return parse_function_or_function_type(parser, start, allow_body = true)
+		} else {
+			expr := parse_expr(parser)
+
+			if !consume(parser, ')') {
+				report_error(token, "Error: Expected ')' after expression")
+			}
+			return expr
 		}
-		return expr
 	case cast() '.'
 		report_error(token, "Error: Unary dot is not implemented")
 		return null

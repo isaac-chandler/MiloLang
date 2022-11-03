@@ -1,0 +1,7 @@
+#import "Standard"
+
+main :: () {
+	defer {
+		return;
+	}
+}

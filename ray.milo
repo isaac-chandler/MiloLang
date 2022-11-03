@@ -1,0 +1,342 @@
+#import "Standard"
+#import "Bitmap"
+#import "File"
+#import "Windows"
+#import "Thread"
+
+#load "ray_math.milo"
+
+WIDTH :: 1200
+HEIGHT :: 800
+SAMPLES_PER_PIXEL :: 10
+THREAD_COUNT :: 12
+
+ASPECT_RATIO :: cast(f32) WIDTH / HEIGHT
+
+frame_buffer: [THREAD_COUNT][WIDTH * HEIGHT]Vector3;
+
+spheres: [..]Sphere /*= Sphere.[
+	.{.{.{0, -100.5, -1}}, 100}, 
+	.{.{.{0, 0, -1}}, 0.5}, 
+	.{.{.{-1, 0, -1}}, 0.5}, 
+	.{.{.{-1, 0, -1}}, -0.45}, 
+	.{.{.{1, 0, -1}}, 0.5}
+]*/
+
+sphere_materials: [..]Material /*= Material.[
+	.{.{.{0.8, 0.8, 0}}, 1}, 
+	.{.{.{0.1, 0.2, 0.5}}, 0.2}, 
+	.{.{.{1, 1, 1}}, 0, 1.5}, 
+	.{.{.{1, 1, 1}}, 0, 1.5}, 
+	.{.{.{0.8, 0.6, 0.2}}, 0}
+]*/
+
+Hit :: struct {
+	location: Vector3
+	normal: Vector3
+	using material: Material
+	outward_face: bool
+}
+
+hit_spheres :: (using r: Ray, spheres: []Sphere, materials: []Material, t_min: f32 = 0.001, t_max: f32 = 1e9) -> (hit: bool, record: Hit = .{--}) {
+	sphere_hit: *Sphere
+	closest_t := t_max + 1e9
+
+	for *spheres {
+		t := hit_sphere(r, <<it, t_min)
+
+		if t_min <= t && t <= t_max && t < closest_t {
+			sphere_hit = it
+			closest_t = t
+		}
+	}
+
+	if !sphere_hit
+		return false
+
+	using record: Hit = --
+	location = ray(closest_t, r)
+	normal = scale(1 / sphere_hit.radius, sub(location, sphere_hit.center))
+	material = materials[sphere_hit - spheres.data]
+
+	if dot(normal, direction) < 0 {
+		outward_face = true
+	} else {
+		normal = neg(normal)
+		outward_face = false
+	}
+
+	return true, record
+}
+
+Material :: struct {
+	albedo: Vector3
+	roughness: f32
+	index_of_refraction: f32
+}
+
+reflectance :: (refraction_ratio: f32, cos_theta: f32) -> f32 {
+	r0 := (1 - refraction_ratio) / (1 + refraction_ratio)
+	r0 *= r0
+
+	one_minus := 1 - cos_theta
+
+	return r0 + (1 - r0) * one_minus * one_minus * one_minus * one_minus * one_minus
+}
+
+scatter :: (using r: Ray, record: Hit) -> Ray {
+	using record
+
+	if index_of_refraction != 0 {
+		refraction_ratio: f32 = --
+		inv_refraction_ratio: f32 = --
+
+		if outward_face {
+			refraction_ratio = 1 / index_of_refraction
+			inv_refraction_ratio = index_of_refraction
+		} else {
+			refraction_ratio = index_of_refraction
+			inv_refraction_ratio = 1 / index_of_refraction
+		}
+
+
+		unit_direction := unit(direction)
+
+
+		cos_theta := -dot(unit_direction, normal)
+		sin_theta_squared := 1 - cos_theta * cos_theta
+
+		new_direction: Vector3 = --
+
+		if sin_theta_squared > inv_refraction_ratio * inv_refraction_ratio || reflectance(refraction_ratio, cos_theta) > random_f32() {
+			new_direction = reflect(unit_direction, normal)
+		} else {
+			r_out_perp := scale(refraction_ratio, add(unit_direction, scale(cos_theta, normal)))
+			r_out_parallel := scale(-sqrtf(abs(1 - dot(r_out_perp, r_out_perp))), normal)
+
+			new_direction = add(r_out_perp, r_out_parallel)
+		}
+
+		return .{location, add(new_direction, scale(roughness, random_unit()))}
+	} else if record.roughness == 1 {
+		new_direction := add(normal, random_unit())
+
+		if dot(new_direction, new_direction) < 0.0000001
+			new_direction = normal
+
+		return .{location, new_direction}
+	} else {
+		return .{location, add(reflect(direction, normal), scale(roughness, random_unit()))}
+	}
+}
+
+ray_color :: (r: Ray, depth: s64 = 50) -> Vector3 {
+	if depth <= 0
+		return .{}
+
+	hit, record := hit_spheres(r, spheres, sphere_materials)
+
+	if hit {
+		return modulate(ray_color(scatter(r, record), depth - 1), record.albedo)
+	}
+	t := r.direction.y / length(r.direction) * 0.7 + 0.7
+	return lerp(t, .{.{1, 1, 1}}, .{.{0.5, 0.7, 1}})
+}
+
+Sphere :: struct {
+	center: Vector3
+	radius: f32
+}
+
+Job :: struct {
+	sample_count: s64
+	frame_buffer: []Vector3
+}
+
+thread_proc :: (thread: *Thread) {
+	job: *Job = thread.user_data
+
+
+	look_from :: Vector3.{.{13, 2, 3}}
+	look_at :: Vector3.{.{0, 0, 0}}
+	up :: Vector3.{.{0, 1, 0}}
+	focal_dist :: 10.0
+	vfov :: 20.0
+	viewport_height :: 2.0 * #run tanf(vfov / 360 * 3.141592)
+	viewport_width :: ASPECT_RATIO * viewport_height
+	lens_radius :: 0.05
+
+	w := unit(sub(look_at, look_from))
+	u := unit(cross(w, up))
+	v := unit(cross(u, w))
+
+	horizontal := scale(focal_dist * viewport_width, u)
+	vertical := scale(focal_dist * viewport_height, v)
+	into := scale(focal_dist, w)
+
+
+
+	for y: HEIGHT {
+		for x: WIDTH {
+			pixel: Vector3
+
+			for job.sample_count {
+				s := (cast(f32) x + random_f32()) / (WIDTH  - 1)
+				t := (cast(f32) y + random_f32()) / (HEIGHT - 1)
+
+				rd := scale(lens_radius, random_in_unit_disk())
+				offset := add(scale(rd.x, u), scale(rd.y, v))
+
+				r := Ray.{add(look_from, offset), add(sub(add(scale(s - 0.5, horizontal), scale(t - 0.5, vertical)), offset), into)};
+
+				pixel = add(pixel, ray_color(r))
+			}
+			job.frame_buffer[y * WIDTH + x] = pixel
+		}
+	}
+}
+
+main :: () {
+	jobs: [THREAD_COUNT]Job
+	threads: [THREAD_COUNT]*Thread
+
+	for * jobs {
+		if it_index + 1 == THREAD_COUNT {
+			it.sample_count = SAMPLES_PER_PIXEL - (THREAD_COUNT - 1) * ((SAMPLES_PER_PIXEL + THREAD_COUNT - 1) / THREAD_COUNT)
+		} else {
+			it.sample_count = (SAMPLES_PER_PIXEL + THREAD_COUNT - 1) / THREAD_COUNT	
+		}
+
+		it.frame_buffer.data = frame_buffer[it_index].data
+		it.frame_buffer.count = frame_buffer[it_index].count
+	}
+
+	performance_counter_frequency: s64
+	
+	QueryPerformanceFrequency(*performance_counter_frequency)
+	
+	counter_scale := 1.0 / cast(f32) performance_counter_frequency
+	start_time: s64
+	
+	QueryPerformanceCounter(*start_time)
+
+	context.random_state = cast() start_time
+
+	for a: -11 .. 11 {
+		for b: -11 .. 11 {
+			choose_mat := random_f32()
+
+			center := Vector3.{.{cast(f32) a + 0.9 * random_f32(), 0.2, cast(f32) b + 0.9 * random_f32()}}
+
+			if length(sub(.{.{4, 0.2, 0}}, center)) <= 0.9  continue;
+
+			array_add(*spheres, .{center, 0.2})
+			sphere_material: Material
+			if choose_mat < 0.8 {
+				albedo := Vector3.{.{random_f32() * random_f32(), random_f32() * random_f32(), random_f32() * random_f32()}}
+				sphere_material = Material.{albedo, 1}
+			} else if choose_mat < 0.95 {
+				albedo := Vector3.{.{random_f32() * 0.5 + 0.5, random_f32() * 0.5 + 0.5, random_f32() * 0.5 + 0.5}}
+				sphere_material = Material.{albedo, 1}
+			} else {
+				sphere_material = Material.{.{.{1, 1, 1}}, 0, 1.5}
+			}
+
+			array_add(*sphere_materials, sphere_material)
+		}
+	}
+
+	array_add(*spheres, .{.{.{0, 1, 0}}, 1})
+	array_add(*sphere_materials, .{.{.{1, 1, 1}}, 0, 1.5})
+
+	array_add(*spheres, .{.{.{-4, 1, 0}}, 1})
+	array_add(*sphere_materials, .{.{.{0.4, 0.2, 0.1}}, 1})
+
+	array_add(*spheres, .{.{.{4, 1, 0}}, 1})
+	array_add(*sphere_materials, .{.{.{0.7, 0.6, 0.5}}, 0})
+
+	array_add(*spheres, .{.{.{0, -1000, 0}}, 1000})
+	array_add(*sphere_materials, .{.{.{0.5, 0.5, 0.5}}, 1})
+
+	
+	for * threads {
+		<<it = create_thread(thread_proc, *jobs[it_index], Context.{random_state = random_u32() * cast() it_index})
+	}
+	
+	for threads {
+		wait_for_thread(it)
+		close_thread(it)
+	}
+	
+	end_time: s64
+	
+	QueryPerformanceCounter(*end_time)
+	
+	print("% s\n", cast() (end_time - start_time) * counter_scale)
+
+
+	SIZE :: size_of(Bmp_File_Header) + size_of(Bmp_Dib_Header) + WIDTH * HEIGHT * 3
+	file := new_array(u8, SIZE)
+
+	file_header: Bmp_File_Header
+	
+	file_header.file_size = SIZE
+	file_header.offset_to_image = size_of(Bmp_File_Header) + size_of(Bmp_Dib_Header);
+	
+	<<cast(*type_of(file_header)) file.data = file_header
+	
+	dib_header: Bmp_Dib_Header;
+	
+	dib_header.width = WIDTH
+	dib_header.height = HEIGHT
+	dib_header.image_size = 3 * WIDTH * HEIGHT;
+	
+	<< cast(*type_of(dib_header)) *file[size_of(type_of(file_header))] = dib_header
+	
+	image := *file.data[file_header.offset_to_image]
+
+	for pixel: WIDTH * HEIGHT {
+		total: Vector3
+
+		for THREAD_COUNT {
+			total = add(total, frame_buffer[it][pixel])
+		}
+
+		image[0] = cast(u8) (sqrtf(clamp01(total.z / SAMPLES_PER_PIXEL)) * 255.999);
+		image[1] = cast(u8) (sqrtf(clamp01(total.y / SAMPLES_PER_PIXEL)) * 255.999);
+		image[2] = cast(u8) (sqrtf(clamp01(total.x / SAMPLES_PER_PIXEL)) * 255.999);
+		image += 3
+	}
+	
+	write_entire_file("ray.bmp", file)	
+}
+
+#import "Compiler"
+
+setup_build :: () {
+	arguments := get_build_arguments()
+	
+	if arguments {
+		llvm_options: [..]string
+
+		for arguments {
+			array_add(*llvm_options, it)
+		}
+
+		array_add(*llvm_options, "-mcpu=znver1")
+		array_add(*llvm_options, "-mattr=+avx2,+fma")
+		array_add(*llvm_options, "--enable-no-infs-fp-math")
+		array_add(*llvm_options, "--enable-no-nans-fp-math")
+		array_add(*llvm_options, "--enable-no-signed-zeros-fp-math")
+		array_add(*llvm_options, "--enable-no-trapping-fp-math")
+		array_add(*llvm_options, "--enable-unsafe-fp-math")
+
+		options := get_build_options()
+		options.backend = .LLVM
+		options.llvm_options = llvm_options
+		
+		set_build_options(options)
+	}
+}
+
+#run setup_build()

@@ -1,0 +1,7 @@
+#import "Standard"
+
+main :: () {
+	print("%\n", types[types.count - 1])
+}
+
+types : [65536]type

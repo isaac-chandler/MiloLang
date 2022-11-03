@@ -152,7 +152,7 @@ Node_Function_Call :: struct {
 
 Node_Block :: struct {
 	using base := Node.{kind = .BLOCK}
-	declarations: Block
+	declarations := Block.{kind = .IMPERATIVE}
 	statements: []*Node
 }
 
@@ -170,9 +170,10 @@ Node_Struct_Literal :: struct {
 
 Node_Function :: struct {
 	using base := Node.{kind = .FUNCTION}
-	constants: Block
-	arguments: Block
-	returns:   Block
+
+	constants := Block.{kind = .CONSTANTS}
+	arguments := Block.{kind = .ARGUMENTS}
+	returns   := Block.{kind = .RETURNS  }
 
 	body: *Node
 }
@@ -226,13 +227,13 @@ Node_Struct_Definition :: struct {
 
 	statements: []*Node
 	defined_type: Type_Struct
-	block: Block
+	block := Block.{kind = .STRUCT}
 }
 
 Node_Enum_Defintion :: struct {
 	using base := Node.{kind = .ENUM_DEFINITION}
 	defined_type: Type_Enum
-	block: Block
+	block := Block.{kind = .ENUM}
 }
 
 Block :: struct {

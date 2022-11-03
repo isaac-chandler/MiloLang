@@ -1,0 +1,298 @@
+
+
+compute_piece_values :: (pawn_square_bonus: [64]s16, pawn_value: s16, 
+						knight_square_bonus: [64]s16, knight_value: s16, 
+						bishop_square_bonus: [64]s16, bishop_value: s16, 
+						queen_square_bonus: [64]s16, queen_value: s16, 
+						rook_square_bonus: [64]s16, rook_value: s16, 
+						king_square_bonus: [64]s16) -> [12][64]s16 {
+	result: [12][64]s16
+
+	for * result[WHITE_PAWN] {
+		<<it = pawn_value + pawn_square_bonus[it_index]
+	}
+
+	for * result[WHITE_KING] {
+		<<it = king_square_bonus[it_index]
+	}
+
+	for * result[WHITE_KNIGHT] {
+		<<it = knight_value + knight_square_bonus[it_index]
+	}
+
+	for * result[WHITE_BISHOP] {
+		<<it = bishop_value + bishop_square_bonus[it_index]
+	}
+
+	for * result[WHITE_ROOK] {
+		<<it = rook_value + rook_square_bonus[it_index]
+	}
+
+	for * result[WHITE_QUEEN] {
+		<<it = queen_value + queen_square_bonus[it_index]
+	}
+
+	for piece: WHITE_PAWN .. 12 {
+		for result[piece] {
+			result[piece - WHITE_PAWN][flip(cast() it_index)] = -it
+		}
+	}
+
+	return result
+}
+
+piece_values :: #run compute_piece_values(
+	pawn_value = 100, 
+	pawn_square_bonus = .[
+		   0,    0,    0,    0,    0,    0,    0,    0, 
+		 120,  163,   74,  116,   83,  154,   41,  -13, 
+		  -7,    9,   32,   38,   79,   68,   30,  -24, 
+		 -17,   16,    7,   26,   28,   15,   21,  -28, 
+		 -33,   -2,   -6,   15,   21,    7,   12,  -30, 
+		 -32,   -5,   -5,  -12,    4,    4,   40,  -15, 
+		 -43,   -1,  -24,  -28,  -18,   29,   46,  -27, 
+		   0,    0,    0,    0,    0,    0,    0,    0
+	], 
+	knight_value = 411, 
+	knight_square_bonus = .[
+		-204, -109,  -41,  -60,   74, -118,  -18, -130, 
+		 -89,  -50,   88,   44,   28,   76,    9,  -21, 
+		 -57,   73,   45,   79,  102,  157,   89,   54, 
+		 -11,   21,   23,   65,   45,   84,   22,   27, 
+		 -16,    5,   20,   16,   34,   23,   26,  -10, 
+		 -28,  -11,   15,   12,   23,   21,   30,  -20, 
+		 -35,  -65,  -15,   -4,   -1,   22,  -17,  -23, 
+		-128,  -26,  -71,  -40,  -21,  -34,  -23,  -28
+	], 
+	bishop_value = 445, 
+	bishop_square_bonus = .[
+		 -35,    5, -100,  -45,  -30,  -51,    9,  -10, 
+		 -32,   20,  -22,  -16,   37,   72,   22,  -57, 
+		 -20,   45,   52,   49,   43,   61,   45,   -2, 
+		  -5,    6,   23,   61,   45,   45,    9,   -2, 
+		  -7,   16,   16,   32,   41,   15,   12,    5, 
+		   0,   18,   18,   18,   17,   33,   22,   12, 
+		   5,   18,   20,    0,    9,   26,   40,    1, 
+		 -40,   -4,  -17,  -26,  -16,  -15,  -48,  -26
+	], 
+	rook_value = 582, 
+	rook_square_bonus = .[
+		  39,   51,   39,   62,   77,   11,   38,   52, 
+		  33,   39,   71,   76,   98,   82,   32,   54, 
+		  -6,   23,   32,   44,   21,   55,   74,   20, 
+		 -29,  -13,    9,   32,   29,   43,  -10,  -24, 
+		 -44,  -32,  -15,   -1,   11,   -9,    7,  -28, 
+		 -55,  -30,  -20,  -21,    4,    0,   -6,  -40, 
+		 -54,  -20,  -24,  -11,   -1,   13,   -7,  -87, 
+		 -23,  -16,    1,   21,   20,    9,  -45,  -32
+	], 
+	queen_value = 1250, 
+	queen_square_bonus = .[
+		 -34,    0,   35,   15,   72,   54,   52,   55, 
+		 -29,  -48,   -6,    1,  -20,   70,   34,   66, 
+		 -16,  -21,    9,   10,   35,   68,   57,   70, 
+		 -33,  -33,  -20,  -20,   -1,   21,   -2,    1, 
+		 -11,  -32,  -11,  -12,   -2,   -5,    4,   -4, 
+		 -17,    2,  -13,   -2,   -6,    2,   17,    6, 
+		 -43,  -10,   13,    2,   10,   18,   -4,    1, 
+		  -1,  -22,  -11,   12,  -18,  -30,  -38,  -61
+	], 
+	king_square_bonus = .[
+		 -79,   28,   20,  -18,  -68,  -41,    2,   16, 
+		  35,   -1,  -24,   -9,  -10,   -5,  -46,  -35, 
+		 -11,   29,    2,  -20,  -24,    7,   27,  -27, 
+		 -21,  -24,  -15,  -33,  -37,  -30,  -17,  -44, 
+		 -60,   -1,  -33,  -48,  -56,  -54,  -40,  -62, 
+		 -17,  -17,  -27,  -56,  -54,  -37,  -18,  -33, 
+		   1,    9,  -10,  -78,  -52,  -20,   11,   10, 
+		 -18,   44,   15,  -66,   10,  -34,   29,   17
+	]
+)
+
+
+endgame_piece_values :: #run compute_piece_values(
+	pawn_value = 115, 
+	pawn_square_bonus = .[
+		   0,    0,    0,    0,    0,    0,    0,    0, 
+		 217,  211,  193,  163,  179,  161,  201,  228, 
+		 115,  122,  104,   82,   68,   65,  100,  102, 
+		  39,   29,   16,    6,   -2,    5,   21,   21, 
+		  16,   11,   -4,   -9,   -9,  -10,    4,   -1, 
+		   5,    9,   -7,    1,    0,   -6,   -1,  -10, 
+		  16,   10,   10,   12,   16,    0,    2,   -9, 
+		   0,    0,    0,    0,    0,    0,    0,    0
+	], 
+	knight_value = 343, 
+	knight_square_bonus = .[
+		 -71,  -46,  -16,  -34,  -38,  -33,  -77, -121, 
+		 -30,  -10,  -30,   -2,  -11,  -30,  -29,  -63, 
+		 -29,  -24,   12,   11,   -1,  -11,  -23,  -50, 
+		 -21,    4,   27,   27,   27,   13,   10,  -22, 
+		 -22,   -7,   20,   30,   20,   21,    5,  -22, 
+		 -28,   -4,   -1,   18,   12,   -4,  -24,  -27, 
+		 -51,  -24,  -12,   -6,   -2,  -24,  -28,  -54, 
+		 -35,  -62,  -28,  -18,  -27,  -22,  -61,  -78
+	], 
+	bishop_value = 362, 
+	bishop_square_bonus = .[
+		 -17,  -26,  -13,  -10,   -9,  -11,  -21,  -29, 
+		 -10,   -5,    9,  -15,   -4,  -16,   -5,  -17, 
+		   2,  -10,    0,   -1,   -2,    7,    0,    5, 
+		  -4,   11,   15,   11,   17,   12,    4,    2, 
+		  -7,    4,   16,   23,    9,   12,   -4,  -11, 
+		 -15,   -4,   10,   12,   16,    4,   -9,  -18, 
+		 -17,  -22,   -9,   -1,    5,  -11,  -18,  -33, 
+		 -28,  -11,  -28,   -6,  -11,  -20,   -6,  -21
+	], 
+	rook_value = 624, 
+	rook_square_bonus = .[
+		  16,   12,   22,   18,   15,   15,   10,    6, 
+		  13,   16,   16,   13,   -4,    4,   10,    4, 
+		   9,    9,    9,    6,    5,   -4,   -6,   -4, 
+		   5,    4,   16,    1,    2,    1,   -1,    2, 
+		   4,    6,   10,    5,   -6,   -7,  -10,  -13, 
+		  -5,    0,   -6,   -1,   -9,  -15,  -10,  -20, 
+		  -7,   -7,    0,    2,  -11,  -11,  -13,   -4, 
+		 -11,    2,    4,   -1,   -6,  -16,    5,  -24
+	], 
+	queen_value = 1141, 
+	queen_square_bonus = .[
+		 -11,   27,   27,   33,   33,   23,   12,   24, 
+		 -21,   24,   39,   50,   71,   30,   37,    0, 
+		 -24,    7,   11,   60,   57,   43,   23,   11, 
+		   4,   27,   29,   55,   70,   49,   70,   44, 
+		 -22,   34,   23,   57,   38,   41,   48,   28, 
+		 -20,  -33,   18,    7,   11,   21,   12,    6, 
+		 -27,  -28,  -37,  -20,  -20,  -28,  -44,  -39, 
+		 -40,  -34,  -27,  -52,   -6,  -39,  -24,  -50
+	], 
+	king_square_bonus = .[
+		 -90,  -43,  -22,  -22,  -13,   18,    5,  -21, 
+		 -15,   21,   17,   21,   21,   46,   28,   13, 
+		  12,   21,   28,   18,   24,   55,   54,   16, 
+		 -10,   27,   29,   33,   32,   40,   32,    4, 
+		 -22,   -5,   26,   29,   33,   28,   11,  -13, 
+		 -23,   -4,   13,   26,   28,   20,    9,  -11, 
+		 -33,  -13,    5,   16,   17,    5,   -6,  -21, 
+		 -65,  -41,  -26,  -13,  -34,  -17,  -29,  -52
+	]
+)
+
+piece_value :: (piece: s8, square: s8, endgame_weight: f32) -> s16 {
+	return cast() (cast(f32) endgame_piece_values[piece][square] * endgame_weight + cast(f32) piece_values[piece][square] * (1.0 - endgame_weight))
+}
+
+evaluate_position :: (using state: State) -> s16 {
+	PIECE_PHASE  :: 1
+	ROOK_PHASE   :: 2
+	QUEEN_PHASE  :: 4
+	
+	STARTING_MATERIAL :: PIECE_PHASE * 4 + ROOK_PHASE * 4 + QUEEN_PHASE * 2
+
+	endgame_weight := STARTING_MATERIAL
+	
+	endgame_weight -= PIECE_PHASE * cast(s64) pop_count(pieces[WHITE_BISHOP] | pieces[WHITE_KNIGHT] | pieces[BLACK_BISHOP] | pieces[BLACK_KNIGHT])
+	endgame_weight -= ROOK_PHASE  * cast(s64) pop_count(pieces[WHITE_ROOK]   | pieces[BLACK_ROOK])
+	endgame_weight -= QUEEN_PHASE * cast(s64) pop_count(pieces[WHITE_QUEEN]  | pieces[BLACK_QUEEN])
+
+	endgame_scalar := cast(f32) endgame_weight * (1.0 / STARTING_MATERIAL)
+
+	if endgame_scalar > 1  endgame_scalar = 1
+	else if endgame_scalar < 0 endgame_scalar = 0
+
+	evaluation: s16
+
+	white_pawn_files: [8]u64
+	black_pawn_files: [8]u64
+
+	for cast(u64) 8 {
+		white_pawn_files[it] = (pieces[WHITE_PAWN] >> it) & file_mask
+		black_pawn_files[it] = (pieces[BLACK_PAWN] >> it) & file_mask
+	}
+
+
+	for pieces {
+		piece_mask := it
+
+		location: s8
+
+		while iterate_bits(*piece_mask, *location) {
+			evaluation += piece_value(cast()it_index, location, endgame_scalar)
+
+			file := it & 7
+
+			if it == WHITE_ROOK {
+				if !white_pawn_files[file]
+					evaluation += 30
+				if !black_pawn_files[file]
+					evaluation += 30
+			} else if it == BLACK_ROOK {
+				if !white_pawn_files[file]
+					evaluation -= 30
+				if !black_pawn_files[file]
+					evaluation -= 30
+			} else if it == WHITE_KING {
+				if !white_pawn_files[file]
+					evaluation -= cast() ((1.0 - endgame_scalar) * 80) 
+				if file > 0 && !white_pawn_files[file - 1]
+					evaluation -= cast() ((1.0 - endgame_scalar) * 30)
+				if file < 7 && !white_pawn_files[file + 1]
+					evaluation -= cast() ((1.0 - endgame_scalar) * 30)
+
+				white_pieces := collect_occupied(state, start = WHITE_PAWN)
+				occupied_for_virtual_mobility := white_pieces | pieces[BLACK_KING] | pieces[BLACK_PAWN] | pieces[BLACK_KNIGHT]
+
+				rook_moves := get_rook_moves(location, occupied_for_virtual_mobility)
+				bishop_moves := get_bishop_moves(location, occupied_for_virtual_mobility)
+
+				evaluation -= cast() ((1.0 - endgame_scalar) * 5 * cast() pop_count((rook_moves | bishop_moves) & ~white_pieces))
+
+			} else if it == BLACK_KING {
+				if !black_pawn_files[file]
+					evaluation += cast() ((1.0 - endgame_scalar) * 80)
+				if file > 0 && !black_pawn_files[file - 1]
+					evaluation += cast() ((1.0 - endgame_scalar) * 30)
+				if file < 7 && !black_pawn_files[file + 1]
+					evaluation += cast() ((1.0 - endgame_scalar) * 30)
+
+				black_pieces := collect_occupied(state, end = WHITE_PAWN)
+				occupied_for_virtual_mobility := black_pieces | pieces[WHITE_KING] | pieces[WHITE_PAWN] | pieces[WHITE_KNIGHT]
+
+				rook_moves := get_rook_moves(location, occupied_for_virtual_mobility)
+				bishop_moves := get_bishop_moves(location, occupied_for_virtual_mobility)
+
+				evaluation += cast() ((1.0 - endgame_scalar) * 5 * cast() pop_count((rook_moves | bishop_moves) & ~black_pieces))
+			}
+		}
+	}
+
+	if white_pawn_files[0] && !white_pawn_files[1] {
+		evaluation -= 10
+	}
+	if black_pawn_files[0] && !black_pawn_files[1] {
+		evaluation += 10
+	}
+
+	for cast(u64) 1 .. 7 {
+		if white_pawn_files[it] && !white_pawn_files[it - 1] && !white_pawn_files[it + 1] {
+			evaluation -= 10
+		}
+		if black_pawn_files[it] && !black_pawn_files[it - 1] && !black_pawn_files[it + 1] {
+			evaluation += 10
+		}
+	}
+
+	if white_pawn_files[7] && !white_pawn_files[6] {
+		evaluation -= 10
+	}
+	if black_pawn_files[7] && !black_pawn_files[6] {
+		evaluation += 10
+	}
+
+	for cast(u64) 8 {
+		evaluation -= 10 * cast(s16) pop_count(white_pawn_files[it] & (white_pawn_files[it] - 1))
+		evaluation += 10 * cast(s16) pop_count(black_pawn_files[it] & (black_pawn_files[it] - 1))
+	}
+
+	return evaluation					
+}

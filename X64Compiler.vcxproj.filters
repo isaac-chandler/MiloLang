@@ -1,0 +1,51 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClInclude Include="src\CompilerMain.h" />
+    <ClInclude Include="src\Basic.h" />
+    <ClInclude Include="src\Lexer.h" />
+    <ClInclude Include="src\UTF.h" />
+    <ClInclude Include="src\Array.h" />
+    <ClInclude Include="src\ArraySet.h" />
+    <ClInclude Include="src\String.h" />
+    <ClInclude Include="src\Parser.h" />
+    <ClInclude Include="src\Ast.h" />
+    <ClInclude Include="src\Infer.h" />
+    <ClInclude Include="src\WorkQueue.h" />
+    <ClInclude Include="src\IrGenerator.h" />
+    <ClInclude Include="src\BucketedArenaAllocator.h" />
+    <ClInclude Include="src\CoffWriter.h" />
+    <ClInclude Include="src\TypeTable.h" />
+    <ClInclude Include="src\Block.h" />
+    <ClInclude Include="src\Find.h" />
+    <ClInclude Include="src\IrRunner.h" />
+    <ClInclude Include="src\Error.h" />
+    <ClInclude Include="src\Polymorph.h" />
+    <ClInclude Include="src\CodeView.h" />
+    <ClInclude Include="src\Identifier.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\CompilerMain.cpp" />
+    <ClCompile Include="src\Basic.cpp" />
+    <ClCompile Include="src\Lexer.cpp" />
+    <ClCompile Include="src\UTF.cpp" />
+    <ClCompile Include="src\String.cpp" />
+    <ClCompile Include="src\Parser.cpp" />
+    <ClCompile Include="src\Infer.cpp" />
+    <ClCompile Include="src\IrGenerator.cpp" />
+    <ClCompile Include="src\BucketedArenaAllocator.cpp" />
+    <ClCompile Include="src\CoffWriter.cpp" />
+    <ClCompile Include="src\TypeTable.cpp" />
+    <ClCompile Include="src\Block.cpp" />
+    <ClCompile Include="src\Find.cpp" />
+    <ClCompile Include="src\LlvmIr.cpp" />
+    <ClCompile Include="src\IrRunner.cpp" />
+    <ClCompile Include="src\Error.cpp" />
+    <ClCompile Include="src\Polymorph.cpp" />
+    <ClCompile Include="src\CodeView.cpp" />
+    <ClCompile Include="src\Identifier.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <Natvis Include="NatvisFile.natvis" />
+  </ItemGroup>
+</Project>

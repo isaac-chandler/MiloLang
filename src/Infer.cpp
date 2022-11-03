@@ -1101,7 +1101,7 @@ void doConstantCast(Expr **cast) {
 	if (expr->flavor == ExprFlavor::INT_LITERAL) {
 		auto old = static_cast<ExprLiteral *>(expr);
 
-		if (castTo->flavor == TypeFlavor::INTEGER || castTo->flavor == TypeFlavor::ENUM) {
+		if (castTo->flavor == TypeFlavor::INTEGER || castTo->flavor == TypeFlavor::ENUM || castTo == &TYPE_BOOL) {
 			*cast = createInBoundsIntLiteral(binary->start, expr->end, castTo, old->unsignedValue);
 		}
 		else if (castTo->flavor == TypeFlavor::FLOAT) {
@@ -1232,7 +1232,7 @@ TypeStruct *getExpressionNamespace(Expr *expr, bool *onlyConstants, Expr *locati
 	else if (expr->type->flavor == TypeFlavor::POINTER) {
 		auto type = static_cast<TypePointer *>(expr->type)->pointerTo;
 
-		if (type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::ARRAY) {
+		if (type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::ARRAY || type == &TYPE_STRING) {
 			*onlyConstants = false;
 			return static_cast<TypeStruct *>(type);
 		}
@@ -3059,6 +3059,9 @@ bool isAddressable(Expr *expr) {
 			return isAddressable(access);
 		}
 	}
+	else if (expr->flavor == ExprFlavor::CONTEXT) {
+		return true;
+	}
 	else {
 		return false;
 	}
@@ -3080,7 +3083,7 @@ bool sortArguments(SubJob *job, Arguments *arguments, Block *block, const char *
 		}
 		else {
 			for (u32 i = arguments->count; i < block->declarations.count; i++) {
-				if (!block->declarations[i]->initialValue) {
+				if (!block->declarations[i]->initialValue && !(block->declarations[i]->flags & DECLARATION_IS_EXPLICIT_DEFAULT)) {
 					reportError(callLocation, "Error: Too few %ss for %.*s (Expected: %" PRIu32 ", Given: %" PRIu32 ")",
 						message, STRING_PRINTF(functionName), block->declarations.count, arguments->count);
 					return false;
@@ -3184,7 +3187,7 @@ bool sortArguments(SubJob *job, Arguments *arguments, Block *block, const char *
 			if (!sortedArguments[i]) {
 				auto argument = block->declarations[i];
 
-				if (argument->initialValue) {
+				if (argument->initialValue || (argument->flags & DECLARATION_IS_EXPLICIT_DEFAULT)) {
 					// The actual value will be filled in during inferArguments or doPolymorphMatching
 				}
 				else if (argument->flags & DECLARATION_IS_VARARGS) {
@@ -3329,7 +3332,7 @@ bool checkArgumentsForOverload(SubJob *job, Arguments *arguments, Block *block, 
 
 		auto argument = block->declarations[i];
 
-		if (!argument->initialValue && !(argument->flags & DECLARATION_IS_VARARGS)) {
+		if (!argument->initialValue && !(argument->flags & (DECLARATION_IS_VARARGS | DECLARATION_IS_EXPLICIT_DEFAULT))) {
 			return false;
 		}
 	}
@@ -5762,6 +5765,11 @@ bool inferFlattened(SubJob *job) {
 					declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, identifier->type);
 
 					declaration->flags |= DECLARATION_TYPE_IS_READY;
+
+					if (i >= 1) {
+						declaration->flags |= DECLARATION_IS_POINTED_TO;
+					}
+
 					wakeUpSleepers(&declaration->sleepingOnMyType);
 					declaration->sleepingOnMyType.free();
 				}
@@ -5771,6 +5779,10 @@ bool inferFlattened(SubJob *job) {
 					if (!isAddressable(comma->left[i])) {
 						reportError(comma->left[i], "Error: This expression cannot be assigned to");
 						return false;
+					}
+
+					if (i >= 1) {
+						markDeclarationsAsPointedTo(comma->left[i]);
 					}
 
 					if (comma->left[i]->type != function->returnTypes[i]) {
@@ -5867,6 +5879,7 @@ bool inferFlattened(SubJob *job) {
 				if (yield)
 					return true;
 
+				// We didn't find any matching overloads so do error reporting
 				if (call->function->flavor == ExprFlavor::OVERLOAD_SET) {
 					ArraySet<Declaration *> overloads;
 

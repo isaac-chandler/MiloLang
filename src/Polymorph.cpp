@@ -252,9 +252,9 @@ Expr *copyExpr(Expr *srcExpr) {
 
 		{
 			copyingBlocks.add({ &dest->constants, &src->constants });
+			copyingBlocks.add({ &dest->arguments, &src->arguments });
 			copyBlock(&dest->constants, &src->constants);
 			{
-				copyingBlocks.add({ &dest->arguments, &src->arguments });
 				copyBlock(&dest->arguments, &src->arguments);
 
 				{
@@ -301,8 +301,24 @@ Expr *copyExpr(Expr *srcExpr) {
 
 		return dest;
 	}
-	case ExprFlavor::IF:
+	case ExprFlavor::IF: {
+		c(ExprIf);
+		copy_expr(condition);
+		copy_expr(ifBody);
+		copy_expr(elseBody);
+
+		return dest;
+	}
 	case ExprFlavor::STATIC_IF: {
+		assert(copyingBlocks.count);
+		auto enclosingScope = copyingBlocks[copyingBlocks.count - 1];
+
+		for (u32 i = 0; i < enclosingScope.dest->importers.count; i++) {
+			if (enclosingScope.src->importers[i]->import == srcExpr) {
+				return enclosingScope.dest->importers[i]->import;
+			}
+		}
+
 		c(ExprIf);
 		copy_expr(condition);
 		copy_expr(ifBody);
@@ -471,7 +487,6 @@ Importer *copyImporter(Importer *src) {
 
 	copy(moduleScope);
 	copy_expr(import);
-	copy_expr(structAccess);
 
 	return dest;
 }

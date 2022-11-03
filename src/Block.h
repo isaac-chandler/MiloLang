@@ -100,7 +100,6 @@ struct Importer {
 
 	Block *enclosingScope = nullptr;
 	Expr *import;
-	Expr *structAccess = nullptr;
 
 };
 

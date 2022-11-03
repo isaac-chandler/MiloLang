@@ -1,0 +1,15 @@
+*.exe
+*.obj
+*.pdb
+*.ir
+*.ilk
+*.cache
+cmath
+.vs
+x64
+*.lib
+*.user
+*.iobj
+*.ipdb
+*.lastcodeanalysissucceeded
+tests/log.txt

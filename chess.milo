@@ -1809,7 +1809,7 @@ white_ai: bool
 
 Hashing_Data :: struct {
 	piece_positions: [16][65]u64
-	castle_state: [16]u64
+	castle_state: [4]u64
 	en_passant_file: [8]u64
 	black_move: u64
 }

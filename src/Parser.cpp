@@ -774,6 +774,10 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 				else if (lexer->token.type == TOKEN('}')) {
 					break;
 				}
+				else {
+					reportExpectedError(&lexer->token, "Error: Expected a case or else block");
+					return nullptr;
+				}
 			}
 
 			lexer->advance();
@@ -1646,7 +1650,6 @@ ExprFunction *parseFunctionOrFunctionType(LexerFile *lexer, CodeLocation start, 
 }
 
 Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
-	EndLocation end = lexer->token.end;
 	Expr *expr = nullptr;
 
 	if (isFunctionOrFunctionType(lexer)) { // This is an argument declaration

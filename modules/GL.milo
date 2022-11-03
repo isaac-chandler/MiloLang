@@ -1071,6 +1071,8 @@ PFNGLGETCOLORTABLEPARAMETERIVEXTPROC :: (target: u32, pname: u32, params: *s32) 
 PFNGLGETCOLORTABLEPARAMETERFVEXTPROC :: (target: u32, pname: u32, params: *f32) -> void
 
 #if TARGET_WINDOWS {
+	#import "Windows"
+
 	wglSwapIntervalEXT : (s32) -> s32 #c_call
 	
 	wglGetProcAddress :: (Arg1: *u8) -> *void #external "opengl32"
@@ -1083,6 +1085,10 @@ PFNGLGETCOLORTABLEPARAMETERFVEXTPROC :: (target: u32, pname: u32, params: *f32) 
 	wglDeleteContext :: (Arg1: HGLRC) -> s32 #external "opengl32"
 
 	wglGetCurrentDC :: () -> HDC #external "opengl32"
+
+	init_gl(window: *Window) -> bool {
+
+	}
 }
 
 load_gl_extensions :: () {

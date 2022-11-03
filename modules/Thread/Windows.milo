@@ -10,6 +10,8 @@ Thread :: struct {
 	user_data: *void
 }
 
+
+
 create_thread :: (procedure: (*Thread) -> void, data := null, initial_context := Context.{}) -> #must *Thread {
 	thread := new(Thread, initialized = false)
 	thread.allocator = context.allocator_info
@@ -46,6 +48,30 @@ close_thread :: (using thread: *Thread) {
 	push_context new_context {
 		free(thread)
 	}
+}
+
+Semaphore :: struct {
+	handle: HANDLE
+}
+
+create_semaphore :: (initial_count: s32 = 0) -> Semaphore {
+	return .{ CreateSemaphoreA(lInitialCount = initial_count) }
+}
+
+wait_semaphore :: (using semaphore: Semaphore) {
+	WaitForSingleObject(handle)
+}
+
+wait_semaphore :: (using semaphore: Semaphore, timeout_millis: u32) -> bool {
+	return WaitForSingleObject(handle, timeout_millis) == WAIT_OBJECT_0
+}
+
+notify_semaphore :: (using semaphore: Semaphore) {
+	ReleaseSemaphore(handle)
+}
+
+free_semaphore :: (using semaphore: Semaphore) {
+	CloseHandle(handle)
 }
 
 #scope_module

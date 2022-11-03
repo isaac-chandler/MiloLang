@@ -1,0 +1,239 @@
+#import "Bitmap"
+#import "GL"
+
+
+load_image :: (filename: string) -> u32 {	
+	file, success := read_entire_file(filename)
+	defer free_array(file)
+	
+	if !success {
+		print("Failed to load image ")
+		print(filename)
+		print("\n")
+		return 0
+	}
+	
+	if file.count < size_of(Bmp_File_Header) + size_of(Bmp_Dib_Header) {
+		return 0
+	}
+
+	file_header := cast(*Bmp_File_Header)file.data
+	dib_header := cast(*Bmp_Dib_Header)(file.data + size_of(Bmp_File_Header))
+	
+	if file_header.header != Bmp_File_Header.EXPECTED_HEADER || file_header.file_size != file.count {
+		return 0
+	}
+	
+	if dib_header.bits_per_pixel != 32 || 
+		dib_header.compression_method != .BI_BITFIELDS || 
+		dib_header.alpha_mask != 0xFF000000 ||
+		dib_header.red_mask   != 0x00FF0000 ||
+		dib_header.green_mask != 0x0000FF00 ||
+		dib_header.blue_mask  != 0x000000FF ||
+		dib_header.height <= 0 {
+		
+		return 0
+	}
+	
+	texture: u32
+	
+	glGenTextures(1, *texture)
+	glBindTexture(GL_TEXTURE_2D, texture)
+	
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP)
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP)
+	
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, dib_header.width, dib_header.height, 0, GL_BGRA_EXT, GL_UNSIGNED_BYTE, file.data + file_header.offset_to_image)
+	
+	return texture
+}
+
+gl_context: GL_Context
+texture: u32
+
+draw :: (moves: []Move, window: *Window) {
+	glViewport(0, 0, window.width, window.height)
+	glClear(GL_COLOR_BUFFER_BIT)
+	
+	glMatrixMode(GL_PROJECTION)
+	glLoadIdentity()
+	glOrtho(0, 8, 8, 0, -5, 5)
+	glMatrixMode(GL_MODELVIEW)
+	glLoadIdentity()
+	
+	glDisable(GL_TEXTURE_2D)
+	glBegin(GL_QUADS)
+	
+	for y: 8 {
+		for x: 8 {
+			if x + y & 1
+				glColor3f(0.4, 0.3, 0.2)
+			else
+				glColor3f(0.8, 0.7, 0.5)
+			
+			
+			glVertex2f(cast(f32) x, cast(f32) y)
+			glVertex2f(cast(f32) x + 1, cast(f32) y)
+			glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
+			glVertex2f(cast(f32) x, cast(f32) y + 1)
+		}
+	}
+	
+	if selected_square != -1 {
+		x, y := unpack(selected_square)
+		
+		if true && white_ai && !black_ai  {
+			x = 7 - x
+			y = 7 - y
+		}
+		
+		glColor4f(1, 1, 0, 0.4)
+		
+		glVertex2f(cast(f32) x, cast(f32) y)
+		glVertex2f(cast(f32) x + 1, cast(f32) y)
+		glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
+		glVertex2f(cast(f32) x, cast(f32) y + 1)
+	}
+	
+	if move_history {
+		move := array_peek(move_history)
+		
+		glColor4f(0, 0, 1, 0.4)
+		
+		x, y := unpack(move.start)
+	
+		if true && white_ai && !black_ai  {
+			x = 7 - x
+			y = 7 - y
+		}
+		
+		glVertex2f(cast(f32) x, cast(f32) y)
+		glVertex2f(cast(f32) x + 1, cast(f32) y)
+		glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
+		glVertex2f(cast(f32) x, cast(f32) y + 1)
+		
+		x, y = unpack(move.end)
+		
+		if true && white_ai && !black_ai  {
+			x = 7 - x
+			y = 7 - y
+		}
+		
+		glVertex2f(cast(f32) x, cast(f32) y)
+		glVertex2f(cast(f32) x + 1, cast(f32) y)
+		glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
+		glVertex2f(cast(f32) x, cast(f32) y + 1)
+	}
+	
+	glColor4f(0, 1, 0, 0.4)
+	
+	for moves {
+		_, valid := checked_do_move(global_board, it)
+		
+		if valid {
+			x, y := unpack(it.end)
+			
+			if true && white_ai && !black_ai  {
+				x = 7 - x
+				y = 7 - y
+			}
+			
+			
+			
+			glVertex2f(cast(f32) x, cast(f32) y)
+			glVertex2f(cast(f32) x + 1, cast(f32) y)
+			glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
+			glVertex2f(cast(f32) x, cast(f32) y + 1)
+		}
+	}
+	
+	glEnd()
+	
+	glColor3f(1, 1, 1)
+	
+	glEnable(GL_TEXTURE_2D)
+	glBegin(GL_QUADS)
+	
+	for 64 {
+		piece := get_piece(global_board, cast() it)
+		
+		if piece == -1
+			continue;
+		x, y := unpack(cast() it)
+		
+		if true && white_ai && !black_ai  {
+			x = 7 - x
+			y = 7 - y
+		}
+		
+		y_coord: f32 = 0
+		x_coord: f32 = 0
+		
+		if piece >= WHITE_PAWN {
+			y_coord = 0.5
+			piece -= WHITE_PAWN
+		}
+
+		if piece == {
+			case BLACK_QUEEN
+				x_coord = 1.0 / 6.0
+			case BLACK_BISHOP 
+				x_coord = 2.0 / 6.0
+			case BLACK_KNIGHT
+				x_coord = 3.0 / 6.0
+			case BLACK_ROOK
+				x_coord = 4.0 / 6.0
+			case BLACK_PAWN
+				x_coord = 5.0 / 6.0
+		}
+		
+		
+		glTexCoord2f(x_coord, y_coord + 0.5)
+		glVertex2f(cast(f32) x, cast(f32) y)
+		
+		glTexCoord2f(x_coord + 1.0 / 6.0, y_coord + 0.5)
+		glVertex2f(cast(f32) x + 1, cast(f32) y)
+		
+		glTexCoord2f(x_coord + 1.0 / 6.0, y_coord)
+		glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
+		
+		glTexCoord2f(x_coord, y_coord)
+		glVertex2f(cast(f32) x, cast(f32) y + 1)
+	}
+	
+	glEnd()
+	
+	swap_buffers(gl_context)
+}
+
+init_graphics :: (window: *Window) -> bool {
+	success: bool
+
+	success, gl_context = create_gl(window, depth_bits = 0)
+	
+	if !success {
+		print("Failed to create gl context")
+		return false
+	}
+
+	make_context_current(gl_context)
+
+	load_gl_extensions()
+	set_swap_interval(1)
+	
+	glEnable(GL_TEXTURE_2D)
+	texture = load_image("chess.bmp")
+	
+	glEnable(GL_BLEND)
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+
+	return true
+}
+
+destroy_graphics :: () {
+	glFinish()
+					
+	free_gl(gl_context)
+}

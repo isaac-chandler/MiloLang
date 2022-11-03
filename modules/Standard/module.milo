@@ -132,6 +132,13 @@ min :: (a: $T, b: T) -> #must T {
 		return b
 }
 
+abs :: (a: $T) -> #must T {
+	if a < 0
+		return -a
+	else
+		return a
+}
+
 max :: (a: $T, b: T) -> #must T {
 	if a > b 
 		return a
@@ -203,6 +210,10 @@ array_pop :: (using array: *[]$T) -> T {
 	return value
 }
 
+backed_array :: (using array: []$T) -> [..]T {
+	return .{data = data, count = 0, capacity = count}
+}
+
 
 Allocator :: struct {
 	using Mode :: enum u8 {
@@ -217,6 +228,10 @@ Allocator :: struct {
 }
 
 #add_context using allocator_info: Allocator
+
+allocate :: (bytes: u64, align: u64 = 8) -> *void {
+	return context.allocator(.NEW, context.allocator_data, bytes, align, null, 0)
+}
 
 new :: ($T: type, initialized := true) -> *T {
 	result: *T = context.allocator(.NEW, context.allocator_data, size_of(T), align_of(T), null, 0)
@@ -240,15 +255,16 @@ new_array :: ($T: type, count: u64, initialized := true) -> []T {
 	result.data = context.allocator(.NEW, context.allocator_data, size_of(T) * count, align_of(T), null, 0)
 
 	if initialized && count {
-		default: T: ..
-		result[0] = default
-
-		for 1 .. count {
-			result[it] = result[0]
-		}
+		fill_array(result)
 	}
 
 	return result
+}
+
+fill_array :: (using array: []$T, value: T = ..) {
+	for *array {
+		<<it = value
+	}
 }
 
 free_array :: (using array: []$T) {
@@ -266,6 +282,13 @@ free_string :: (s: string) {
 
 array_peek :: (using array: []$T) -> T {
 	return array[count - 1]
+}
+
+array_copy :: (using array: []$T) -> []T {
+	result := new_array(T, count, false)
+	memory_copy(result.data, data, count * size_of(T))
+
+	return result
 }
 
 array_free :: (using array: [..]$T) {

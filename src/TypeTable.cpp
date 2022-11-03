@@ -66,7 +66,7 @@ void rehash() {
 
 		u32 slot = findSlotInTypeTable(entry.value);
 
-		typeTableEntries[slot].hash =entry.hash;
+		typeTableEntries[slot].hash = entry.hash;
 		typeTableEntries[slot].value = entry.value;
 	}
 
