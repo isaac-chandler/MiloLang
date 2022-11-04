@@ -1,0 +1,309 @@
+#import "Standard"
+#import "File"
+#import "Intrinsics"
+#import "Random"
+
+#load "magic_bitboard.milo"
+
+pack :: (x: u64, y: u64) -> u64 {
+	return cast() (y * 8 + x)
+}
+
+unpack :: (square: u64) -> (u64, u64) {
+	return square & 7, square >> 3
+}
+
+Bitboard_Result :: struct {
+	occupied: u64
+	moves: u64
+}
+
+bishop_visible :: (square: u64, occupied: u64 = 0) -> u64 {
+	visible: u64
+
+	x, y := unpack(square)
+	while x > 0 && y > 0 {
+		x -= 1
+		y -= 1
+
+		mask := 1 << pack(x, y)
+		visible |= mask
+
+		if occupied & mask
+			break
+	}
+
+	x, y = unpack(square)
+	while x < 7 && y > 0 {
+		x += 1
+		y -= 1
+
+		mask := 1 << pack(x, y)
+		visible |= mask
+
+		if occupied & mask
+			break
+	}
+
+	x, y = unpack(square)
+	while x > 0 && y < 7 {
+		x -= 1
+		y += 1
+
+		mask := 1 << pack(x, y)
+		visible |= mask
+
+		if occupied & mask
+			break
+	}
+
+	x, y = unpack(square)
+	while x < 7 && y < 7 {
+		x += 1
+		y += 1
+
+		mask := 1 << pack(x, y)
+		visible |= mask
+
+		if occupied & mask
+			break
+	}
+
+	return visible
+}
+
+get_bishop_mask :: (square: u64) -> u64 {
+	visible: u64
+
+	x, y := unpack(square)
+	while x > 1 && y > 1 {
+		x -= 1
+		y -= 1
+
+		mask := 1 << pack(x, y)
+		visible |= mask
+	}
+
+	x, y = unpack(square)
+	while x < 6 && y > 1 {
+		x += 1
+		y -= 1
+
+		mask := 1 << pack(x, y)
+		visible |= mask
+	}
+
+	x, y = unpack(square)
+	while x > 1 && y < 6 {
+		x -= 1
+		y += 1
+
+		mask := 1 << pack(x, y)
+		visible |= mask
+	}
+
+	x, y = unpack(square)
+	while x < 6 && y < 6 {
+		x += 1
+		y += 1
+
+		mask := 1 << pack(x, y)
+		visible |= mask
+	}
+
+	return visible
+}
+
+rook_visible :: (square: u64, occupied: u64 = 0) -> u64 {
+	visible: u64
+
+	x, y := unpack(square)
+	while x > 0 {
+		x -= 1
+
+		mask := 1 << pack(x, y)
+		visible |= mask
+
+		if occupied & mask
+			break
+	}
+
+	x, y = unpack(square)
+	while y > 0 {
+		y -= 1
+
+		mask := 1 << pack(x, y)
+		visible |= mask
+
+		if occupied & mask
+			break
+	}
+
+	x, y = unpack(square)
+	while x < 7 {
+		x += 1
+
+		mask := 1 << pack(x, y)
+		visible |= mask
+
+		if occupied & mask
+			break
+	}
+
+	x, y = unpack(square)
+	while y < 7 {
+		y += 1
+
+		mask := 1 << pack(x, y)
+		visible |= mask
+
+		if occupied & mask
+			break
+	}
+
+	return visible
+}
+
+get_rook_mask :: (square: u64) -> u64 {
+	visible: u64
+
+	x, y := unpack(square)
+	while x > 1 {
+		x -= 1
+
+		mask := 1 << pack(x, y)
+		visible |= mask
+	}
+
+	x, y = unpack(square)
+	while y > 1 {
+		y -= 1
+
+		mask := 1 << pack(x, y)
+		visible |= mask
+	}
+
+	x, y = unpack(square)
+	while x < 6 {
+		x += 1
+
+		mask := 1 << pack(x, y)
+		visible |= mask
+	}
+
+	x, y = unpack(square)
+	while y < 6 {
+		y += 1
+
+		mask := 1 << pack(x, y)
+		visible |= mask
+	}
+
+	return visible
+}
+
+bitboard_results :: (square: u64, visible_func: (u64, u64) -> u64, mask_func: (u64) -> u64) -> [..]Bitboard_Result {
+	moves := visible_func(square, 0) & mask_func(square)
+
+	move_bits: [..]u64
+	defer array_free(move_bits)
+
+	for cast(u64) 64 {
+		x, y := unpack(it)
+
+		if moves & (1 << it)
+			array_add(*move_bits, 1 << it)
+	}
+
+	result: [..]Bitboard_Result
+
+	for 1 << move_bits.count {
+		occupied: u64 = 0
+
+		for piece, bit: move_bits
+			if it & (1 << bit)
+				occupied |= piece
+
+		array_add(*result, .{occupied, visible_func(square, occupied)})
+	}
+
+	return result
+}
+
+check_magic :: (results: []Bitboard_Result, mul: u64, bits: u64, magic_table: []u64) -> bool {
+	//mask := (1 << bits) - 1
+
+	for results {
+		index := (it.occupied * mul) >> (64 - bits)
+		//index &= mask
+
+		if magic_table[index] && magic_table[index] != it.moves {
+			return false
+		}
+
+		magic_table[index] = it.moves
+	}
+
+	return true
+}
+
+find_magic :: (square: u64, visible_func: (u64, u64) -> u64, mask_func: (u64) -> u64, magic_table: []u64) -> u64 {
+	assert(magic_table.count && !(magic_table.count & (magic_table.count - 1)))
+	bits := bit_scan_forward(magic_table.count)
+
+	results := bitboard_results(square, visible_func, mask_func)
+
+	defer array_free(results)
+
+	rng := create_random(1, 1)
+
+	mask := mask_func(square)
+
+	count := 0
+
+	while true {
+		count += 1
+		if count % 1_000_000 == 0 print("-")
+		
+		mul := random_u64(*rng) & random_u64(*rng) & random_u64(*rng)
+
+		fill_array(magic_table)
+		if check_magic(results, mul, bits, magic_table)
+			return mul
+	}
+}
+
+main :: () {
+	using magic_table := cast(*Magic_Table) allocate(size_of(Magic_Table))
+	memory_clear(magic_table, size_of(Magic_Table))
+
+	for cast(u64) 64 {
+		x, y := unpack(it)
+
+		rook_mul[it] = find_magic(it, rook_visible, get_rook_mask, rook_table[it])
+		rook_mask[it] = get_rook_mask(it)
+		print("Rook (%, %) % \n", x, y, rook_mul[it])
+
+		bishop_mul[it] = find_magic(it, bishop_visible, get_bishop_mask, bishop_table[it])
+		bishop_mask[it] = get_bishop_mask(it)
+		print("Bishop (%, %) % \n", x, y, bishop_mul[it])
+	}
+
+	write_entire_file("magic_bitboard.bin", .{cast() magic_table, size_of(Magic_Table)})
+}
+
+#import "Compiler"
+
+setup_build :: () {
+	arguments := get_build_arguments()
+	
+	if arguments {
+		options := get_build_options()
+		options.backend = .LLVM
+		options.llvm_options = arguments
+		
+		set_build_options(options)
+	}
+}
+
+#run setup_build()

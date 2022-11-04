@@ -157,6 +157,19 @@ read_line :: () -> (string, bool) {
 	return "", false
 }
 
+get_performance_timer :: () -> f64 {
+	pcf: s64 = --
+	QueryPerformanceFrequency(*pcf)
+	time: s64 = --
+	QueryPerformanceCounter(*time)
+
+	return cast(f64) time / cast(f64) pcf
+}
+
+get_system_timer :: () -> f64 {
+	return cast(f64) GetTickCount() * 0.001
+}
+
 #scope_module
 
 had_carriage_return: bool

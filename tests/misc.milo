@@ -1,0 +1,17 @@
+#import "Standard"
+
+main :: () {
+	y: s64
+	x := *y
+
+	assert(*<<x == x)
+	assert(*<<*<<x == x)
+
+	//assert(cast(s16) cast(u8) 128 == 128)
+
+	a: u8 = 128
+	assert(cast(s16) cast(u8) a == 128)
+}
+
+
+#run main()

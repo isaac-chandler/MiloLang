@@ -1,0 +1,73 @@
+#import "Windows"
+
+GL_Context :: struct {
+	handle: HGLRC
+	device_context: HDC
+}
+
+
+wglGetProcAddress :: (Arg1: *u8) -> *void #external "opengl32"
+	
+wglCreateContext :: (Arg1: HDC) -> HGLRC #external "opengl32"
+
+wglMakeCurrent :: (hdc: HDC, hglrc: HGLRC) -> s32 #external "opengl32"
+
+wglDeleteContext :: (Arg1: HGLRC) -> s32 #external "opengl32"
+
+wglGetCurrentDC :: () -> HDC #external "opengl32"
+
+wglSwapIntervalEXT: (s32) -> s32 #c_call
+
+create_gl :: (window: *Window, color_bits := 8, alpha_bits := 8, depth_bits := 24) -> (bool, GL_Context) {
+	using gl_context: GL_Context
+
+	device_context = GetDC(window.handle)
+
+	if !device_context
+		return false, gl_context
+	
+	desired_format: PIXELFORMATDESCRIPTOR
+	desired_format.dwFlags = PFD_SUPPORT_OPENGL | PFD_DRAW_TO_WINDOW | PFD_DOUBLEBUFFER
+
+	if !depth_bits
+		desired_format.dwFlags |= PFD_DEPTH_DONTCARE
+
+	desired_format.cColorBits = cast() (color_bits * 3 + alpha_bits)
+	desired_format.cAlphaBits = cast() alpha_bits
+	desired_format.iLayerType = PFD_MAIN_PLANE
+	
+	found_format := ChoosePixelFormat(device_context, *desired_format)
+	
+	if found_format == 0
+		return false, gl_context
+	
+	used_format: PIXELFORMATDESCRIPTOR
+	
+	if !SetPixelFormat(device_context, found_format, *used_format)
+		return false, gl_context
+	
+	
+	handle = wglCreateContext(device_context)
+
+	return cast() handle, gl_context
+}
+
+make_context_current :: (using gl_context: GL_Context) {
+	wglMakeCurrent(device_context, handle)
+}
+
+free_gl :: (using gl_context: GL_Context) {
+	wglDeleteContext(handle)
+}
+
+set_swap_interval :: (swap_interval: s32) {
+	wglSwapIntervalEXT(swap_interval)
+}
+
+swap_buffers :: (using gl_context: GL_Context) {
+	SwapBuffers(device_context)
+}
+
+load_gl_extensions :: () {
+	wglSwapIntervalEXT = wglGetProcAddress("wglSwapIntervalEXT")
+}

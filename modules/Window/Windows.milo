@@ -1,0 +1,241 @@
+#import "Windows"
+#import "Standard"
+
+Os_Window :: HWND
+
+create_window :: (title: string, width: s32, height: s32, resizable := true) -> *Window {
+	ensure_window_class_registered()
+	
+	window_style := WS_OVERLAPPEDWINDOW
+
+	if !resizable {
+		window_style ^= WS_THICKFRAME ^ WS_MAXIMIZEBOX
+	}
+	
+	window_rect: RECT
+	
+	window_rect.top = 0
+	window_rect.bottom = cast() width
+	window_rect.left = 0
+	window_rect.right = cast() height
+	
+	AdjustWindowRectEx(*window_rect, window_style ^ WS_OVERLAPPED | WS_TILED)
+
+	windows_title := to_windows_string("Test Window")
+	defer free_array(windows_title)
+	
+	window_handle := CreateWindowExW(lpClassName = window_class_name.data, lpWindowName = windows_title.data, dwStyle = window_style, 
+		nWidth = window_rect.right - window_rect.left, nHeight = window_rect.bottom - window_rect.top, hInstance = GetModuleHandleW(null))
+	
+	if !window_handle
+		return null
+
+	window := new(Window)
+	window.width = width
+	window.height = height
+
+	window.handle = window_handle
+
+	SetWindowLongPtrW(window_handle, GWLP_USERDATA, cast() window)
+
+	return window
+}
+
+show_window :: (using window: *Window) {
+
+	
+	startup_info: STARTUPINFOW
+	
+	GetStartupInfoW(*startup_info)
+	
+	show_command := SW_SHOWDEFAULT
+	if startup_info.dwFlags & STARTF_USESHOWWINDOW {
+		show_command = cast() startup_info.wShowWindow
+	}
+	
+	
+	ShowWindow(handle, show_command)
+}
+
+// Does not close the window immediately
+// After calling this function continue handling window events until poll events returns false
+close_window :: (using window: *Window) {
+	DestroyWindow(window_handle)
+}
+
+poll_events :: (using window: *Window) -> bool {
+	events.count = 0
+
+	if should_quit
+		return false
+
+	message: MSG = --
+	
+	while PeekMessageW(*message, null) {
+		if message.message == WM_QUIT {
+			should_quit = true
+			return false
+		}
+		
+		TranslateMessage(*message)
+		DispatchMessageW(*message)
+	}
+
+	return true
+}
+
+#scope_module
+registered_window_class := false
+window_class_name: []u16
+
+ensure_window_class_registered :: () -> bool{
+	if registered_window_class
+		return true
+
+	window_class_name = to_windows_string("MiloWindowClass")
+	window_class: WNDCLASSW
+	
+	window_class.style = CS_OWNDC | CS_VREDRAW | CS_HREDRAW
+	window_class.lpfnWndProc = window_proc
+	window_class.hInstance = GetModuleHandleW(null)
+	window_class.lpszClassName = window_class_name.data
+	window_class.hbrBackground = GetStockObject(BLACK_BRUSH)
+	
+	
+	return cast() RegisterClassW(*window_class)
+}
+
+window_proc :: (hwnd: HWND, uMsg: MSG.Message, wParam: u64, lParam: s64) -> s64 #c_call {
+	push_context .{} {
+		using window := cast(*Window) GetWindowLongPtrW(hwnd, GWLP_USERDATA)
+
+		modifiers := cast(Modifiers) (wParam & 0x7F)
+		x := cast(s16) lParam
+		y := cast(s16) (lParam >> 16)
+
+		if uMsg == {
+			case WM_CLOSE
+				DestroyWindow(hwnd)
+				
+			case WM_DESTROY		
+				PostQuitMessage(0)
+				
+			case WM_PAINT
+				paint: PAINTSTRUCT = --
+				
+				dc := BeginPaint(hwnd, *paint)
+				EndPaint(hwnd, *paint)
+				
+			case WM_SIZE
+				client_rect: RECT = --
+				
+				GetClientRect(hwnd, *client_rect)
+
+				width = client_rect.right - client_rect.left
+				height = client_rect.bottom - client_rect.top
+				
+				array_add(*events, .{ .RESIZE, .{ resize = .{ width, height } }})
+				
+			case WM_LBUTTONDOWN #through
+			case WM_LBUTTONUP
+
+				mouse_x = x
+				mouse_y = y
+
+				button := Mouse.LEFT
+				down := uMsg == WM_LBUTTONDOWN
+				
+				array_add(*events, .{.MOUSE, .{ mouse = .{ button, x, y, modifiers, down } }})
+				mouse[cast(u8) button] = down
+				
+			case WM_RBUTTONDOWN #through
+			case WM_RBUTTONUP
+
+				mouse_x = x
+				mouse_y = y
+				
+				button := Mouse.LEFT
+				down := uMsg == WM_RBUTTONDOWN
+				
+				array_add(*events, .{.MOUSE, .{ mouse = .{ .RIGHT, x, y, modifiers, down } }})
+				mouse[cast(u8) button] = down
+
+			case WM_MBUTTONDOWN #through
+			case WM_MBUTTONUP
+
+				mouse_x = x
+				mouse_y = y
+				
+				button := Mouse.LEFT
+				down := uMsg == WM_MBUTTONDOWN
+				
+				array_add(*events, .{.MOUSE, .{ mouse = .{ button, x, y, modifiers, down } }})
+				mouse[cast(u8) button] = down
+
+			case WM_XBUTTONDOWN #through
+			case WM_XBUTTONUP
+
+				mouse_x = x
+				mouse_y = y
+
+				button := Mouse._4
+
+				if ((wParam >> 16) & 0xFFFF) == 2 {
+					button = ._5
+				}
+
+				down := uMsg == WM_XBUTTONDOWN
+				
+				array_add(*events, .{.MOUSE, .{ mouse = .{ button, x, y, modifiers, down } }})
+				mouse[cast(u8) button] = down
+
+			case WM_KEYDOWN #through
+			case WM_KEYUP
+				if wParam <= 255 {
+					key := cast(Key) wParam
+					down := uMsg == WM_KEYDOWN
+
+					repeat_count := lParam & 0xFFFF
+
+					for repeat_count
+						array_add(*events, .{.KEY, .{ key = .{ key, modifiers, down } }})
+
+					keys[cast(u8) key] = down
+				}
+
+			case WM_CHAR
+				key := cast(Key) wParam
+				down := uMsg == WM_KEYDOWN
+
+				repeat_count := lParam & 0xFFFF
+
+				for repeat_count
+					array_add(*events, .{.CHAR, .{ char = .{ cast() wParam, modifiers } }})
+
+			case WM_MOUSEWHEEL
+
+				mouse_x = x
+				mouse_y = y
+
+				delta := cast(s16) (wParam >> 16)
+
+				array_add(*events, .{.SCROLL, .{ scroll = .{ 0, delta, x, y, modifiers } }})
+
+
+			case WM_MOUSEHWHEEL
+
+				mouse_x = x
+				mouse_y = y
+
+				delta := cast(s16) (wParam >> 16)
+
+				array_add(*events, .{.SCROLL, .{ scroll = .{ delta, 0, x, y, modifiers } }})
+
+				
+			else
+				return DefWindowProcW(hwnd, uMsg, wParam, lParam)
+		}
+		
+		return 0
+	}
+}

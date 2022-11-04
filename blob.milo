@@ -1,0 +1,9 @@
+#import "Standard"
+#import "File"
+
+main :: () {
+	files := get_files_in_directory(".")
+	
+	for files
+		print("%\n", it)
+}

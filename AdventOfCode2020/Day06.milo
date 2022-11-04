@@ -1,0 +1,59 @@
+#load "standard.milo"
+#load "file.milo"
+#load "string.milo"
+
+_main :: () {
+	data := cast(string) read_entire_file("AdventOfCode2020/Day06.txt")
+	
+	part1 :: false
+	total: u64
+	characters: [..]u8
+	
+	while data {
+	
+		characters.count = 0
+	
+		#if part1 {
+			while true {
+				line: string
+				line, data = read_line(data)
+				
+				if !line
+					break
+					
+				for answer: line
+					for characters
+						if it == answer
+							break
+					or
+						array_add(cast() *characters, answer)
+			}
+		} else {
+			line: string
+			line, data = read_line(data)
+			
+			for line array_add(cast() *characters, it)
+			
+			while true {
+				line, data = read_line(data)
+				
+				if !line
+					break
+					
+				for characters
+					for answer: line
+						if it == answer
+							break
+					or
+						remove
+			}
+		}
+		
+		total += characters.count
+	}
+
+	print("%\n", total)
+	
+	
+	#run _main()
+}

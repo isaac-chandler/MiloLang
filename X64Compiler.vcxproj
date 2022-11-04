@@ -290,6 +290,7 @@
     <ClInclude Include="src\CompilerMain.h" />
     <ClInclude Include="src\Error.h" />
     <ClInclude Include="src\Find.h" />
+    <ClInclude Include="src\Identifier.h" />
     <ClInclude Include="src\Infer.h" />
     <ClInclude Include="src\IrGenerator.h" />
     <ClInclude Include="src\IrRunner.h" />
@@ -317,6 +318,7 @@
     <ClCompile Include="src\CompilerMain.cpp" />
     <ClCompile Include="src\Error.cpp" />
     <ClCompile Include="src\Find.cpp" />
+    <ClCompile Include="src\Identifier.cpp" />
     <ClCompile Include="src\Infer.cpp" />
     <ClCompile Include="src\IrGenerator.cpp" />
     <ClCompile Include="src\IrRunner.cpp" />

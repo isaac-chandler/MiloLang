@@ -18,6 +18,13 @@ create_random :: (state: u64, inc: u64) -> Random_State {
 	return rng
 }
 
+#import "Standard"
+create_seeded_random_insecure :: () -> Random_State {
+	time := cast(u64) (get_system_timer() * 1000)
+
+	return create_random(time, time)
+}
+
 random_u32 :: (rng: *Random_State) -> u32 {
     oldstate := rng.state
     // Advance internal state

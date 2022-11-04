@@ -104,34 +104,7 @@ static llvm::Type *createLlvmType(llvm::LLVMContext &context, Type *type) {
 		type->llvmType = llvmType; // Put the empty struct on the type so that if we have a struct that points to itself we don't infinitely recurse
 
 		if (type->flags & TYPE_STRUCT_IS_UNION) {
-			Type *mainMember = nullptr;
-
-			for (auto member : struct_->members.declarations) {
-				if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING))
-					continue;
-
-				auto memberType = getDeclarationType(member);
-
-				if ((type->flags & TYPE_STRUCT_IS_PACKED) || memberType->alignment == struct_->alignment) {
-					if (!mainMember || (memberType->size > mainMember->size)) {
-						mainMember = memberType;
-					}
-				}
-			}
-
-			if (!mainMember) {
-				return llvm::StructType::create(stringRef(struct_->name), llvm::ArrayType::get(llvm::IntegerType::get(context, type->alignment * 8), type->size / type->alignment));
-			}
-			else {
-				if (struct_->size == mainMember->size) {
-					llvmType->setBody(getLlvmType(context, mainMember));
-				}
-				else {
-					llvmType->setBody(getLlvmType(context, mainMember), llvm::ArrayType::get(llvm::Type::getInt8Ty(context), struct_->size - mainMember->size));
-				}
-
-				return llvmType;
-			}
+			return llvm::StructType::create(stringRef(struct_->name), llvm::ArrayType::get(llvm::IntegerType::get(context, type->alignment * 8), type->size / type->alignment));
 		}
 		else {
 
@@ -558,14 +531,10 @@ static llvm::Constant *createConstant(State *state, Expr *expr) {
 				assert(literal->initializers.count == 1);
 				auto value = literal->initializers.values[0];
 
-				if (getLlvmType(state->context, value->type) == llvmType->getStructElementType(0)) {
-					if (llvmType->getStructNumElements() == 1) {
-						return llvm::ConstantStruct::get(llvmType, createConstant(state, value));
-					}
-					else {
-						return llvm::ConstantStruct::get(llvmType, createConstant(state, value), llvm::UndefValue::get(llvmType->getStructElementType(1)));
-					}
-				}
+				if (value->type->size == literal->type->size) {
+					return llvm::ConstantExpr::getBitCast(createConstant(state, value), llvmType);
+
+				} 
 				else {
 					auto memberType = getLlvmType(state->context, value->type);
 					auto arrayType = llvm::ArrayType::get(llvm::Type::getInt8Ty(state->context), struct_->size - value->type->size);
@@ -574,6 +543,7 @@ static llvm::Constant *createConstant(State *state, Expr *expr) {
 
 					return llvm::ConstantExpr::getBitCast(llvm::ConstantStruct::get(tempType, createConstant(state, value), llvm::UndefValue::get(arrayType)), llvmType);
 				}
+
 			}
 			else {
 				return llvm::UndefValue::get(llvmType);
@@ -1429,6 +1399,9 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 			case TypeFlavor::FUNCTION: {
 				if (right->type->flavor == TypeFlavor::ARRAY && (right->type->flags & TYPE_ARRAY_IS_FIXED)) {
 					return state->builder.CreatePointerCast(loadAddressOf(state, right), getLlvmType(state->context, castTo));
+				}
+				else if (right->type->flavor == TypeFlavor::INTEGER) {
+					return state->builder.CreateIntToPtr(generateLlvmIr(state, right), getLlvmType(state->context, castTo));
 				}
 				else {
 					return state->builder.CreatePointerCast(generateLlvmIr(state, right), getLlvmType(state->context, castTo));
@@ -2900,7 +2873,7 @@ void runLlvm() {
 
 							llvm::Constant *initial_value;
 
-							if (member->initialValue && (member->initialValue->flavor != ExprFlavor::TYPE_LITERAL || static_cast<ExprLiteral *>(member->initialValue)->typeValue->flavor != TypeFlavor::MODULE)) {
+							if (member->initialValue && (member->initialValue->flavor != ExprFlavor::TYPE_LITERAL || static_cast<ExprLiteral *>(member->initialValue)->typeValue->flavor != TypeFlavor::MODULE)) { 
 								auto variable = createUnnnamedConstant(&state, getLlvmType(context, member->initialValue->type));
 								variable->setInitializer(createConstant(&state, member->initialValue));
 								initial_value = llvm::ConstantExpr::getBitCast(variable, llvm::Type::getInt8PtrTy(context));
