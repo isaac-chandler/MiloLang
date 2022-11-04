@@ -883,6 +883,7 @@ u32 generateEquals(IrState *state, u32 leftReg, Expr *right, bool equals) {
 		ir.data = argumentInfo;
 		ir.dest = result;
 		ir.opSize = 1;
+		ir.flags |= IR_C_CALL;
 
 
 		if (!equals) {
@@ -1213,6 +1214,7 @@ void generateRemove(IrState *state, ExprBreakOrContinue *remove) {
 	ir.data = argumentInfo;
 	ir.dest = remove->refersTo->irPointer;
 	ir.opSize = TYPE_VOID_POINTER->size;
+	ir.flags |= IR_C_CALL;
 
 	Ir &sub = state->ir.add();
 	sub.op = IrOp::ADD_CONSTANT;

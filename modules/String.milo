@@ -155,15 +155,39 @@ read_character :: (s: string) -> (character: u32, remaining: string) {
 	}
 }
 
-read_u64 :: (s: string) -> (value: u64, remaining: string) {
+get_digit :: (c: u8, base: u64 = 10) -> (u64, bool) {
+	numeral_min :: '0'
+	numeral_max := '0' - 1 + min(base, 10)
+	lower_min :: 'a'
+	lower_max := 'a' + base - 11
+	upper_min :: 'A'
+	upper_max := 'A' + base - 11
+	
+	if numeral_min <= c && c <= numeral_max
+		return c - '0', true
+	else if lower_min   <= c && c <= lower_max
+		return c - 'a', true
+	else if upper_min   <= c && c <= upper_max
+		return c - 'A', true
+	
+	return 0, false
+}
+
+read_u64 :: (s: string, base: u64 = 10) -> (value: u64, remaining: string) {
+	assert(2 <= base && base <= 36)
 	remaining := s
 	
 	value: u64
 	
 	
-	while remaining && '0' <= remaining[0] && remaining[0] <= '9' {
-		value *= 10
-		value += remaining[0] - '0'
+	while remaining {
+		digit, success := get_digit(remaining[0], base)
+		
+		if !success
+			break;
+		
+		value *= base
+		value += digit
 		remaining = remaining[1..]
 	}
 
@@ -262,4 +286,10 @@ concatenate :: (s: string.., delimiter: string = "") -> string {
 	}
 	
 	return result
+}
+
+lower :: (c: u8) -> u8 {
+	if 'A' <= c && c <= 'Z' {
+		return c - 'A' + 'a'
+	}
 }

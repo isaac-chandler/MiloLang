@@ -804,8 +804,6 @@ if (op.flags & IR_FLOAT_OP) {\
 		}
 	}
 
-	assert(stack[0] == 0);
-
 	// We shouldn't go off the end without returning
 	assert(false);
 }

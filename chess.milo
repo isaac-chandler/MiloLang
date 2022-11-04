@@ -842,7 +842,7 @@ evaluation_list: [..]f32
 
 moves_explored: u64
 
-transposition_table: [1 << 26]struct {
+transposition_table: [(1 << 25) + 1]struct {
 	hash: u64
 	value: f32
 	kind: enum u8 {
@@ -925,15 +925,15 @@ order_moves :: (using state: State, moves: []Move, old_best: Move, depth: s8, al
 		evaluation_list[it_index] = 0
 	
 		if it.piece_index == old_best.piece_index && it.end == old_best.end {
-			evaluation_list[it_index] += 10000
+			evaluation_list[it_index] += 1000000
 		}
 		
 		if it.piece_index == killer_move.piece_index && it.end == killer_move.end {
-			evaluation_list[it_index] += 5000
+			evaluation_list[it_index] += 2000
 		} 
 		
 		if it.piece_index == old_killer_move.piece_index && it.end == old_killer_move.end {
-			evaluation_list[it_index] += 4000
+			evaluation_list[it_index] += 1000
 		} 
 		
 		if board[it.end] != -1 {
@@ -1066,7 +1066,7 @@ quiesce :: (using state: State, alpha: f32, beta: f32, depth := 0) -> f32 {
 	
 	key := hash(state)
 
-	entry := *transposition_table[key & (transposition_table.count - 1)]
+	entry := *transposition_table[key % transposition_table.count]
 	
 	current_alpha := alpha
 	current_beta  := beta
@@ -1112,6 +1112,7 @@ quiesce :: (using state: State, alpha: f32, beta: f32, depth := 0) -> f32 {
 			if pieces[it].location != -1 get_capture_moves_for_piece(state, legal_moves, cast() it)		
 		}
 	}
+
 	
 	best_move: Move
 	
@@ -1254,7 +1255,7 @@ stats: struct {
 	transpositions_matched: u64
 }
 
-minimax :: (using state: State, depth: s8, alpha: f32 = -1e9, beta: f32 = 1e9) -> (f32, Move) {
+minimax :: (using state: State, depth: s8, alpha: f32 = -1e4, beta: f32 = 1e4) -> (f32, Move) {
 	if moves_explored == max_moves  return 0, .{}
 	
 	current_alpha := alpha
@@ -1269,7 +1270,7 @@ minimax :: (using state: State, depth: s8, alpha: f32 = -1e9, beta: f32 = 1e9) -
 
 	defer remove_repetition(repetition_stored)
 	
-	entry := *transposition_table[key & (transposition_table.count - 1)]
+	entry := *transposition_table[key % transposition_table.count]
 	
 
 	current_depth := depth
@@ -1335,7 +1336,7 @@ minimax :: (using state: State, depth: s8, alpha: f32 = -1e9, beta: f32 = 1e9) -
 			if it_index == 0 {
 				value = -minimax(new_state, current_depth - 1, -current_beta, -current_alpha)
 			} else {
-				value = -minimax(new_state, current_depth - 1, -current_alpha - 0.005, -current_alpha)
+				value = -minimax(new_state, current_depth - 1, -current_alpha - 0.02, -current_alpha)
 				
 				if current_alpha < value && value < current_beta {
 					value = -minimax(new_state, current_depth - 1, -current_beta, -current_alpha)
@@ -1346,9 +1347,9 @@ minimax :: (using state: State, depth: s8, alpha: f32 = -1e9, beta: f32 = 1e9) -
 			if value > best_move_value {
 				best_move = it
 				best_move_value = value
-				add_history(history_location, 0.01 * cast(f32) depth)
+				add_history(history_location, 0.001 * cast(f32) depth * cast(f32) depth)
 			} else {
-				remove_history(history_location, 0.01 * cast(f32) depth)
+				remove_history(history_location, 0.001 * cast(f32) depth * cast(f32) depth)
 			}
 
 			current_alpha = max(current_alpha, value)
@@ -1358,7 +1359,7 @@ minimax :: (using state: State, depth: s8, alpha: f32 = -1e9, beta: f32 = 1e9) -
 				killer_moves[depth] = it
 				counter_moves[previous_move.piece_index][previous_move.end] = it
 				
-				add_history(history_location, 0.01 * cast(f32) depth * cast(f32) depth)
+				add_history(history_location, 0.001 * cast(f32) depth * cast(f32) depth)
 			
 				stats.beta_cutoffs += 1
 				break
@@ -1904,6 +1905,11 @@ select_ai_move :: () -> Move {
 			<<it = 0
 		}
 	}
+	
+	for * transposition_table {
+		<<it = .{}
+	}
+	
 	depth := 2
 	value, ai_move := minimax(global_board, cast() depth)
 	

@@ -273,6 +273,13 @@ array_free :: (using array: [..]$T) {
 		context.allocator(.FREE, context.allocator_data, 0, align_of(T), data, size_of(T) * capacity) 
 }
 
+array_copy :: (using array: []$T) -> []T {
+	result := new_array(T, count, initialized = false)
+	memory_copy(result.data, data, count * size_of(T))
+	
+	return result
+}
+
 panic :: () {
 	print("Panic")
 	
