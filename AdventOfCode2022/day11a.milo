@@ -1,0 +1,100 @@
+#import "Standard"
+#import "File"
+#import "String"
+
+Monkey :: struct {
+	items: [..]u64
+	operation: enum {
+		ADD
+		MULTIPLY
+		SQUARE
+	}
+	value: u64
+	divisible: u64
+	true_monkey: u64
+	false_monkey: u64
+}
+
+main :: () {
+	file := cast(string) read_entire_file("day11.txt")
+
+	monkeys: [..]Monkey
+
+	while file {
+		_: string
+		line: string
+
+		line, file = read_line(file)
+
+		if !begins_with(line, "Monkey ")
+			continue;
+
+		monkey := array_push(*monkeys)
+
+		line, file = read_line(file)
+
+		_, line = split_at_first(line, ": ")
+		for split(line, ", ")
+			array_add(*monkey.items, read_u64(it))
+
+		line, file = read_line(file)
+		_, line = split_at_first(line, "= ")
+
+		symbols := split(line, " ")
+
+		if symbols[1] == "+" {
+			monkey.operation = .ADD
+			monkey.value = read_u64(symbols[2])
+		} else if symbols[2] == "old" {
+			monkey.operation = .SQUARE
+		} else {
+			monkey.operation = .MULTIPLY
+			monkey.value = read_u64(symbols[2])
+		}
+
+		line, file = read_line(file)
+		_, line = split_at_first(line, "by ")
+		monkey.divisible = read_u64(line)
+
+		line, file = read_line(file)
+		_, line = split_at_first(line, "monkey ")
+		monkey.true_monkey = read_u64(line)
+
+		line, file = read_line(file)
+		_, line = split_at_first(line, "monkey ")
+		monkey.false_monkey = read_u64(line)
+	}
+
+	inspections := new_array(u64, monkeys.count)
+
+	for 20 {
+		for * monkey: monkeys {
+			inspections[it_index] += monkey.items.count
+
+			for item: monkey.items {
+				worry := item
+
+				if monkey.operation == #complete {
+					case .ADD
+						worry += monkey.value
+					case .MULTIPLY
+						worry *= monkey.value
+					case .SQUARE
+						worry *= worry
+				}
+
+				worry /= 3
+
+				if worry % monkey.divisible == 0
+					array_add(*monkeys[monkey.true_monkey].items, worry)
+				else
+					array_add(*monkeys[monkey.false_monkey].items, worry)
+			}
+
+			monkey.items.count = 0
+		}
+	}
+
+	insertion_sort(inspections)
+	print("%\n", inspections[inspections.count - 1] * inspections[inspections.count - 2])
+}

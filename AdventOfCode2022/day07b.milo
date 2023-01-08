@@ -1,0 +1,46 @@
+#import "Standard"
+#import "File"
+#import "String"
+
+main :: () {
+	file := cast(string) read_entire_file("day07.txt")
+
+	sizes: [..]s64
+	all_sizes: [..]s64
+
+	array_add(*sizes, 0)
+
+	while file {
+		line: string
+
+		line, file = read_line(file)
+
+		if line == "$ ls" {
+
+		} else if line == "$ cd .." {
+			size := array_pop(*sizes)
+
+			array_add(*all_sizes, size)
+		} else if begins_with(line, "$ cd ") {
+			array_add(*sizes, 0)
+		} else if begins_with(line, "dir ") {
+
+		} else {
+			size := cast(s64) read_u64(line)
+
+			for * sizes {
+				<<it += size
+			}
+		}
+	}
+
+	min_delete_size := sizes[0] - (70_000_000 - 30_000_000)
+
+	delete_size := 1_000_000_000_000
+
+	for all_sizes
+		if it >= min_delete_size && it < delete_size
+			delete_size = it
+	
+	print("% %\n", delete_size)
+}

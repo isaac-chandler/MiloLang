@@ -1,0 +1,91 @@
+#import "Standard"
+#import "File"
+#import "String"
+
+Location :: struct {
+	x: s64
+	y: s64
+}
+
+add_to_set :: (set: *[..]s64, using location: Location) {
+	value := (y << 32) | (x & 0xFF_FF_FF_FF)
+
+	for <<set
+		if value == it
+			return;
+	
+	array_add(set, value)
+}
+
+
+
+main :: () {
+	file := cast(string) read_entire_file("day09.txt")
+
+	locations_set: [..]s64
+
+	rope: [10]Location
+
+	update_location :: (head: Location, tail: *Location) {
+		head_offset_x := head.x - tail.x
+		head_offset_y := head.y - tail.y
+
+		if head_offset_x == 2 {
+			tail.x += 1
+
+			if head_offset_y == 2 {
+				tail.y += 1
+			} else if head_offset_y == -2 {
+				tail.y -= 1
+			} else {
+				tail.y += head_offset_y
+			}
+		} else if head_offset_x == -2 {
+			tail.x -= 1
+
+			if head_offset_y == 2 {
+				tail.y += 1
+			} else if head_offset_y == -2 {
+				tail.y -= 1
+			} else {
+				tail.y += head_offset_y
+			}
+		} else if head_offset_y == 2 {
+			tail.x += head_offset_x
+			tail.y += 1
+		} else if head_offset_y == -2 {
+			tail.x += head_offset_x
+			tail.y -= 1
+		} 
+	}
+
+	while file {
+		line: string
+
+		line, file = read_line(file)
+
+		dir, distance_string := split_at_first(line, " ")
+		distance := read_u64(distance_string)
+
+		for distance {
+			if dir == {
+				case "R"
+					rope[0].x += 1
+				case "L"
+					rope[0].x -= 1
+				case "U"
+					rope[0].y += 1
+				case "D"
+					rope[0].y -= 1
+			}
+
+			for * rope[1..] {
+				update_location(rope[it_index], it)
+			}
+
+			add_to_set(*locations_set, rope[rope.count - 1])
+		}
+	}
+
+	print("%\n", locations_set.count)
+}

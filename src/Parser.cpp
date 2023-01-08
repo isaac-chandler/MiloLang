@@ -834,60 +834,34 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 
 
 		continue_->start = lexer->token.start;
+		continue_->refersTo = nullptr;
+		continue_->enclosingScope = lexer->currentBlock;
 
 		if (lexer->inDefer && lexer->token.type != TokenT::REMOVE) {
 			continue_->end = lexer->token.end;
 
-			reportError(continue_, "Error: Cannot have a %s inside a defer", lexer->token.type == TokenT::CONTINUE ? "continue" : "break");
+			reportError(continue_, "Error: Cannot have a %s inside a defer", lexer->token.type == TokenT::CONTINUE ? "continue" :
+				(lexer->token.type == TokenT::REMOVE ? "remove" : "break"));
 			reportError(lexer->inDefer, "");
 			return nullptr;
 		}
 
 		lexer->advance();
 
+
 		if (lexer->token.type == TokenT::IDENTIFIER) {
-			auto identifier = PARSER_NEW(ExprIdentifier);
-			identifier->start = lexer->token.start;
-			identifier->end = lexer->token.end;
-			identifier->name = lexer->token.text;
-			identifier->flavor = ExprFlavor::IDENTIFIER;
-			identifier->resolveFrom = lexer->currentBlock;
-			identifier->enclosingScope = lexer->currentBlock;
-			identifier->declaration = nullptr;
-			identifier->flags |= EXPR_IDENTIFIER_IS_BREAK_OR_CONTINUE_LABEL;
-			identifier->structAccess = nullptr;
-
-			if (lexer->currentBlock) {
-				identifier->serial = lexer->identifierSerial++;
-			}
-
-			continue_->label = identifier;
-			continue_->refersTo = nullptr;
+			continue_->label = lexer->token.text;
 
 			continue_->end = lexer->token.end;
 
 			lexer->advance();
 			return continue_;
 		}
-		else { // @Cleanup: Currently unlabelled break is resolved during parse but labelled break is resolved far away in type inference, should this change?
-			continue_->label = nullptr;
+		else {
+			continue_->label = { nullptr, (u32)0 };
 			continue_->end = lexer->previousTokenEnd;
 
-			// Don't pass through arguments blocks since we can't break from an inner function to an outer one
-			for (Block *block = lexer->currentBlock; block && block->flavor == BlockFlavor::IMPERATIVE; block = block->parentBlock) {
-				if (block->loop) {
-					continue_->refersTo = CAST_FROM_SUBSTRUCT(ExprLoop, iteratorBlock, block);
-
-					if (continue_->flavor == ExprFlavor::BREAK) {
-						continue_->refersTo->flags |= EXPR_LOOP_HAS_BREAK;
-					}
-					return continue_;
-				}
-			}
-
-			reportError(continue_, "Error: Cannot have a %s outside of a loop", lexer->token.type == TokenT::CONTINUE ? "continue" :
-				(lexer->token.type == TokenT::REMOVE ? "remove" : "break"));
-			return nullptr;
+			return continue_;
 		}
 	}
 	else if (lexer->token.type == TokenT::RETURN) {

@@ -1,0 +1,74 @@
+#import "Standard"
+#import "File"
+#import "String"
+
+main :: () {
+	file := cast(string) read_entire_file("day08.txt")
+
+	total_size := 0
+
+	heights: [..][]u8
+
+	is_visible :: (heights: [][]u8, tree_x: s64, tree_y: s64) -> bool {
+		height := heights[tree_y][tree_x]
+
+		x := tree_x + 1
+		while cast() x < heights[tree_y].count {
+			if heights[tree_y][x] >= height
+				break;
+
+			x += 1
+		} or {
+			return true
+		}
+
+		x = tree_x - 1
+		while cast() x >= 0 {
+			if heights[tree_y][x] >= height
+				break;
+
+			x -= 1
+		} or {
+			return true
+		}
+
+		y := tree_y + 1
+		while cast() y < heights.count {
+			if heights[y][tree_x] >= height
+				break;
+
+			y += 1
+		} or {
+			return true
+		}
+
+		y = tree_y - 1
+		while cast() y >= 0 {
+			if heights[y][tree_x] >= height
+				break;
+
+			y -= 1
+		} or {
+			return true
+		}
+
+		return false
+	}
+
+	while file {
+		line: string
+
+		line, file = read_line(file)
+
+		array_add(*heights, cast() line)
+	}
+
+	total := 0
+
+	for row, y: heights
+		for x: row.count
+			if is_visible(heights, cast() x, cast() y)
+				total += 1
+
+	print("%\n", total)
+}

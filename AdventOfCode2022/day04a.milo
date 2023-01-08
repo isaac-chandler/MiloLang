@@ -1,0 +1,36 @@
+#import "Standard"
+#import "File"
+#import "String"
+
+parse_range :: (range: string) -> (u64, u64) {
+	low_text, high_text := split_at_first(range, '-')
+
+	low := read_u64(low_text)
+	high := read_u64(high_text)
+
+	return low, high
+}
+
+main :: () {
+	file := cast(string) read_entire_file("day04.txt")
+
+	total := 0
+
+	while file {
+		line: string
+
+		line, file = read_line(file)
+
+		first_range, second_range := split_at_first(line, ',')
+
+		first_range_low, first_range_high := parse_range(first_range)
+		second_range_low, second_range_high := parse_range(second_range)
+
+		if first_range_low <= second_range_low && second_range_high <= first_range_high
+			total += 1
+		else if second_range_low <= first_range_low && first_range_high <= second_range_high
+			total += 1
+	}
+
+	print("%\n", total)
+}

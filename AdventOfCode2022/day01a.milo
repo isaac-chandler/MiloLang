@@ -1,0 +1,25 @@
+#import "Standard"
+#import "File"
+#import "Stringg"
+
+main :: () {
+	file := cast(string) read_entire_file("day01.txt")
+
+	calories := 0
+	max_calories := 0
+
+	while file {
+		line: string
+
+		line, file = read_line(file)
+
+		if !line 
+			calories = 0
+		else {
+			calories += cast() read_u64(line)
+			max_calories = max(max_calories, calories)
+		}
+	}
+
+	print("%\n", max_calories)
+}

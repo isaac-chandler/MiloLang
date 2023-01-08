@@ -1,0 +1,85 @@
+#import "Standard"
+#import "File"
+#import "String"
+
+add_to_set :: (set: *[..]s64, x: s64, y: s64) {
+	value := (y << 32) | (x & 0xFF_FF_FF_FF)
+
+	for <<set
+		if value == it
+			return;
+	
+	array_add(set, value)
+}
+
+
+
+main :: () {
+	file := cast(string) read_entire_file("day09.txt")
+
+	locations_set: [..]s64
+	
+	tail_x := 0
+	tail_y := 0
+
+	head_offset_x := 0
+	head_offset_y := 0
+
+	add_to_set(*locations_set, tail_x, tail_y)
+
+	while file {
+		line: string
+
+		line, file = read_line(file)
+
+		dir, distance_string := split_at_first(line, " ")
+		distance := read_u64(distance_string)
+
+		for distance {
+			if dir == {
+				case "R"
+					head_offset_x += 1
+
+					if head_offset_x == 2 {
+						tail_x += 1
+						tail_y += head_offset_y
+						head_offset_x = 1
+						head_offset_y = 0
+						add_to_set(*locations_set, tail_x, tail_y)
+					}
+				case "L"
+					head_offset_x -= 1
+
+					if head_offset_x == -2 {
+						tail_x -= 1
+						tail_y += head_offset_y
+						head_offset_x = -1
+						head_offset_y = 0
+						add_to_set(*locations_set, tail_x, tail_y)
+					}
+				case "U"
+					head_offset_y += 1
+
+					if head_offset_y == 2 {
+						tail_x += head_offset_x
+						tail_y += 1
+						head_offset_x = 0
+						head_offset_y = 1
+						add_to_set(*locations_set, tail_x, tail_y)
+					}
+				case "D"
+					head_offset_y -= 1
+
+					if head_offset_y == -2 {
+						tail_x += head_offset_x
+						tail_y -= 1
+						head_offset_x = 0
+						head_offset_y = -1
+						add_to_set(*locations_set, tail_x, tail_y)
+					}
+			}
+		}
+	}
+
+	print("%\n", locations_set.count)
+}

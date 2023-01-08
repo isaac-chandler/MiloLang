@@ -1,0 +1,44 @@
+#import "Standard"
+#import "File"
+#import "String"
+
+main :: () {
+	file := cast(string) read_entire_file("day05.txt")
+
+	stacks: [][..]u8
+
+	while file {
+		line: string
+
+		line, file = read_line(file)
+
+		if !line {
+			for stacks
+				array_reverse(it)
+		} else if find_first(line, "[") {
+			if !stacks
+				stacks = new_array([..]u8, (line.count + 1) / 4)
+
+			for * stacks {
+				if line[it_index * 4] == '['
+					array_add(it, line[it_index * 4 + 1])
+			}
+		} else if find_first(line, "move ") {
+			count_string, rest := split_at_first(line[5..], " from ")
+			count := read_u64(count_string)
+
+			from_string, to_string := split_at_first(rest, " to ")
+			from := read_u64(from_string) - 1
+			to := read_u64(to_string) - 1
+
+			for count
+				array_add(*stacks[to], array_pop(*stacks[from]))
+		}
+	}
+
+	result: [..]u8
+	for * stacks
+		array_add(*result, array_pop(it))
+
+	print("%\n", cast(string) cast([]u8) result)
+}

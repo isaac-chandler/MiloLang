@@ -408,7 +408,11 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 	}
 	case ExprFlavor::ENTRY_POINT:
 	case ExprFlavor::CONTEXT:
-	case ExprFlavor::ADD_CONTEXT: {
+	case ExprFlavor::ADD_CONTEXT:
+	case ExprFlavor::BREAK:
+	case ExprFlavor::CONTINUE:
+	case ExprFlavor::REMOVE:
+	case ExprFlavor::ENUM_INCREMENT: {
 		flattenTo.add(expr);
 		break;
 	}
@@ -569,21 +573,6 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 	case ExprFlavor::FLOAT_LITERAL:
 	case ExprFlavor::INT_LITERAL:
 		break;
-	case ExprFlavor::BREAK:
-	case ExprFlavor::CONTINUE:
-	case ExprFlavor::REMOVE: {
-		auto continue_ = static_cast<ExprBreakOrContinue *>(*expr);
-
-		if (continue_->label) {
-			flatten(flattenTo, &continue_->label);
-		}
-
-		if (!continue_->refersTo) {
-			flattenTo.add(expr);
-		}
-
-		break;
-	}
 	case ExprFlavor::PUSH_CONTEXT: {
 		ExprBinaryOperator *pushContext = static_cast<ExprBinaryOperator *>(*expr);
 
@@ -697,10 +686,6 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 		if (loop->completedBody)
 			flatten(flattenTo, &loop->completedBody);
 
-		break;
-	}
-	case ExprFlavor::ENUM_INCREMENT: {
-		flattenTo.add(expr);
 		break;
 	}
 	default:
@@ -4640,6 +4625,16 @@ bool inferFlattened(SubJob *job) {
 						bool yield;
 
 						if (Declaration *declaration = findDeclaration(identifier->resolveFrom, identifier->name, &yield, identifier->serial)) {
+							// Don't resolve while loop iterator variable during normal identifier lookup
+							// this
+							if (declaration->flags & DECLARATION_IS_ITERATOR) {
+								auto loop = CAST_FROM_SUBSTRUCT(ExprLoop, iteratorBlock, declaration->enclosingScope);
+								assert(loop->flavor == ExprFlavor::WHILE || loop->flavor == ExprFlavor::FOR);
+
+								if (loop->flavor == ExprFlavor::WHILE)
+									continue;
+							}
+
 							if (declaration->flags & DECLARATION_IS_CONSTANT) {
 								identifier->declaration = declaration;
 								break;
@@ -4761,86 +4756,70 @@ bool inferFlattened(SubJob *job) {
 				}
 			}
 
-			if (!(identifier->flags & EXPR_IDENTIFIER_IS_BREAK_OR_CONTINUE_LABEL)) {
-				// We shouldn't bother resolving types for labels, they aren't needed
-				// Replacing a constant would mean we have to check if the label
-				// is still an identifier when we infer break/continue and if we did that it would be a bad error message
-				if (identifier->declaration->flags & DECLARATION_IS_ITERATOR) {
-					auto loop = CAST_FROM_SUBSTRUCT(ExprLoop, iteratorBlock, identifier->declaration->enclosingScope);
-					assert(loop->flavor == ExprFlavor::WHILE || loop->flavor == ExprFlavor::FOR);
-
-					if (loop->flavor == ExprFlavor::WHILE) {
-						reportError(identifier, "Error: Cannot use while loop label as a variable, it has no storage");
-						reportError(identifier->declaration, "   ..: Here is the location of the loop");
-						return false;
-					}
+			if (identifier->declaration->flags & DECLARATION_TYPE_IS_READY) {
+				if (!identifier->type) {
+					identifier->type = getDeclarationType(identifier->declaration);
+					addSizeDependency(job->sizeDependencies, identifier->type);
 				}
+			}
+			else {
+				goToSleep(job, &identifier->declaration->sleepingOnMyType, "Identifier type not ready");
 
-				if (identifier->declaration->flags & DECLARATION_TYPE_IS_READY) {
-					if (!identifier->type) {
-						identifier->type = getDeclarationType(identifier->declaration);
-						addSizeDependency(job->sizeDependencies, identifier->type);
-					}
+				if (!identifier->declaration->inferJob)
+					forceAddDeclaration(identifier->declaration);
+
+				return true;
+			}
+
+			if (identifier->declaration->flags & DECLARATION_IS_CONSTANT) {
+				if (identifier->declaration->flags & DECLARATION_VALUE_IS_READY) {
+					assert(identifier->declaration->flags & DECLARATION_TYPE_IS_READY);
+					copyLiteral(exprPointer, identifier->declaration->initialValue);
+
+
 				}
 				else {
-					goToSleep(job, &identifier->declaration->sleepingOnMyType, "Identifier type not ready");
+					goToSleep(job, &identifier->declaration->sleepingOnMyValue, "Identifier value not ready");
 
 					if (!identifier->declaration->inferJob)
 						forceAddDeclaration(identifier->declaration);
 
 					return true;
 				}
-
-				if (identifier->declaration->flags & DECLARATION_IS_CONSTANT) {
-					if (identifier->declaration->flags & DECLARATION_VALUE_IS_READY) {
-						assert(identifier->declaration->flags & DECLARATION_TYPE_IS_READY);
-						copyLiteral(exprPointer, identifier->declaration->initialValue);
-
-
+			}
+			else if (identifier->structAccess) {
+				if (identifier->structAccess->type->flags & TYPE_ARRAY_IS_FIXED) {
+					if (!isAddressable(identifier->structAccess)) {
+						reportError(identifier, "Error: Cannot get the data pointer of a fixed array that has no storage");
+						return false;
 					}
-					else {
-						goToSleep(job, &identifier->declaration->sleepingOnMyValue, "Identifier value not ready");
 
-						if (!identifier->declaration->inferJob)
-							forceAddDeclaration(identifier->declaration);
+					markDeclarationsAsPointedTo(identifier->structAccess);
 
-						return true;
-					}
+					auto address = INFER_NEW(ExprUnaryOperator);
+					address->flavor = ExprFlavor::UNARY_OPERATOR;
+					address->op = TOKEN('*');
+					address->start = identifier->start;
+					address->end = identifier->end;
+					address->value = identifier->structAccess;
+					address->type = getPointer(identifier->structAccess->type);
+
+					*exprPointer = address;
+
+					insertImplicitCast(job->sizeDependencies, exprPointer, identifier->type);
 				}
-				else if (identifier->structAccess) {
-					if (identifier->structAccess->type->flags & TYPE_ARRAY_IS_FIXED) {
-						if (!isAddressable(identifier->structAccess)) {
-							reportError(identifier, "Error: Cannot get the data pointer of a fixed array that has no storage");
-							return false;
-						}
+				else if (identifier->structAccess->type->flavor == TypeFlavor::POINTER &&
+					(static_cast<TypePointer *>(identifier->structAccess->type)->pointerTo->flags & TYPE_ARRAY_IS_FIXED)) {
+					auto cast = INFER_NEW(ExprBinaryOperator);
+					cast->flavor = ExprFlavor::BINARY_OPERATOR;
+					cast->op = TokenT::CAST;
+					cast->start = identifier->start;
+					cast->end = identifier->end;
+					cast->right = identifier->structAccess;
+					cast->type = identifier->type;
+					cast->left = inferMakeTypeLiteral(cast->start, cast->end, cast->type);
 
-						markDeclarationsAsPointedTo(identifier->structAccess);
-
-						auto address = INFER_NEW(ExprUnaryOperator);
-						address->flavor = ExprFlavor::UNARY_OPERATOR;
-						address->op = TOKEN('*');
-						address->start = identifier->start;
-						address->end = identifier->end;
-						address->value = identifier->structAccess;
-						address->type = getPointer(identifier->structAccess->type);
-
-						*exprPointer = address;
-
-						insertImplicitCast(job->sizeDependencies, exprPointer, identifier->type);
-					}
-					else if (identifier->structAccess->type->flavor == TypeFlavor::POINTER &&
-						(static_cast<TypePointer *>(identifier->structAccess->type)->pointerTo->flags & TYPE_ARRAY_IS_FIXED)) {
-						auto cast = INFER_NEW(ExprBinaryOperator);
-						cast->flavor = ExprFlavor::BINARY_OPERATOR;
-						cast->op = TokenT::CAST;
-						cast->start = identifier->start;
-						cast->end = identifier->end;
-						cast->right = identifier->structAccess;
-						cast->type = identifier->type;
-						cast->left = inferMakeTypeLiteral(cast->start, cast->end, cast->type);
-
-						*exprPointer = cast;
-					}
+					*exprPointer = cast;
 				}
 			}
 			break;
@@ -5264,16 +5243,29 @@ bool inferFlattened(SubJob *job) {
 		case ExprFlavor::REMOVE: {
 			auto continue_ = static_cast<ExprBreakOrContinue *>(expr);
 
-			assert(continue_->label->flavor == ExprFlavor::IDENTIFIER);
-			auto label = static_cast<ExprIdentifier *>(continue_->label);
-			assert(label->declaration);
+				// Don't pass through arguments blocks since we can't break from an inner function to an outer one
+			for (Block *block = continue_->enclosingScope; block && block->flavor == BlockFlavor::IMPERATIVE; block = block->parentBlock) {
+				if (!block->loop)
+					continue;
+				if (!continue_->label || findDeclarationNoYield(block, continue_->label)) {
 
-			if (!(label->declaration->flags & DECLARATION_IS_ITERATOR)) {
-				reportError(continue_, "Error: %s label '%.*s' is not a loop iterator", continue_->flavor == ExprFlavor::CONTINUE ? "Continue" : "Break", STRING_PRINTF(label->name));
-				return false;
+					continue_->refersTo = CAST_FROM_SUBSTRUCT(ExprLoop, iteratorBlock, block);
+
+					if (continue_->flavor == ExprFlavor::BREAK) {
+						continue_->refersTo->flags |= EXPR_LOOP_HAS_BREAK;
+					}
+					break;
+				}
 			}
 
-			continue_->refersTo = CAST_FROM_SUBSTRUCT(ExprLoop, iteratorBlock, label->declaration->enclosingScope);
+			if (!continue_->refersTo) {
+				if (continue_->label)
+					reportError(continue_, "Error: Could not resolve loop with iterator %.*s", STRING_PRINTF(continue_->label));
+				else
+					reportError(continue_, "Error: Cannot have a %s outside of a loop", continue_->flavor == ExprFlavor::CONTINUE ? "continue" :
+						(continue_->flavor == ExprFlavor::REMOVE ? "remove" : "break"));
+				return false;
+			}
 
 			if (continue_->flavor == ExprFlavor::REMOVE) {
 				if (continue_->refersTo->flavor == ExprFlavor::WHILE) {
@@ -5299,8 +5291,6 @@ bool inferFlattened(SubJob *job) {
 
 					return false;
 				}
-			} else if (continue_->flavor == ExprFlavor::BREAK) {
-				continue_->refersTo->flags |= EXPR_LOOP_HAS_BREAK;
 			}
 
 			break;

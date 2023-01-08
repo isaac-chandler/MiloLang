@@ -1,0 +1,27 @@
+#import "Standard"
+#import "File"
+#import "String"
+
+main :: () {
+	file := cast(string) read_entire_file("day01.txt")
+
+	calories := 0
+	calories_carried: [..]s64
+
+	while file {
+		line: string
+
+		line, file = read_line(file)
+
+		if !line {
+			array_add(*calories_carried, calories)
+			calories = 0
+		} else {
+			calories += cast() read_u64(line)
+		}
+	}
+
+	insertion_sort(calories_carried)
+
+	print("%\n", calories_carried[calories_carried.count - 1] + calories_carried[calories_carried.count - 2] + calories_carried[calories_carried.count - 3])
+}

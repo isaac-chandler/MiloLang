@@ -1,0 +1,55 @@
+#import "Standard"
+#import "File"
+#import "String"
+
+WIDTH :: 20_000_000
+Y :: 2_000_000
+OFFSET :: WIDTH / 2
+
+disallowed: [WIDTH]bool
+beacons: [WIDTH]bool
+
+
+manhattan_distance :: (x1: s64, y1: s64, x2: s64, y2: s64) -> s64{
+	return abs(x1 - x2) + abs(y1 - y2)
+}
+
+main :: () {
+	file := cast(string) read_entire_file("day15.txt")
+
+	count := 0
+
+	while file {
+		line: string
+
+		line, file = read_line(file)
+		if !line continue;
+		
+		points := split(line, "x=")
+
+		sensor := points[1]
+		beacon := points[2]
+
+		sensor_x_string, sensor_y_string := split_at_first(sensor, ", y=")
+		sensor_x := read_s64(sensor_x_string)
+		sensor_y := read_s64(sensor_y_string)
+		beacon_x_string, beacon_y_string := split_at_first(beacon, ", y=")
+		beacon_x := read_s64(beacon_x_string)
+		beacon_y := read_s64(beacon_y_string)
+
+		if beacon_y == Y {
+			beacons[beacon_x + OFFSET] = true
+		}
+
+		distance := manhattan_distance(sensor_x, sensor_y, beacon_x, beacon_y)
+
+		for * disallowed {
+			if !beacons[it_index] && !<<it && manhattan_distance(sensor_x, sensor_y, cast() it_index - OFFSET, Y) <= distance {
+				<<it = true
+				count += 1
+			}
+		}
+	}	
+
+	print("%\n", count)
+}

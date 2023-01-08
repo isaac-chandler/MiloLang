@@ -1,0 +1,36 @@
+#import "Standard"
+#import "File"
+#import "String"
+
+main :: () {
+	file := cast(string) read_entire_file("day10.txt")
+
+	adds: [..]s64
+
+	while file {
+		line: string
+
+		line, file = read_line(file)
+
+		if line == "noop" {
+			array_add(*adds, 0)
+		} else {
+			array_add(*adds, 0)
+			array_add(*adds, read_s64(line[5..]))
+		}
+	}
+
+	X := 1
+	total := 0
+
+	for adds {
+		if (it_index + 1) % 40 == 20 {
+			print("%*%\n", X, it_index + 1)
+			total += X * cast() (it_index + 1)
+		}
+
+		X += it
+	}
+
+	print("%\n", total)
+}

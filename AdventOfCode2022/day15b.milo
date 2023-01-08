@@ -1,0 +1,76 @@
+#import "Standard"
+#import "File"
+#import "String"
+
+Location :: struct {
+	x: s64
+	y: s64
+}
+
+Sensor :: struct {
+	sensor: Location
+	distance: s64
+}
+
+manhattan_distance :: (p1: Location, p2: Location) -> s64 {
+	return abs(p1.x - p2.x) + abs(p1.y - p2.y)
+}
+
+main :: () {
+	file := cast(string) read_entire_file("day15.txt")
+
+	count := 0
+
+	sensors: [..]Sensor
+
+	while file {
+		line: string
+
+		line, file = read_line(file)
+		if !line continue;
+		
+		points := split(line, "x=")
+
+		sensor := points[1]
+		beacon := points[2]
+
+		sensor_x_string, sensor_y_string := split_at_first(sensor, ", y=")
+		sensor_x := read_s64(sensor_x_string)
+		sensor_y := read_s64(sensor_y_string)
+		beacon_x_string, beacon_y_string := split_at_first(beacon, ", y=")
+		beacon_x := read_s64(beacon_x_string)
+		beacon_y := read_s64(beacon_y_string)
+
+		beacon_location := Location.{beacon_x, beacon_y}
+		sensor_location := Location.{sensor_x, sensor_y}
+
+		array_add(*sensors, .{sensor_location, manhattan_distance(sensor_location, beacon_location)})
+	}
+
+	SEARCH_AREA :: 4_000_000
+
+	for y: SEARCH_AREA + 1 {
+		x := 0
+
+		while x: x <= SEARCH_AREA {
+			location := Location.{x, y}
+
+			for sensors {
+				distance := manhattan_distance(location, it.sensor)
+
+				if distance <= it.distance {
+					if x >= it.sensor.x {
+						x += it.distance - distance + 1
+					} else {
+						x = it.sensor.x
+					}
+
+					continue x
+				}
+			}
+			print("%\n", x * SEARCH_AREA + y)
+			x += 1
+		}
+	}
+
+}

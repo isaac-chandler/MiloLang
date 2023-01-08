@@ -214,6 +214,10 @@ backed_array :: (using array: []$T) -> [..]T {
 	return .{data = data, count = 0, capacity = count}
 }
 
+array_reverse :: (using array: []$T) {
+	for array.count / 2
+		swap(*array[it], *array[array.count - it - 1])
+}
 
 Allocator :: struct {
 	using Mode :: enum u8 {
@@ -294,6 +298,11 @@ array_copy :: (using array: []$T) -> []T {
 array_free :: (using array: [..]$T) {
 	if capacity  
 		context.allocator(.FREE, context.allocator_data, 0, align_of(T), data, size_of(T) * capacity) 
+}
+
+array_contains :: (using array: []$T, value: T) {
+	for array if it == value return true
+	return false
 }
 
 panic :: () {
@@ -691,5 +700,26 @@ print_any :: (c: *Concatenator, using val: any) {
 	
 		append(c, "Cannot print ")
 		append(c, value_type.name)		
+	}
+}
+
+swap :: (a: *$T, b: *T) {
+	temp := <<a;
+	<<a = <<b;
+	<<b = temp
+}
+
+insertion_sort :: (array: []$T, less := (a: T, b: T) -> bool { return a < b }) {
+	for 1 .. array.count {
+		i := it
+
+		while i > 0 {
+			if less(array[i], array[i - 1]) {
+				swap(*array[i], *array[i - 1])
+			} else
+				break;
+
+			i -= 1
+		}
 	}
 }
