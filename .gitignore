@@ -14,4 +14,7 @@ x64
 *.lastcodeanalysissucceeded
 *.session
 *.mecfg
+*.dll
+*.res
+*.ttf
 tests/log.txt
