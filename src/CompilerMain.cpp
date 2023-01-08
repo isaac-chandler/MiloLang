@@ -553,6 +553,7 @@ int main(int argc, char *argv[]) {
 
 		wchar_t *linkerPath;
 		wchar_t *windowsLibPath;
+		wchar_t *windowsSdkPath;
 		wchar_t *crtLibPath;
 		wchar_t *ucrtLibPath;
 
@@ -628,6 +629,20 @@ int main(int argc, char *argv[]) {
 					goto linkerCacheFail;
 				}
 
+				if (!read(&length, 1)) {
+					reportInfo("Failed to read linker cache");
+					fclose(cache);
+					goto linkerCacheFail;
+				}
+
+				windowsSdkPath = new wchar_t[length];
+
+				if (!read(windowsSdkPath, length)) {
+					reportInfo("Failed to read linker cache");
+					fclose(cache);
+					goto linkerCacheFail;
+				}
+
 				fclose(cache);
 
 				if (!fileExists(linkerPath)) {
@@ -636,17 +651,22 @@ int main(int argc, char *argv[]) {
 				}
 
 				if (!directoryExists(windowsLibPath)) {
-					reportInfo("Linker cache had invalid library path");
+					reportInfo("Linker cache had invalid windows library path");
 					goto linkerCacheFail;
 				}
 
 				if (!directoryExists(crtLibPath)) {
-					reportInfo("Linker cache had invalid library path");
+					reportInfo("Linker cache had invalid crt library path");
 					goto linkerCacheFail;
 				}
 
 				if (!directoryExists(ucrtLibPath)) {
-					reportInfo("Linker cache had invalid library path");
+					reportInfo("Linker cache had invalid windows ucrt library path");
+					goto linkerCacheFail;
+				}
+
+				if (!directoryExists(windowsSdkPath)) {
+					reportInfo("Linker cache had invalid windows sdk path");
 					goto linkerCacheFail;
 				}
 			}
@@ -665,11 +685,15 @@ int main(int argc, char *argv[]) {
 					return 1;
 				}
 				else if (!result.windows_sdk_um_library_path) {
-					reportError("Couldn't find libraries");
+					reportError("Couldn't find windows sdk um");
 					return 1;
 				}
 				else if (!result.windows_sdk_ucrt_library_path) {
-					reportError("Couldn't find libraries");
+					reportError("Couldn't find windows sdk ucrt");
+					return 1;
+				}
+				else if (!result.windows_sdk_bin) {
+					reportError("Couldn't find windows sdk");
 					return 1;
 				}
 
@@ -677,6 +701,7 @@ int main(int argc, char *argv[]) {
 				windowsLibPath = result.windows_sdk_um_library_path;
 				crtLibPath = result.vs_library_path;
 				ucrtLibPath = result.windows_sdk_ucrt_library_path;
+				windowsSdkPath = result.windows_sdk_bin;
 
 				if (FILE *cache = _wfopen(cacheFile, L"wb")) {
 					u16 length = lstrlenW(linkerPath) + 1;
@@ -703,6 +728,12 @@ int main(int argc, char *argv[]) {
 
 					write(&length, 1);
 					write(ucrtLibPath, length);
+
+
+					length = lstrlenW(windowsSdkPath) + 1;
+
+					write(&length, 1);
+					write(windowsSdkPath, length);
 
 					fclose(cache);
 				}
@@ -732,38 +763,83 @@ int main(int argc, char *argv[]) {
 				libBuffer = mprintf("%s %s", libBuffer, getLibC());
 			}
 
+			if (buildOptions.icon_name.count) {
+				auto iconFile = fopen("icon.rc", "w");
+				fprintf(iconFile, "MAINICON ICON %.*s\r\n", buildOptions.icon_name.count, buildOptions.icon_name.data);
+				fclose(iconFile);
 
-			linkerCommand = mprintf(L"\"%s\" %S -nodefaultlib -out:%.*S /debug %S %S%s \"-libpath:%s\" \"-libpath:%s\" \"-libpath:%s\" -incremental:no -nologo -natvis:%Smilo.natvis",
-				linkerPath, objectFileName, STRING_PRINTF(outputFileName), libBuffer, modulePath, linkLibC ? L"__milo_cmain.obj" : 
-				L"__milo_chkstk.obj -entry:__program_start -SUBSYSTEM:CONSOLE", windowsLibPath, crtLibPath, ucrtLibPath, modulePath);
+				auto rcCommand = mprintf(L"\"%s\\rc.exe\" /nologo icon.rc", windowsSdkPath);
+
+				fwprintf(stdout, L"RC command: %s\n", rcCommand);
+
+				STARTUPINFOW startup = {};
+				startup.cb = sizeof(STARTUPINFOW);
+
+				PROCESS_INFORMATION info;
+
+				if (!CreateProcessW(NULL, rcCommand, NULL, NULL, false, 0, NULL, NULL, &startup, &info)) {
+					reportInfo("Failed to run rc command");
+				}
+
+				CloseHandle(info.hThread);
+				{
+					PROFILE_ZONE("Wait for rc");
+					WaitForSingleObject(info.hProcess, INFINITE);
+				}
+
+				// Make sure a failing exit code is returned if the linker fails
+				DWORD exitCode;
+				GetExitCodeProcess(info.hProcess, &exitCode);
+				if (exitCode) {
+					hadError = true;
+					return 1;
+				}
+			}
+
+			linkerCommand = mprintf(L"\"%s\" %S -nodefaultlib -out:%.*S /debug %S %S%s \"-libpath:%s\"  \"-libpath:%s\" \"-libpath:%s\" -incremental:no -nologo -natvis:%Smilo.natvis -SUBSYSTEM:%s%s",
+				linkerPath, 
+				objectFileName, 
+				STRING_PRINTF(outputFileName), 
+				libBuffer, 
+				modulePath,
+				linkLibC ? L"__milo_cmain.obj" :  L"__milo_chkstk.obj -entry:__program_start", 
+				windowsLibPath, 
+				crtLibPath,
+				ucrtLibPath, 
+				modulePath, 
+				buildOptions.show_console ? L"CONSOLE" : L"WINDOWS", 
+				buildOptions.icon_name.count ? L" icon.res" : L"");
 		}
 
-
-		fwprintf(stdout, L"Linker command: %s\n", linkerCommand);
-
-		STARTUPINFOW startup = {};
-		startup.cb = sizeof(STARTUPINFOW);
-
-		PROCESS_INFORMATION info;
-
-		if (!CreateProcessW(NULL, linkerCommand, NULL, NULL, false, 0, NULL, NULL, &startup, &info)) {
-			reportInfo("Failed to run linker command");
-		}
-
-		CloseHandle(info.hThread);
 		{
-			PROFILE_ZONE("Wait for linker");
-			WaitForSingleObject(info.hProcess, INFINITE);
+			fwprintf(stdout, L"Linker command: %s\n", linkerCommand);
+
+			STARTUPINFOW startup = {};
+			startup.cb = sizeof(STARTUPINFOW);
+
+			PROCESS_INFORMATION info;
+
+			if (!CreateProcessW(NULL, linkerCommand, NULL, NULL, false, 0, NULL, NULL, &startup, &info)) {
+				reportInfo("Failed to run linker command");
+			}
+
+			CloseHandle(info.hThread);
+			{
+				PROFILE_ZONE("Wait for linker");
+				WaitForSingleObject(info.hProcess, INFINITE);
+			}
+
+			// Make sure a failing exit code is returned if the linker fails
+			DWORD exitCode;
+			GetExitCodeProcess(info.hProcess, &exitCode);
+			if (exitCode) {
+				hadError = true;
+			}
+
+			CloseHandle(info.hProcess);
 		}
 
-		// Make sure a failing exit code is returned if the linker fails
-		DWORD exitCode;
-		GetExitCodeProcess(info.hProcess, &exitCode);
-		if (exitCode) {
-			hadError = true;
-		}
-		
-		CloseHandle(info.hProcess);
+	error:;
 
 		reportInfo("Linker Time: %.1fms", duration_cast<microseconds>(duration<double>(
 			high_resolution_clock::now() - linkerStart)).count() / 1000.0);

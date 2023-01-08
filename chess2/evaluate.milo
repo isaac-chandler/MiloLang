@@ -34,7 +34,7 @@ compute_piece_values :: (pawn_square_bonus: [64]s16, pawn_value: s16,
 
 	for piece: WHITE_PAWN .. 12 {
 		for result[piece] {
-			result[piece - WHITE_PAWN][flip(cast() it_index)] = -it
+			result[piece - WHITE_PAWN][flip(cast() it_index)] = it
 		}
 	}
 
@@ -178,11 +178,74 @@ endgame_piece_values :: #run compute_piece_values(
 	]
 )
 
+compute_pawn_front_attack_span :: (white: bool) -> [64]u64 {
+	result: [64]u64
+	
+	for * result {
+		x, y := unpack(cast() it_index)
+		
+		while true {
+			if white {
+				y -= 1
+				if y < 0
+					break
+			} else {
+				y += 1
+				if y > 7
+					break
+			}
+			
+			if x > 1 {
+				<<it |= 1 << cast(u64) pack(x - 1, y)
+			}
+			
+			if x < 7 {
+				<<it |= 1 << cast(u64) pack(x + 1, y)			
+			}
+		}
+	}
+	
+	return result
+}
+
+compute_pawn_front_span :: (white: bool) -> [64]u64 {
+	result: [64]u64
+	
+	for * result {
+		x, y := unpack(cast() it_index)
+		
+		while true {
+			if white {
+				y -= 1
+				if y < 0
+					break
+			} else {
+				y += 1
+				if y > 7
+					break
+			}
+			
+			<<it |= 1 << cast(u64) pack(x, y)	
+		}
+	}
+	
+	return result
+}
+
+white_pawn_front_attack_span :: #run compute_pawn_front_attack_span(true)
+white_pawn_front_span :: #run compute_pawn_front_span(true)
+black_pawn_front_attack_span :: #run compute_pawn_front_attack_span(false)
+black_pawn_front_span :: #run compute_pawn_front_span(false)
+
+
 piece_value :: (piece: s8, square: s8, endgame_weight: f32) -> s16 {
 	return cast() (cast(f32) endgame_piece_values[piece][square] * endgame_weight + cast(f32) piece_values[piece][square] * (1.0 - endgame_weight))
 }
 
-evaluate_position :: (using state: State) -> s16 {
+evaluate_position :: (using state: *State) -> s16 {
+	stats.time_in_evaluate -= get_performance_ticks()
+	defer stats.time_in_evaluate += get_performance_ticks()
+
 	PIECE_PHASE  :: 1
 	ROOK_PHASE   :: 2
 	QUEEN_PHASE  :: 4
@@ -209,6 +272,14 @@ evaluate_position :: (using state: State) -> s16 {
 		white_pawn_files[it] = (pieces[WHITE_PAWN] >> it) & file_mask
 		black_pawn_files[it] = (pieces[BLACK_PAWN] >> it) & file_mask
 	}
+	
+	white_pawn_attacks := ((pieces[WHITE_PAWN] & (white_pawn_left_capture_mask | white_pawn_promote_left_mask)) >> 9) | 
+		((pieces[WHITE_PAWN] & (white_pawn_right_capture_mask | white_pawn_promote_right_mask)) >> 7)
+	black_pawn_attacks := ((pieces[BLACK_PAWN] & (black_pawn_left_capture_mask | black_pawn_promote_left_mask)) << 7) | 
+		((pieces[WHITE_PAWN] & (black_pawn_right_capture_mask | black_pawn_promote_right_mask)) << 9)
+		
+	
+	occupied_for_mobility := pieces[WHITE_PAWN] | pieces[WHITE_KING] | pieces[WHITE_QUEEN] | pieces[BLACK_PAWN] | pieces[BLACK_KING] | pieces[BLACK_QUEEN]
 
 
 	for pieces {
@@ -217,81 +288,156 @@ evaluate_position :: (using state: State) -> s16 {
 		location: s8
 
 		while iterate_bits(*piece_mask, *location) {
-			evaluation += piece_value(cast()it_index, location, endgame_scalar)
+			piece_evaluation := piece_value(cast()it_index, location, endgame_scalar)
 
 			file := it & 7
 
-			if it == WHITE_ROOK {
+			if it_index == WHITE_ROOK {
 				if !white_pawn_files[file]
-					evaluation += 30
+					evaluation += 20
 				if !black_pawn_files[file]
-					evaluation += 30
-			} else if it == BLACK_ROOK {
+					evaluation += 20
+					
+				mobility := get_rook_moves(location, occupied_for_mobility) & ~black_pawn_attacks
+				
+				piece_evaluation += cast() (3 * pop_count(mobility))
+				
+			} else if it_index == BLACK_ROOK {
 				if !white_pawn_files[file]
-					evaluation -= 30
+					piece_evaluation += 20
 				if !black_pawn_files[file]
-					evaluation -= 30
-			} else if it == WHITE_KING {
+					piece_evaluation += 20
+					
+				mobility := get_rook_moves(location, occupied_for_mobility) & ~white_pawn_attacks
+				
+				piece_evaluation += cast() (3 * pop_count(mobility))
+				
+			} else if it_index == WHITE_KING {
 				if !white_pawn_files[file]
-					evaluation -= cast() ((1.0 - endgame_scalar) * 80) 
+					piece_evaluation -= cast() ((1.0 - endgame_scalar) * 80) 
 				if file > 0 && !white_pawn_files[file - 1]
-					evaluation -= cast() ((1.0 - endgame_scalar) * 30)
+					piece_evaluation -= cast() ((1.0 - endgame_scalar) * 30)
 				if file < 7 && !white_pawn_files[file + 1]
-					evaluation -= cast() ((1.0 - endgame_scalar) * 30)
+					piece_evaluation -= cast() ((1.0 - endgame_scalar) * 30)
 
 				white_pieces := collect_occupied(state, start = WHITE_PAWN)
-				occupied_for_virtual_mobility := white_pieces | pieces[BLACK_KING] | pieces[BLACK_PAWN] | pieces[BLACK_KNIGHT]
+				occupied_for_virtual_mobility := white_pieces | pieces[BLACK_KING] | pieces[BLACK_PAWN]
 
 				rook_moves := get_rook_moves(location, occupied_for_virtual_mobility)
 				bishop_moves := get_bishop_moves(location, occupied_for_virtual_mobility)
 
-				evaluation -= cast() ((1.0 - endgame_scalar) * 5 * cast() pop_count((rook_moves | bishop_moves) & ~white_pieces))
+				piece_evaluation -= cast() ((1.0 - endgame_scalar) * 2 * cast() pop_count((rook_moves | bishop_moves) & ~white_pieces))
 
-			} else if it == BLACK_KING {
+			} else if it_index == BLACK_KING {
 				if !black_pawn_files[file]
-					evaluation += cast() ((1.0 - endgame_scalar) * 80)
+					piece_evaluation -= cast() ((1.0 - endgame_scalar) * 80)
 				if file > 0 && !black_pawn_files[file - 1]
-					evaluation += cast() ((1.0 - endgame_scalar) * 30)
+					piece_evaluation -= cast() ((1.0 - endgame_scalar) * 30)
 				if file < 7 && !black_pawn_files[file + 1]
-					evaluation += cast() ((1.0 - endgame_scalar) * 30)
+					piece_evaluation -= cast() ((1.0 - endgame_scalar) * 30)
 
 				black_pieces := collect_occupied(state, end = WHITE_PAWN)
-				occupied_for_virtual_mobility := black_pieces | pieces[WHITE_KING] | pieces[WHITE_PAWN] | pieces[WHITE_KNIGHT]
+				occupied_for_virtual_mobility := black_pieces | pieces[WHITE_KING] | pieces[WHITE_PAWN]
 
 				rook_moves := get_rook_moves(location, occupied_for_virtual_mobility)
 				bishop_moves := get_bishop_moves(location, occupied_for_virtual_mobility)
 
-				evaluation += cast() ((1.0 - endgame_scalar) * 5 * cast() pop_count((rook_moves | bishop_moves) & ~black_pieces))
+				piece_evaluation -= cast() ((1.0 - endgame_scalar) * 5 * cast() pop_count((rook_moves | bishop_moves) & ~black_pieces))
+			} else if it_index == WHITE_PAWN {
+				
+				if !((white_pawn_front_attack_span[location] | white_pawn_front_span[location]) & pieces[BLACK_PAWN]) {
+					piece_evaluation += cast() ((1.0 - endgame_scalar) * 10 + endgame_scalar * 30)
+				}
+				
+			} else if it_index == BLACK_PAWN {
+				
+				if !((black_pawn_front_attack_span[location] | black_pawn_front_span[location]) & pieces[WHITE_PAWN]) {
+					piece_evaluation += cast() ((1.0 - endgame_scalar) * 10 + endgame_scalar * 30)
+				}
+			} else if it_index == WHITE_BISHOP {
+				mobility := get_bishop_moves(location, occupied_for_mobility) & ~black_pawn_attacks
+				
+				piece_evaluation += cast() (3 * pop_count(mobility))
+				
+				if (1 << cast(u64) location) & dark_square_mask {
+					piece_evaluation -= cast() (2 * pop_count(occupied_for_mobility & dark_square_mask))
+				} else {
+					piece_evaluation -= cast() (2 * pop_count(occupied_for_mobility & ~dark_square_mask))
+				}
+				
+			} else if it_index == BLACK_BISHOP {					
+				mobility := get_bishop_moves(location, occupied_for_mobility) & ~white_pawn_attacks
+				
+				piece_evaluation += cast() (3 * pop_count(mobility))
+				
+				if (1 << cast(u64) location) & dark_square_mask {
+					piece_evaluation -= cast() (2 * pop_count(occupied_for_mobility & dark_square_mask))
+				} else {
+					piece_evaluation -= cast() (2 * pop_count(occupied_for_mobility & ~dark_square_mask))
+				}
+				
+			} else if it_index == WHITE_QUEEN {
+				mobility := (get_bishop_moves(location, occupied_for_mobility) | get_rook_moves(location, occupied_for_mobility)) & ~black_pawn_attacks
+				
+				piece_evaluation += cast() (2 * pop_count(mobility))
+				
+			} else if it_index == BLACK_QUEEN {					
+				mobility := (get_bishop_moves(location, occupied_for_mobility) | get_rook_moves(location, occupied_for_mobility)) & ~white_pawn_attacks
+				
+				piece_evaluation += cast() (2 * pop_count(mobility))
+				
+			} else if it_index == WHITE_KNIGHT {
+				mobility := knight_mask[location] & ~black_pawn_attacks & ~occupied_for_mobility
+				
+				piece_evaluation += cast() (5 * pop_count(mobility))
+				
+			} else if it_index == BLACK_KNIGHT {					
+				mobility := knight_mask[location] & ~white_pawn_attacks & ~occupied_for_mobility
+				
+				piece_evaluation += cast() (5 * pop_count(mobility))
+				
+			}
+			
+			if it_index < WHITE_PAWN {
+				evaluation -= piece_evaluation
+			} else {
+				evaluation += piece_evaluation
 			}
 		}
 	}
 
-	if white_pawn_files[0] && !white_pawn_files[1] {
-		evaluation -= 10
+	if white_pawn_files[0] && white_pawn_files[1] {
+		evaluation += 5
 	}
-	if black_pawn_files[0] && !black_pawn_files[1] {
-		evaluation += 10
+	if black_pawn_files[0] && black_pawn_files[1] {
+		evaluation -= 5
 	}
 
 	for cast(u64) 1 .. 7 {
-		if white_pawn_files[it] && !white_pawn_files[it - 1] && !white_pawn_files[it + 1] {
-			evaluation -= 10
+		if white_pawn_files[it] {
+			if white_pawn_files[it - 1] {
+				evaluation += 5
+			}
+			if white_pawn_files[it + 1] {
+				evaluation += 5
+			}
 		}
-		if black_pawn_files[it] && !black_pawn_files[it - 1] && !black_pawn_files[it + 1] {
-			evaluation += 10
+		
+		if black_pawn_files[it] {
+			if black_pawn_files[it - 1] {
+				evaluation -= 5
+			}
+			if black_pawn_files[it + 1] {
+				evaluation -= 5
+			}
 		}
 	}
 
-	if white_pawn_files[7] && !white_pawn_files[6] {
-		evaluation -= 10
+	if white_pawn_files[7] && white_pawn_files[6] {
+		evaluation += 5
 	}
-	if black_pawn_files[7] && !black_pawn_files[6] {
-		evaluation += 10
-	}
-
-	for cast(u64) 8 {
-		evaluation -= 10 * cast(s16) pop_count(white_pawn_files[it] & (white_pawn_files[it] - 1))
-		evaluation += 10 * cast(s16) pop_count(black_pawn_files[it] & (black_pawn_files[it] - 1))
+	if black_pawn_files[7] && black_pawn_files[6] {
+		evaluation -= 5
 	}
 
 	return evaluation					

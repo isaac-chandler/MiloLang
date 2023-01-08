@@ -1385,7 +1385,7 @@ u32 generateCall(IrState *state, ExprFunctionCall *call, ExprCommaAssignment *co
 			
 			return result;
 		}
-		else if (call->function->valueOfDeclaration->name == "bit_scan_forward") {
+		else if (call->function->valueOfDeclaration->name == "bit_scan_forward" || call->function->valueOfDeclaration->name == "bit_scan_reverse") {
 			auto argumentType = type->argumentTypes[0];
 
 			if (argumentType->flavor != TypeFlavor::INTEGER && argumentType->flavor != TypeFlavor::ENUM) {
@@ -1399,7 +1399,12 @@ u32 generateCall(IrState *state, ExprFunctionCall *call, ExprCommaAssignment *co
 			u32 resultZero = allocateRegister(state);
 
 			auto &ir = state->ir.add();
-			ir.op = IrOp::BIT_SCAN_FORWARD;
+			if (call->function->valueOfDeclaration->name == "bit_scan_forward") {
+				ir.op = IrOp::BIT_SCAN_FORWARD;
+			}
+			else {
+				ir.op = IrOp::BIT_SCAN_REVERSE;
+			}
 			ir.opSize = argumentType->size;
 			ir.dest = resultIndex;
 			ir.b = resultZero;

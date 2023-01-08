@@ -1,3 +1,4 @@
 pop_count :: (value: $T) -> #must T #intrinsic
 
 bit_scan_forward :: (value: $T) -> (#must index: T, zero: bool) #intrinsic
+bit_scan_reverse :: (value: $T) -> (#must index: T, zero: bool) #intrinsic

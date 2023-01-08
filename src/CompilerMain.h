@@ -29,7 +29,8 @@ struct Build_Options {
 	u64 c_runtime_library = C_Runtime_Library::STATIC;
 	MiloArray<MiloString> llvm_options = { nullptr, 0 };
 	MiloString output_name;
-	
+	MiloString icon_name;
+	bool show_console = true;
 };
 
 inline Build_Options buildOptions;

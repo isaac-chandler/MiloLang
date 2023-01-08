@@ -2414,7 +2414,7 @@ main :: () {
 	
 	
 	load_gl_extensions()
-	wglSwapIntervalEXT(0)
+	wglSwapIntervalEXT(1)
 	
 	glEnable(GL_TEXTURE_2D)
 	texture := load_image("chess.bmp")

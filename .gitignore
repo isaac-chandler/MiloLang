@@ -12,4 +12,6 @@ x64
 *.iobj
 *.ipdb
 *.lastcodeanalysissucceeded
+*.session
+*.mecfg
 tests/log.txt

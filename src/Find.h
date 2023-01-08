@@ -58,6 +58,7 @@ struct Find_Result {
     int windows_sdk_version;   // Zero if no Windows SDK found.
 
     wchar_t *windows_sdk_root = NULL;
+    wchar_t *windows_sdk_bin = NULL;
     wchar_t *windows_sdk_um_library_path = NULL;
     wchar_t *windows_sdk_ucrt_library_path = NULL;
 

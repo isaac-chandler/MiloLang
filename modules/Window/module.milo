@@ -7,16 +7,24 @@
 Window :: struct {
 	handle: Os_Window
 	should_quit: bool
+    destroy_on_close := true
 	events: [..]Event
 	width: s32
 	height: s32
 	keys: [256]bool
 	mouse_x: s16
 	mouse_y: s16
-	mouse: [5]bool
+	
+	draw: () -> void
 }
 
-
+get_window_events :: (window: *Window) -> []Event {
+	result: []Event = window.events
+	
+	window.events.count = 0
+	
+	return result
+}
 
 Event :: struct {
 	kind: enum u8 {
@@ -27,7 +35,7 @@ Event :: struct {
 		CHAR
 		MOUSE_MOVE
 		RESIZE
-		DESTROY
+        CLOSE
 	}
 
 	using data: union {
@@ -38,12 +46,19 @@ Event :: struct {
 		} = --
 
 		mouse: struct {
-			button: Mouse
+			button: Key
 			x: s16
 			y: s16
 			modifiers: Modifiers
 			down: bool
+			double_click: bool
 		} = --
+		
+		mouse_move: struct {
+			x: s16
+			y: s16
+			modifiers: Modifiers
+		}
 
 		scroll: struct {
 			scroll_x: s16
@@ -65,23 +80,10 @@ Event :: struct {
 	}
 }
 
-// Currently a 1:1 correspondence with windows wParam
 Modifiers :: enum_flags u8 {
-	LEFT_MOUSE
-	RIGHT_MOUSE
 	SHIFT
 	CONTROL
-	MIDDLE_MOUSE
-	MOUSE_4
-	MOUSE_5
-}
-
-Mouse :: enum u8 {
-	LEFT
-	RIGHT
-	MIDDLE
-	_4
-	_5
+	ALT
 }
 
 // Currently a 1:1 correspondence with windows VK codes
@@ -91,6 +93,11 @@ Mouse :: enum u8 {
 //     messages that isn't currently handled)
 //  - This is also not a complete list of VK codes
 Key :: enum u8 {
+	LEFT_MOUSE :: 0x01
+	RIGHT_MOUSE :: 0x02
+	MIDDLE_MOUSE :: 0x04
+	MOUSE_4 :: 0x05
+	MOUSE_5 :: 0x06
 	BACKSPACE :: '\b'
 	TAB :: '\t'
 	ENTER :: '\r'
@@ -165,18 +172,18 @@ Key :: enum u8 {
 	NUMPAD_SUBTRACT :: 0x6D
 	NUMPAD_DECIMAL :: 0x6E
 	NUMPAD_DIVIDE :: 0x6F
-	F1 :: 0x71
-	F2 :: 0x72
-	F3 :: 0x73
-	F4 :: 0x74
-	F5 :: 0x75
-	F6 :: 0x76
-	F7 :: 0x77
-	F8 :: 0x78
-	F9 :: 0x79
-	F10 :: 0x7A
-	F11 :: 0x7B
-	F12 :: 0x7C
+	F1 :: 0x70
+	F2 :: 0x71
+	F3 :: 0x72
+	F4 :: 0x73
+	F5 :: 0x74
+	F6 :: 0x75
+	F7 :: 0x76
+	F8 :: 0x77
+	F9 :: 0x78
+	F10 :: 0x79
+	F11 :: 0x7A
+	F12 :: 0x7B
 	NUM_LOCK :: 0x90
 	SCROLL_LOCK :: 0x91
 	LEFT_SHIFT :: 0xA0
@@ -194,5 +201,6 @@ Key :: enum u8 {
 	BACKTICK :: 0xC0  // US Keyboard specific
 	LEFT_SQUARE_BRACKET :: 0xDB // US Keyboard specific
 	BACKSLASH :: 0xDC // US Keyboard specific
-	RIGHT_SQUARE_BRACKET :: 0xDE // US Keyboard specific
+	RIGHT_SQUARE_BRACKET :: 0xDD // US Keyboard specific
+	QUOTE :: 0xDE // US Keyboard specific
 }

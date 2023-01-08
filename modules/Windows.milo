@@ -20,243 +20,348 @@ HDC :: *struct {}
 HGLRC :: *struct {}
 
 RECT :: struct {
-	left: s32
-	top: s32
-	right: s32
-	bottom: s32
+    left: s32
+    top: s32
+    right: s32
+    bottom: s32
 }
 
 HANDLE :: *void
 HGDIOBJ :: *void
 
+HGLOBAL :: HANDLE
+
 WNDPROC :: (hwnd: HWND, uMsg: MSG.Message, wParam: u64, lParam: s64) -> s64 #c_call
 
 DefWindowProcW :: (hWnd: HWND, Msg: MSG.Message, wParam: u64, lParam: s64) -> s64 #external "user32"
 
+VirtualAlloc :: (lpAddress := null, dwSize: u64, 
+                    flAllocationType := Allocation_Flags.MEM_COMMIT | .MEM_RESERVE, 
+                    flProtect := Protect_Flags.PAGE_READWRITE) -> *void #external "kernel32"
 
-
-WNDCLASSW :: struct {
-	style: Style
-	lpfnWndProc: WNDPROC
-	cbClsExtra: s32
-	cbWndExtra: s32
-	hInstance: HINSTANCE
-	hIcon: HICON
-	hCursor: HCURSOR
-	hbrBackground: HBRUSH
-	lpszMenuName: *u16
-	lpszClassName: *u16
-	
-	Style :: enum_flags u32 {
-		CS_VREDRAW         :: 0x0000_0001
-		CS_HREDRAW         :: 0x0000_0002
-		CS_DBLCLKS         :: 0x0000_0008
-		CS_OWNDC           :: 0x0000_0020
-		CS_CLASSDC         :: 0x0000_0040
-		CS_PARENTDC        :: 0x0000_0080
-		CS_NOCLOSE         :: 0x0000_0200
-		CS_SAVEBITS        :: 0x0000_0800
-		CS_BYTEALIGNCLIENT :: 0x0000_1000
-		CS_BYTEALIGNWINDOW :: 0x0000_2000
-		CS_GLOBALCLASS     :: 0x0000_4000
-		CS_IME             :: 0x0001_0000
-		CS_DROPSHADOW      :: 0x0002_0000
-	}
+using Allocation_Flags :: enum_flags u32 {
+    MEM_UNMAP_WITH_TRANSIENT_BOOST :: 0x00000001
+    MEM_COALECE_PLACEHOLDER        :: 0x00000002
+    MEM_PRESERVE_PLACEHOLDER       :: 0x00000004
+    MEM_COMMIT                     :: 0x00001000
+    MEM_RESERVE                    :: 0x00002000
+    MEM_REPLACE_PLACEHOLDER        :: 0x00004000
+    MEM_DECOMMIT                   :: 0x00004000
+    MEM_RELASE                     :: 0x00008000
+    MEM_FREE                       :: 0x00010000
+    MEM_RESERVE_PLACEHOLDER        :: 0x00040000
+    MEM_RESET                      :: 0x00080000
+    MEM_TOP_DOWN                   :: 0x00100000
+    MEM_WRITE_WATCH                :: 0x00200000
+    MEM_PHYSICAL                   :: 0x00400000
+    MEM_ROTATE                     :: 0x00800000
+    MEM_DIFFERENT_IMAGE_BASE_OK    :: 0x00800000
+    MEM_RESET_UNDO                 :: 0x01000000
+    MEM_LARGE_PAGES                :: 0x20000000
+    MEM_4MB_PAGES                  :: 0x80000000
+    MEM_64K_PAGES                  :: MEM_LARGE_PAGES | MEM_PHYSICAL    
 }
 
+using Protect_Flags :: enum_flags u32 {
+    PAGE_NOACCESS                   :: 0x01
+    PAGE_READONLY                   :: 0x02
+    PAGE_READWRITE                  :: 0x04
+    PAGE_WRITECOPY                  :: 0x08
+    PAGE_EXECUTE                    :: 0x10
+    PAGE_EXECUTE_READ               :: 0x20
+    PAGE_EXECUTE_READWRITE          :: 0x40
+    PAGE_EXECUTE_WRITECOPY          :: 0x80
+    PAGE_GUARD                      :: 0x100
+    PAGE_NOCACHE                    :: 0x200
+    PAGE_GRAPHICS_NOACCESS          :: 0x800
+    PAGE_GRAPHICS_READONLY          :: 0x1000
+    PAGE_GRAPGICS_READWRITE         :: 0x2000
+    PAGE_GRAPHICS_EXECUTE           :: 0x4000    
+    PAGE_GRAPHICS_EXECUTE_READ      :: 0x8000    
+    PAGE_GRAPHICS_EXECUTE_READWRITE :: 0x10000    
+    PAGE_GRAPHICS_COHERENT          :: 0x20000    
+    PAGE_ENCLAVE_DECOMMIT           :: 0x10000000 
+    PAGE_ENCLAVE_UNVALIDATED        :: 0x20000000  
+    PAGE_TARGETS_NO_UPDATE          :: 0x40000000  
+    PAGE_TARGETS_INVALID            :: 0x40000000  
+    PAGE_ENCLAVE_THREAD_CONTROL     :: 0x80000000  
+    PAGE_REVERT_TO_FILE_MAP         :: 0x80000000   
+    
+    
+}
+
+WNDCLASSW :: struct {
+    style: Style
+    lpfnWndProc: WNDPROC
+    cbClsExtra: s32
+    cbWndExtra: s32
+    hInstance: HINSTANCE
+    hIcon: HICON
+    hCursor: HCURSOR
+    hbrBackground: HBRUSH
+    lpszMenuName: *u16
+    lpszClassName: *u16
+    
+    Style :: enum_flags u32 {
+        CS_VREDRAW         :: 0x0000_0001
+        CS_HREDRAW         :: 0x0000_0002
+        CS_DBLCLKS         :: 0x0000_0008
+        CS_OWNDC           :: 0x0000_0020
+        CS_CLASSDC         :: 0x0000_0040
+        CS_PARENTDC        :: 0x0000_0080
+        CS_NOCLOSE         :: 0x0000_0200
+        CS_SAVEBITS        :: 0x0000_0800
+        CS_BYTEALIGNCLIENT :: 0x0000_1000
+        CS_BYTEALIGNWINDOW :: 0x0000_2000
+        CS_GLOBALCLASS     :: 0x0000_4000
+        CS_IME             :: 0x0001_0000
+        CS_DROPSHADOW      :: 0x0002_0000
+    }
+}
+
+LoadCursorW :: (hInstance: HINSTANCE = null, lpCursorName: *u16) -> HCURSOR #external "kernel32"
+
+IDC_APPSTARTING :: cast(*u16) 32650
+IDC_ARROW       :: cast(*u16) 32512
+IDC_CROSS       :: cast(*u16) 32515
+IDC_HAND        :: cast(*u16) 32649
+IDC_HELP        :: cast(*u16) 32651
+IDC_IBEAM       :: cast(*u16) 32513
+IDC_ICON        :: cast(*u16) 32641 // Obsolete for applications marked version 4.0 or later.
+IDC_NO          :: cast(*u16) 32648
+IDC_SIZE        :: cast(*u16) 32640 // Obsolete for applications marked version 4.0 or later. Use IDC_SIZEALL.
+IDC_SIZEALL     :: cast(*u16) 32646
+IDC_SIZENESW    :: cast(*u16) 32643
+IDC_SIZENS      :: cast(*u16) 32645
+IDC_SIZENWSE    :: cast(*u16) 32642
+IDC_SIZEWE      :: cast(*u16) 32644
+IDC_UPARROW     :: cast(*u16) 32516
+IDC_WAIT        :: cast(*u16) 32514
 
 using WNDCLASSW.Style
 
 STARTUPINFOW :: struct {
-	cb: u32 = size_of(STARTUPINFOW)
-	lpReserved: *u16
-	lpDesktop: *u16
-	lpTitle: *u16
-	dwX: u32
-	dwY: u32
-	dwXSize: u32
-	dwYSize: u32
-	dwXCountChars: u32
-	dwYCountChars: u32
-	dwFillAttribute: u32
-	dwFlags: Flags
-	wShowWindow: u16
-	cbReserved2: u16
-	lpReserved2: *u8
-	hStdInput: HANDLE
-	hStdOutput: HANDLE
-	hStdError: HANDLE
-	
-	Flags :: enum_flags u32 {
-		STARTF_USESHOWWINDOW    :: 0x0000_0001
-		STARTF_USESIZE          :: 0x0000_0002
-		STARTF_USEPOSITION      :: 0x0000_0004
-		STARTF_USECOUNTCHARS    :: 0x0000_0008
-		STARTF_USEFILLATTRIBUTE :: 0x0000_0010
-		STARTF_RUNFULLSCREEN    :: 0x0000_0020
-		STARTF_FORCEONFEEDBACK  :: 0x0000_0040
-		STARTF_FORCEOFFFEEDBACK :: 0x0000_0080
-		STARTF_USESTDHANDLES    :: 0x0000_0100
-		STARTF_USEHOTKEY        :: 0x0000_0200
-		STARTF_TITLEISLINKNAME  :: 0x0000_0800
-		STARTF_TITLEISAPPID     :: 0x0000_1000
-		STARTF_PREVENTPINNING   :: 0x0000_2000
-		STARTF_UNTRUSTEDSOURCE  :: 0x0000_8000
-	}
+    cb: u32 = size_of(STARTUPINFOW)
+    lpReserved: *u16
+    lpDesktop: *u16
+    lpTitle: *u16
+    dwX: u32
+    dwY: u32
+    dwXSize: u32
+    dwYSize: u32
+    dwXCountChars: u32
+    dwYCountChars: u32
+    dwFillAttribute: u32
+    dwFlags: Flags
+    wShowWindow: u16
+    cbReserved2: u16
+    lpReserved2: *u8
+    hStdInput: HANDLE
+    hStdOutput: HANDLE
+    hStdError: HANDLE
+    
+    Flags :: enum_flags u32 {
+        STARTF_USESHOWWINDOW    :: 0x0000_0001
+        STARTF_USESIZE          :: 0x0000_0002
+        STARTF_USEPOSITION      :: 0x0000_0004
+        STARTF_USECOUNTCHARS    :: 0x0000_0008
+        STARTF_USEFILLATTRIBUTE :: 0x0000_0010
+        STARTF_RUNFULLSCREEN    :: 0x0000_0020
+        STARTF_FORCEONFEEDBACK  :: 0x0000_0040
+        STARTF_FORCEOFFFEEDBACK :: 0x0000_0080
+        STARTF_USESTDHANDLES    :: 0x0000_0100
+        STARTF_USEHOTKEY        :: 0x0000_0200
+        STARTF_TITLEISLINKNAME  :: 0x0000_0800
+        STARTF_TITLEISAPPID     :: 0x0000_1000
+        STARTF_PREVENTPINNING   :: 0x0000_2000
+        STARTF_UNTRUSTEDSOURCE  :: 0x0000_8000
+    }
 
 }
 using STARTUPINFOW.Flags
 
 using Window_Style :: enum_flags u32 {
-	WS_OVERLAPPED   :: 0x0000_0000
-	WS_POPUP        :: 0x8000_0000
-	WS_CHILD        :: 0x4000_0000
-	WS_MINIMIZE     :: 0x2000_0000
-	WS_VISIBLE      :: 0x1000_0000
-	WS_DISABLED     :: 0x0800_0000
-	WS_CLIPSIBLINGS :: 0x0400_0000
-	WS_CLIPCHILDREN :: 0x0200_0000
-	WS_MAXIMIZE     :: 0x0100_0000
-	WS_CAPTION      :: WS_BORDER | WS_DLGFRAME
-	WS_BORDER       :: 0x0080_0000
-	WS_DLGFRAME     :: 0x0040_0000
-	WS_VSCROLL      :: 0x0020_0000
-	WS_HSCROLL      :: 0x0010_0000
-	WS_SYSMENU      :: 0x0008_0000
-	WS_THICKFRAME   :: 0x0004_0000
-	WS_GROUP        :: 0x0002_0000
-	WS_TABSTOP      :: 0x0001_0000
-	WS_MINIMIZEBOX  :: 0x0002_0000
-	WS_MAXIMIZEBOX  :: 0x0001_0000
-	
-	WS_TILED :: WS_OVERLAPPED
-	WS_ICONIC :: WS_MINIMIZE
-	WS_SIZEBOX :: WS_THICKFRAME
-	WS_TILEDWINDOW :: WS_OVERLAPPEDWINDOW
-	
-	WS_OVERLAPPEDWINDOW :: WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX
+    WS_OVERLAPPED   :: 0x0000_0000
+    WS_POPUP        :: 0x8000_0000
+    WS_CHILD        :: 0x4000_0000
+    WS_MINIMIZE     :: 0x2000_0000
+    WS_VISIBLE      :: 0x1000_0000
+    WS_DISABLED     :: 0x0800_0000
+    WS_CLIPSIBLINGS :: 0x0400_0000
+    WS_CLIPCHILDREN :: 0x0200_0000
+    WS_MAXIMIZE     :: 0x0100_0000
+    WS_CAPTION      :: WS_BORDER | WS_DLGFRAME
+    WS_BORDER       :: 0x0080_0000
+    WS_DLGFRAME     :: 0x0040_0000
+    WS_VSCROLL      :: 0x0020_0000
+    WS_HSCROLL      :: 0x0010_0000
+    WS_SYSMENU      :: 0x0008_0000
+    WS_THICKFRAME   :: 0x0004_0000
+    WS_GROUP        :: 0x0002_0000
+    WS_TABSTOP      :: 0x0001_0000
+    WS_MINIMIZEBOX  :: 0x0002_0000
+    WS_MAXIMIZEBOX  :: 0x0001_0000
+    
+    WS_TILED :: WS_OVERLAPPED
+    WS_ICONIC :: WS_MINIMIZE
+    WS_SIZEBOX :: WS_THICKFRAME
+    WS_TILEDWINDOW :: WS_OVERLAPPEDWINDOW
+    
+    WS_OVERLAPPEDWINDOW :: WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX
 
-	WS_POPUPWINDOW :: WS_POPUP | WS_BORDER | WS_SYSMENU
+    WS_POPUPWINDOW :: WS_POPUP | WS_BORDER | WS_SYSMENU
 
-	WS_CHILDWINDOW :: WS_CHILD
+    WS_CHILDWINDOW :: WS_CHILD
 }
 
 using Window_Style_Ex :: enum_flags u32 {
-	WS_EX_DLGMODALFRAME       :: 0x0000_0001
-	WS_EX_NOPARENTNOTIFY      :: 0x0000_0004
-	WS_EX_TOPMOST             :: 0x0000_0008
-	WS_EX_ACCEPTFILES         :: 0x0000_0010
-	WS_EX_TRANSPARENT         :: 0x0000_0020
-	WS_EX_MDICHILD            :: 0x0000_0040
-	WS_EX_TOOLWINDOW          :: 0x0000_0080
-	WS_EX_WINDOWEDGE          :: 0x0000_0100
-	WS_EX_CLIENTEDGE          :: 0x0000_0200
-	WS_EX_CONTEXTHELP         :: 0x0000_0400
-	WS_EX_RIGHT               :: 0x0000_1000
-	WS_EX_LEFT                :: 0x0000_0000
-	WS_EX_RTLEADING           :: 0x0000_2000
-	WS_EX_LTLEADING           :: 0x0000_0000
-	WS_EX_LEFTSCROLLBAR       :: 0x0000_4000
-	WS_EX_RIGHTSCROLLBAR      :: 0x0000_0000
-	WS_EX_CONTROLPARENT       :: 0x0001_0000
-	WS_EX_STATICEDGE          :: 0x0002_0000
-	WS_EX_APPWINDOW           :: 0x0004_0000
-	WS_EX_LAYERED             :: 0x0008_0000
-	WS_EX_NOINHERITLAYOUT     :: 0x0010_0000
-	WS_EX_NOREDIRECTIONBITMAP :: 0x0020_0000
-	WS_EX_LAYOUTRTL           :: 0x0200_0000
-	WS_EX_COMPOSITED          :: 0x0400_0000
-	WS_EX_NOACTIBE            :: 0x0800_0000
+    WS_EX_DLGMODALFRAME       :: 0x0000_0001
+    WS_EX_NOPARENTNOTIFY      :: 0x0000_0004
+    WS_EX_TOPMOST             :: 0x0000_0008
+    WS_EX_ACCEPTFILES         :: 0x0000_0010
+    WS_EX_TRANSPARENT         :: 0x0000_0020
+    WS_EX_MDICHILD            :: 0x0000_0040
+    WS_EX_TOOLWINDOW          :: 0x0000_0080
+    WS_EX_WINDOWEDGE          :: 0x0000_0100
+    WS_EX_CLIENTEDGE          :: 0x0000_0200
+    WS_EX_CONTEXTHELP         :: 0x0000_0400
+    WS_EX_RIGHT               :: 0x0000_1000
+    WS_EX_LEFT                :: 0x0000_0000
+    WS_EX_RTLEADING           :: 0x0000_2000
+    WS_EX_LTLEADING           :: 0x0000_0000
+    WS_EX_LEFTSCROLLBAR       :: 0x0000_4000
+    WS_EX_RIGHTSCROLLBAR      :: 0x0000_0000
+    WS_EX_CONTROLPARENT       :: 0x0001_0000
+    WS_EX_STATICEDGE          :: 0x0002_0000
+    WS_EX_APPWINDOW           :: 0x0004_0000
+    WS_EX_LAYERED             :: 0x0008_0000
+    WS_EX_NOINHERITLAYOUT     :: 0x0010_0000
+    WS_EX_NOREDIRECTIONBITMAP :: 0x0020_0000
+    WS_EX_LAYOUTRTL           :: 0x0200_0000
+    WS_EX_COMPOSITED          :: 0x0400_0000
+    WS_EX_NOACTIBE            :: 0x0800_0000
 
-	WS_EX_OVERLAPPEDWINDOW :: WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE
-	WS_EX_PALETTE_WINDOW   :: WS_EX_WINDOWEDGE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST
+    WS_EX_OVERLAPPEDWINDOW :: WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE
+    WS_EX_PALETTE_WINDOW   :: WS_EX_WINDOWEDGE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST
 }
 
 using Show_Window_Command :: enum u32 {
-	SW_HIDE            ::  0
-	SW_SHOWNORMAL      ::  1
-	SW_NORMAL          ::  1
-	SW_SHOWMINIMIZED   ::  2
-	SW_SHOWMAXIMIZED   ::  3
-	SW_MAXIMIZE        ::  3
-	SW_SHOWNOACTIVATE  ::  4
-	SW_SHOW            ::  5
-	SW_MINIMIZE        ::  6
-	SW_SHOWMINNOACTIVE ::  7
-	SW_SHOWNA          ::  8
-	SW_RESTORE         ::  9
-	SW_SHOWDEFAULT     ::  10
-	SW_FORCEMINIMIZE   ::  11
-	SW_MAX             ::  11
+    SW_HIDE            ::  0
+    SW_SHOWNORMAL      ::  1
+    SW_NORMAL          ::  1
+    SW_SHOWMINIMIZED   ::  2
+    SW_SHOWMAXIMIZED   ::  3
+    SW_MAXIMIZE        ::  3
+    SW_SHOWNOACTIVATE  ::  4
+    SW_SHOW            ::  5
+    SW_MINIMIZE        ::  6
+    SW_SHOWMINNOACTIVE ::  7
+    SW_SHOWNA          ::  8
+    SW_RESTORE         ::  9
+    SW_SHOWDEFAULT     ::  10
+    SW_FORCEMINIMIZE   ::  11
+    SW_MAX             ::  11
 }
 
 POINT :: struct {
-	x: s32
-	y: s32
+    x: s32
+    y: s32
 }
 
 MSG :: struct {
-	hwnd: HWND
-	message: Message
-	wParam: u64
-	lParam: s64
-	time: u32
-	pt: POINT
-	
-	Message :: enum u32 {
-		WM_NULL            :: 0x0000
-		WM_CREATE          :: 0x0001
-		WM_DESTROY         :: 0x0002
-		WM_MOVE            :: 0x0003
-		WM_SIZE            :: 0x0005
-		WM_ACTIVATE        :: 0x0006
-		WM_SETFOCUS        :: 0x0007
-		WM_KILLFOCUES      :: 0x0008
-		WM_ENABLE          :: 0x000A
-		WM_SETREDRAW       :: 0x000B
-		WM_SETTEXT         :: 0x000C
-		WM_GETTEXT         :: 0x000D
-		WM_GETTEXTLENGTH   :: 0x000E
-		WM_PAINT           :: 0x000F
-		WM_CLOSE           :: 0x0010
-		WM_QUERYENDSESSION :: 0x0011
-		WM_QUIT            :: 0x0012
-		WM_QUERYOPEN       :: 0x0013
-		WM_ERASEBKGND      :: 0x0014
-		WM_SYSCOLORCHANGE  :: 0x0015
-		WM_ENDSESSION      :: 0x0016
-		WM_SHOWWINDOW      :: 0x0018
-		WM_WININICHANGE    :: 0x001A
-		WM_DEVMODECHANGE   :: 0x001B
-		WM_ACTIVATEAPP     :: 0x001C
-		WM_FONTCHANGE      :: 0x001D
-		WM_TIMECHANGE      :: 0x001E
-		WM_CANCELMODE      :: 0x001F
-		WM_SETCURSOR       :: 0x0020
-		WM_MOUSEACTIVATE   :: 0x0021
-		WM_CHILDACTIVATE   :: 0x0022
-		WM_QUEUESYNC       :: 0x0023
-		WM_GETMINMAXINFO   :: 0x0024
-		
-		WM_KEYDOWN :: 0x0100
-		WM_KEYUP   :: 0x0101
-		WM_CHAR    :: 0x0102
-		
-		WM_LBUTTONDOWN :: 0x0201
-		WM_LBUTTONUP   :: 0x0202
-		WM_RBUTTONDOWN :: 0x0204
-		WM_RBUTTONUP   :: 0x0205
-		WM_MBUTTONDOWN :: 0x0206
-		WM_MBUTTONUP   :: 0x0207
-		WM_MOUSEWHEEL  :: 0x020A
-		WM_XBUTTONDOWN :: 0x020B
-		WM_XBUTTONUP   :: 0x020C
-		WM_MOUSEHWHEEL :: 0x020E
-	}
+    hwnd: HWND
+    message: Message
+    wParam: u64
+    lParam: s64
+    time: u32
+    pt: POINT
+    
+    Message :: enum u32 {
+        WM_NULL            :: 0x0000
+        WM_CREATE          :: 0x0001
+        WM_DESTROY         :: 0x0002
+        WM_MOVE            :: 0x0003
+        WM_SIZE            :: 0x0005
+        WM_ACTIVATE        :: 0x0006
+        WM_SETFOCUS        :: 0x0007
+        WM_KILLFOCUES      :: 0x0008
+        WM_ENABLE          :: 0x000A
+        WM_SETREDRAW       :: 0x000B
+        WM_SETTEXT         :: 0x000C
+        WM_GETTEXT         :: 0x000D
+        WM_GETTEXTLENGTH   :: 0x000E
+        WM_PAINT           :: 0x000F
+        WM_CLOSE           :: 0x0010
+        WM_QUERYENDSESSION :: 0x0011
+        WM_QUIT            :: 0x0012
+        WM_QUERYOPEN       :: 0x0013
+        WM_ERASEBKGND      :: 0x0014
+        WM_SYSCOLORCHANGE  :: 0x0015
+        WM_ENDSESSION      :: 0x0016
+        WM_SHOWWINDOW      :: 0x0018
+        WM_WININICHANGE    :: 0x001A
+        WM_DEVMODECHANGE   :: 0x001B
+        WM_ACTIVATEAPP     :: 0x001C
+        WM_FONTCHANGE      :: 0x001D
+        WM_TIMECHANGE      :: 0x001E
+        WM_CANCELMODE      :: 0x001F
+        WM_SETCURSOR       :: 0x0020
+        WM_MOUSEACTIVATE   :: 0x0021
+        WM_CHILDACTIVATE   :: 0x0022
+        WM_QUEUESYNC       :: 0x0023
+        WM_GETMINMAXINFO   :: 0x0024
+        
+        WM_KEYDOWN :: 0x0100
+        WM_KEYUP   :: 0x0101
+        WM_CHAR    :: 0x0102
+        WM_SYSKEYDOWN :: 0x0104
+        WM_SYSKEYUP   :: 0x0105
+        
+        WM_SYSCOMMAND :: 0x0112
+        
+        WM_MOUSEMOVE     :: 0x0200
+        WM_LBUTTONDOWN   :: 0x0201
+        WM_LBUTTONUP     :: 0x0202
+        WM_LBUTTONDBLCLK :: 0x0203
+        WM_RBUTTONDOWN   :: 0x0204
+        WM_RBUTTONUP     :: 0x0205
+        WM_RBUTTONDBLCLK :: 0x0206
+        WM_MBUTTONDOWN   :: 0x0207
+        WM_MBUTTONUP     :: 0x0208
+        WM_MBUTTONDBLCLK :: 0x0209
+        WM_MOUSEWHEEL    :: 0x020A
+        WM_XBUTTONDOWN   :: 0x020B
+        WM_XBUTTONUP     :: 0x020C
+        WM_XBUTTONDBLCLK :: 0x020D
+        WM_MOUSEHWHEEL   :: 0x020E
+        
+        WM_SIZING :: 0x0214
+    }
 }
 
 using MSG.Message
 
+using Wm_Sys_Command :: enum u64 {
+    SC_CLOSE        :: 0xF060
+    SC_CONTEXTHELP  :: 0xF180
+    SC_DEFAULT      :: 0xF160
+    SC_HOTKEY       :: 0xF150
+    SC_HSCROLL      :: 0xF080
+    SCF_ISSECURE    :: 0x0001
+    SC_KEYMENU      :: 0xF100
+    SC_MAXIMIZE     :: 0xF030
+    SC_MINIMIZE     :: 0xF020
+    SC_MONITORPOWER :: 0xF170
+    SC_MOUSEMENU    :: 0xF090
+    SC_MOVE         :: 0xF010
+    SC_NEXTWINDOW   :: 0xF040
+    SC_PREVWINDOW   :: 0xF050
+    SC_RESTORE      :: 0xF120
+    SC_SCREENSAVE   :: 0xF140
+    SC_SIZE         :: 0xF000
+    SC_TASKLIST     :: 0xF130
+    SC_VSCROLL      :: 0xF070
+}
 
 MK_LBUTTON  :: 0x0001
 MK_RBUTTON  :: 0x0002
@@ -271,21 +376,40 @@ CW_USEDEFAULT :: cast(s32) 0x80000000
 
 GetStartupInfoW :: (lpStartupInfo: *STARTUPINFOW) #external "kernel32"
 
-
 CreateWindowExW :: (dwExStyle: Window_Style_Ex = 0, lpClassName: *u16, lpWindowName: *u16, dwStyle := Window_Style.WS_OVERLAPPEDWINDOW, X: s32 = CW_USEDEFAULT, Y: s32 = CW_USEDEFAULT, nWidth: s32, nHeight: s32, hWndParent: HWND = null, hMenu: HMENU = null, hInstance: HINSTANCE, lpParam := null) -> HWND #external "user32"
+
+CREATESTRUCTW :: struct {
+  lpCreateParams: *void
+  hInstance: HINSTANCE
+  hMenu: HMENU
+  hwndParent: HWND
+  cy: s32
+  cx: s32
+  y: s32
+  x: s32
+  style: Window_Style
+  lpszName: *u16
+  lpszClass: *u16
+  dwExStyle: Window_Style_Ex
+}
 
 GWLP_USERDATA :: -21
 
 SetWindowLongPtrW :: (hWnd: HWND, nIndex: s32, dwNewLong: s64) -> s64 #external "user32"
 GetWindowLongPtrW :: (hWnd: HWND, nIndex: s32) -> s64 #external "user32"
 
+GCLP_HCURSOR :: -12
+GCLP_HICON   :: -14
+
+SetClassLongPtrW :: (hWnd: HWND, nIndex: s32, dwNewLong: s64) -> u64 #external "user32"
+
 PAINTSTRUCT :: struct {
-	hdc: HDC
-	fErase: s32
-	rcPaint: RECT
-	fRestore: s32
-	fIncUpdate: s32
-	rgbReserved: [32]u8
+    hdc: HDC
+    fErase: s32
+    rcPaint: RECT
+    fRestore: s32
+    fIncUpdate: s32
+    rgbReserved: [32]u8
 }
 
 BeginPaint :: (hWnd: HWND, lpPaint: *PAINTSTRUCT) -> HDC #external "user32"
@@ -295,6 +419,57 @@ EndPaint :: (hWnd: HWND, lpPaint: *PAINTSTRUCT) -> s32 #external "user32"
 AdjustWindowRect :: (lpRect: *RECT, dwStyle: Window_Style, bMenu := false) -> s32 #external "user32"
 AdjustWindowRectEx :: (lpRect: *RECT, dwStyle: Window_Style, bMenu: bool = false, dwSyleEx: Window_Style_Ex = 0) -> s32 #external "user32"
 
+OpenClipboard :: (hWndNewOwner: HWND) -> s32 #external "user32"
+CloseClipboard :: () -> s32 #external "user32"
+IsClipboardFormatAvailable :: (uFormat: Clipboard_Format) -> s32 #external "user32"
+EmptyClipboard :: () -> s32 #external "user32"
+SetClipboardData :: (uFormat: Clipboard_Format, hMem: HANDLE) -> HANDLE #external "user32"
+GetClipboardData :: (uFormat: Clipboard_Format) -> HANDLE #external "user32"
+GetClipboardOwner :: () -> HWND #external "user32"
+
+
+using Clipboard_Format :: enum u32 {
+    CF_BITMAP          :: 0x0002
+    CF_DIB             :: 0x0008
+    CF_DIBV5           :: 0x0011
+    CF_DIF             :: 0x0005
+    CF_DSPBITMAP       :: 0x0082
+    CF_DSPENHMETAFILE  :: 0x008E
+    CF_DSPMETAFILEPICT :: 0x0083
+    CF_DSPTEXT         :: 0x0081
+    CF_ENHMETAFILE     :: 0x000E
+    CF_GDIOBJFIRST     :: 0x0300
+    CF_GDIOBJLAST      :: 0x03FF
+    CF_HDROP           :: 0x000F
+    CF_LOCALE          :: 0x0010
+    CF_METAFILEPICT    :: 0x0003
+    CF_OEMTEXT         :: 0x0007
+    CF_OWNERDISPLAY    :: 0x0080
+    CF_PALETTE         :: 0x0009
+    CF_PENDATA         :: 0x000A
+    CF_PRIVATEFIRST    :: 0x0200
+    CF_PRIVATELAST     :: 0x02FF
+    CF_RIFF            :: 0x000B
+    CF_SYLK            :: 0x0004
+    CF_TEXT            :: 0x0001
+    CF_TIFF            :: 0x0006
+    CF_UNICODETEXT     :: 0x000D
+    CF_WAVE            :: 0x000C
+}
+
+GlobalAlloc :: (uFlags: Global_Alloc_Flags, dwBytes: u64) -> HGLOBAL #external "user32"
+GlobalFree :: (hMem: HGLOBAL) -> HGLOBAL #external "kernel32"
+GlobalLock :: (hMem: HGLOBAL) -> *void #external "kernel32"
+GlobalUnlock :: (hMem: HGLOBAL) -> s32 #external "kernel32"
+
+using Global_Alloc_Flags :: enum_flags u32 {
+    GMEM_FIXED    :: 0x0000
+    GMEM_MOVEABLE :: 0x0002
+    GMEM_ZEROINIT :: 0x0040
+    GPTR          :: GMEM_ZEROINIT | GMEM_FIXED
+    GHND          :: GMEM_ZEROINIT | GMEM_FIXED
+}
+
 PatBlt :: (hdc: HDC, x: s32, y: s32, w: s32, h: s32, rop: u32) -> s32 #external "gdi32"
 
 BLACKNESS :: 0x0000_0042
@@ -303,43 +478,111 @@ WHITENESS :: 0x00FF_0062
 GetStockObject :: (i: Stock_Object) -> HGDIOBJ #external "gdi32"
 
 using Stock_Object :: enum u32 {
-	WHITE_BRUSH         ::  0
-	LTGRAY_BRUSH        ::  1
-	GRAY_BRUSH          ::  2
-	DKGRAY_BRUSH        ::  3
-	BLACK_BRUSH         ::  4
-	NULL_BRUSH          ::  5
-	HOLLOW_BRUSH        ::  NULL_BRUSH
-	WHITE_PEN           ::  6
-	BLACK_PEN           ::  7
-	NULL_PEN            ::  8
-	OEM_FIXED_FONT      ::  10
-	ANSI_FIXED_FONT     ::  11
-	ANSI_VAR_FONT       ::  12
-	SYSTEM_FONT         ::  13
-	DEVICE_DEFAULT_FONT ::  14
-	DEFAULT_PALETTE     ::  15
-	SYSTEM_FIXED_FONT   ::  16
-	DEFAULT_GUI_FONT    ::  17
-	DC_BRUSH            ::  18
-	DC_PEN              ::  19
+    WHITE_BRUSH         ::  0
+    LTGRAY_BRUSH        ::  1
+    GRAY_BRUSH          ::  2
+    DKGRAY_BRUSH        ::  3
+    BLACK_BRUSH         ::  4
+    NULL_BRUSH          ::  5
+    HOLLOW_BRUSH        ::  NULL_BRUSH
+    WHITE_PEN           ::  6
+    BLACK_PEN           ::  7
+    NULL_PEN            ::  8
+    OEM_FIXED_FONT      ::  10
+    ANSI_FIXED_FONT     ::  11
+    ANSI_VAR_FONT       ::  12
+    SYSTEM_FONT         ::  13
+    DEVICE_DEFAULT_FONT ::  14
+    DEFAULT_PALETTE     ::  15
+    SYSTEM_FIXED_FONT   ::  16
+    DEFAULT_GUI_FONT    ::  17
+    DC_BRUSH            ::  18
+    DC_PEN              ::  19
 }
 
 GetClientRect :: (hWnd: HWND, lpRect: *RECT) -> s32 #external "user32"
+GetWindowRect :: (hWnd: HWND, lpRect: *RECT) -> s32 #external "user32"
 
 GetLastError :: () -> u32 #external "kernel32"
 
 GetModuleHandleW :: (lpModuleName: *u8) -> HMODULE #external "kernel32"
+GetModuleFileNameW :: (hModule: HMODULE = null, lpFilename: *u16, nSize: u32) -> u32 #external "kernel32"
+
 
 RegisterClassW :: (lpWndClass: *WNDCLASSW) -> u16 #external "user32"
 
-
 ShowWindow :: (hWnd: HWND, nCmdShow: Show_Window_Command) -> s32 #external "user32"
+IsIconic :: (hWnd: HWND) -> s32 #external "user32"
 
+using Set_Window_Pos_Flags :: enum_flags u32 {
+    SWP_ASYNCWINDOWPOS :: 0x4000
+    SWP_DEFERERASE     :: 0x2000
+    SWP_DRAWFRAME      :: 0x0020
+    SWP_FRAMECHANGED   :: 0x0020
+    SWP_HIDEWINDOW     :: 0x0080
+    SWP_NOACTIVATE     :: 0x0010
+    SWP_NOCOPYBITS     :: 0x0100
+    SWP_NOMOVE         :: 0x0002
+    SWP_NOOWNERZORDER  :: 0x0200
+    SWP_NOREDRAW       :: 0x0008
+    SWP_NOREPOSITION   :: 0x0200
+    SWP_NOSENDCHANGING :: 0x0400
+    SWP_NOSIZE         :: 0x0001
+    SWP_NOZORDER       :: 0x0004
+    SWP_SHOWWINDOW     :: 0x0040
+}
+
+SetWindowPos :: (hWnd: HWND, hWndInsertAfter: HWND, X: s32, Y: s32, cx: s32, cy: s32, uFlags: Set_Window_Pos_Flags) -> s32 #external "user32"
+MoveWindow :: (hWnd: HWND, X: s32, Y: s32, nWidth: s32, nHeight: s32, bRepaint: s32) -> s32 #external "user32"
+SetForegroundWindow :: (hWnd: HWND) -> s32 #external "user32"
+SetActiveWindow :: (hWnd: HWND) -> s32 #external "user32"
+
+SetWindowPlacement :: (hWnd: HWND, lpwndpl: *WINDOWPLACEMENT) -> s32 #external "user32"
+GetWindowPlacement :: (hWnd: HWND, lpwndpl: *WINDOWPLACEMENT) -> s32 #external "user32"
+
+WINDOWPLACEMENT :: struct {
+    length: u32 = size_of(WINDOWPLACEMENT)
+    flags: Flags
+    showCmd: Show_Window_Command
+    ptMinPosition:    POINT
+    ptMaxPosition:    POINT
+    rcNormalPosition: RECT
+    rcDevice:         RECT
+    
+    Flags :: enum_flags u32 {
+        WPF_ASYNCWINDOWPLACEMENT :: 0x0004
+        WPF_RESTORETOMAXIMIZED   :: 0x0002
+        WPF_SETMINPOSITION       :: 0x0001
+    }
+}
+
+using WINDOWPLACEMENT.Flags
 
 GetMessageW :: (lpMsg: *MSG, hWnd: HWND,  wMsgFilterMin := WM_NULL, wMsgFilterMax := WM_NULL) -> s32 #external "user32"
 
 PeekMessageW :: (lpMsg: *MSG, hWnd: HWND,  wMsgFilterMin := WM_NULL, wMsgFilterMax := WM_NULL, wRemoveMessage := PM_REMOVE) -> s32 #external "user32"
+MsgWaitForMultipleObjects :: (nCount: u32 = 0, pHandles: *HANDLE = null, fWaitAll: s32 = 0, dwMilliseconds: u32, dwWakeMask := QS_ALLINPUT ) -> u32 #external "user32"
+SetTimer :: (hWnd: HWND, nIDEvent: u64, uElapse: u32, lpTimerFunc: (hWnd: HWND, Msg: MSG.Message, nIDEvent: u64, dwTime: u32) -> void = null) -> u64 #external "user32"
+
+using Msg_Mask :: enum_flags u32 {
+    QS_ALLEVENTS      :: 0x04BF
+    QS_ALLINPUT       :: 0x04FF
+    QS_ALLPOSTMESSAGE :: 0x0100
+    QS_HOTKEY         :: 0x0080
+    QS_INPUT          :: 0x407
+    QS_KEY            :: 0x0001
+    QS_MOUSE          :: 0x0006
+    QS_MOUSEBUTTON    :: 0x0004
+    QS_MOUSEMOVE      :: 0x0002
+    QS_PAINT          :: 0x0020
+    QS_POSTMESSAGE    :: 0x0008
+    QS_RAWINPUT       :: 0x0400
+    QS_SENDMESSAGE    :: 0x0040
+    QS_TIMER          :: 0x0010
+}
+
+PostMessageW :: (hWnd: HWND, Msg: MSG.Message, wParam: u64, lParam: s64) -> s32 #external "user32"
+SendMessageW :: (hWnd: HWND, Msg: MSG.Message, wParam: u64, lParam: s64) -> s64 #external "user32"
 
 TranslateMessage :: (lpMsg: *MSG) -> s32 #external "user32"
 
@@ -356,10 +599,30 @@ PostQuitMessage :: (nExitCode: s32) #external "user32"
 LoadLibraryA :: (lpLibFileName: *u8) -> HMODULE #external "kernel32"
 GetProcAddress :: (hModule: HMODULE, lpProcName: *u8) -> *void #external "kernel32"
 
+using Load_Image_Type :: enum u32 {
+    IMAGE_BITMAP :: 0
+    IMAGE_CURSOR :: 2
+    IMAGE_ICON   :: 1
+}
+
+using Load_Image_Flags :: enum_flags u32 {
+    LR_CREATEDIBSECTION :: 0x00002000
+    LR_DEFAULTCOLOR     :: 0x00000000
+    LR_DEFAULTSIZE      :: 0x00000040
+    LR_LOADFROMFILE     :: 0x00000010
+    LR_LOADMAP3DCOLORS  :: 0x00001000
+    LR_LOADTRANSPARENT  :: 0x00000020
+    LR_MONOCHROME       :: 0x00000001
+    LR_SHARED           :: 0x00008000
+    LR_VGACOLOR         :: 0x00000080
+}
+
+LoadImageW :: (hInst: HINSTANCE = null, name: *u16, type_: Load_Image_Type, cx: s32, cy: s32, fuLoad: Load_Image_Flags) -> HANDLE #external "user32"
+
 using Peek_Message_Options :: enum u32 {
-	PM_NOREMOVE :: 0
-	PM_REMOVE   :: 1
-	PM_NOYIELD  :: 2
+    PM_NOREMOVE :: 0
+    PM_REMOVE   :: 1
+    PM_NOYIELD  :: 2
 }
 
 GetCommandLineW :: () -> *u16 #external "kernel32"
@@ -368,25 +631,25 @@ CommandLineToArgvW :: (lpCmdLine: *u16, pNumArgs: *s32) -> **u16 #external "shel
 LocalFree :: (hMem: HANDLE) -> HANDLE #external "kernel32"
 
 using Code_Page :: enum u32 {
-	CP_UTF8 :: 65001
+    CP_UTF8 :: 65001
 }
 
 SetConsoleOutputCP :: (wCodePageID: Code_Page) -> s32 #external "kernel32"
 
 using Multi_Byte_Char_Flags :: enum_flags u32 {
-	MB_PRECOMPOSED       :: 0x1
-	MB_COMPOSITE         :: 0x2
-	MB_USEGLYPHCHARS     :: 0x4
-	MB_ERR_INVALID_CHARS :: 0x8
+    MB_PRECOMPOSED       :: 0x1
+    MB_COMPOSITE         :: 0x2
+    MB_USEGLYPHCHARS     :: 0x4
+    MB_ERR_INVALID_CHARS :: 0x8
 }
 
 using Wide_Char_Flags :: enum_flags u32 {
-	WC_COMPOSITECHECK    :: 0x200  // convert composite to precomposed
-	WC_DISCARDNS         :: 0x010  // discard non-spacing chars          // Used with WC_COMPOSITECHECK
-	WC_SEPCHARS          :: 0x020  // generate separate chars            // Used with WC_COMPOSITECHECK
-	WC_DEFAULTCHAR       :: 0x040  // replace w/ default char            // Used with WC_COMPOSITECHECK
-	WC_ERR_INVALID_CHARS :: 0x080  // error for invalid chars
-	WC_NO_BEST_FIT_CHARS :: 0x400  // do not use best fit chars
+    WC_COMPOSITECHECK    :: 0x200  // convert composite to precomposed
+    WC_DISCARDNS         :: 0x010  // discard non-spacing chars          // Used with WC_COMPOSITECHECK
+    WC_SEPCHARS          :: 0x020  // generate separate chars            // Used with WC_COMPOSITECHECK
+    WC_DEFAULTCHAR       :: 0x040  // replace w/ default char            // Used with WC_COMPOSITECHECK
+    WC_ERR_INVALID_CHARS :: 0x080  // error for invalid chars
+    WC_NO_BEST_FIT_CHARS :: 0x400  // do not use best fit chars
 }
 
 MultiByteToWideChar :: (CodePage := CP_UTF8, dwFlags: Multi_Byte_Char_Flags = 0, lpMultiByteStr: *u8, cbMultiByte: s32,     lpWideCharStr: *u16, ccWideChar:  s32) -> s32 #external "kernel32"
@@ -394,31 +657,31 @@ WideCharToMultiByte :: (CodePage := CP_UTF8, dwFlags: Wide_Char_Flags = 0,      
                                                                                                         lpDefaultChar: *u8 = null, lpUsedDefaultChar: *s32 = null) -> s32 #external "kernel32"
 
 from_windows_string :: (windows_string: *u16) -> string {
-	if !<<windows_string  return ""
-	
-	
-	character_count := cast(u64) WideCharToMultiByte(lpWideCharStr = windows_string, lpMultiByteStr = null, cbMultiByte = 0) - 1
-	
-	result := new_string(character_count, initialized = false)
-	
-	WideCharToMultiByte(lpWideCharStr = windows_string, lpMultiByteStr = result.data, cbMultiByte = cast() character_count)
-	
-	return result
+    if !<<windows_string  return ""
+    
+    
+    character_count := cast(u64) WideCharToMultiByte(lpWideCharStr = windows_string, lpMultiByteStr = null, cbMultiByte = 0) - 1
+    
+    result := new_string(character_count, initialized = false)
+    
+    WideCharToMultiByte(lpWideCharStr = windows_string, lpMultiByteStr = result.data, cbMultiByte = cast() character_count)
+    
+    return result
 }
 
 to_windows_string :: (s: string) -> []u16 {
-	if !s  {
-		return new_array(u16, 1)
-	}
-	
-	character_count := cast(u64) MultiByteToWideChar(lpMultiByteStr = s.data, cbMultiByte = cast() s.count, lpWideCharStr = null, ccWideChar = 0)
-	result := new_array(u16, character_count + 1, initialized = false)
-	
-	MultiByteToWideChar(lpMultiByteStr = s.data, cbMultiByte = cast() s.count, lpWideCharStr = result.data, ccWideChar = cast() character_count)
-	
-	result[character_count] = 0
-	
-	return result
+    if !s  {
+        return new_array(u16, 1)
+    }
+    
+    character_count := cast(u64) MultiByteToWideChar(lpMultiByteStr = s.data, cbMultiByte = cast() s.count, lpWideCharStr = null, ccWideChar = 0)
+    result := new_array(u16, character_count + 1, initialized = false)
+    
+    MultiByteToWideChar(lpMultiByteStr = s.data, cbMultiByte = cast() s.count, lpWideCharStr = result.data, ccWideChar = cast() character_count)
+    
+    result[character_count] = 0
+    
+    return result
 }
 
 SwapBuffers :: (Arg1: HDC) -> s32 #external "gdi32"
@@ -426,65 +689,65 @@ SwapBuffers :: (Arg1: HDC) -> s32 #external "gdi32"
 GetTickCount :: () -> u32 #external "kernel32"
 
 PIXELFORMATDESCRIPTOR :: struct {
-	nSize: u16 = size_of(PIXELFORMATDESCRIPTOR)
-	nVersion: u16 = 1
-	dwFlags: Flags
-	iPixelType: Pixel_Type
-	cColorBits: u8
-	cRedBits: u8
-	cRedShift: u8
-	cGreenBits: u8
-	cGreenShift: u8
-	cBlueBits: u8
-	cBlueShift: u8
-	cAlphaBits: u8
-	cAlphaShift: u8
-	cAccumBits: u8
-	cAccumRedBits: u8
-	cAccumGreenBits: u8
-	cAccumBlueBits: u8
-	cAccumAlphaBits: u8
-	cDepthBits: u8
-	cStencilBits: u8
-	cAuxBuffers: u8
-	iLayerType: Plane
-	bReserved: u8
-	dwLayerMask: u32
-	dwVisibleMask: u32
-	dwDamageMask: u32
-	
-	Flags :: enum_flags u32 {
-		PFD_DOUBLEBUFFER          :: 0x0000_0001
-		PFD_STEREO                :: 0x0000_0002
-		PFD_DRAW_TO_WINDOW        :: 0x0000_0004
-		PFD_DRAW_TO_BITMAP        :: 0x0000_0008
-		PFD_SUPPORT_GDI           :: 0x0000_0010
-		PFD_SUPPORT_OPENGL        :: 0x0000_0020
-		PFD_GENERIC_FORMAT        :: 0x0000_0040
-		PFD_NEED_PALETTE          :: 0x0000_0080
-		PFD_NEED_SYSTEM_PALETTE   :: 0x0000_0100
-		PFD_SWAP_EXCHANGE         :: 0x0000_0200
-		PFD_SWAP_COPY             :: 0x0000_0400
-		PFD_SWAP_LAYER_BUFFERS    :: 0x0000_0800
-		PFD_GENERIC_ACCELERATED   :: 0x0000_1000
-		PFD_SUPPORT_DIRECTDRAW    :: 0x0000_2000
-		PFD_DIRECT3D_ACCELERATED  :: 0x0000_4000
-		PFD_SUPPORT_COMPOSITION   :: 0x0000_8000
-		PFD_DEPTH_DONTCARE        :: 0x2000_0000
-		PFD_DOUBLEBUFFER_DONTCARE :: 0x4000_0000
-		PFD_STEREO_DONTCARE       :: 0x8000_0000
-	}
-	
-	Pixel_Type :: enum u8 {
-		PFD_TYPE_RGBA       :: 0
-		PFD_TYPE_COLORINDEX :: 1
-	}
-	
-	Plane :: enum u8 {
-		PFD_MAIN_PLANE     :: 0
-		PFD_OVERLAY_PLANE  :: 1
-		PFD_UNDERLAY_PLANE :: 0xFF
-	}
+    nSize: u16 = size_of(PIXELFORMATDESCRIPTOR)
+    nVersion: u16 = 1
+    dwFlags: Flags
+    iPixelType: Pixel_Type
+    cColorBits: u8
+    cRedBits: u8
+    cRedShift: u8
+    cGreenBits: u8
+    cGreenShift: u8
+    cBlueBits: u8
+    cBlueShift: u8
+    cAlphaBits: u8
+    cAlphaShift: u8
+    cAccumBits: u8
+    cAccumRedBits: u8
+    cAccumGreenBits: u8
+    cAccumBlueBits: u8
+    cAccumAlphaBits: u8
+    cDepthBits: u8
+    cStencilBits: u8
+    cAuxBuffers: u8
+    iLayerType: Plane
+    bReserved: u8
+    dwLayerMask: u32
+    dwVisibleMask: u32
+    dwDamageMask: u32
+    
+    Flags :: enum_flags u32 {
+        PFD_DOUBLEBUFFER          :: 0x0000_0001
+        PFD_STEREO                :: 0x0000_0002
+        PFD_DRAW_TO_WINDOW        :: 0x0000_0004
+        PFD_DRAW_TO_BITMAP        :: 0x0000_0008
+        PFD_SUPPORT_GDI           :: 0x0000_0010
+        PFD_SUPPORT_OPENGL        :: 0x0000_0020
+        PFD_GENERIC_FORMAT        :: 0x0000_0040
+        PFD_NEED_PALETTE          :: 0x0000_0080
+        PFD_NEED_SYSTEM_PALETTE   :: 0x0000_0100
+        PFD_SWAP_EXCHANGE         :: 0x0000_0200
+        PFD_SWAP_COPY             :: 0x0000_0400
+        PFD_SWAP_LAYER_BUFFERS    :: 0x0000_0800
+        PFD_GENERIC_ACCELERATED   :: 0x0000_1000
+        PFD_SUPPORT_DIRECTDRAW    :: 0x0000_2000
+        PFD_DIRECT3D_ACCELERATED  :: 0x0000_4000
+        PFD_SUPPORT_COMPOSITION   :: 0x0000_8000
+        PFD_DEPTH_DONTCARE        :: 0x2000_0000
+        PFD_DOUBLEBUFFER_DONTCARE :: 0x4000_0000
+        PFD_STEREO_DONTCARE       :: 0x8000_0000
+    }
+    
+    Pixel_Type :: enum u8 {
+        PFD_TYPE_RGBA       :: 0
+        PFD_TYPE_COLORINDEX :: 1
+    }
+    
+    Plane :: enum u8 {
+        PFD_MAIN_PLANE     :: 0
+        PFD_OVERLAY_PLANE  :: 1
+        PFD_UNDERLAY_PLANE :: 0xFF
+    }
 }
 
 using PIXELFORMATDESCRIPTOR.Flags
@@ -501,21 +764,21 @@ QueryPerformanceCounter :: (lpPerformanceCount: *s64) -> s32 #external "kernel32
 QueryPerformanceFrequency :: (lpFrequency: *s64) -> s32 #external "kernel32"
 
 SECURITY_ATTRIBUTES :: struct {
-	nLength: u32 = size_of(SECURITY_ATTRIBUTES)
-	lpSecurityDescriptor: *void
-	bInheritHandle: s32
+    nLength: u32 = size_of(SECURITY_ATTRIBUTES)
+    lpSecurityDescriptor: *void
+    bInheritHandle: s32
 }
 
 OVERLAPPED :: struct {
-	Internal: u64
-	InternalHigh: u64
-	
-	data: union {
-		Offset: u64
-		Pointer: *void = --
-	}
-	
-	hEvent: HANDLE
+    Internal: u64
+    InternalHigh: u64
+    
+    data: union {
+        Offset: u64
+        Pointer: *void = --
+    }
+    
+    hEvent: HANDLE
 }
 
 STD_INPUT_HANDLE  :: cast(u32) -10
@@ -529,8 +792,8 @@ GetProcessHeap :: () -> HANDLE #external "kernel32"
 CloseHandle :: (hObject: HANDLE) -> s32 #external "kernel32"
 
 CreateFileW :: (lpFileName: *u16, dwDesiredAccess: Access_Flags, dwShareMode: File_Share_Flag, lpSecurityAttributes: *SECURITY_ATTRIBUTES = null, 
-				dwCreationDisposition: File_Create_Option, dwFlagsAndAttributes: File_Flag, hTemplateFile: HANDLE = null) -> HANDLE #external "kernel32"
-				
+                dwCreationDisposition: File_Create_Option, dwFlagsAndAttributes: File_Flag, hTemplateFile: HANDLE = null) -> HANDLE #external "kernel32"
+                
 GetFileSizeEx :: (hFile: HANDLE, lpFileSize: *s64) -> s32 #external "kernel32"
 
 ReadFile :: (hFile: HANDLE, lpBuffer: *void, nNumberOfBytesToRead: u32, lpNumberOfBytesRead: *u32, lpOverlapped: *OVERLAPPED = null) -> s32 #external "kernel32"
@@ -540,88 +803,93 @@ FindFirstFileW :: (lpFileName: *u16, lpFindFileData: *WIN32_FIND_DATAW) -> HANDL
 FindNextFileW :: (lpFindFile: HANDLE, lpFindFileData: *WIN32_FIND_DATAW) -> s32 #external "kernel32"
 FindClose :: (lpFindFile: HANDLE) -> s32 #external "kernel32"
 
+GetFullPathNameW :: (lpFileName: *u16, nBufferLength: u32, lpBuffer: *u16, lpFilePart: **u16) -> u32 #external "kernel32"
+
 FILETIME :: struct {
-	dwLowDateTime:  u32
-	dwHighDateTime: u32
+    dwLowDateTime:  u32
+    dwHighDateTime: u32
 }
 
 WIN32_FIND_DATAW :: struct {
-	dwFileAttributes: File_Flag
-	ftCreationTime:   FILETIME
-	ftLastAccessTime: FILETIME
-	ftLastWriteTime:  FILETIME
-	nFileSizeHigh: u32
-	nFileSizeLow:  u32
-	dwReserved0: u32
-	dwReserved1: u32
-	cFileName: [260]u16
-	cAlternateFileName: [14]u16
-	
-	/* these are #if'ed out in minwinbase.h (unless running on 68k or PowerPC?!?) but appear on MS documentation (with no description)
-	dwFileType: u32
-	dwCreatorType: u32
-	wFinderFlags: u16
-	*/
+    dwFileAttributes: File_Flag
+    ftCreationTime:   FILETIME
+    ftLastAccessTime: FILETIME
+    ftLastWriteTime:  FILETIME
+    nFileSizeHigh: u32
+    nFileSizeLow:  u32
+    dwReserved0: u32
+    dwReserved1: u32
+    cFileName: [260]u16
+    cAlternateFileName: [14]u16
+    
+    /* these are #if'ed out in minwinbase.h (unless running on 68k or PowerPC?!?) but appear on MS documentation (with no description)
+    dwFileType: u32
+    dwCreatorType: u32
+    wFinderFlags: u16
+    */
 }
 
 
 INVALID_HANDLE_VALUE :: cast(HANDLE) -1
 
 using Access_Flags :: enum_flags u32 {
-	GENERIC_ALL     :: 0x1000_0000
-	GENERIC_EXECUTE :: 0x2000_0000
-	GENERIC_WRITE   :: 0x4000_0000
-	GENERIC_READ    :: 0x8000_0000
+    GENERIC_ALL     :: 0x1000_0000
+    GENERIC_EXECUTE :: 0x2000_0000
+    GENERIC_WRITE   :: 0x4000_0000
+    GENERIC_READ    :: 0x8000_0000
 }
 
 using File_Share_Flag :: enum_flags u32 {
-	FILE_SHARE_WRITE  :: 0x1
-	FILE_SHARE_READ   :: 0x2
-	FILE_SHARE_DELETE :: 0x4
+    FILE_SHARE_WRITE  :: 0x1
+    FILE_SHARE_READ   :: 0x2
+    FILE_SHARE_DELETE :: 0x4
 }
 
 using File_Create_Option :: enum u32 {
-	CREATE_NEW        :: 1
-	CREATE_ALWAYS     :: 2
-	OPEN_EXISTING     :: 3
-	OPEN_ALWAYS       :: 4
-	TRUNCATE_EXISTING :: 5
+    CREATE_NEW        :: 1
+    CREATE_ALWAYS     :: 2
+    OPEN_EXISTING     :: 3
+    OPEN_ALWAYS       :: 4
+    TRUNCATE_EXISTING :: 5
 }
 
 using File_Flag :: enum_flags u32 {
-	FILE_ATTRIBUTE_READONLY              :: 0x0000_0001
-	FILE_ATTRIBUTE_HIDDEN                :: 0x0000_0002
-	FILE_ATTRIBUTE_SYSTEM                :: 0x0000_0004
-	FILE_ATTRIBUTE_DIRECTORY             :: 0x0000_0010
-	FILE_ATTRIBUTE_ARCHIVE               :: 0x0000_0020
-	FILE_ATTRIBUTE_DEVICE                :: 0x0000_0040
-	FILE_ATTRIBUTE_NORMAL                :: 0x0000_0080
-	FILE_ATTRIBUTE_TEMPORARY             :: 0x0000_0100
-	FILE_ATTRIBUTE_SPARSE_FILE           :: 0x0000_0200
-	FILE_ATTRIBUTE_REPARSE_POINT         :: 0x0000_0400
-	FILE_ATTRIBUTE_COMPRESSED            :: 0x0000_0800
-	FILE_ATTRIBUTE_OFFLINE               :: 0x0000_1000
-	FILE_ATTRIBUTE_NOT_CONTENT_INDEXED   :: 0x0000_2000
-	FILE_ATTRIBUTE_ENCRYPTED             :: 0x0000_4000
-	FILE_ATTRIBUTE_INTEGRITY_STREAM      :: 0x0000_8000
-	FILE_ATTRIBUTE_VIRTUAL               :: 0x0001_0000
-	FILE_ATTRIBUTE_NO_SCRUB_DATA         :: 0x0002_0000
-	FILE_ATTRIBUTE_RECALL_ON_OPEN        :: 0x0004_0000
-	FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS :: 0x0040_0000 // This is not a mistake, there is a file attribute in the middle of the file flags range
+    FILE_ATTRIBUTE_READONLY              :: 0x0000_0001
+    FILE_ATTRIBUTE_HIDDEN                :: 0x0000_0002
+    FILE_ATTRIBUTE_SYSTEM                :: 0x0000_0004
+    FILE_ATTRIBUTE_DIRECTORY             :: 0x0000_0010
+    FILE_ATTRIBUTE_ARCHIVE               :: 0x0000_0020
+    FILE_ATTRIBUTE_DEVICE                :: 0x0000_0040
+    FILE_ATTRIBUTE_NORMAL                :: 0x0000_0080
+    FILE_ATTRIBUTE_TEMPORARY             :: 0x0000_0100
+    FILE_ATTRIBUTE_SPARSE_FILE           :: 0x0000_0200
+    FILE_ATTRIBUTE_REPARSE_POINT         :: 0x0000_0400
+    FILE_ATTRIBUTE_COMPRESSED            :: 0x0000_0800
+    FILE_ATTRIBUTE_OFFLINE               :: 0x0000_1000
+    FILE_ATTRIBUTE_NOT_CONTENT_INDEXED   :: 0x0000_2000
+    FILE_ATTRIBUTE_ENCRYPTED             :: 0x0000_4000
+    FILE_ATTRIBUTE_INTEGRITY_STREAM      :: 0x0000_8000
+    FILE_ATTRIBUTE_VIRTUAL               :: 0x0001_0000
+    FILE_ATTRIBUTE_NO_SCRUB_DATA         :: 0x0002_0000
+    FILE_ATTRIBUTE_RECALL_ON_OPEN        :: 0x0004_0000
+    FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS :: 0x0040_0000 // This is not a mistake, there is a file attribute in the middle of the file flags range
 
-	FILE_FLAG_OPEN_NO_RECALL     :: 0x0010_0000
-	FILE_FLAG_OPEN_REPARSE_POINT :: 0x0020_0000
-	// This gap contains FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS for some reason
-	FILE_FLAG_SESSION_AWARE      :: 0x0080_0000
-	FILE_FLAG_POSIX_SEMANCTICS   :: 0x0100_0000
-	FILE_FLAG_BACKUP_SEMANTICS   :: 0x0200_0000
-	FILE_FLAG_DELETE_ON_CLOSE    :: 0x0400_0000
-	FILE_FLAG_SEQUENTIAL_SCAN    :: 0x0800_0000
-	FILE_FLAG_RANDOM_ACCESS      :: 0x1000_0000
-	FILE_FLAG_NO_BUFFERING       :: 0x2000_0000
-	FILE_FLAG_OVERLAPPED         :: 0x4000_0000
-	FILE_FLAG_WRITETHROUGH       :: 0x8000_0000
+    FILE_FLAG_OPEN_NO_RECALL     :: 0x0010_0000
+    FILE_FLAG_OPEN_REPARSE_POINT :: 0x0020_0000
+    // This gap contains FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS for some reason
+    FILE_FLAG_SESSION_AWARE      :: 0x0080_0000
+    FILE_FLAG_POSIX_SEMANCTICS   :: 0x0100_0000
+    FILE_FLAG_BACKUP_SEMANTICS   :: 0x0200_0000
+    FILE_FLAG_DELETE_ON_CLOSE    :: 0x0400_0000
+    FILE_FLAG_SEQUENTIAL_SCAN    :: 0x0800_0000
+    FILE_FLAG_RANDOM_ACCESS      :: 0x1000_0000
+    FILE_FLAG_NO_BUFFERING       :: 0x2000_0000
+    FILE_FLAG_OVERLAPPED         :: 0x4000_0000
+    FILE_FLAG_WRITETHROUGH       :: 0x8000_0000
 }
+
+AttachConsole :: (dwProcessId: u32) -> s32 #external "kernel32"
+ATTACH_PARENT_PROCESS :: cast(u32) -1
 
 WriteConsoleA :: (hConsoleOutput: HANDLE, lpBuffer: *void, nNumberOfCharactersToWrite: u32, lpNumberOfCharactersWritten: *u32 = null, lpReserved := null) -> s32 #external "kernel32"
 ExitProcess :: (uExitCode: u32) #external "kernel32"
@@ -631,48 +899,48 @@ HeapReAlloc :: (hHeap: HANDLE, dwFlags: u32, lpMem: *void, dwBytes: u64) -> *voi
 HeapFree :: (hHeap: HANDLE, dwFlags: u32, lpMem: *void) -> s32 #external "kernel32"
 
 using Process_Creation_Flags :: enum_flags u32 {
-	DEBUG_PROCESS                    :: 0x0000_0001
-	DEBUG_ONLY_THIS_PROCESS          :: 0x0000_0002
-	DETACHED_PROCESS                 :: 0x0000_0008
-	CREATE_NEW_CONSOLE               :: 0x0000_0010
-	NORMAL_PRIORITY_CLASS            :: 0x0000_0020
-	IDLE_PRIORITY_CLASS              :: 0x0000_0040
-	HIGH_PRIORITY_CLASS              :: 0x0000_0080
-	REALTIME_PRIORITY_CLASS          :: 0x0000_0100
-	CREATE_NEW_PROCESS_GROUP         :: 0x0000_0200
-	CREATE_UNICODE_ENVIRONMENT       :: 0x0000_0400
-	CREATE_SEPARATE_WOW_VDM          :: 0x0000_0800
-	CREATE_SHARED_WOW_VDM            :: 0x0000_1000
-	BELOW_NORMAL_PRIORITY_CLASS      :: 0x0000_4000
-	ABOVE_NORMAL_PRIORITY_CLASS      :: 0x0000_8000
-	INHERIT_PARENT_AFFINITY          :: 0x0001_0000
-	CREATE_PROTECTED_PROCESS         :: 0x0004_0000
-	EXTENDED_STARTUPINFO_PRESENT     :: 0x0008_0000
-	PROCESS_MODE_BACKGROUND_BEGIN    :: 0x0010_0000
-	PROCESS_MODE_BACKGROUND_END      :: 0x0020_0000
-	CREATE_SECURE_PROCESS            :: 0x0040_0000
-	CREATE_NO_WINDOW                 :: 0x0800_0000
-	CREATE_BREAKAWAY_FROM_JOB        :: 0x0100_0000
-	CREATE_PRESERVE_CODE_AUTHZ_LEVEL :: 0x0200_0000
-	CREATE_DEFAULT_ERROR_MODE        :: 0x0400_0000
+    DEBUG_PROCESS                    :: 0x0000_0001
+    DEBUG_ONLY_THIS_PROCESS          :: 0x0000_0002
+    DETACHED_PROCESS                 :: 0x0000_0008
+    CREATE_NEW_CONSOLE               :: 0x0000_0010
+    NORMAL_PRIORITY_CLASS            :: 0x0000_0020
+    IDLE_PRIORITY_CLASS              :: 0x0000_0040
+    HIGH_PRIORITY_CLASS              :: 0x0000_0080
+    REALTIME_PRIORITY_CLASS          :: 0x0000_0100
+    CREATE_NEW_PROCESS_GROUP         :: 0x0000_0200
+    CREATE_UNICODE_ENVIRONMENT       :: 0x0000_0400
+    CREATE_SEPARATE_WOW_VDM          :: 0x0000_0800
+    CREATE_SHARED_WOW_VDM            :: 0x0000_1000
+    BELOW_NORMAL_PRIORITY_CLASS      :: 0x0000_4000
+    ABOVE_NORMAL_PRIORITY_CLASS      :: 0x0000_8000
+    INHERIT_PARENT_AFFINITY          :: 0x0001_0000
+    CREATE_PROTECTED_PROCESS         :: 0x0004_0000
+    EXTENDED_STARTUPINFO_PRESENT     :: 0x0008_0000
+    PROCESS_MODE_BACKGROUND_BEGIN    :: 0x0010_0000
+    PROCESS_MODE_BACKGROUND_END      :: 0x0020_0000
+    CREATE_SECURE_PROCESS            :: 0x0040_0000
+    CREATE_NO_WINDOW                 :: 0x0800_0000
+    CREATE_BREAKAWAY_FROM_JOB        :: 0x0100_0000
+    CREATE_PRESERVE_CODE_AUTHZ_LEVEL :: 0x0200_0000
+    CREATE_DEFAULT_ERROR_MODE        :: 0x0400_0000
 }
 
 PROCESS_INFORMATION :: struct {
-	hProcess: HANDLE
-	hThread:  HANDLE
-	dwProcessId: u32
-	dwThreadId:  u32
+    hProcess: HANDLE
+    hThread:  HANDLE
+    dwProcessId: u32
+    dwThreadId:  u32
 }
 
 CreateProcessW :: (lpApplicationName: *u16 = null, lpCommandLine: *u16, lpProcessAttributes: *SECURITY_ATTRIBUTES = null, 
-					   lpThreadAttributes: *SECURITY_ATTRIBUTES = null, bInheritHandles: s32 = 0, dwCreationFlags: Process_Creation_Flags = 0, 
-					   lpEnvironment: *void = null, lpCurrentDirectory: *u16 = null, lpStartupInfo: *STARTUPINFOW, lpProcessInformation: *PROCESS_INFORMATION) -> s32 #external "kernel32"
+                       lpThreadAttributes: *SECURITY_ATTRIBUTES = null, bInheritHandles: s32 = 0, dwCreationFlags: Process_Creation_Flags = 0, 
+                       lpEnvironment: *void = null, lpCurrentDirectory: *u16 = null, lpStartupInfo: *STARTUPINFOW, lpProcessInformation: *PROCESS_INFORMATION) -> s32 #external "kernel32"
 
 GetExitCodeProcess :: (hProcess: HANDLE, lpExitCode: *u32) -> s32 #external "kernel32"
 
 using Create_Thread_Flags :: enum_flags u32 {
-	CREATE_SUSPENDED :: 0x4
-	STACK_SIZE_PARAM_IS_A_RESERVATION :: 0x1_0000
+    CREATE_SUSPENDED :: 0x4
+    STACK_SIZE_PARAM_IS_A_RESERVATION :: 0x1_0000
 }
 
 CreateThread :: (lpThreadAttributes: *SECURITY_ATTRIBUTES = null, dwStackSize: u64 = 0, lpStartAddress: (*void) -> u32 #c_call, lpParameter := null, dwCreationFlags: Create_Thread_Flags = 0, lpThreadId: *u32 = null) -> HANDLE #external "kernel32"
@@ -685,40 +953,70 @@ ReleaseSemaphore :: (hSemaphore: HANDLE, lReleaseCount: s32 = 1, lpPreviousCount
 INFINITE :: 0xFFFF_FFFF
 
 using Wait_Result :: enum u32 {
-	WAIT_ABANDONED :: 0x80
-	WAIT_OBJECT_0 :: 0
-	WAIT_TIMEOUT :: 0x102
-	WAIT_FAILED :: 0xFFFF_FFFF
+    WAIT_ABANDONED :: 0x80
+    WAIT_OBJECT_0 :: 0
+    WAIT_TIMEOUT :: 0x102
+    WAIT_FAILED :: 0xFFFF_FFFF
 }
 
 WaitForSingleObject :: (hHandle: HANDLE, dwMilliseconds: u32 = INFINITE) -> Wait_Result #external "kernel32"
 
 GUID :: struct {
-	Data1: u32
-	Data2: u16
-	Data3: u16
-	Data4: [8]u8
+    Data1: u32
+    Data2: u16
+    Data3: u16
+    Data4: [8]u8
 }
 
 using Console_Mode :: enum_flags u32 {
-	// These flags apply to input handles (stdin)
-	ENABLE_PROCESSED_INPUT        :: 0x0001
-	ENABLE_LINE_INPUT             :: 0x0002
-	ENABLE_ECHO_INPUT             :: 0x0004
-	ENABLE_WINDOW_INPUT           :: 0x0008
-	ENABLE_MOUSE_INPUT            :: 0x0010
-	ENABLE_INSERT_MODE            :: 0x0020
-	ENABLE_QUICK_EDIT_MODE        :: 0x0040
-	ENABLE_VIRTUAL_TERMINAL_INPUT :: 0x0200
-	
-	// These flags apply to outut handles (stdout, stderr)
-	ENABLE_PROCESSED_OUTPUT            :: 0x0001
-	ENABLE_WRAP_AT_EOL_OUTPUT          :: 0x0002
-	ENABLE_VIRTUAL_TERMINAL_PROCESSING :: 0x0004
-	DISABLE_NEWLINE_AUTO_RETURN        :: 0x0008
-	ENABLE_LVB_GRID_WORLDWIDE          :: 0x0010
+    // These flags apply to input handles (stdin)
+    ENABLE_PROCESSED_INPUT        :: 0x0001
+    ENABLE_LINE_INPUT             :: 0x0002
+    ENABLE_ECHO_INPUT             :: 0x0004
+    ENABLE_WINDOW_INPUT           :: 0x0008
+    ENABLE_MOUSE_INPUT            :: 0x0010
+    ENABLE_INSERT_MODE            :: 0x0020
+    ENABLE_QUICK_EDIT_MODE        :: 0x0040
+    ENABLE_VIRTUAL_TERMINAL_INPUT :: 0x0200
+    
+    // These flags apply to outut handles (stdout, stderr)
+    ENABLE_PROCESSED_OUTPUT            :: 0x0001
+    ENABLE_WRAP_AT_EOL_OUTPUT          :: 0x0002
+    ENABLE_VIRTUAL_TERMINAL_PROCESSING :: 0x0004
+    DISABLE_NEWLINE_AUTO_RETURN        :: 0x0008
+    ENABLE_LVB_GRID_WORLDWIDE          :: 0x0010
 }
 
 
 SetConsoleMode :: (hConsoleHandle: HANDLE, dwMode:  Console_Mode) -> s32 #external "kernel32"
 GetConsoleMode :: (hConsoleHandle: HANDLE, lpMode: *Console_Mode) -> s32 #external "kernel32"
+
+DwmSetWindowAttribute :: (hWnd: HWND, dwAttribute: DWMWINDOWATTRIBUTE, pvAttribute: *void, cbAttribute: u32) -> s32 #external "dwmapi"
+
+using DWMWINDOWATTRIBUTE  :: enum u32 {
+    DWMWA_NCRENDERING_ENABLED
+    DWMWA_NCRENDERING_POLICY
+    DWMWA_TRANSITIONS_FORCEDISABLED
+    DWMWA_ALLOW_NCPAINT
+    DWMWA_CAPTION_BUTTON_BOUNDS
+    DWMWA_NONCLIENT_RTL_LAYOUT
+    DWMWA_FORCE_ICONIC_REPRESENTATION
+    DWMWA_FLIP3D_POLICY
+    DWMWA_EXTENDED_FRAME_BOUNDS
+    DWMWA_HAS_ICONIC_BITMAP
+    DWMWA_DISALLOW_PEEK
+    DWMWA_EXCLUDED_FROM_PEEK
+    DWMWA_CLOAK
+    DWMWA_CLOAKED
+    DWMWA_FREEZE_REPRESENTATION
+    DWMWA_PASSIVE_UPDATE_MODE
+    DWMWA_USE_HOSTBACKDROPBRUSH
+    DWMWA_USE_IMMERSIVE_DARK_MODE  :: 20
+    DWMWA_WINDOW_CORNER_PREFERENCE :: 33
+    DWMWA_BORDER_COLOR
+    DWMWA_CAPTION_COLOR
+    DWMWA_TEXT_COLOR
+    DWMWA_VISIBLE_FRAME_BORDER_THICKNESS
+    DWMWA_SYSTEMBACKDROP_TYPE
+    DWMWA_LAST
+}

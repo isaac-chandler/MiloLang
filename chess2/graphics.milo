@@ -84,7 +84,7 @@ draw :: (moves: []Move, window: *Window) {
 	if selected_square != -1 {
 		x, y := unpack(selected_square)
 		
-		if true && white_ai && !black_ai  {
+		if !flip_board  {
 			x = 7 - x
 			y = 7 - y
 		}
@@ -104,7 +104,7 @@ draw :: (moves: []Move, window: *Window) {
 		
 		x, y := unpack(move.start)
 	
-		if true && white_ai && !black_ai  {
+		if !flip_board  {
 			x = 7 - x
 			y = 7 - y
 		}
@@ -116,7 +116,7 @@ draw :: (moves: []Move, window: *Window) {
 		
 		x, y = unpack(move.end)
 		
-		if true && white_ai && !black_ai  {
+		if !flip_board  {
 			x = 7 - x
 			y = 7 - y
 		}
@@ -130,23 +130,19 @@ draw :: (moves: []Move, window: *Window) {
 	glColor4f(0, 1, 0, 0.4)
 	
 	for moves {
-		_, valid := checked_do_move(global_board, it)
+		x, y := unpack(it.end)
 		
-		if valid {
-			x, y := unpack(it.end)
-			
-			if true && white_ai && !black_ai  {
-				x = 7 - x
-				y = 7 - y
-			}
-			
-			
-			
-			glVertex2f(cast(f32) x, cast(f32) y)
-			glVertex2f(cast(f32) x + 1, cast(f32) y)
-			glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
-			glVertex2f(cast(f32) x, cast(f32) y + 1)
+		if !flip_board {
+			x = 7 - x
+			y = 7 - y
 		}
+		
+		
+		
+		glVertex2f(cast(f32) x, cast(f32) y)
+		glVertex2f(cast(f32) x + 1, cast(f32) y)
+		glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
+		glVertex2f(cast(f32) x, cast(f32) y + 1)
 	}
 	
 	glEnd()
@@ -157,13 +153,13 @@ draw :: (moves: []Move, window: *Window) {
 	glBegin(GL_QUADS)
 	
 	for 64 {
-		piece := get_piece(global_board, cast() it)
+		piece := get_piece(*global_board, cast() it)
 		
 		if piece == -1
 			continue;
 		x, y := unpack(cast() it)
 		
-		if true && white_ai && !black_ai  {
+		if !flip_board  {
 			x = 7 - x
 			y = 7 - y
 		}

@@ -1,0 +1,81 @@
+#import "Standard"
+#import "String"
+#import "File"
+
+Move :: struct {
+	move: string
+	distance: u64
+}
+
+part1 :: (values: []Move) {
+	x: u64 = 0
+	y: u64 = 0
+	
+	for values {
+		if it.move == {
+		case "forward"
+			x += it.distance
+		case "up"
+			y -= it.distance
+		case "down"
+			y += it.distance
+		}
+		
+	}
+	
+	print("Part 1: %\n", x * y)
+}
+
+part2 :: (values: []Move) {
+	x: s64 = 0
+	y: s64 = 0
+	aim:   = 0
+	
+	for values {
+		if it.move == {
+		case "forward"
+			x += cast() it.distance
+			y += cast() it.distance * aim
+		case "up"
+			aim -= cast() it.distance
+		case "down"
+			aim += cast() it.distance
+		}
+		
+	}
+	
+	print("Part 2: %\n", x * y)
+}
+
+main :: () {
+	file, success := read_entire_file("day02.txt")
+	
+	if !success {
+		print("Failed to read input file")
+		exit(1)
+	}
+	
+	defer free_array(file)
+
+	data := cast(string) file
+	values: [..]Move
+	
+	while data {
+		line: string
+		
+		
+		line, data = read_line(data)
+		
+		if !line
+			continue;
+			
+		move, distance := split_at_first(line, ' ')
+		
+		array_add(*values, .{move, read_u64(distance)})
+	}
+	
+	part1(values)
+	part2(values)
+}
+
+#run main()

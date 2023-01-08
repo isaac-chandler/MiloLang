@@ -1,0 +1,56 @@
+#import "Standard"
+#import "String"
+#import "File"
+
+part1 :: (values: []u64) {
+	total := 0
+
+	for 1 .. values.count {
+		if values[it] > values[it - 1]
+			total += 1
+	}
+	
+	print("Part 1: %\n", total)
+}
+
+part2 :: (values: []u64) {
+	total := 0
+
+	for 3 .. values.count {
+		if values[it] > values[it - 3]
+			total += 1
+	}
+	
+	print("Part 2: %\n", total)
+}
+
+main :: () {
+	file, success := read_entire_file("day01.txt")
+	
+	if !success {
+		print("Failed to read input file")
+		exit(1)
+	}
+	
+	defer free_array(file)
+
+	data := cast(string) file
+	values: [..]u64
+	
+	while data {
+		line: string
+		
+		
+		line, data = read_line(data)
+		
+		if !line
+			continue;
+			
+		array_add(*values, read_u64(line))
+	}
+	
+	part1(values)
+	part2(values)
+}
+
+#run main()

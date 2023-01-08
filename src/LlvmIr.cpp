@@ -1085,6 +1085,28 @@ static llvm::Value *generateLlvmCall(State *state, ExprFunctionCall *call, ExprC
 
 			return resultIndex;
 		}
+		else if (call->function->valueOfDeclaration->name == "bit_scan_reverse") {
+			auto argumentType = function->argumentTypes[0];
+
+			if (argumentType->flavor != TypeFlavor::INTEGER && argumentType->flavor != TypeFlavor::ENUM) {
+				reportError(call->arguments.values[0], "Error: bit_scan_reverse can only operate on integers or enums");
+				return 0;
+			}
+
+			auto argument = generateLlvmIr(state, call->arguments.values[0]);
+
+			auto integerType = getLlvmType(state->context, argumentType);
+			auto ctlz = state->builder.CreateIntrinsic(llvm::Intrinsic::ctlz, arrayRef({ integerType }),
+				arrayRef<llvm::Value *>({ argument, llvm::ConstantInt::get(llvm::Type::getInt1Ty(state->context), 1) }));
+
+			auto resultIndex = state->builder.CreateSub(llvm::ConstantInt::get(integerType, integerType->getIntegerBitWidth()  - 1), ctlz);
+
+			if (comma && comma->exprCount >= 2) {
+				state->builder.CreateStore(state->builder.CreateICmpEQ(argument, llvm::ConstantInt::get(argument->getType(), 0)), loadAddressOf(state, comma->left[1]));
+			}
+
+			return resultIndex;
+		}
 		else {
 			reportError(call, "Error: Call to unknown intrinsic function: %.*s", STRING_PRINTF(call->function->valueOfDeclaration->name));
 			return 0;

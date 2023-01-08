@@ -147,6 +147,9 @@ max :: (a: $T, b: T) -> #must T {
 }
 
 copy_string :: (using s: string) -> #must string {
+    if !s.data
+        return s
+
 	result := new_string(s.count, initialized = false)
 	
 	memory_copy(result.data, s.data, s.count)
@@ -168,13 +171,17 @@ array_reserve :: (using array: *[..]$T, new_capacity: u64) {
 	capacity = new_capacity
 }
 
+array_add_unchecked :: (using array: *[..]$T, value: T) {
+	count += 1;
+	(<<array)[count - 1] = value
+}
+
 array_add :: (using array: *[..]$T, value: T) {
 	if count >= capacity {
 		array_reserve(array, max(count * 2, 4))
 	}
 	
-	count += 1;
-	(<<array)[count - 1] = value
+	array_add_unchecked(array, value)
 }
 
 array_push :: (using array: *[..]$T, initialized := true) -> *T {
@@ -523,6 +530,27 @@ print :: (format: string, vals: any..) {
 	print_buffer(*std_out_concatenator)
 }
 
+sprint :: (format: string, vals: any..) -> string {
+	reset(*std_out_concatenator)
+	
+	print_to_buffer(*std_out_concatenator, format, ..vals)
+	
+	result := new_string(std_out_concatenator.total_count, initialized = false)
+	
+	offset: u64 = 0
+	
+	bucket := *std_out_concatenator.first_bucket
+	
+	while offset < result.count {
+		memory_copy(*result[offset], bucket.data.data, bucket.offset)
+		offset += bucket.offset
+		
+		bucket = bucket.next
+	}
+	
+	return result
+}
+
 print_to_buffer :: (c: *Concatenator, format: string, vals: any..) {
 	index: u64
 	
@@ -699,4 +727,15 @@ print_any :: (c: *Concatenator, using val: any) {
 		append(c, "Cannot print ")
 		append(c, value_type.name)		
 	}
+}
+
+from_c_string :: (c_string: *u8) -> string {
+	if !c_string || !<<c_string return .{}
+
+	result := string.{ data = c_string }
+	
+	while c_string[result.count]
+		result.count += 1
+		
+	return result
 }

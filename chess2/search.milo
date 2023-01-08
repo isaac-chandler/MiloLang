@@ -1,4 +1,4 @@
-perft :: (using state: State, depth: s8) -> s64 {
+perft :: (using state: *State, depth: s8) -> s64 {
 	if depth == 0
 		return 1
 
@@ -13,30 +13,35 @@ perft :: (using state: State, depth: s8) -> s64 {
 		new_state, valid := checked_do_move(state, it)
 
 		if valid {
-			nodes += perft(new_state, depth - 1)
+			nodes += perft(*new_state, depth - 1)
 		}
 	}
 
 	return nodes
 }
 
-killer_moves: [MAX_DEPTH * 3]Move
-history: [12][64]f32
-counter_move: [12][64]Move
+killer_moves: [MAX_DEPTH * 3][2]Move
+piece_to_history: [32][64]s16
+capture_history: [32][64][16]s16
+counter_move: [32][64]Move
+continuation_history: [32][64][32][64]s16
 
-add_history :: (value: *f32, bonus: f32) {
-	MAX_HISTORY_BONUS :: 10;
-	
-	<<value += bonus - <<value * bonus / MAX_HISTORY_BONUS
+add_history :: (value: *$T, bonus: T, $max: T) {
+	<<value += bonus - <<value * abs(bonus) / max
 }
 
-remove_history :: (value: *f32, penalty: f32) {
-	MAX_HISTORY_BONUS :: 10;
-	
-	<<value -= penalty - <<value * penalty / MAX_HISTORY_BONUS
+get_captured_piece :: (using state: *State, move: Move) -> s8 {
+	if move.end_piece == WHITE_EN_PASSANT
+		return BLACK_PAWN
+	else if move.end_piece == BLACK_EN_PASSANT
+		return WHITE_PAWN
+	else
+		return get_colored_piece(state, move.end, !state.white_move)
 }
 
-order_moves :: (using state: State, moves: []Move, best_move: Move, killer_move: Move, depth: s64, alpha: s16, beta: s16) {
+order_moves :: (using state: *State, moves: []Move, best_move: Move, killer_move: []Move, depth: s64, alpha: s16, beta: s16) {
+	stats.time_in_order_moves -= get_performance_ticks()
+	defer stats.time_in_order_moves += get_performance_ticks()
 	evaluation_list: [200]s64 = --
 	
 	for moves {
@@ -44,36 +49,34 @@ order_moves :: (using state: State, moves: []Move, best_move: Move, killer_move:
 		
 		if moves_equal(it, best_move) {
 			evaluation_list[it_index] = 1_000_000
-		} else if moves_equal(it, killer_move) {
+		} else if moves_equal(it, killer_move[0]) {
 			evaluation_list[it_index] = 900_000
-		} else if moves_equal(it, counter_move[previous_move.start_piece][previous_move.end]) {
+		} else if moves_equal(it, killer_move[1]) {
+			evaluation_list[it_index] = 850_000
+		} else if moves_equal(it, counter_move[previous_move.start_piece_flags][previous_move.end]) {
 			evaluation_list[it_index] = 800_000
-		} else if is_capture_move(state, it) {
-			captured := get_piece(state, it.end)
+		} else if is_promotion_move(it) {
+			evaluation_list[it_index] += piece_values[it.end_piece][it.end]
 
-
-			if captured != -1 {
-				evaluation_list[it_index] -= piece_values[it.start_piece][it.start] + piece_values[captured][it.end]
-			}
-
-			if it.end_piece > it.start_piece {
-				evaluation_list[it_index] += piece_values[it.end_piece][it.end] - piece_values[it.start_piece][it.start]
-			}
-
-			if !state.white_move {
-				evaluation_list[it_index] = -evaluation_list[it_index]
-			}
-
-			evaluation_list[it_index] += 10000
-		} else if depth > 3 {
-			evaluation_list[it_index] = cast() minimax(state, depth - 2, alpha, beta)
+			evaluation_list[it_index] += 100_000
+		} else if is_capture_move(it) {
+			captured := get_captured_piece(state, it)
+			
+			// Technically in the case of en passant it.end is not actually the location of the captured piece but its close enough
+			evaluation_list[it_index] += 5 * (piece_values[captured][it.end])
+			
+			evaluation_list[it_index] += capture_history[it.start_piece_flags][it.end][captured]
+			evaluation_list[it_index] += 20_000
 		}
 		
-		evaluation_list[it_index] += cast() (history[it.start_piece][it.end])
+		evaluation_list[it_index] += piece_to_history[it.start_piece_flags][it.end]
+		evaluation_list[it_index] += 2 * continuation_history[previous_move.start_piece_flags][previous_move.end][it.start_piece_flags][it.end]
 	}
 
 	for moves {
 		i := it_index
+		
+		//if evaluation_list[i] < -20 continue;
 		
 		while i >= 1 {
 			a := evaluation_list[i - 1]
@@ -97,115 +100,145 @@ MAX_DEPTH :: 50
 
 moves_explored: u64
 
-transposition_table: [1 << 18]struct {
-	hash: u64
+TT_Entry :: struct {
+	hash: u32
 	value: s16
+	ply: s16
+	generation: s16
+	move: Move
 	kind: enum u8 {
 		LOWER_BOUND
 		UPPER_BOUND
 		EXACT
 	}
 	depth: s8
-	ply: s16
-	move: Move
+
 }
 
-max_moves: u64 = 7_500_000
+transposition_table: [][4]TT_Entry
+
+transposition_generation: s16
+
+max_moves: u64 = 10_000_000
 
 stats: struct {
 	beta_cutoffs: u64
 	transpositions_matched: u64
+	time_in_movegen: s64
+	time_in_evaluate: s64
+	time_in_do_move: s64
+	time_in_order_moves: s64
 }
 
-quiesce :: (using state: State, alpha: s16, beta: s16, depth: s64 = 0) -> s16 {
+tt_lookup :: (using state: *State) -> (bool, *TT_Entry) {
+	entries := []TT_Entry.{data = transposition_table[hash & (transposition_table.count - 1)].data, count = 4}
+	
+	for * entries {
+		if it.hash != hash >> 32
+			continue;
+		
+		if it.value > 19000 {
+			it.value = it.value + it.ply - ply
+		} else if it.value < -19000 {
+			it.value = it.value - it.ply + ply
+		}
+
+		
+		return true, it
+	}
+	
+	replace := *entries[0]
+	
+	for * entries[1..] {
+		if it.generation - it.ply < replace.generation - replace.ply {
+			replace = it
+		}
+	}
+	
+	return false, replace
+}
+
+tt_store :: (using state: *State, entry: *TT_Entry, alpha: s16, current_alpha: s16, current_beta: s16, best_move: Move, depth: s64) {
+	entry.value = current_alpha
+	entry.hash = cast() (hash >> 32)
+	entry.move = best_move
+	entry.ply = ply
+	entry.depth = cast() depth
+	entry.generation = transposition_generation
+	
+	if current_alpha <= alpha
+		entry.kind = .UPPER_BOUND
+	else if current_alpha >= current_beta
+		entry.kind = .LOWER_BOUND
+	else
+		entry.kind = .EXACT
+}
+
+push_killer_move :: (killer_move: *[2]Move, move: Move) {
+	if moves_equal((<<killer_move)[0], move)
+		return;
+		
+	(<<killer_move)[1] = (<<killer_move)[0];
+	(<<killer_move)[0] = move
+}
+
+quiesce :: (using state: *State, alpha: s16, beta: s16, depth: s64 = 0) -> s16 {
 	if moves_explored == max_moves {
 		return 0
 	}
 
-	best_move := Move.{start_piece = -1}
+	moves_explored += 1
+
+	best_move := Move.{start_piece_flags = -1}
 	current_alpha := alpha
 	current_beta := beta
-
-	if move_count >= 100 {
-		current_alpha = min(max(current_alpha, 0), current_beta)
+	
+	if check_for_instant_draw(state) {
+		current_alpha = max(current_alpha, 0)
 		return current_alpha
 	}
-
-	for move_count {
-		if state_history.count < cast() (it + 1)
-			break;
-
-		if state_history[state_history.count - 1 - cast() it] == hash {
-			current_alpha = min(max(current_alpha, 0), current_beta)
-			return current_alpha
-		}
-	}
-
-	moves_explored += 1
 	
-	entry := *transposition_table[hash & (transposition_table.count - 1)]
-	
-
-	if entry.hash == hash && entry.depth >= depth {
-		if entry.value > 19000 {
-			entry.value = entry.value + entry.ply - ply
-			entry.ply = ply
-		} else if entry.value < -19000 {
-			entry.value = entry.value - entry.ply + ply
-			entry.ply = ply
-		}
-
+	found, entry := tt_lookup(state)
+	if found {
 		stats.transpositions_matched += 1
+		best_move = entry.move
 	
-		if entry.kind == .EXACT {
-			return entry.value
-		} else if entry.kind == .LOWER_BOUND {
-			best_move = entry.move
-			current_alpha = max(entry.value, current_alpha)
-		} else if entry.kind == .UPPER_BOUND {
-			current_beta = min(current_beta, entry.value)
-		}
-		
-		if current_alpha >= current_beta {
-			stats.beta_cutoffs += 1
-			return current_beta
-		}
-	}
-
-	defer {
-		if current_alpha > current_beta {
-			current_beta = current_alpha
-		}
-
-		if entry && moves_explored < max_moves {
-
-			entry.value = current_alpha
-			entry.hash = hash
-			entry.move = best_move
-			entry.ply = ply
-			entry.depth = cast() depth
+		if entry.depth >= depth {
+			if entry.kind == { 
+				case .EXACT
+					return entry.value
+				case .LOWER_BOUND
+					current_alpha = max(entry.value, current_alpha)
+				case .UPPER_BOUND
+					current_beta = min(current_beta, entry.value)
+			}
 			
-			if current_alpha <= alpha
-				entry.kind = .UPPER_BOUND
-			else if current_alpha >= current_beta
-				entry.kind = .LOWER_BOUND
-			else
-				entry.kind = .EXACT
+			if current_alpha >= current_beta {
+				stats.beta_cutoffs += 1
+				return current_alpha
+			}
 		}
 	}
+
+	defer if moves_explored < max_moves tt_store(state, entry, alpha, current_alpha, current_beta, best_move, depth)
 
 	in_check := is_in_check(state)
+	
+	evaluation: s16
+	
+	if white_move {
+		evaluation = evaluate_position(state)
+	} else {
+		evaluation = -evaluate_position(state)
+	}
+	
 
 	if !in_check {
-		if white_move {
-			current_alpha = max(current_alpha, evaluate_position(state))
-		} else {
-			current_alpha = max(current_alpha, -evaluate_position(state))
-		}
+		current_alpha = max(current_alpha, evaluation)
 
 		if current_alpha >= current_beta {
 			stats.beta_cutoffs += 1
-			current_alpha = current_beta
+			//current_alpha = current_beta
 			return current_alpha
 		}
 	}
@@ -218,15 +251,15 @@ quiesce :: (using state: State, alpha: s16, beta: s16, depth: s64 = 0) -> s16 {
 	moves_buffer: [200]Move = --
 	moves := backed_array(moves_buffer)
 
+	get_capture_moves(state, *moves)
+	
 	if in_check {
-		get_all_moves(state, *moves)
-	} else {
-		get_capture_moves(state, *moves)
+		get_non_capture_moves(state, *moves)
 	}
 
 	order_moves(state, moves, best_move, <<killer_move, depth, current_alpha, current_beta)
 
-	had_legal := false
+	legal_moves := 0
 
 	array_add(*state_history, hash)
 	defer array_pop(*state_history)
@@ -236,39 +269,51 @@ quiesce :: (using state: State, alpha: s16, beta: s16, depth: s64 = 0) -> s16 {
 		if !valid
 			continue;
 		
-
-		score: s16
-		if !had_legal {
-			score = -quiesce(new_state, -current_beta, -current_alpha, depth - 1)
-		} else {
-			score = -quiesce(new_state, -current_alpha - 1, -current_alpha, depth - 1)
-
-			if score > current_alpha
-				score = -quiesce(new_state, -current_beta, -current_alpha, depth - 1)
+		legal_moves += 1
+			
+		if !in_check && !is_promotion_move(it) && !is_in_check(*new_state) {
+			if legal_moves > 4
+				continue;
+				
+			possible_value := evaluation + 200 + piece_values[get_captured_piece(state, it)][it.end]
+			
+			if possible_value <= alpha
+				continue;
 		}
-
-		had_legal = true
-
+		
+		score := -quiesce(*new_state, -current_beta, -current_alpha, depth - 1)
+		
+		capture_history_location: *s16
+		
+		if is_capture_move(it)
+			capture_history_location = *capture_history[it.start_piece_flags][it.end][get_captured_piece(state, it)]
 
 		if score > current_alpha {
 			best_move = it
 			current_alpha = score
+			
+			if capture_history_location
+				add_history(capture_history_location, 10, 10000)
+		} else {
+			if capture_history_location
+				add_history(capture_history_location, -10, 10000)
 		}
 
 		if current_alpha >= current_beta {
-			stats.beta_cutoffs += 1
-			current_alpha = current_beta;
-			<<killer_move = it
+			stats.beta_cutoffs += 1;
+			push_killer_move(killer_move, it)
 
-			if !is_capture_move(state, it)
-				counter_move[previous_move.start_piece][previous_move.end] = it
+			counter_move[previous_move.start_piece_flags][previous_move.end] = it
+			
+			if capture_history_location
+				add_history(capture_history_location, 300, 10000)
 
 			return current_alpha
 		}
 
 	}
 
-	if !had_legal {
+	if !legal_moves {
 		if in_check {
 			current_alpha = max(current_alpha, -20000 + cast(s16) ply)
 		}
@@ -277,87 +322,91 @@ quiesce :: (using state: State, alpha: s16, beta: s16, depth: s64 = 0) -> s16 {
 	return current_alpha
 }
 
+check_for_only_minors :: (using state: *State) -> bool {
+	return !(pieces[WHITE_PAWN] | pieces[WHITE_ROOK] | pieces[WHITE_QUEEN] | pieces[BLACK_PAWN] | pieces[BLACK_ROOK] | pieces[BLACK_QUEEN])	
+}
 
-minimax :: (using state: State, depth: s64, alpha: s16 = -30000, beta: s16 = 30000, root := false) -> (s16, Move) {
+check_for_insufficient_material :: (using state: *State) -> bool {
+	if !check_for_only_minors(state)
+		return false
+		
+	white_minors := pieces[WHITE_BISHOP] | pieces[WHITE_KNIGHT]
+	black_minors := pieces[BLACK_BISHOP] | pieces[BLACK_KNIGHT]
+	
+	return !(white_minors & (white_minors - 1)) && !(black_minors & (black_minors - 1))
+}
+
+check_for_instant_draw :: (using state: *State) -> bool {
+	if move_count >= 100
+		return true
+
+	it: s8 = 1		
+	while it < move_count {
+		if state_history.count < cast() (it + 1)
+			break;
+		
+		if state_history[state_history.count - 1 - cast() it] == hash
+			return true
+		
+		it += 2
+	}
+	
+	
+	return false
+}
+
+Node_Type :: enum {
+	ROOT
+	PV
+	NON_PV
+}
+
+minimax :: (using state: *State, depth: s64, alpha: s16 = -30000, beta: s16 = 30000, node_type: Node_Type) -> (s16, Move) {
 	if moves_explored == max_moves {
-		return 0, .{start_piece = -1}
+		return 0, .{start_piece_flags = -1}
 	}
 
 	moves_explored += 1
 	
-	best_move := Move.{start_piece = -1}
+	best_move := Move.{start_piece_flags = -1}
 	current_alpha := alpha
 	current_beta := beta
 
-	if !root {
-		if move_count >= 100 {
-			current_alpha = min(max(current_alpha, 0), current_beta)
+	if node_type != .ROOT {
+		if check_for_instant_draw(state) {
+			current_alpha = max(current_alpha, 0)
 			return current_alpha, best_move
 		}
-
-		for move_count {
-			if state_history.count < cast() (it + 1)
-				break;
-
-			if state_history[state_history.count - 1 - cast() it] == hash {
-				current_alpha = min(max(current_alpha, 0), current_beta)
+	} else {
+		transposition_generation += 1
+	}
+	
+	
+	found, entry := tt_lookup(state)
+	if found {
+		stats.transpositions_matched += 1
+		best_move = entry.move
+	
+		if entry.depth >= depth {
+			if entry.kind == { 
+				case .EXACT
+					return entry.value, best_move
+				case .LOWER_BOUND
+					current_alpha = max(entry.value, current_alpha)
+				case .UPPER_BOUND
+					current_beta = min(current_beta, entry.value)
+			}
+			
+			if current_alpha >= current_beta {
+				stats.beta_cutoffs += 1
 				return current_alpha, best_move
 			}
 		}
 	}
-	
-	entry := *transposition_table[hash & (transposition_table.count - 1)]
 
-	if entry.hash == hash && entry.depth >= depth && (!root || entry.move.start_piece != -1) {
-		if entry.value > 19000 {
-			entry.value = entry.value + entry.ply - ply
-			entry.ply = ply
-		} else if entry.value < -19000 {
-			entry.value = entry.value - entry.ply + ply
-			entry.ply = ply
-		}
+	defer if moves_explored < max_moves tt_store(state, entry, alpha, current_alpha, current_beta, best_move, depth)
 
-		stats.transpositions_matched += 1
-	
-		if entry.kind == .EXACT {
-			return entry.value, entry.move
-		} else if entry.kind == .LOWER_BOUND {
-			best_move = entry.move
-			current_alpha = max(entry.value, current_alpha)
-		} else if entry.kind == .UPPER_BOUND {
-			current_beta = min(current_beta, entry.value)
-		}
-		
-		if current_alpha >= current_beta {
-			current_alpha = current_beta
-			stats.beta_cutoffs += 1
-			return current_alpha, best_move
-		}
-	}
-
-	defer {
-		if current_alpha >= current_beta {
-			current_alpha = current_beta
-		}
-
-		if entry && moves_explored < max_moves  {
-
-			entry.value = current_alpha
-			entry.hash = hash
-			entry.depth = cast() depth
-			entry.move = best_move
-			entry.ply = ply
-			
-			if current_alpha <= alpha
-				entry.kind = .UPPER_BOUND
-			else if current_alpha >= current_beta
-				entry.kind = .LOWER_BOUND
-			else
-				entry.kind = .EXACT
-		}
-	}
-
-	if depth == 0 {
+	if depth <= 0 {
 		current_alpha = quiesce(state, current_alpha, beta)
 	} else {
 
@@ -369,7 +418,11 @@ minimax :: (using state: State, depth: s64, alpha: s16 = -30000, beta: s16 = 300
 		
 		moves_buffer: [200]Move = --
 		moves := backed_array(moves_buffer)
-		get_all_moves(state, *moves)
+		
+		get_capture_moves(state, *moves)
+		get_non_capture_moves(state, *moves)
+		
+		
 		order_moves(state, moves, best_move, <<killer_move, depth, current_alpha, current_beta)
 
 		array_add(*state_history, hash)
@@ -382,48 +435,63 @@ minimax :: (using state: State, depth: s64, alpha: s16 = -30000, beta: s16 = 300
 
 
 			score: s16
+			reduction := 0
 
-			if !legal_moves {
-				score = -minimax(new_state, depth - 1, -current_beta, -current_alpha)
-			} else {
-				reduction := 0
-
-				if !in_check && depth > 3 && !is_capture_move(state, it) && legal_moves >= 4 {
-					reduction = 1 + cast() (legal_moves >= 10)
-				}
-
-				score = -minimax(new_state, depth - 1 - reduction, -current_alpha - 1, -current_alpha)
-
-				if score > current_alpha && reduction
-					score = -minimax(new_state, depth - 1, -current_alpha - 1, -current_alpha)
-
-				if score > current_alpha
-					score = -minimax(new_state, depth - 1, -current_beta, -current_alpha)
+			if !in_check && legal_moves >= 4 {
+				reduction = 1 + legal_moves / 10
 			}
+			
+			reduction = min(reduction, depth - 1)
+
+			score = -minimax(*new_state, depth - 1 - reduction, -current_alpha - 1, -current_alpha, .NON_PV)
+
+			if score > current_alpha && score < current_beta && reduction
+				score = -minimax(*new_state, depth - 1, -current_alpha - 1, -current_alpha, .NON_PV)
+			
+			if node_type != .NON_PV && (!legal_moves || (score > current_alpha && score < current_beta))
+				score = -minimax(*new_state, depth - 1, -current_beta, -current_alpha, .PV)
 
 			legal_moves += 1
 
-			history_location := *history[it.start_piece][it.end]
+			history_location := *piece_to_history[it.start_piece_flags][it.end]
+			continuation_history_location := *continuation_history[previous_move.start_piece_flags][previous_move.end][it.start_piece_flags][it.end]
+			capture_history_location: *s16
+			
+			if is_capture_move(it)
+				capture_history_location = *capture_history[it.start_piece_flags][it.end][get_captured_piece(state, it)]
 
+			history_to_add := min((10 * cast(s16) depth + 50) * cast(s16) depth - 50, 1000)
+			
 			if score > current_alpha {
 				best_move = it
 				current_alpha = score
-
-				add_history(history_location, 0.01 * cast(f32) depth)
+				
+				add_history(history_location, history_to_add, 10000)
+				add_history(continuation_history_location, history_to_add, 10000)
+				if capture_history_location
+					add_history(capture_history_location, history_to_add, 10000)
+				
 
 				if current_alpha >= current_beta {
-					add_history(history_location, 0.01 * cast(f32) depth * cast(f32) depth)
-					current_alpha = current_beta
 					stats.beta_cutoffs += 1;
-					<<killer_move = it
+					push_killer_move(killer_move, it)
 
-					if !is_capture_move(state, it)
-						counter_move[previous_move.start_piece][previous_move.end] = it
+					history_to_add := min((10 * (cast(s16) depth + 1) + 50) * (cast(s16) depth + 1) - 50, 1000)
+					add_history(history_location, history_to_add, 10000)
+					add_history(continuation_history_location, history_to_add, 10000)
+					if capture_history_location
+						add_history(capture_history_location, history_to_add, 10000)
+					
+					if !is_capture_move(it)
+						counter_move[previous_move.start_piece_flags][previous_move.end] = it
 
 					return current_alpha, best_move
 				}
 			} else {
-				remove_history(history_location, 0.01 * cast(f32) depth)
+				add_history(history_location, -history_to_add, 10000)
+				add_history(continuation_history_location, -history_to_add, 10000)
+				if capture_history_location
+					add_history(capture_history_location, -history_to_add, 10000)
 			}
 		}
 
@@ -463,57 +531,75 @@ select_ai_move :: () -> Move {
 
 	move_format_buffer: [16]u8
 
-	memory_clear(history.data, size_of(type_of(history)))
-
 	for * killer_moves {
-		<<it = .{start_piece = -1}
+		for * <<it {
+			<<it = .{start_piece_flags = -1}
+		}
 	}
 
 	stats = .{}
 	moves_explored = 0
 	
 	depth := 1
-	value, ai_move := minimax(global_board, cast() depth, root = true)
-	print("Depth: % Move: %\n", depth, format_move(global_board, ai_move, move_format_buffer))
-	
+	value, ai_move := minimax(*global_board, cast() depth, node_type = .ROOT)
 	total_explored := moves_explored
+	
+	print("Depth = %  % =  Explored = %\n", depth, format_move(*global_board, ai_move, move_format_buffer), value, total_explored)
+	
 	
 	max_moves = old_max_moves
 	
-	alpha_aspiraton: s16 = 40
-	beta_aspiration: s16 = 40
+	alpha_aspiraton: s64 = 40
+	beta_aspiration: s64 = 40
 	
 	depth += 1
 
 	while moves_explored < max_moves && depth < MAX_DEPTH {
 
-		new_value, new_move := minimax(global_board, cast() depth, value - alpha_aspiraton, value + beta_aspiration, root = true)
+		new_value, new_move := minimax(*global_board, cast() depth, cast() max(value - alpha_aspiraton, -30000), cast() min(value + beta_aspiration, 30000), .ROOT)
 	
 		if moves_explored >= max_moves
 			break;
 	
 		total_explored = moves_explored
 
+		move_text := format_move(*global_board, new_move, move_format_buffer)
+
 		if new_value >= value + beta_aspiration {
-			beta_aspiration *= 2
-			print("Fail high\n")
+			print("Depth = %  % >= %  Explored = %\n", depth, move_text, new_value, total_explored)
+			beta_aspiration = cast(s64) (new_value - value) * 2
 		} else if new_value <= value - alpha_aspiraton {
-			alpha_aspiraton *= 2
-			print("Fail low\n")
+			print("Depth = %  % <= %  Explored = %\n", depth, move_text, new_value, total_explored)
+			alpha_aspiraton = cast(s64) (value - new_value) * 2
 		} else {
 			value = new_value
 			ai_move = new_move
 			alpha_aspiraton = 40
 			beta_aspiration = 40
-			print("Depth: % Move: %\n", depth, format_move(global_board, ai_move, move_format_buffer))
+			print("Depth = %  % =  %  Explored = %\n", depth, move_text, new_value, total_explored)
 
 			depth += 1
 		}
 	}
-
-	print("%\n", stats)
-	print("% moves explored\n", total_explored)
-	print("move valued at %\n", value)
+	
+	stats_info := type_info(type_of(stats))
+	stats_base := cast(*void) *stats
+	
+	print("{ ")
+	for stats_info.members {
+		if it.flags & .CONSTANT continue;
+		
+		print("% = ", it.name)
+		
+		value := any.{stats_base + it.offset, it.member_type}
+		
+		if begins_with(it.name, "time") && it.member_type == type_info(s64) {
+			print("%s ", cast(f64) cast(s64) value / cast(f64) get_performance_tickrate())
+		} else {
+			print("% ", value)
+		}
+	}
+	print("}\n")
 	
 	return ai_move
 }
@@ -542,7 +628,7 @@ ai_move: Move
 make_ai_move ::() {
 	if making_ai_move {
 		if wait_semaphore(ai_stop_semaphore, 0) {
-			if ai_move.start_piece == -1 {
+			if ai_move.start_piece_flags == -1 {
 				print("Bad\n")
 				game_over = true
 			} else {

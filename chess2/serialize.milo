@@ -106,23 +106,23 @@ calculate_openings_table :: () -> bool {
 
 			if move == "O-O" {
 				if white_move {
-					move_info.start_piece = WHITE_KING
+					move_info.start_piece_flags = WHITE_KING
 					move_info.end = 62
 				} else {
-					move_info.start_piece = BLACK_KING
+					move_info.start_piece_flags = BLACK_KING
 					move_info.end = 6
 				}
 			} else if move == "O-O-O" {
 				if white_move {
-					move_info.start_piece = WHITE_KING
+					move_info.start_piece_flags = WHITE_KING
 					move_info.end = 58
 				} else {
-					move_info.start_piece = BLACK_KING
+					move_info.start_piece_flags = BLACK_KING
 					move_info.end = 2
 				}
 			} else {
 				if 'a' <= move[0] && move[0] <= 'h' {
-					move_info.start_piece = BLACK_PAWN
+					move_info.start_piece_flags = BLACK_PAWN
 				
 					file = cast() (move[0] - 'a')
 					
@@ -131,25 +131,25 @@ calculate_openings_table :: () -> bool {
 					}
 				} else if move[0] == 'R' {
 					move = move[1..]
-					move_info.start_piece = BLACK_ROOK
+					move_info.start_piece_flags = BLACK_ROOK
 				} else if move[0] == 'N' {
 					move = move[1..]
-					move_info.start_piece = BLACK_KNIGHT
+					move_info.start_piece_flags = BLACK_KNIGHT
 				} else if move[0] == 'B' {
 					move = move[1..]
-					move_info.start_piece = BLACK_BISHOP
+					move_info.start_piece_flags = BLACK_BISHOP
 				} else if move[0] == 'K' {
 					move = move[1..]
-					move_info.start_piece = BLACK_KING
+					move_info.start_piece_flags = BLACK_KING
 				} else if move[0] == 'Q' {
 					move = move[1..]
-					move_info.start_piece = BLACK_QUEEN
+					move_info.start_piece_flags = BLACK_QUEEN
 				} else {
 					return false
 				}
 
 				if white_move {
-					move_info.start_piece += WHITE_PAWN
+					move_info.start_piece_flags += WHITE_PAWN
 				}
 				
 				if move.count > 2 && 'a' <= move[0] && move[0] <= 'h' {
@@ -167,20 +167,20 @@ calculate_openings_table :: () -> bool {
 				
 				move_info.end = pack(cast() (move[0] - 'a'), cast() ('8' - move[1]))
 			}
-
+			
 			key := hash
 
 			moves_buffer: [200]Move = --
 			moves := backed_array(moves_buffer)
 
-			get_all_legal_moves_slow(state, *moves)
+			get_all_legal_moves_slow(*state, *moves)
 
 			for moves {
 				x, y := unpack(it.start)
 
-				if it.start_piece == move_info.start_piece && (file == -1 || x == file) && (rank == -1 || y == rank) && it.end == move_info.end {
+				if (it.start_piece_flags & Move.START_PIECE_MASK) == move_info.start_piece_flags && (file == -1 || x == file) && (rank == -1 || y == rank) && it.end == move_info.end {
 					move_info = it
-					state = do_move(state, it)
+					state = do_move(*state, it)
 					break
 				}
 			} or {
@@ -197,7 +197,7 @@ calculate_openings_table :: () -> bool {
 	return true
 }
 
-print_fen :: (using state: State) {
+print_fen :: (using state: *State) {
 	for y: 8 {
 		x := 0
 		
@@ -401,12 +401,12 @@ initialize_from_fen :: (fen: string) -> (State, bool) {
 	
 	if remaining return .{}, false
 
-	state.hash = hash(state)
+	state.hash = hash(*state)
 	
 	return state, true
 }
 
-format_move :: (using state: State, move: Move, output_buffer: []u8) -> string {
+format_move :: (using state: *State, move: Move, output_buffer: []u8) -> string {
 	get_piece_character :: (piece: s8) -> u8 {
 		if piece == {
 			case WHITE_KING #through
@@ -428,7 +428,7 @@ format_move :: (using state: State, move: Move, output_buffer: []u8) -> string {
 	moves_buffer: [200]Move = --
 	moves := backed_array(moves_buffer)
 
-	if move.start_piece == -1 {
+	if move.start_piece_flags == -1 {
 		result[result.count] = 'I'
 		result.count += 1
 		result[result.count] = 'n'
@@ -462,7 +462,10 @@ format_move :: (using state: State, move: Move, output_buffer: []u8) -> string {
 		result[result.count] = 'O'
 		result.count += 1
 	} else {
-		piece_character := get_piece_character(move.start_piece)
+		start_piece := move.start_piece_flags & Move.START_PIECE_MASK
+	
+		piece_character := get_piece_character(start_piece)
+		
 
 
 		if piece_character {
@@ -476,7 +479,7 @@ format_move :: (using state: State, move: Move, output_buffer: []u8) -> string {
 			multiple_file  := false
 
 			for moves {
-				if it.start_piece != move.start_piece || it.end_piece != move.end_piece || it.end != move.end || moves_equal(it, move)
+				if it.start_piece_flags != move.start_piece_flags || it.end_piece != move.end_piece || it.end != move.end || moves_equal(it, move)
 					continue;
 
 				multiple_moves = true
@@ -510,7 +513,7 @@ format_move :: (using state: State, move: Move, output_buffer: []u8) -> string {
 			result.count += 1
 		}
 
-		if move.end_piece == WHITE_EN_PASSANT || move.end_piece == BLACK_EN_PASSANT || get_piece(state, move.end) != -1 {
+		if is_capture_move(move) {
 			result[result.count] = 'x'
 			result.count += 1
 		}
@@ -523,22 +526,20 @@ format_move :: (using state: State, move: Move, output_buffer: []u8) -> string {
 		result[result.count] = '1' + cast(u8) rank
 		result.count += 1
 
-		if move.end_piece > move.start_piece {
+		if is_promotion_move(move) {
 			result[result.count] = '='
 			result.count += 1
 			result[result.count] = get_piece_character(move.end_piece)
 			result.count += 1			
 		}
 	}
-
-
-
+	
 	new_state := do_move(state, move)
 
-	is_check := is_in_check(new_state)
+	is_check := is_in_check(*new_state)
 
 	if is_check {
-		get_all_legal_moves_slow(new_state, *moves)
+		get_all_legal_moves_slow(*new_state, *moves)
 
 		if !moves {
 			result[result.count] = '#'

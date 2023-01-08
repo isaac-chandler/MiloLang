@@ -5,6 +5,7 @@
 #import "Thread"
 #import "Intrinsics"
 #import "Window"
+#import "Windows"
 
 #load "magic_bitboard.milo"
 #load "graphics.milo"
@@ -57,7 +58,7 @@ make_move :: (move: Move) {
 	array_add(*state_history, global_board.hash)
 
 
-	global_board = do_move(global_board, move)
+	global_board = do_move(*global_board, move)
 	array_add(*state_history, global_board.hash)
 
 	repetition: [..]struct {
@@ -65,12 +66,17 @@ make_move :: (move: Move) {
 		count: u64
 	}
 	defer array_free(repetition)
+	
+	if global_board.move_count == 100 {
+		print("50 Move Draw\n")
+		game_over = true
+	}
 
 	for state: state_history {
 		for * repetition {
 			if state == it.hash {
 				if it.count == 2 {
-					print("Repetition!\n")
+					print("Repetition\n")
 					game_over = true
 				} else {
 					it.count += 1
@@ -81,13 +87,31 @@ make_move :: (move: Move) {
 			array_add(*repetition, .{state, 1})
 		}
 	}
+	
+	if check_for_insufficient_material(*global_board) {
+		print("Insufficient Material\n")
+		game_over = true
+	}
+	
+	moves_buffer: [200]Move = --
+	moves := backed_array(moves_buffer)
+	
+	get_all_legal_moves_slow(*global_board, *moves)
+	
+	if !moves.count {
+		if is_in_check(*global_board) {
+			print("Checkmate\n")
+			game_over = false
+		} else {
+			print("Stalemate\n")
+			game_over = false
+		}
+	}
 
 	array_pop(*state_history)
 	
-	print_fen(global_board)
+	print_fen(*global_board)
 	array_add(*move_history, move)
-
-	print("Evaluation: %\n", evaluate_position(global_board))
 }
 
 game_over: bool
@@ -95,11 +119,15 @@ game_over: bool
 STARTING_BOARD :: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
 use_book := true
+flip_board := false
 
 selected_square: s8 = -1
 
 main :: () {
 	defer exit(0)
+	
+	transposition_table.count = 1 << 16
+	transposition_table.data = VirtualAlloc(dwSize = transposition_table.count * size_of(type_of(transposition_table[0])))
 
 	magic_table_buffer, success := read_entire_file("magic_bitboard.bin")
 
@@ -129,6 +157,8 @@ main :: () {
 			black_ai = true
 		} else if it == "-no_book" {
 			use_book = false
+		} else if it == "-flip" {
+			flip_board = true
 		} else if begins_with(it, "-moves=") {
 			before, after := split_at_first(it, '=')
 			
@@ -175,6 +205,7 @@ main :: () {
 	show_window(window)
 	
 	moves: [..]Move
+	array_reserve(*moves, 200)
 	
 	while poll_events(window) {		
 		for window.events {
@@ -196,7 +227,7 @@ main :: () {
 				file := x / 100
 				rank := y /  100
 				
-				if true && white_ai && !black_ai {
+				if !flip_board {
 					file = 7 - file
 					rank = 7 - rank
 				}
@@ -223,14 +254,14 @@ main :: () {
 					end_piece := it.end_piece
 					if end_piece >= WHITE_PAWN end_piece -= WHITE_PAWN
 
-					if it.end == square && (it.end_piece <= it.start_piece || promote_to == end_piece) {
+					if it.end == square && (!is_promotion_move(it) || promote_to == end_piece) {
 						selected_square = -1
 						make_move(it)
 						
 						break
 					}
 				} or {
-					piece := get_piece(global_board, square)
+					piece := get_piece(*global_board, square)
 					
 					if piece == -1 || piece >= WHITE_PAWN != global_board.white_move {
 						selected_square = -1
@@ -239,7 +270,7 @@ main :: () {
 						
 						selected_square = square
 						moves.count = 0
-						get_all_legal_moves_slow(global_board, *moves)
+						get_all_legal_moves_slow(*global_board, *moves)
 
 						for moves {
 							if it.start != selected_square

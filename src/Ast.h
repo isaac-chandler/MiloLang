@@ -73,7 +73,8 @@ enum class IrOp : u8 {
 	TYPE_INFO, 
 	BLOCK, 
 	POP_COUNT, 
-	BIT_SCAN_FORWARD
+	BIT_SCAN_FORWARD, 
+	BIT_SCAN_REVERSE
 };
 
 #define IR_SIGNED_OP 0x1

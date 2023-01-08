@@ -118,3 +118,32 @@ get_files_in_directory :: (file: string, include_folders := false) -> [..]string
 	
 	return files
 }
+
+get_executable_path :: () -> string {
+    filename_windows := new_array(u16, 32768, initialized = false)
+    defer free_array(filename_windows)
+    
+    GetModuleFileNameW(null, filename_windows.data, cast() filename_windows.count)
+    
+    return from_windows_string(filename_windows.data)
+}
+
+get_path_relative_to_executable :: (path: string) -> string {
+    executable_path := get_executable_path()
+    defer free_string(executable_path)
+    
+    last_backslash := find_last(executable_path, "\\")
+    
+    return concatenate(executable_path[..last_backslash], path, delimiter = "\\")
+}
+
+get_final_path_name :: (path: string) -> string {
+    last_backslash, found := find_last(path, "\\")
+    
+    if !found
+        return path
+    else if last_backslash + 1 == path.count
+        return get_final_path_name(path[..path.count - 1])
+    
+    return path[last_backslash + 1..]
+}

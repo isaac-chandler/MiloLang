@@ -20,6 +20,8 @@ Build_Options :: struct {
 	c_runtime_library := C_Runtime_Library.STATIC
 	llvm_options: []string
 	output_name: string
+    icon_name:   string
+    show_console := true
 }
 
 add_build_file :: (filename: string) #compiler {

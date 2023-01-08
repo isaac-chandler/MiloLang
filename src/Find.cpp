@@ -59,6 +59,7 @@ Find_Result find_visual_studio_and_windows_sdk();
 
 void free_resources(Find_Result *result) {
     free(result->windows_sdk_root);
+    free(result->windows_sdk_bin);
     free(result->windows_sdk_um_library_path);
     free(result->windows_sdk_ucrt_library_path);
     free(result->vs_exe_path);
@@ -361,7 +362,6 @@ void find_windows_kit_root(Find_Result *result) {
         if (data.best_name) {
             result->windows_sdk_version = 10;
             result->windows_sdk_root = data.best_name;
-            return;
         }
     }
 
@@ -377,8 +377,58 @@ void find_windows_kit_root(Find_Result *result) {
         Version_Data data = { 0 };
         visit_files_w(windows8_lib, &data, win8_best);
         if (data.best_name) {
-            result->windows_sdk_version = 8;
             result->windows_sdk_root = data.best_name;
+            return;
+        }
+    }
+
+    // If we get here, we failed to find anything.
+}
+
+void find_windows_kit_bin(Find_Result *result) {
+    // Information about the Windows 10 and Windows 8 development kits
+    // is stored in the same place in the registry. We open a key
+    // to that place, first checking preferntially for a Windows 10 kit,
+    // then, if that's not found, a Windows 8 kit.
+
+    HKEY main_key;
+
+    auto rc = RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows Kits\\Installed Roots",
+        0, KEY_QUERY_VALUE | KEY_WOW64_32KEY | KEY_ENUMERATE_SUB_KEYS, &main_key);
+    if (rc != S_OK) return;
+    defer{ RegCloseKey(main_key); };
+
+    // Look for a Windows 10 entry.
+    auto windows10_root = read_from_the_registry(main_key, (wchar_t *) L"KitsRoot10");
+    if (windows10_root) {
+        defer{ free(windows10_root); };
+        Version_Data data = { 0 };
+        
+        auto windows10_bin = concat(windows10_root, (wchar_t *) L"bin");
+        defer{ free(windows10_bin); };
+
+        visit_files_w(windows10_bin, &data, win10_best);
+        if (data.best_name) {
+            result->windows_sdk_version = 10;
+            result->windows_sdk_bin = concat(data.best_name, (wchar_t *) L"\\x64");
+            return;
+        }
+    }
+
+    // Look for a Windows 8 entry.
+    auto windows8_root = read_from_the_registry(main_key, (wchar_t *) L"KitsRoot81");
+
+    if (windows8_root) {
+        defer{ free(windows8_root); };
+
+        Version_Data data = { 0 };
+
+        auto windows8_bin = concat(windows10_root, (wchar_t *) L"bin");
+        defer{ free(windows8_bin); };
+
+        visit_files_w(windows8_bin, &data, win10_best);
+        if (data.best_name) {
+            result->windows_sdk_bin = concat(data.best_name, (wchar_t *) L"\\x64");
             return;
         }
     }
@@ -526,6 +576,7 @@ Find_Result find_visual_studio_and_windows_sdk() {
     Find_Result result;
 
     find_windows_kit_root(&result);
+    find_windows_kit_bin(&result);
 
     if (result.windows_sdk_root) {
         result.windows_sdk_um_library_path = concat(result.windows_sdk_root, (wchar_t *) L"\\um\\x64");

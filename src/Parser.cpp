@@ -37,7 +37,7 @@ static u64 getTokenPrecedence(TokenT token) {
 			if (t == token) return i + 1;
 		}
 	}
-
+	
 	return 0;
 }
 

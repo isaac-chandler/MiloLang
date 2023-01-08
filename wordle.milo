@@ -1,0 +1,240 @@
+#import "Standard"
+#import "String"
+#import "File"
+#import "Random"
+
+WORD_LENGTH :: 5
+
+Char_Map :: struct {
+	map: [26]u8
+}
+
+count :: (c: u8, word: string) -> u8 {
+	total: u8 = 0
+	
+	for WORD_LENGTH
+		if word[it] == c
+			total += 1
+	
+	return total
+}
+
+get :: (map: *Char_Map, c: u8) -> *u8 {
+	return *map.map[c - 'a']
+}
+
+evaluate :: (word: string, previous_word: string, hint: string) -> bool {
+	counts: Char_Map
+	grey: Char_Map
+
+	for WORD_LENGTH {
+		hint_type := hint[it]
+		previous := previous_word[it]
+		
+		if (hint_type == '2') != (word[it] == previous)
+			return false
+			
+		if hint_type == '0' {
+			<<get(*grey, previous) = 1
+		} else
+			<<get(*counts, previous) += 1
+	}
+	
+	for WORD_LENGTH {
+		previous := previous_word[it]
+		word_count := count(previous, word)
+		
+		if <<get(*grey, previous) && word_count != <<get(*counts, previous)
+			return false
+		else if word_count < <<get(*counts, previous)
+			return false
+	}
+	
+	return true
+}
+
+get_hint :: (correct_word: string, guess_word: string, hint: string) {
+	for *hint {
+		<<it = '0'
+	}
+	
+	counted_chars: Char_Map
+	
+	for WORD_LENGTH {
+		correct := correct_word[it]
+		guess := guess_word[it]
+		if guess == correct {
+			<<get(*counted_chars, guess) += 1
+			hint[it] = '2'
+		}
+	}
+	
+	for WORD_LENGTH {
+		guess := guess_word[it]
+		
+		counted := get(*counted_chars, guess)
+			
+		if hint[it] != '2' && <<counted < count(guess, correct_word) {
+			<<counted += 1
+			hint[it] = '1'
+		}	
+	}
+}
+
+get_word_list :: (filename: string) -> []string {
+	// Do not free because we keep views into the file
+	data := cast(string) read_entire_file(filename)
+	
+	words: [..]string
+	
+	while true {
+		word: string = --
+		word, data = get_line(data)
+		
+		if !word break;
+		
+		assert(word.count == WORD_LENGTH)
+		
+		for word 
+			assert('a' <= it && it <= 'z')
+		
+		array_add(*words, word)
+	}
+	
+	return words
+}
+
+get_best_word :: (words: []string) -> string {
+	if words.count == WORD_LIST.count {
+		return "slate"
+	}
+
+	best_word := words[0]
+	
+	if words.count <= 3 {
+		return best_word
+	}
+	
+	best_eliminations := 0
+	for guess: WORD_LIST {
+		eliminations := 0
+		
+		for true_word: words {
+		
+			hint_buffer: [WORD_LENGTH]u8 = --
+			hint := string.{hint_buffer.data, WORD_LENGTH}
+			
+			get_hint(true_word, guess, hint)
+			
+			for word: words {
+				if !evaluate(word, guess, hint)
+					eliminations += 1
+			}
+		}
+		
+		if eliminations > best_eliminations {
+			best_eliminations = eliminations
+			best_word = guess
+		}
+	}
+	
+	print("Expected eliminations: %\n", cast(f32) best_eliminations / cast(f32) words.count)
+	
+	return best_word
+}
+
+WORD_LIST: []string
+
+main :: () {
+	WORD_LIST = get_word_list("five-letter-words.txt")
+	
+	
+	args := get_command_line_arguments()
+	
+	if args.count >= 2 && args[1] == "test" {
+		rng := create_random(859433, 4236287)
+		
+		SAMPLE_SIZE :: 250
+		
+		total_guesses := 0
+		
+		for 1 .. SAMPLE_SIZE + 1 {
+			sample := WORD_LIST[random_u32(*rng) % SAMPLE_SIZE]
+			
+			words := array_copy(WORD_LIST)
+			defer free_array(words)
+			
+			guesses := 0
+			
+			print("----%----\n", sample)
+		
+			while true {
+				assert(words.count != 0)
+				guesses += 1
+			
+				best_word := get_best_word(words)
+				print("%\n", best_word)
+				
+				hint_buffer: [WORD_LENGTH]u8 = --
+				hint := string.{hint_buffer.data, WORD_LENGTH}
+				
+				get_hint(sample, best_word, hint)
+				print("%\n", hint)
+				
+				if hint == "22222"
+					break;
+				
+				for words {
+					if !evaluate(it, best_word, hint)
+						remove;
+				}
+				
+				print("% words remaining\n", words.count)
+			}
+			
+			total_guesses += guesses
+			
+			print("% guesses, Avg: %, %/%\n", guesses, cast(f32) total_guesses / cast(f32) it, it, SAMPLE_SIZE)
+		}
+	} else {
+		words := array_copy(WORD_LIST)
+		defer free_array(words)
+		
+		while true {
+			assert(words.count != 0)
+		
+			best_word := get_best_word(words)
+			print("%\n", best_word)
+			
+			hint := read_line()
+			defer free_string(hint)
+			
+			if hint == "22222"
+				break;
+			
+			for words {
+				if !evaluate(it, best_word, hint)
+					remove;
+			}
+			
+			print("% words remaining\n", words.count)
+		}
+	}
+}
+
+#import "Compiler"
+
+setup_build :: () {
+
+	arguments := get_build_arguments()
+	
+	if arguments {
+		options := get_build_options()
+		options.backend = .LLVM
+		options.llvm_options = arguments
+		
+		set_build_options(options)
+	}
+}
+
+#run setup_build()

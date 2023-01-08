@@ -1,0 +1,60 @@
+#import "Windows"
+#import "Window"
+#import "Standard"
+
+using Wave_Format :: enum_flags u32 {
+	WAVE_FORMAT_1M08  :: 0x0000_0001
+	WAVE_FORMAT_1S08  :: 0x0000_0002
+	WAVE_FORMAT_1M16  :: 0x0000_0004
+	WAVE_FORMAT_1S16  :: 0x0000_0008
+	WAVE_FORMAT_2M08  :: 0x0000_0010
+	WAVE_FORMAT_2S08  :: 0x0000_0020
+	WAVE_FORMAT_2M16  :: 0x0000_0040
+	WAVE_FORMAT_2S16  :: 0x0000_0080
+	WAVE_FORMAT_4M08  :: 0x0000_0100
+	WAVE_FORMAT_4S08  :: 0x0000_0200
+	WAVE_FORMAT_4M16  :: 0x0000_0400
+	WAVE_FORMAT_4S16  :: 0x0000_0800
+	WAVE_FORMAT_44M08 :: 0x0000_0100
+	WAVE_FORMAT_44S08 :: 0x0000_0200
+	WAVE_FORMAT_44M16 :: 0x0000_0400
+	WAVE_FORMAT_44S16 :: 0x0000_0800
+	WAVE_FORMAT_48M08 :: 0x0000_1000
+	WAVE_FORMAT_48S08 :: 0x0000_2000
+	WAVE_FORMAT_48M16 :: 0x0000_4000
+	WAVE_FORMAT_48S16 :: 0x0000_8000
+	WAVE_FORMAT_96M08 :: 0x0001_0000
+	WAVE_FORMAT_96S08 :: 0x0002_0000
+	WAVE_FORMAT_96M16 :: 0x0004_0000
+	WAVE_FORMAT_96S16 :: 0x0008_0000
+}
+
+WAVEINCAPSW :: struct {
+	wMid: u16
+	wPid: u16
+	vDriverVersion: u32
+	szPname: [32]u16
+	dwFormats: Wave_Format
+	wChannels: u16
+	wReserved1: u16
+}
+
+waveInGetNumDevs :: () -> u32 #external "winmm"
+
+waveInGetDevCapsW :: (uDeviceID: u64, pwic: *WAVEINCAPSW, cbwic: u32 = size_of(WAVEINCAPSW)) -> u32 #external "winmm"
+
+main :: () {
+	device_count := waveInGetNumDevs()
+
+	print("% deviced detected\n", device_count)
+	
+	for device_count {
+		caps: WAVEINCAPSW
+		
+		if waveInGetDevCapsW(it, *caps)
+			print("  Failed to get caps for device %\n", it)
+		else
+			print("  %: %\n", it, from_windows_string(caps.szPname.data))
+		
+	}	
+}

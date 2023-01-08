@@ -17,6 +17,7 @@ Maybe make [] operations on a pointer illegal so that pointers to an array are l
 
 Ternary operator
 
+Look for libs/dlls in the module directory of the module that uses them
 
 Speed up IR Runner (currenly the #run directives in chess.milo take ~1.5 ms, which is like 100x too slow)
  - Optimize loop

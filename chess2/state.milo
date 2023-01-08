@@ -7,7 +7,10 @@ unpack :: (postion: s8) -> (s8, s8) {
 }
 
 Move :: struct {
-	start_piece: s8
+	START_PIECE_MASK :: 0xF
+	CAPTURE_FLAG :: 0x10
+	
+	start_piece_flags: s8
 	end_piece: s8
 	start: s8
 	end: s8
@@ -22,7 +25,7 @@ BLACK_KINGSIDE_CASTLE  :: -6
 WHITE_QUEENSIDE_CASTLE :: -7
 BLACK_QUEENSIDE_CASTLE :: -8
 
-collect_occupied :: (using state: State, start := 0, end := 12) -> u64 {
+collect_occupied :: (using state: *State, start := 0, end := 12) -> u64 {
 	occupied: u64 = 0
 
 	for start .. end {
@@ -82,15 +85,15 @@ create_mask :: (bits: [64]u64) -> u64 {
 
 
 moves_equal :: (a: Move, b: Move) -> bool {
-	return a.start_piece == b.start_piece && a.end_piece == b.end_piece && a.start == b.start && a.end == b.end
+	return a.start_piece_flags == b.start_piece_flags && a.end_piece == b.end_piece && a.start == b.start && a.end == b.end
 }
 
-move_is_legal :: (using state: State, move: Move) -> bool {
-	if white_move != (move.start_piece >= WHITE_PAWN) {
+move_is_legal :: (using state: *State, move: Move) -> bool {
+	if white_move != ((move.start_piece_flags & Move.START_PIECE_MASK) >= WHITE_PAWN) {
 		return false
 	}
 
-	if get_piece(state, move.start) != move.start_piece {
+	if get_piece(state, move.start) != (move.start_piece_flags & Move.START_PIECE_MASK) {
 		return false
 	}
 	white_pieces := collect_occupied(state, start = WHITE_PAWN)
@@ -98,7 +101,7 @@ move_is_legal :: (using state: State, move: Move) -> bool {
 	all_pieces := black_pieces | white_pieces
 
 
-	if move.start_piece == {
+	if move.start_piece_flags & Move.START_PIECE_MASK == {
 		case BLACK_PAWN
 			if move.end_piece == BLACK_EN_PASSANT {
 				return en_passant_position == move.end
@@ -170,27 +173,15 @@ move_is_legal :: (using state: State, move: Move) -> bool {
 	}
 }
 
-is_capture_move :: (using state: State, move: Move) -> bool {
-	if move.start_piece < WHITE_PAWN {
-		if get_piece(state, move.end, start = WHITE_PAWN) != -1
-			return true
-		else if move.end_piece == BLACK_EN_PASSANT
-			return true
-		else if move.start_piece == BLACK_PAWN && move.end_piece > BLACK_PAWN
-			return true
-	} else {
-		if get_piece(state, move.end, end = WHITE_PAWN) != -1
-			return true
-		else if move.end_piece == WHITE_EN_PASSANT
-			return true
-		else if move.start_piece == WHITE_PAWN && move.end_piece > WHITE_PAWN
-			return true
-	}
-
-	return false
+is_capture_move :: (move: Move) -> bool {
+	return cast() (move.start_piece_flags & Move.CAPTURE_FLAG)
 }
 
-get_piece :: (using state: State, index: s8, start: s8 = 0, end: s8 = 12) -> s8 {
+is_promotion_move :: (move: Move) -> bool {
+	return move.end_piece > (move.start_piece_flags & Move.START_PIECE_MASK)
+}
+
+get_piece :: (using state: *State, index: s8, start: s8 = 0, end: s8 = 12) -> s8 {
 	mask := 1 << cast(u64) index
 
 	for start .. end {
@@ -201,7 +192,7 @@ get_piece :: (using state: State, index: s8, start: s8 = 0, end: s8 = 12) -> s8 
 	return -1
 }
 
-look_for_checks :: (using state: State, square: s8, white_king: bool) -> bool {
+look_for_checks :: (using state: *State, square: s8, white_king: bool) -> bool {
 	all_pieces := collect_occupied(state)
 
 	if white_king {
@@ -230,7 +221,34 @@ look_for_checks :: (using state: State, square: s8, white_king: bool) -> bool {
 	return false
 }
 
-is_in_check :: (using state: State, other_side := false) -> bool {
+look_for_checks_fast :: (using state: *State, all_pieces: u64, $square: s8, $white_king: bool) -> bool {
+	if white_king {
+		if pieces[BLACK_PAWN] & white_king_black_pawn_check_mask[square]
+			return true
+		else if pieces[BLACK_KNIGHT] & knight_mask[square]
+			return true
+		else if pieces[BLACK_KING] & king_mask[square]
+			return true
+		else if (pieces[BLACK_BISHOP] | pieces[BLACK_QUEEN]) & get_bishop_moves(square, all_pieces)
+			return true
+		else if (pieces[BLACK_ROOK] | pieces[BLACK_QUEEN]) & get_rook_moves(square, all_pieces)
+			return true
+	} else {
+		if pieces[WHITE_PAWN] & black_king_white_pawn_check_mask[square]
+			return true
+		else if pieces[WHITE_KNIGHT] & knight_mask[square]
+			return true
+		else if pieces[WHITE_KING] & king_mask[square]
+			return true
+		else if (pieces[WHITE_BISHOP] | pieces[WHITE_QUEEN]) & get_bishop_moves(square, all_pieces)
+			return true
+		else if (pieces[WHITE_ROOK] | pieces[WHITE_QUEEN]) & get_rook_moves(square, all_pieces)
+			return true
+	}
+	return false
+}
+
+is_in_check :: (using state: *State, other_side := false) -> bool {
 	if white_move ^ other_side {
 		return look_for_checks(state, cast() bit_scan_forward(pieces[WHITE_KING]), true)
 	} else {
@@ -238,10 +256,12 @@ is_in_check :: (using state: State, other_side := false) -> bool {
 	}
 }
 
-checked_do_move :: (using state: State, using move: Move) -> (State, #must bool) {
+checked_do_move :: (using state: *State, using move: Move) -> (State, #must bool) {
+	stats.time_in_do_move -= get_performance_ticks()
+	defer stats.time_in_do_move += get_performance_ticks()
 	new_state := do_move(state, move)
 
-	return new_state, !is_in_check(new_state, other_side = true)
+	return new_state, !is_in_check(*new_state, other_side = true)
 }
 
 white_pawn_up_one_mask :: #run create_mask(.[
@@ -453,7 +473,7 @@ file_mask :: #run create_mask(.[
 	1, 0, 0, 0, 0, 0, 0, 0
 ])
 
-light_square_mask :: #run create_mask(.[
+dark_square_mask :: #run create_mask(.[
 	1, 0, 1, 0, 1, 0, 1, 0, 
 	0, 1, 0, 1, 0, 1, 0, 1, 
 	1, 0, 1, 0, 1, 0, 1, 0, 
@@ -541,6 +561,13 @@ precompute_en_passant_candidate :: () -> [64]u64 {
 	return result
 }
 
+get_colored_piece :: (using state: *State, square: s8, color: bool) -> s8 {
+	if color
+		return get_piece(state, square, start = WHITE_PAWN)
+	else
+		return get_piece(state, square, end = WHITE_PAWN)
+}
+
 knight_mask :: #run precompute_legal_knight_moves()
 king_mask   :: #run precompute_legal_king_moves()
 
@@ -575,39 +602,35 @@ Move_Kind :: enum_flags u8 {
 	PROMOTION
 }
 
-get_moves :: (using state: State, moves: *[..]Move, $kind: Move_Kind) {
+get_moves :: (using state: *State, moves: *[..]Move, $capture_or_promotion: bool) {
+	stats.time_in_movegen -= get_performance_ticks()
+	defer stats.time_in_movegen += get_performance_ticks()
+
 	white_pieces := collect_occupied(state, start = WHITE_PAWN)
 	black_pieces := collect_occupied(state, end = WHITE_PAWN)
 	all_pieces := white_pieces | black_pieces
 	
 	move: Move = --
-
+	mask: u64 = --
+	piece_mask: u64 = --
 	if white_move {
-		move.start_piece = WHITE_PAWN
-		move.end_piece = WHITE_PAWN
+		move.start_piece_flags = WHITE_PAWN
+		move.end_piece = move.start_piece_flags
+		piece_mask = pieces[move.start_piece_flags]
 
-		piece_mask := pieces[WHITE_PAWN]
-		mask: u64
-
-		#if kind & .QUIET {
-			mask = (piece_mask & white_pawn_up_one_mask) & ~(all_pieces << 8)
-			while iterate_bits(*mask, *move.start) {
-				move.end = move.start - 8
-				array_add(moves, move)
-			}
-		}
-
-		#if kind & .CAPTURE {
+		#if capture_or_promotion {
+			move.start_piece_flags |= Move.CAPTURE_FLAG
+			
 			mask = (piece_mask & white_pawn_left_capture_mask) & (black_pieces << 9)
 			while iterate_bits(*mask, *move.start) {
 				move.end = move.start - 9
-				array_add(moves, move)
+				array_add_unchecked(moves, move)
 			}
 
 			mask = (piece_mask & white_pawn_right_capture_mask) & (black_pieces << 7)
 			while iterate_bits(*mask, *move.start) {
 				move.end = move.start - 7
-				array_add(moves, move)
+				array_add_unchecked(moves, move)
 			}
 
 
@@ -616,7 +639,7 @@ get_moves :: (using state: State, moves: *[..]Move, $kind: Move_Kind) {
 				move.start = en_passant_position + 9
 				move.end = en_passant_position
 				move.end_piece = WHITE_EN_PASSANT
-				array_add(moves, move)
+				array_add_unchecked(moves, move)
 			}
 
 			mask = (piece_mask & white_pawn_right_capture_mask) & (1 << cast(u64) (en_passant_position + 7))
@@ -624,40 +647,16 @@ get_moves :: (using state: State, moves: *[..]Move, $kind: Move_Kind) {
 				move.start = en_passant_position + 7
 				move.end = en_passant_position
 				move.end_piece = WHITE_EN_PASSANT
-				array_add(moves, move)
+				array_add_unchecked(moves, move)
 			}
-		}
-
-
-		#if kind & .QUIET {
-			move.end_piece = WHITE_PAWN_TWO
-			mask = (piece_mask & white_pawn_up_two_mask) & ~(all_pieces << 8) & ~(all_pieces << 16)
-			while iterate_bits(*mask, *move.start) {
-				move.end = move.start - 16
-				array_add(moves, move)
-			}
-		}
-
-		#if kind & .PROMOTION {
-			mask = (piece_mask & white_pawn_promote_mask) & ~(all_pieces << 8)
-			while iterate_bits(*mask, *move.start) {
-				move.end = move.start - 8
-
-				for WHITE_KNIGHT .. WHITE_QUEEN + 1 {
-					move.end_piece = cast() it
-					array_add(moves, move)
-				}
-			}
-		}
-
-		#if (kind & .PROMOTION) || (kind & .CAPTURE) { 
+			
 			mask = (piece_mask & white_pawn_promote_left_mask) & (black_pieces << 9)
 			while iterate_bits(*mask, *move.start) {
 				move.end = move.start - 9
 
 				for WHITE_KNIGHT .. WHITE_QUEEN + 1 {
 					move.end_piece = cast() it
-					array_add(moves, move)
+					array_add_unchecked(moves, move)
 				}
 			}
 
@@ -667,139 +666,160 @@ get_moves :: (using state: State, moves: *[..]Move, $kind: Move_Kind) {
 
 				for WHITE_KNIGHT .. WHITE_QUEEN + 1 {
 					move.end_piece = cast() it
-					array_add(moves, move)
+					array_add_unchecked(moves, move)
 				}
 			}
+			
+			move.start_piece_flags = WHITE_PAWN
+			mask = (piece_mask & white_pawn_promote_mask) & ~(all_pieces << 8)
+			while iterate_bits(*mask, *move.start) {
+				move.end = move.start - 8
+
+				for WHITE_KNIGHT .. WHITE_QUEEN + 1 {
+					move.end_piece = cast() it
+					array_add_unchecked(moves, move)
+				}
+			}
+		} else {
+			move.end_piece = WHITE_PAWN_TWO
+			mask = (piece_mask & white_pawn_up_two_mask) & ~(all_pieces << 8) & ~(all_pieces << 16)
+			while iterate_bits(*mask, *move.start) {
+				move.end = move.start - 16
+				array_add_unchecked(moves, move)
+			}
+			
+			mask = (piece_mask & white_pawn_up_one_mask) & ~(all_pieces << 8)
+			while iterate_bits(*mask, *move.start) {
+				move.end = move.start - 8
+				array_add_unchecked(moves, move)
+			}
 		}
 
 
-		move.start_piece = WHITE_KNIGHT
-		move.end_piece = WHITE_KNIGHT
-		piece_mask = pieces[WHITE_KNIGHT]
+		move.start_piece_flags = WHITE_KNIGHT		
+		move.end_piece = move.start_piece_flags
+		piece_mask = pieces[move.start_piece_flags]
+		#if capture_or_promotion {
+			move.start_piece_flags |= Move.CAPTURE_FLAG
+		}
 		while iterate_bits(*piece_mask, *move.start) {
 			mask = knight_mask[move.start]
-			mask &= ~white_pieces
-			#if !(kind & .CAPTURE) {
-				mask &= ~black_pieces
-			}
-			#if !(kind & .QUIET) {
+			#if capture_or_promotion {
 				mask &= black_pieces
+			} else {
+				mask &= ~all_pieces
 			}
 
 			while iterate_bits(*mask, *move.end)
-				array_add(moves, move)
+				array_add_unchecked(moves, move)
 		}
 
 
-		move.start_piece = WHITE_BISHOP
-		move.end_piece = WHITE_BISHOP
-		piece_mask = pieces[WHITE_BISHOP]
+		move.start_piece_flags = WHITE_BISHOP		
+		move.end_piece = move.start_piece_flags
+		piece_mask = pieces[move.start_piece_flags]
+		#if capture_or_promotion {
+			move.start_piece_flags |= Move.CAPTURE_FLAG
+		}
 		while iterate_bits(*piece_mask, *move.start) {
 			mask = get_bishop_moves(move.start, all_pieces)
-			mask &= ~white_pieces
-			#if !(kind & .CAPTURE) {
-				mask &= ~black_pieces
-			}
-			#if !(kind & .QUIET) {
+			#if capture_or_promotion {
 				mask &= black_pieces
+			} else {
+				mask &= ~all_pieces
 			}
 
 			while iterate_bits(*mask, *move.end)
-				array_add(moves, move)
+				array_add_unchecked(moves, move)
 		}
 
 
-		move.start_piece = WHITE_ROOK
-		move.end_piece = WHITE_ROOK
-		piece_mask = pieces[WHITE_ROOK]
+		move.start_piece_flags = WHITE_ROOK		
+		move.end_piece = move.start_piece_flags
+		piece_mask = pieces[move.start_piece_flags]
+		#if capture_or_promotion {
+			move.start_piece_flags |= Move.CAPTURE_FLAG
+		}
 		while iterate_bits(*piece_mask, *move.start) {
 			mask = get_rook_moves(move.start, all_pieces)
-			mask &= ~white_pieces
-			#if !(kind & .CAPTURE) {
-				mask &= ~black_pieces
-			}
-			#if !(kind & .QUIET) {
+			#if capture_or_promotion {
 				mask &= black_pieces
+			} else {
+				mask &= ~all_pieces
 			}
 
 			while iterate_bits(*mask, *move.end)
-				array_add(moves, move)
+				array_add_unchecked(moves, move)
 		}
 
 
-		move.start_piece = WHITE_QUEEN
-		move.end_piece = WHITE_QUEEN
-		piece_mask = pieces[WHITE_QUEEN]
+		move.start_piece_flags = WHITE_QUEEN
+		move.end_piece = move.start_piece_flags
+		piece_mask = pieces[move.start_piece_flags]
+		#if capture_or_promotion {
+			move.start_piece_flags |= Move.CAPTURE_FLAG
+		}
 		while iterate_bits(*piece_mask, *move.start) {
 			mask = get_bishop_moves(move.start, all_pieces) | get_rook_moves(move.start, all_pieces)
-			mask &= ~white_pieces
-			#if !(kind & .CAPTURE) {
-				mask &= ~black_pieces
-			}
-			#if !(kind & .QUIET) {
+			#if capture_or_promotion {
 				mask &= black_pieces
+			} else {
+				mask &= ~all_pieces
 			}
 
 			while iterate_bits(*mask, *move.end)
-				array_add(moves, move)
+				array_add_unchecked(moves, move)
 		}
 
 
-		move.start_piece = WHITE_KING
-		move.end_piece = WHITE_KING
-		move.start = cast() bit_scan_forward(pieces[WHITE_KING])
-		mask = king_mask[move.start] & ~white_pieces
-		#if !(kind & .CAPTURE) {
-			mask &= ~black_pieces
+		move.start_piece_flags = WHITE_KING
+		move.end_piece = move.start_piece_flags
+		piece_mask = pieces[move.start_piece_flags]
+		#if capture_or_promotion {
+			move.start_piece_flags |= Move.CAPTURE_FLAG
 		}
-		#if !(kind & .QUIET) {
+		move.start = cast() bit_scan_forward(piece_mask)
+		mask = king_mask[move.start]
+		#if capture_or_promotion {
 			mask &= black_pieces
+		} else {
+			mask &= ~all_pieces
 		}
 		while iterate_bits(*mask, *move.end)
-			array_add(moves, move)
+			array_add_unchecked(moves, move)
 
-		#if kind & .QUIET {
+		#if !capture_or_promotion {
 			if !(castle_state & .WHITE_NO_KINGSIDE) && !(all_pieces & white_kingside_castle_mask) 
-				&& !look_for_checks(state, move.start, true) && !look_for_checks(state, 61, true) {
+				&& !look_for_checks_fast(state, all_pieces, 60, true) && !look_for_checks_fast(state, all_pieces, 61, true) {
 				move.end = 62
 				move.end_piece = WHITE_KINGSIDE_CASTLE
-				array_add(moves, move)
+				array_add_unchecked(moves, move)
 			}
 			if !(castle_state & .WHITE_NO_QUEENSIDE) && !(all_pieces & white_queenside_castle_mask) 
-				&& !look_for_checks(state, move.start, true) && !look_for_checks(state, 59, true) {
+				&& !look_for_checks_fast(state, all_pieces, 60, true) && !look_for_checks_fast(state, all_pieces, 59, true) {
 				move.end = 58
 				move.end_piece = WHITE_QUEENSIDE_CASTLE
-				array_add(moves, move)
+				array_add_unchecked(moves, move)
 			}
 		}
 
 	} else {
-		move.start_piece = BLACK_PAWN
-		move.end_piece = BLACK_PAWN
-		piece_mask := pieces[BLACK_PAWN]
+		move.start_piece_flags = BLACK_PAWN		
+		move.end_piece = move.start_piece_flags
+		piece_mask = pieces[move.start_piece_flags]
 
-		mask: u64
-
-		#if kind & .QUIET {
-			mask = (piece_mask & black_pawn_up_one_mask) & ~(all_pieces >> 8)
-			while iterate_bits(*mask, *move.start) {
-				move.end = move.start + 8
-				array_add(moves, move)
-			}
-		}
-
-
-		#if kind & .CAPTURE {
+		#if capture_or_promotion {
+			move.start_piece_flags |= Move.CAPTURE_FLAG
 			mask = (piece_mask & black_pawn_left_capture_mask) & (white_pieces >> 7)
 			while iterate_bits(*mask, *move.start) {
 				move.end = move.start + 7
-				array_add(moves, move)
+				array_add_unchecked(moves, move)
 			}
 
 			mask = (piece_mask & black_pawn_right_capture_mask) & (white_pieces >> 9)
 			while iterate_bits(*mask, *move.start) {
 				move.end = move.start + 9
-				array_add(moves, move)
+				array_add_unchecked(moves, move)
 			}
 
 
@@ -808,7 +828,7 @@ get_moves :: (using state: State, moves: *[..]Move, $kind: Move_Kind) {
 				move.start = en_passant_position - 7
 				move.end = en_passant_position
 				move.end_piece = BLACK_EN_PASSANT
-				array_add(moves, move)
+				array_add_unchecked(moves, move)
 			}
 
 			mask = (piece_mask & black_pawn_right_capture_mask) & (1 << cast(u64) (en_passant_position - 9))
@@ -816,40 +836,16 @@ get_moves :: (using state: State, moves: *[..]Move, $kind: Move_Kind) {
 				move.start = en_passant_position - 9
 				move.end = en_passant_position
 				move.end_piece = BLACK_EN_PASSANT
-				array_add(moves, move)
+				array_add_unchecked(moves, move)
 			}
-		}
-
-
-		#if kind & .QUIET {
-			move.end_piece = BLACK_PAWN_TWO
-			mask = (piece_mask & black_pawn_up_two_mask) & ~(all_pieces >> 8) & ~(all_pieces >> 16)
-			while iterate_bits(*mask, *move.start) {
-				move.end = move.start + 16
-				array_add(moves, move)
-			}
-		}
-
-		#if kind & .PROMOTION {
-			mask = (piece_mask & black_pawn_promote_mask) & ~(all_pieces >> 8)
-			while iterate_bits(*mask, *move.start) {
-				move.end = move.start + 8
-
-				for BLACK_KNIGHT .. BLACK_QUEEN + 1 {
-					move.end_piece = cast() it
-					array_add(moves, move)
-				}
-			}
-		}
-
-		#if (kind & .PROMOTION) || (kind & .CAPTURE) {
+			
 			mask = (piece_mask & black_pawn_promote_left_mask) & (white_pieces >> 7)
 			while iterate_bits(*mask, *move.start) {
 				move.end = move.start + 7
 
 				for BLACK_KNIGHT .. BLACK_QUEEN + 1 {
 					move.end_piece = cast() it
-					array_add(moves, move)
+					array_add_unchecked(moves, move)
 				}
 			}
 
@@ -859,119 +855,152 @@ get_moves :: (using state: State, moves: *[..]Move, $kind: Move_Kind) {
 
 				for BLACK_KNIGHT .. BLACK_QUEEN + 1 {
 					move.end_piece = cast() it
-					array_add(moves, move)
+					array_add_unchecked(moves, move)
 				}
 			}
+			
+			move.start_piece_flags = BLACK_PAWN
+			mask = (piece_mask & black_pawn_promote_mask) & ~(all_pieces >> 8)
+			while iterate_bits(*mask, *move.start) {
+				move.end = move.start + 8
+
+				for BLACK_KNIGHT .. BLACK_QUEEN + 1 {
+					move.end_piece = cast() it
+					array_add_unchecked(moves, move)
+				}
+			}
+		} else {
+			mask = (piece_mask & black_pawn_up_one_mask) & ~(all_pieces >> 8)
+			while iterate_bits(*mask, *move.start) {
+				move.end = move.start + 8
+				array_add_unchecked(moves, move)
+			}
+			
+			move.end_piece = BLACK_PAWN_TWO
+			mask = (piece_mask & black_pawn_up_two_mask) & ~(all_pieces >> 8) & ~(all_pieces >> 16)
+			while iterate_bits(*mask, *move.start) {
+				move.end = move.start + 16
+				array_add_unchecked(moves, move)
+			}
 		}
 
 
-		move.start_piece = BLACK_KNIGHT
-		move.end_piece = BLACK_KNIGHT
-		piece_mask = pieces[BLACK_KNIGHT]
+		move.start_piece_flags = BLACK_KNIGHT
+		move.end_piece = move.start_piece_flags
+		piece_mask = pieces[move.start_piece_flags]
+		#if capture_or_promotion {
+			move.start_piece_flags |= Move.CAPTURE_FLAG
+		}
 		while iterate_bits(*piece_mask, *move.start) {
 			mask = knight_mask[move.start]
-			mask &= ~black_pieces
-			#if !(kind & .CAPTURE) {
-				mask &= ~white_pieces
-			}
-			#if !(kind & .QUIET) {
+			#if capture_or_promotion {
 				mask &= white_pieces
+			} else {
+				mask &= ~all_pieces
 			}
 
 			while iterate_bits(*mask, *move.end)
-				array_add(moves, move)
+				array_add_unchecked(moves, move)
 		}
 
 
-		move.start_piece = BLACK_BISHOP
-		move.end_piece = BLACK_BISHOP
-		piece_mask = pieces[BLACK_BISHOP]
+		move.start_piece_flags = BLACK_BISHOP
+		move.end_piece = move.start_piece_flags
+		piece_mask = pieces[move.start_piece_flags]
+		#if capture_or_promotion {
+			move.start_piece_flags |= Move.CAPTURE_FLAG
+		}
 		while iterate_bits(*piece_mask, *move.start) {
 			mask = get_bishop_moves(move.start, all_pieces)
-			mask &= ~black_pieces
-			#if !(kind & .CAPTURE) {
-				mask &= ~white_pieces
-			}
-			#if !(kind & .QUIET) {
+			#if capture_or_promotion {
 				mask &= white_pieces
+			} else {
+				mask &= ~all_pieces
 			}
 
 			while iterate_bits(*mask, *move.end)
-				array_add(moves, move)
+				array_add_unchecked(moves, move)
 		}
 
 
-		move.start_piece = BLACK_ROOK
-		move.end_piece = BLACK_ROOK
-		piece_mask = pieces[BLACK_ROOK]
+		move.start_piece_flags = BLACK_ROOK
+		move.end_piece = move.start_piece_flags
+		piece_mask = pieces[move.start_piece_flags]
+		#if capture_or_promotion {
+			move.start_piece_flags |= Move.CAPTURE_FLAG
+		}
 		while iterate_bits(*piece_mask, *move.start) {
 			mask = get_rook_moves(move.start, all_pieces)
-			mask &= ~black_pieces
-			#if !(kind & .CAPTURE) {
-				mask &= ~white_pieces
-			}
-			#if !(kind & .QUIET) {
+			#if capture_or_promotion {
 				mask &= white_pieces
+			} else {
+				mask &= ~all_pieces
 			}
 
 			while iterate_bits(*mask, *move.end)
-				array_add(moves, move)
+				array_add_unchecked(moves, move)
 		}
 
 
-		move.start_piece = BLACK_QUEEN
-		move.end_piece = BLACK_QUEEN
-		piece_mask = pieces[BLACK_QUEEN]
+		move.start_piece_flags = BLACK_QUEEN
+		move.end_piece = move.start_piece_flags
+		piece_mask = pieces[move.start_piece_flags]
+		#if capture_or_promotion {
+			move.start_piece_flags |= Move.CAPTURE_FLAG
+		}
 		while iterate_bits(*piece_mask, *move.start) {
 			mask = get_bishop_moves(move.start, all_pieces) | get_rook_moves(move.start, all_pieces)
-			mask &= ~black_pieces
-			#if !(kind & .CAPTURE) {
-				mask &= ~white_pieces
-			}
-			#if !(kind & .QUIET) {
+			#if capture_or_promotion {
 				mask &= white_pieces
+			} else {
+				mask &= ~all_pieces
 			}
+
 
 			while iterate_bits(*mask, *move.end)
-				array_add(moves, move)
+				array_add_unchecked(moves, move)
 		}
 
 
-		move.start_piece = BLACK_KING
-		move.end_piece = BLACK_KING
+		move.start_piece_flags = BLACK_KING
+		move.end_piece = move.start_piece_flags
+		piece_mask = pieces[move.start_piece_flags]
+		#if capture_or_promotion {
+			move.start_piece_flags |= Move.CAPTURE_FLAG
+		}
 		move.start = cast() bit_scan_forward(pieces[BLACK_KING])
-		mask = king_mask[move.start] & ~black_pieces
-		#if !(kind & .CAPTURE) {
-			mask &= ~white_pieces
-		}
-		#if !(kind & .QUIET) {
+		mask = king_mask[move.start]
+		#if capture_or_promotion {
 			mask &= white_pieces
+		} else {
+			mask &= ~all_pieces
 		}
 		while iterate_bits(*mask, *move.end)
-			array_add(moves, move)
+			array_add_unchecked(moves, move)
 
-		#if kind & .QUIET {
+		#if !capture_or_promotion {
 			if !(castle_state & .BLACK_NO_KINGSIDE) && !(all_pieces & black_kingside_castle_mask) 
-				&& !look_for_checks(state, move.start, false) && !look_for_checks(state, 5, false) {
+				&& !look_for_checks_fast(state, all_pieces, 4, false) && !look_for_checks_fast(state, all_pieces, 5, false) {
 				move.end = 6
 				move.end_piece = BLACK_KINGSIDE_CASTLE
-				array_add(moves, move)
+				array_add_unchecked(moves, move)
 			}
 			if !(castle_state & .BLACK_NO_QUEENSIDE) && !(all_pieces & black_queenside_castle_mask) 
-				&& !look_for_checks(state, move.start, false) && !look_for_checks(state, 3, false) {
+				&& !look_for_checks_fast(state, all_pieces, 4, false) && !look_for_checks_fast(state, all_pieces, 3, false) {
 				move.end = 2
 				move.end_piece = BLACK_QUEENSIDE_CASTLE
-				array_add(moves, move)
+				array_add_unchecked(moves, move)
 			}
 		}
 	}
 }
 
-get_all_moves :: (using state: State, moves: *[..]Move) {
-	get_moves(state, moves, Move_Kind.QUIET | .CAPTURE | .PROMOTION)
+get_all_moves :: (using state: *State, moves: *[..]Move) {
+	get_capture_moves(state, moves)
+	get_non_capture_moves(state, moves)
 }
 
-get_all_legal_moves_slow :: (using state: State, moves: *[..]Move) {
+get_all_legal_moves_slow :: (using state: *State, moves: *[..]Move) {
 	get_all_moves(state, moves)
 
 	for <<moves {
@@ -982,12 +1011,12 @@ get_all_legal_moves_slow :: (using state: State, moves: *[..]Move) {
 	}
 }
 
-get_non_capture_moves :: (using state: State, moves: *[..]Move) {
-	get_moves(state, moves, .QUIET)
+get_non_capture_moves :: (using state: *State, moves: *[..]Move) {
+	get_moves(state, moves, false)
 }
 
-get_capture_moves :: (using state: State, moves: *[..]Move) {
-	get_moves(state, moves, Move_Kind.CAPTURE | .PROMOTION)
+get_capture_moves :: (using state: *State, moves: *[..]Move) {
+	get_moves(state, moves, true)
 }
 
 Hashing_Data :: struct {
@@ -997,7 +1026,7 @@ Hashing_Data :: struct {
 	white_move: u64
 }
 
-hash ::  (using state: State) -> u64 {
+hash ::  (using state: *State) -> u64 {
 	result: u64 = 0
 	
 	for pieces {
@@ -1070,11 +1099,13 @@ do_null_move :: (state: State) -> State {
 }
 
 
-do_move :: (state: State, using move: Move) -> State {
-	new_state := state
+do_move :: (state: *State, using move: Move) -> State {
+	new_state := <<state
 	new_state.move_count += 1
 	new_state.ply += 1
 	new_state.previous_move = move
+
+	start_piece := start_piece_flags & Move.START_PIECE_MASK
 
 	if new_state.en_passant_position {
 		new_state.hash ^= hashing_data.en_passant_file[new_state.en_passant_position & 7]
@@ -1086,23 +1117,6 @@ do_move :: (state: State, using move: Move) -> State {
 
 	if start_piece == WHITE_PAWN || start_piece == BLACK_PAWN {
 		new_state.move_count = 0
-	}
-
-	if move.start == 0 || move.end == 0 || move.start_piece == BLACK_KING && !(new_state.castle_state & .BLACK_NO_QUEENSIDE) {
-		new_state.castle_state |= .BLACK_NO_QUEENSIDE
-		new_state.hash ^= hashing_data.castle_state[3]
-	}
-	if move.start == 7 || move.end == 7 || move.start_piece == BLACK_KING && !(new_state.castle_state & .BLACK_NO_KINGSIDE) {
-		new_state.castle_state |= .BLACK_NO_KINGSIDE
-		new_state.hash ^= hashing_data.castle_state[2]
-	}
-	if move.start == 56 || move.end == 56 || move.start_piece == WHITE_KING && !(new_state.castle_state & .WHITE_NO_QUEENSIDE) {
-		new_state.castle_state |= .WHITE_NO_QUEENSIDE
-		new_state.hash ^= hashing_data.castle_state[1]
-	}
-	if move.start == 63 || move.end == 63 || move.start_piece == WHITE_KING && !(new_state.castle_state & .WHITE_NO_KINGSIDE) {
-		new_state.castle_state |= .WHITE_NO_KINGSIDE
-		new_state.hash ^= hashing_data.castle_state[0]
 	}
 
 	if end_piece == {
@@ -1117,6 +1131,8 @@ do_move :: (state: State, using move: Move) -> State {
 
 			new_state.hash ^= hashing_data.piece_positions[WHITE_PAWN][start]
 			new_state.hash ^= hashing_data.piece_positions[WHITE_PAWN][end]
+			
+			return new_state
 
 		case BLACK_PAWN_TWO
 			new_state.pieces[BLACK_PAWN] &= ~(1 << cast(u64) start)
@@ -1129,6 +1145,8 @@ do_move :: (state: State, using move: Move) -> State {
 
 			new_state.hash ^= hashing_data.piece_positions[BLACK_PAWN][start]
 			new_state.hash ^= hashing_data.piece_positions[BLACK_PAWN][end]
+			
+			return new_state
 
 		case WHITE_EN_PASSANT
 			new_state.pieces[WHITE_PAWN] &= ~(1 << cast(u64) start)
@@ -1138,6 +1156,8 @@ do_move :: (state: State, using move: Move) -> State {
 			new_state.hash ^= hashing_data.piece_positions[WHITE_PAWN][start]
 			new_state.hash ^= hashing_data.piece_positions[WHITE_PAWN][end]
 			new_state.hash ^= hashing_data.piece_positions[BLACK_PAWN][end + 8]
+			
+			return new_state
 
 		case BLACK_EN_PASSANT
 			new_state.pieces[BLACK_PAWN] &= ~(1 << cast(u64) start)
@@ -1147,6 +1167,8 @@ do_move :: (state: State, using move: Move) -> State {
 			new_state.hash ^= hashing_data.piece_positions[BLACK_PAWN][start]
 			new_state.hash ^= hashing_data.piece_positions[BLACK_PAWN][end]
 			new_state.hash ^= hashing_data.piece_positions[WHITE_PAWN][end - 8]
+			
+			return new_state
 
 		case WHITE_KINGSIDE_CASTLE
 			new_state.pieces[WHITE_KING] = 1 << 62
@@ -1157,6 +1179,15 @@ do_move :: (state: State, using move: Move) -> State {
 			new_state.hash ^= hashing_data.piece_positions[WHITE_KING][60]
 			new_state.hash ^= hashing_data.piece_positions[WHITE_ROOK][63]
 			new_state.hash ^= hashing_data.piece_positions[WHITE_ROOK][61]
+			
+			if !(new_state.castle_state & .WHITE_NO_QUEENSIDE)
+				new_state.hash ^= hashing_data.castle_state[1]
+			new_state.hash ^= hashing_data.castle_state[0] // If we kingside castle we must have had kingside castling rights
+			
+			new_state.castle_state |= .WHITE_NO_KINGSIDE
+			new_state.castle_state |= .WHITE_NO_QUEENSIDE
+			
+			return new_state
 
 		case WHITE_QUEENSIDE_CASTLE
 			new_state.pieces[WHITE_KING] = 1 << 58
@@ -1167,6 +1198,16 @@ do_move :: (state: State, using move: Move) -> State {
 			new_state.hash ^= hashing_data.piece_positions[WHITE_KING][60]
 			new_state.hash ^= hashing_data.piece_positions[WHITE_ROOK][59]
 			new_state.hash ^= hashing_data.piece_positions[WHITE_ROOK][56]
+			
+			
+			if !(new_state.castle_state & .WHITE_NO_KINGSIDE)
+				new_state.hash ^= hashing_data.castle_state[0]
+			new_state.hash ^= hashing_data.castle_state[1] // If we queenside castle we must have had queenside castling rights
+			
+			new_state.castle_state |= .WHITE_NO_KINGSIDE
+			new_state.castle_state |= .WHITE_NO_QUEENSIDE
+			
+			return new_state
 
 		case BLACK_KINGSIDE_CASTLE
 			new_state.pieces[BLACK_KING] = 1 << 6
@@ -1177,7 +1218,17 @@ do_move :: (state: State, using move: Move) -> State {
 			new_state.hash ^= hashing_data.piece_positions[BLACK_KING][4]
 			new_state.hash ^= hashing_data.piece_positions[BLACK_ROOK][7]
 			new_state.hash ^= hashing_data.piece_positions[BLACK_ROOK][3]
-
+			
+			
+			if !(new_state.castle_state & .BLACK_NO_QUEENSIDE)
+				new_state.hash ^= hashing_data.castle_state[3]
+			new_state.hash ^= hashing_data.castle_state[2] // If we kingside castle we must have had queenside castling rights
+			
+			new_state.castle_state |= .BLACK_NO_KINGSIDE
+			new_state.castle_state |= .BLACK_NO_QUEENSIDE
+			
+			return new_state
+			
 		case BLACK_QUEENSIDE_CASTLE
 			new_state.pieces[BLACK_KING] = 1 << 2
 			new_state.pieces[BLACK_ROOK] &= cast() ~(1 << 0)
@@ -1187,28 +1238,93 @@ do_move :: (state: State, using move: Move) -> State {
 			new_state.hash ^= hashing_data.piece_positions[BLACK_KING][4]
 			new_state.hash ^= hashing_data.piece_positions[BLACK_ROOK][3]
 			new_state.hash ^= hashing_data.piece_positions[BLACK_ROOK][0]
-
-		else
-			new_state.pieces[start_piece] &= ~(1 << cast(u64) start)
-
-			new_state.hash ^= hashing_data.piece_positions[start_piece][start]
-			new_state.hash ^= hashing_data.piece_positions[end_piece][end]
-
-			captured: s8
-
-			if new_state.white_move
-				captured = get_piece(new_state, end, start = WHITE_PAWN)
-			else
-				captured = get_piece(new_state, end, end = WHITE_PAWN)
 			
-			if captured != -1 {
-				new_state.move_count = 0
-				new_state.pieces[captured] &= ~(1 << cast(u64) end)
-				new_state.hash ^= hashing_data.piece_positions[captured][end]
-			}
+			
+			if !(new_state.castle_state & .BLACK_NO_KINGSIDE)
+				new_state.hash ^= hashing_data.castle_state[2]
+			new_state.hash ^= hashing_data.castle_state[3] // If we queenside castle we must have had queenside castling rights
+			
+			new_state.castle_state |= .BLACK_NO_KINGSIDE
+			new_state.castle_state |= .BLACK_NO_QUEENSIDE
 
-			new_state.pieces[move.end_piece] |= (1 << cast(u64) end)
+			return new_state
+			
+		case BLACK_ROOK
+				
+			if move.start == 0 && !(new_state.castle_state & .BLACK_NO_QUEENSIDE) {
+				new_state.castle_state |= .BLACK_NO_QUEENSIDE
+				new_state.hash ^= hashing_data.castle_state[3]
+			}
+			if move.start == 7 && !(new_state.castle_state & .BLACK_NO_KINGSIDE) {
+				new_state.castle_state |= .BLACK_NO_KINGSIDE
+				new_state.hash ^= hashing_data.castle_state[2]
+			}
+		case WHITE_ROOK
+		
+			if move.start == 56 && !(new_state.castle_state & .WHITE_NO_QUEENSIDE) {
+				new_state.castle_state |= .WHITE_NO_QUEENSIDE
+				new_state.hash ^= hashing_data.castle_state[1]
+			}
+			if move.start == 63 && !(new_state.castle_state & .WHITE_NO_KINGSIDE) {
+				new_state.castle_state |= .WHITE_NO_KINGSIDE
+				new_state.hash ^= hashing_data.castle_state[0]
+			}
+		case BLACK_KING
+			if !(new_state.castle_state & .BLACK_NO_QUEENSIDE) {
+				new_state.hash ^= hashing_data.castle_state[3]
+			}
+			if !(new_state.castle_state & .BLACK_NO_KINGSIDE) {
+				new_state.hash ^= hashing_data.castle_state[2]
+			}
+			
+			new_state.castle_state |= .BLACK_NO_QUEENSIDE
+			new_state.castle_state |= .BLACK_NO_KINGSIDE
+		
+		case WHITE_KING
+			if !(new_state.castle_state & .WHITE_NO_QUEENSIDE) {
+				new_state.hash ^= hashing_data.castle_state[1]
+			}
+			if !(new_state.castle_state & .WHITE_NO_KINGSIDE) {
+				new_state.hash ^= hashing_data.castle_state[0]
+			}
+			
+			new_state.castle_state |= .WHITE_NO_QUEENSIDE
+			new_state.castle_state |= .WHITE_NO_KINGSIDE
+		
 	}
+	
+	new_state.pieces[start_piece] &= ~(1 << cast(u64) start)
+
+	new_state.hash ^= hashing_data.piece_positions[start_piece][start]
+	new_state.hash ^= hashing_data.piece_positions[end_piece][end]
+
+	if start_piece_flags & Move.CAPTURE_FLAG {
+		captured := get_colored_piece(*new_state, end, new_state.white_move)
+		
+		new_state.move_count = 0
+		new_state.pieces[captured] &= ~(1 << cast(u64) end)
+		new_state.hash ^= hashing_data.piece_positions[captured][end]
+		
+			
+		if move.end == 0 && !(new_state.castle_state & .BLACK_NO_QUEENSIDE) {
+			new_state.castle_state |= .BLACK_NO_QUEENSIDE
+			new_state.hash ^= hashing_data.castle_state[3]
+		}
+		if move.end == 7 && !(new_state.castle_state & .BLACK_NO_KINGSIDE) {
+			new_state.castle_state |= .BLACK_NO_KINGSIDE
+			new_state.hash ^= hashing_data.castle_state[2]
+		}
+		if move.end == 56 && !(new_state.castle_state & .WHITE_NO_QUEENSIDE) {
+			new_state.castle_state |= .WHITE_NO_QUEENSIDE
+			new_state.hash ^= hashing_data.castle_state[1]
+		}
+		if move.end == 63 && !(new_state.castle_state & .WHITE_NO_KINGSIDE) {
+			new_state.castle_state |= .WHITE_NO_KINGSIDE
+			new_state.hash ^= hashing_data.castle_state[0]
+		}
+	}
+
+	new_state.pieces[move.end_piece] |= (1 << cast(u64) end)
 
 	return new_state
 }

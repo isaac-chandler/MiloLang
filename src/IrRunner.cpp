@@ -276,6 +276,43 @@ void runFunction(VMState *state, ExprFunction *expr, Ir *caller, DCArgs *dcArgs,
 				return;
 			}
 
+			if (options.llvm_options.count) {
+				MiloArray<MiloString> llvmOptionsCopy;
+				llvmOptionsCopy.count = options.llvm_options.count;
+				llvmOptionsCopy.data = new MiloString[llvmOptionsCopy.count];
+
+				for (u64 i = 0; i < llvmOptionsCopy.count; i++) {
+					auto count = options.llvm_options.data[i].count;
+					llvmOptionsCopy.data[i].count = count;
+
+					if (count) {
+						llvmOptionsCopy.data[i].data = new u8[count];
+						memcpy(llvmOptionsCopy.data[i].data, options.llvm_options.data[i].data, count);
+					}
+					else {
+						llvmOptionsCopy.data[i].data = nullptr;
+					}
+				}
+
+				options.llvm_options = llvmOptionsCopy;
+			}
+
+			if (options.output_name.count) {
+				MiloString outputNameCopy;
+				outputNameCopy.count = options.output_name.count;
+				outputNameCopy.data = new u8[outputNameCopy.count];
+				memcpy(outputNameCopy.data, options.output_name.data, outputNameCopy.count);
+				options.output_name = outputNameCopy;
+			}
+
+			if (options.icon_name.count) {
+				MiloString iconNameCopy;
+				iconNameCopy.count = options.icon_name.count;
+				iconNameCopy.data = new u8[iconNameCopy.count];
+				memcpy(iconNameCopy.data, options.icon_name.data, iconNameCopy.count);
+				options.icon_name = iconNameCopy;
+			}
+
 			buildOptions = options;
 		}
 		else if (expr->valueOfDeclaration->name == "get_build_options") {
@@ -573,7 +610,7 @@ if (op.flags & IR_FLOAT_OP) {\
 					else if (type == &TYPE_F64) {
 						dcArgDouble(state->dc, *reinterpret_cast<double *>(stack + number));
 					}
-					if (type->size == 1) {
+					else if (type->size == 1) {
 						dcArgChar(state->dc, stack[number] & 0xFF);
 					}
 					else if (type->size == 2) {
@@ -904,7 +941,7 @@ Expr *getReturnValueFromBytes(CodeLocation start, EndLocation end, Type *type, v
 		literal->end = end;
 		literal->floatValue = value;
 
-		literal->type = &TYPE_FLOAT_LITERAL;
+		literal->type = type;
 
 		return literal;
 	}

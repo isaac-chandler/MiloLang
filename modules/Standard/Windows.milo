@@ -158,12 +158,20 @@ read_line :: () -> (string, bool) {
 }
 
 get_performance_timer :: () -> f64 {
-	pcf: s64 = --
-	QueryPerformanceFrequency(*pcf)
+
+	return cast(f64) get_performance_ticks() / cast(f64) get_performance_tickrate()
+}
+
+get_performance_ticks :: () -> s64 {
 	time: s64 = --
 	QueryPerformanceCounter(*time)
+	return time
+}
 
-	return cast(f64) time / cast(f64) pcf
+get_performance_tickrate :: () -> s64 {
+	pcf: s64 = --
+	QueryPerformanceFrequency(*pcf)
+	return pcf
 }
 
 get_system_timer :: () -> f64 {

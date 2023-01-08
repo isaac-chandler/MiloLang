@@ -1,0 +1,115 @@
+#import "Standard"
+#import "String"
+#import "File"
+
+
+part1 :: (values: []string) {
+	bits := values[0].count
+
+	ones := new_array(u64, bits)
+	defer free_array(ones)
+	
+	for values
+		for c: it
+			if c == '1'
+				ones[it_index] += 1
+
+				
+	gamma   := 0
+	epsilon := 0
+	
+	for ones {
+		gamma   <<= 1
+		epsilon <<= 1
+	
+		if it > values.count / 2 {
+			gamma   |= 1
+		} else {
+			epsilon |= 1
+		}
+	}
+	
+	print("Part 1: %\n", gamma * epsilon)
+}
+
+part2 :: (values_: []string) {
+	bits := values_[0].count
+	values := array_copy(values_)
+	
+	
+	for bit: bits {
+		count: u64 = 0
+		
+		for values
+			if it[bit] == '1'
+				count += 1
+				
+		keep_ones := count * 2 >= values.count
+		
+		for values	
+			if keep_ones ^ (it[bit] == '1')
+				remove;
+		
+		if values.count == 1
+			break;
+	}
+	
+	oxygen := read_u64(values[0], base = 2)
+	free_array(values)
+	
+	values = array_copy(values_)
+	
+	for bit: bits {
+		count: u64 = 0
+		
+		for values
+			if it[bit] == '1'
+				count += 1
+				
+		keep_ones := count * 2 < values.count
+		
+		for values	
+			if keep_ones ^ (it[bit] == '1')
+				remove;
+		
+		if values.count == 1
+			break;
+	}
+	
+	co2 := read_u64(values[0], base = 2)
+	free_array(values)
+	
+
+	print("Part 2: %\n", oxygen * co2)
+}
+
+main :: () {
+	file, success := read_entire_file("day03.txt")
+	
+	if !success {
+		print("Failed to read input file")
+		exit(1)
+	}
+	
+	defer free_array(file)
+
+	data := cast(string) file
+	values: [..]string
+	
+	while data {
+		line: string
+		
+		
+		line, data = read_line(data)
+		
+		if !line
+			continue;
+		
+		array_add(*values, line)
+	}
+	
+	part1(values)
+	part2(values)
+}
+
+#run main()

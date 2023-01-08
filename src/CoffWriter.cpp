@@ -1842,6 +1842,31 @@ void runCoffWriter() {
 
 					storeFromIntRegister(function, ir.opSize, ir.dest, RAX);
 				} break;
+				case IrOp::BIT_SCAN_REVERSE: {
+					loadIntoIntRegister(function, ir.opSize, RAX, ir.a);
+
+					// There is no 8 bit version of bsr
+					if (ir.opSize == 1) {
+						code.add1Unchecked(0x0f); // movzx eax, al
+						code.add1Unchecked(0xb6);
+						code.add1Unchecked(0xc0);
+					}
+
+					if (ir.opSize == 8) {
+						code.add1Unchecked(0x48);
+					}
+					else if (ir.opSize == 2) {
+						code.add1Unchecked(0x66);
+					}
+
+					code.add1Unchecked(0x0F);
+					code.add1Unchecked(0xBD);
+					code.add1Unchecked(0xC0);
+
+					storeFromIntRegister(function, ir.opSize, ir.dest, RAX);
+
+					setCondition(function, ir.b, C_Z);
+				} break;
 				case IrOp::SHIFT_RIGHT: {
 
 					loadIntoIntRegister(function, ir.opSize, RAX, ir.a);
