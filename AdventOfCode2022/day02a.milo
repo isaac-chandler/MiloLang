@@ -1,0 +1,28 @@
+#import "Standard"
+#import "File"
+#import "String"
+
+main :: () {
+	file := cast(string) read_entire_file("day02.txt")
+
+	score := 0
+
+	while file {
+		line: string
+
+		line, file = read_line(file)
+
+		opponent_choice := line[0] - 'A'
+		our_choice := line[2] - 'X'
+
+		score += 1
+		score += cast() our_choice
+
+		if our_choice == opponent_choice
+			score += 3
+		else if our_choice == (opponent_choice + 1) % 3
+			score += 6
+	}
+
+	print("%\n", score)
+}

@@ -1,0 +1,42 @@
+#import "Standard"
+#import "File"
+#import "String"
+
+items_in_backpack :: (backpack: string) -> [52]bool {
+	result: [52]bool
+
+	for backpack {
+		if it >= 'a' && it <= 'z'
+			result[it - 'a'] = true
+		else
+			result[it - 'A' + 26] = true
+	}
+
+	return result
+}
+
+main :: () {
+	file := cast(string) read_entire_file("day03.txt")
+
+	total := 0
+
+	while file {
+		line: string
+
+		line, file = read_line(file)
+
+		first_compartment := items_in_backpack(line[.. line.count / 2])
+		second_compartment := items_in_backpack(line[line.count / 2 ..])
+
+		total += 1
+
+		for first_compartment {
+			if it && second_compartment[it_index] {
+				total += cast() it_index
+				break
+			}
+		}
+	}
+
+	print("%\n", total)
+}

@@ -222,6 +222,32 @@ find_last :: (s: string, find: string) -> (index: u64, found: bool) {
 	return s.count, false
 }
 
+read_s64 :: (s: string) -> (value: s64, remaining: string) {
+	remaining := s
+	negative := false
+
+	if s if s[0] == {
+		case '-' 
+			remaining = remaining[1..]
+			negative = true
+		case '+' 
+			remaining = remaining[1..]
+	}
+
+	value_u64, remaining_after_u64 := read_u64(remaining)
+
+	if remaining_after_u64.count == remaining.count
+		return 0, s
+
+	if (value_u64 > 0x8000_0000_0000_0000 && negative) || (value_u64 >= 0x8000_0000_0000_0000 && !negative)
+		return 0, s
+
+	if negative
+		return -cast(s64) value_u64, remaining_after_u64
+	else
+		return cast(s64) value_u64, remaining_after_u64
+}
+
 // @Unicode
 split_at_first :: (s: string, c: u8) -> (before: string, after: string, found: bool) {
 	before := s
@@ -242,6 +268,35 @@ split_at_first :: (s: string, c: u8) -> (before: string, after: string, found: b
 	}
 	
 	return before, after, false
+}
+
+split_at_first :: (s: string, split_at: string) -> (before: string, after: string) {
+	found, index := find_first(s, split_at)
+
+	if found
+		return s[..index], s[index + split_at.count..]
+	else 
+		return s, ""
+}
+
+split :: (s: string, split_at: string) -> []string {
+	result: [..]string
+
+	remaining := s
+
+	while true {
+		found, index := find_first(remaining, split_at)
+
+		if !found
+			break;
+
+		array_add(*result, remaining[..index])
+
+		remaining = remaining[index + split_at.count..]
+	}
+
+	array_add(*result, remaining)
+	return result
 }
 
 get_line :: (s: string) -> (before: string, after: string) {

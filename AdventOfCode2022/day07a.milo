@@ -1,0 +1,38 @@
+#import "Standard"
+#import "File"
+#import "String"
+
+main :: () {
+	file := cast(string) read_entire_file("day07.txt")
+
+	total_size := 0
+
+	sizes: [..]s64
+
+	while file {
+		line: string
+
+		line, file = read_line(file)
+
+		if line == "$ ls" {
+
+		} else if line == "$ cd .." {
+			size := array_pop(*sizes)
+
+			if size < 100000
+				total_size += size
+		} else if begins_with(line, "$ cd ") {
+			array_add(*sizes, 0)
+		} else if begins_with(line, "dir ") {
+
+		} else {
+			size := cast(s64) read_u64(line)
+
+			for * sizes {
+				<<it += size
+			}
+		}
+	}
+
+	print("%\n", total_size)
+}

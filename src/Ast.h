@@ -258,7 +258,6 @@ struct ExprDefer : Expr {
 // Set when identifier resolving passes out of a struct or out of a function, this stops a variable from outside the function being referenced
 // since we don't support captures
 #define EXPR_IDENTIFIER_RESOLVING_ONLY_CONSTANTS 0x20
-#define EXPR_IDENTIFIER_IS_BREAK_OR_CONTINUE_LABEL 0x40
 
 // This is an initializer assignment that was inserted by a variable 
 // intitialization in a runtime scope
@@ -491,7 +490,8 @@ struct ExprLoop : Expr {
 };
 
 struct ExprBreakOrContinue : Expr {
-	Expr *label;
+	String label;
+	Block *enclosingScope;
 	ExprLoop *refersTo;
 };
 

@@ -1,0 +1,92 @@
+#import "Standard"
+#import "File"
+#import "String"
+
+main :: () {
+	file := cast(string) read_entire_file("day13.txt")
+
+	total := 0
+
+	i := 0
+	while file {
+		line: string
+
+		Value :: struct {
+			kind: enum {
+				NUMBER
+				LIST
+			}
+			using value: union {
+				list: [..]*Value
+				number: s64 = --
+			}
+		}
+
+		parse :: (text: string) -> (*Value, string) {
+			remaining := text
+			using result := new(Value)
+
+			if remaining[0] == '[' {
+				remaining = remaining[1..]
+				kind = .LIST
+
+				while remaining[0] != ']' {
+					<<array_push(*list), remaining = parse(remaining)
+					if remaining[0] == ','
+						remaining = remaining[1..]
+				} 
+				remaining = remaining[1..]
+			} else {
+				kind = .NUMBER
+				number, remaining = read_s64(remaining) 
+			}
+
+			return result, remaining
+		}
+
+		line, file = read_line(file)
+		left := parse(line)
+
+		line, file = read_line(file)
+		right := parse(line)
+
+		compare :: (left: *Value, right: *Value) -> s64 {
+			if left.kind == .NUMBER && right.kind == .NUMBER {
+				return right.number - left.number
+			} else if left.kind == .NUMBER && right.kind == .LIST {
+				list := Value.{.LIST}
+				array_add(*list.list, left)
+
+				return compare(*list, right)
+			} else if right.kind == .NUMBER && left.kind == .LIST {
+				list := Value.{.LIST}
+				array_add(*list.list, right)
+
+				return compare(left, *list)
+			} else {
+				for left.list {
+					if it_index >= right.list.count
+						return -1
+
+					comparison := compare(it, right.list[it_index])
+					if comparison != 0
+						return comparison
+				}
+
+				if right.list.count > left.list.count {
+					return 1
+				}
+
+				return 0
+			}
+		}
+
+		line, file = read_line(file)
+
+		i += 1
+		if compare(left, right) > 0
+			total += i
+	}
+
+	print("%\n", total)
+}

@@ -1,0 +1,72 @@
+#import "Standard"
+#import "File"
+#import "String"
+
+CENTER_X :: 500
+HEIGHT :: 200
+WIDTH :: 200
+
+X_OFFSET :: CENTER_X - WIDTH / 2
+
+cave: [HEIGHT][WIDTH]bool
+
+draw_line :: (start_x: s64, start_y: s64, end_x: s64, end_y: s64) {
+	for y: min(start_y, end_y) .. max(start_y, end_y) + 1
+		for x: min(start_x, end_x) .. max(start_x, end_x) + 1
+			cave[y][x - X_OFFSET] = true
+}
+
+add_sand :: () -> bool {
+	y := 0
+	x := CENTER_X - X_OFFSET
+
+	if cave[y][x]
+		return false
+	
+	for y: HEIGHT - 1 {
+		if !cave[y + 1][x] {
+
+		} else if !cave[y + 1][x - 1] {
+			x -= 1	
+		} else if !cave[y + 1][x + 1] {
+			x += 1
+		} else {
+			cave[y][x] = true
+			return true
+		}
+	}
+
+	return false
+}
+
+main :: () {
+	file := cast(string) read_entire_file("day14.txt")
+
+	while file {
+		line: string
+
+		line, file = read_line(file)
+		if !line continue;
+		
+		points := split(line, " -> ")
+
+		for 1 .. points.count {
+			start_x_string, start_y_string := split_at_first(points[it - 1], ',')
+			start_x := read_s64(start_x_string)
+			start_y := read_s64(start_y_string)
+
+			end_x_string, end_y_string := split_at_first(points[it], ',')
+			end_x := read_s64(end_x_string)
+			end_y := read_s64(end_y_string)
+
+			draw_line(start_x, start_y, end_x, end_y)
+		}
+	}
+
+	sand_added := 0
+
+	while add_sand()
+		sand_added += 1
+
+	print("%\n", sand_added)
+}

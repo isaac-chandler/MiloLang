@@ -1,0 +1,84 @@
+#import "Standard"
+#import "File"
+#import "String"
+
+main :: () {
+	file := cast(string) read_entire_file("day12.txt")
+
+	total_size := 0
+
+	heights: [..][]u8
+
+	while file {
+		line: string
+
+		line, file = read_line(file)
+
+		array_add(*heights, cast() line)
+	}
+
+	width := heights[0].count
+
+	previous := new_array(u64, heights.count * width)
+	start: u64
+	end: u64
+
+	for row, y: heights
+		for height, x: row
+			if height == 'S'
+				start = y * width + x
+			else if height == 'E'
+				end = y * width + x
+
+	heights[start / width][start % width] = 'a'
+	heights[end / width][end % width] = 'z'
+
+	queue: [..]u64
+	head: u64
+
+	previous[start] = 1
+	array_add(*queue, start)
+
+	while head != queue.count {
+		current := queue[head]
+		head += 1
+
+		if current == end {
+			count := 1
+
+			while previous[current] - 1 != start {
+				height := heights[current / width][current % width]
+				print("% %,%\n", string.{*height, 1}, current % width, current / width)
+				current = previous[current] - 1
+				count += 1
+			}
+			print("%\n", count)
+
+			break
+		}
+		
+
+		x := current % width
+		y := current / width
+
+		current_height := heights[y][x]
+
+
+		if x > 0 && current_height + 1 >= heights[y][x - 1] && !previous[current - 1] {
+			previous[current - 1] = current + 1
+			array_add(*queue, current - 1)
+		}
+		if x + 1 < width && current_height + 1 >= heights[y][x + 1] && !previous[current + 1] {
+			previous[current + 1] = current + 1
+			array_add(*queue, current + 1)
+		}
+		if y > 0 && current_height + 1 >= heights[y - 1][x] && !previous[current - width] {
+			previous[current - width] = current + 1
+			array_add(*queue, current - width)
+		}
+		if y + 1 < heights.count && current_height + 1 >= heights[y + 1][x] && !previous[current + width] {
+			previous[current + width] = current + 1
+			array_add(*queue, current + width)
+		}
+	}
+}

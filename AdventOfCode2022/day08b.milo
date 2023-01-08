@@ -1,0 +1,78 @@
+#import "Standard"
+#import "File"
+#import "String"
+
+main :: () {
+	file := cast(string) read_entire_file("day08.txt")
+
+	total_size := 0
+
+	heights: [..][]u8
+
+	tree_score :: (heights: [][]u8, tree_x: s64, tree_y: s64) -> s64 {
+		score := 1
+		height := heights[tree_y][tree_x]
+
+		x := tree_x + 1
+		while cast() x < heights[tree_y].count {
+			if heights[tree_y][x] >= height {
+				x += 1
+				break;
+			}
+
+			x += 1
+		}
+		score *= x - tree_x - 1
+
+		x = tree_x - 1
+		while cast() x >= 0 {
+			if heights[tree_y][x] >= height {
+				x -= 1
+				break;
+			}
+
+			x -= 1
+		}
+		score *= tree_x - x - 1
+
+		y := tree_y + 1
+		while cast() y < heights.count {
+			if heights[y][tree_x] >= height {
+				y += 1
+				break;
+			}
+
+			y += 1
+		}
+		score *= y - tree_y - 1
+		
+		y = tree_y - 1
+		while cast() y >= 0 {
+			if heights[y][tree_x] >= height {
+				y -= 1
+				break;
+			}
+
+			y -= 1
+		}
+		score *= tree_y - y - 1
+
+		return score
+	}
+
+	while file {
+		line: string
+
+		line, file = read_line(file)
+
+		array_add(*heights, cast() line)
+	}
+
+	max_score := 0
+
+	for row, y: heights
+		for x: row.count
+			max_score = max(max_score, tree_score(heights, cast() x, cast() y))
+
+	print("%\n", max_score)
+}

@@ -1,0 +1,22 @@
+#import "Standard"
+#import "File"
+
+all_distinct :: (array: []u8) -> bool {
+	for a: array
+		for b, i: array[it_index + 1..]
+			if a == b
+				return false
+
+	return true
+}
+
+main :: () {
+	file := read_entire_file("day06.txt")
+
+	for 14 .. file.count {
+		if all_distinct(file[it - 14..it]) {
+			print("%\n", it)
+			break		
+		}
+	}
+}

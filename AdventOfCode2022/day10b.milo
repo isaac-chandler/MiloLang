@@ -1,0 +1,39 @@
+#import "Standard"
+#import "File"
+#import "String"
+
+main :: () {
+	file := cast(string) read_entire_file("day10.txt")
+
+	adds: [..]s64
+
+	while file {
+		line: string
+
+		line, file = read_line(file)
+
+		if line == "noop" {
+			array_add(*adds, 0)
+		} else {
+			array_add(*adds, 0)
+			array_add(*adds, read_s64(line[5..]))
+		}
+	}
+
+	X := 1
+	WIDTH :: 40
+	HEIGHT :: 6
+
+	for y: HEIGHT {
+		for x: WIDTH {
+			if x - 1 <= X && X <= x + 1
+				print("#")
+			else
+				print(".") 
+
+			X += adds[y * WIDTH + x]
+
+		}
+		print("\n")
+	}
+}

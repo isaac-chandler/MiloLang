@@ -142,10 +142,9 @@ Expr *copyExpr(Expr *srcExpr) {
 	case ExprFlavor::CONTINUE:
 	case ExprFlavor::REMOVE: {
 		c(ExprBreakOrContinue);
-		copy_expr(label);
-
-		assert(!src->refersTo);
+		copy(label);
 		copy(refersTo);
+		dest->enclosingScope = copyBlockReference(src->enclosingScope);
 
 		return dest;
 	}
