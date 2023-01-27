@@ -18,3 +18,4 @@ x64
 *.res
 *.ttf
 tests/log.txt
+bin

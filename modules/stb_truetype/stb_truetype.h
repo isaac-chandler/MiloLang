@@ -499,12 +499,6 @@ int main(int arg, char **argv)
 #ifndef __STB_INCLUDE_STB_TRUETYPE_H__
 #define __STB_INCLUDE_STB_TRUETYPE_H__
 
-#ifdef STBTT_STATIC
-#define STBTT_DEF static
-#else
-#define STBTT_DEF extern
-#endif
-
 #ifdef __cplusplus
 extern "C" {
 #endif

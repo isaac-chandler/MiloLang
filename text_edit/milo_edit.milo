@@ -6,1066 +6,198 @@
 #import "Windows"
 #import "String"
 
-Undo :: struct {
-    Kind :: enum u8 {   
-        TYPING
-        BACKSPACE_OR_DELETE
-        OTHER
-    }
+#load "editor.milo"
+#load "editor_controls.milo"
+#load "commands.milo"
+#load "graphics.milo"
+#load "parsing.milo"
 
-    modifications_start: u64
-    start_cursor:        u64
-    start_selection:     u64
-    end_cursor:          u64
-    end_selection:       u64
-}
-
-Modification :: struct {
-    Kind :: enum u8 {
-        INSERT
-        DELETE
-    }
-
-    location: u64
-    using text: string
-}
-
-TEXT_COLOR         :u8: 0
-BACKGROUND_COLOR   :u8: 1
-SELECTION_COLOR    :u8: 2
-CONTROL_FLOW_COLOR :u8: 3
-VALUE_COLOR        :u8: 4
-TYPE_COLOR         :u8: 5
-STRING_COLOR       :u8: 6
-COMMENT_COLOR      :u8: 7
-DIRECTIVE_COLOR    :u8: 8
-MENU_COLOR         :u8: 9
-ERROR_COLOR        :u8: 10
-
-COLORS :: [3]f32.[
-    .[0.95, 0.95, 0.95], 
-    .[0.1,  0.12, 0.12], 
-    .[0.1,  0.1,  0.7 ], 
-    .[0.6,  0.3,  0.9 ], 
-    .[0.9,  0.6,  0.1 ], 
-    .[0.1,  0.9,  0.9 ],
-    .[0.8,  0.9,  0.1 ], 
-    .[0.1,  0.5,  0.3 ], 
-    .[0.9,  0.3,  0.4 ], 
-    .[0.2,  0.24, 0.24], 
-    .[0.8,  0.1,  0.1 ]
-]
-
-Editor :: struct {
-    text:   [..]u8
-    colors: []u8
-    lines:  [..]string
-    cursor:    u64
-    selection: u64
-    
+File_Session_Info :: struct {
+    version := 2
     filename: string
-    
-    change_count:        u64 = 1
-    colors_change_index: u64
-    save_change_index:   u64
-    
-    modifications: [..]Modification
-    
-    redo_index: u64
-    transactions:     [..]Undo
-    current_transaction: *Undo
-    
-    bounds: Rectangle
-    scroll_x: f32
-    scroll_y: f32
-    last_cursor_move_time: f64
-}
-
-Rectangle :: struct {
-    left:   f32
-    top:    f32
-    right:  f32
-    bottom: f32
-}
-
-begin_transaction :: (using editor: *Editor, kind := Undo.Kind.OTHER) {
-    if redo_index < transactions.count {
-        start_of_modifications_for_redo := transactions[redo_index].modifications_start >> 2
-        
-        for modifications[start_of_modifications_for_redo..] {
-            free_string(it)
-        }
-        
-        modifications.count = start_of_modifications_for_redo
-        transactions.count  = redo_index
-        current_transaction = null
-    }
-
-    if kind == .OTHER || !current_transaction || cast() (current_transaction.modifications_start & 0x3) != kind {
-        current_transaction = array_push(*transactions, initialized = false)
-        editor.redo_index += 1
-        
-        current_transaction.modifications_start = (modifications.count << 2) | cast() kind
-        current_transaction.start_cursor    = cursor
-        current_transaction.start_selection = selection
-    }
-}
-
-end_transaction :: (using editor: *Editor) {
-    if modifications.count == current_transaction.modifications_start >> 2{
-        current_transaction = null
-        editor.redo_index  -= 1
-        transactions.count -= 1
-        return;
-    }
-
-    current_transaction.end_cursor    = cursor
-    current_transaction.end_selection = selection
-}
-
-break_transaction_combining :: (using editor: *Editor) {
-    current_transaction = null
-}
-
-recompute_lines :: (using editor: *Editor) {
-    lines.count = 0
-    
-    line := array_push(*lines)
-    line.data = text.data
-    
-    for * text {
-        if <<it == '\n' {
-            line.count = cast() (it - line.data)
-            line = array_push(*lines)
-            line.data = it + 1
-        }
-    }
-    
-    line.count = cast() (text.data + text.count - line.data)
-}
-
-cursor_in_code :: (using editor: *Editor) -> bool {
-    it: u64 = 0
-    while it < cursor {   
-        start_char := text[it]
-        
-        if text[it] == '"' || text[it] == '\'' {
-            it += 1
-            
-            escape := false
-        
-            while it < cursor {                
-                if text[it] == '\\' && !escape {
-                    it += 1
-                    escape = true
-                } else if text[it] == '\n' {
-                    break
-                } else if !escape && text[it] == start_char {
-                    it += 1
-                    break
-                } else {
-                    it += 1
-                    escape = false
-                }
-            } or {
-                return false
-            }
-        } else if it + 1 < cursor && cast() cast([]u8) text[it .. it + 2] == "//" {
-            it += 2
-            
-            while it < cursor {
-                
-                if text[it] == '\n'
-                    break;
-            
-                it += 1
-            } or {
-                return false
-            }
-        } else if it + 1 < cursor && cast() cast([]u8) text[it .. it + 2] == "/*" {
-            it += 2
-            
-            block_comment_nest_count := 0
-        
-            while it < cursor {                   
-                if it + 1 < cursor && cast() cast([]u8) text[it .. it + 2] == "*/" {
-                    it += 2
-                    
-                    if block_comment_nest_count == 0
-                        break;
-                        
-                    block_comment_nest_count -= 1
-                } else if it + 1 < cursor && cast() cast([]u8) text[it .. it + 2] == "/*" {
-                    it += 2
-                    
-                    block_comment_nest_count += 1
-                } else {
-                    it += 1
-                }                    
-            } or {
-                return false
-            }
-        } else {
-            it += 1
-        }
-    }
-    
-    return true
-}
-
-CONTROL_FLOW_KEYWORDS :: string.[
-    "if", 
-    "#if", 
-    "else", 
-    "case", 
-    "while", 
-    "for",
-    "or", 
-    "using", 
-    "break", 
-    "continue", 
-    "remove", 
-    "return", 
-    "push_context", 
-    "defer", 
-    "cast"
-]
-
-VALUE_KEYWORDS :: string.[
-    "true", 
-    "false", 
-    "null"
-]
-
-TYPE_KEYWORDS :: string.[
-    "u8", 
-    "u16", 
-    "u32", 
-    "u64", 
-    "s8", 
-    "s16", 
-    "s32", 
-    "s64", 
-    "bool", 
-    "type", 
-    "void", 
-    "string", 
-    "size_of", 
-    "type_of", 
-    "struct", 
-    "union", 
-    "f32", 
-    "f64", 
-    "enum", 
-    "enum_flags", 
-    "type_info", 
-    "any", 
-    "Context", 
-    "align_of", 
-    "is_constant"
-]
-
-DIRECTIVE_KEYWORDS :: string.[
-    "#external", 
-    "#load", 
-    "#pack", 
-    "#must", 
-    "#complete", 
-    "#through", 
-    "#run", 
-    "#c_call", 
-    "#if", 
-    "#import", 
-    "#scope_module", 
-    "#scope_export", 
-    "#add_context"
-]
-
-array_contains :: (array: []$T, value: T) -> bool {
-    for array
-        if it == value
-            return true
-    return false
-}
-
-set_plain_color :: (using editor: *Editor, color: u8) {
-    if colors.count < text.count {
-        colors = new_array(u8, text.capacity)
-    }
-    
-    fill_array(colors, color)
-}
-
-compute_colors :: (using editor: *Editor, color := TEXT_COLOR) {
-    if change_count == colors_change_index
-        return;
-        
-    colors_change_index = change_count
-
-    set_plain_color(editor, color)
-    
-    it: u64 = 0
-    
-    while outer: it < text.count {   
-        start_char := text[it]
-        start_index := it
-        
-        color := TEXT_COLOR
-        defer fill_array(colors[start_index .. it], color)
-        
-        if text[it] == '#' || text[it] == '_' || ('a' <= text[it] && text[it] <= 'z') || ('A' <= text[it] && text[it] <= 'Z') {
-            it += 1
-            
-            while it < text.count
-                if text[it] == '_' || ('a' <= text[it] && text[it] <= 'z') || ('A' <= text[it] && text[it] <= 'Z') || ('0' <= text[it] && text[it] <= '9')
-                    it += 1
-                else
-                    break;
-            
-            word := cast(string) text[start_index .. it]
-            
-            if array_contains(CONTROL_FLOW_KEYWORDS, word) {
-                color = CONTROL_FLOW_COLOR
-            } else if array_contains(VALUE_KEYWORDS, word) {
-                color = VALUE_COLOR
-            } else if array_contains(TYPE_KEYWORDS, word) {
-                color = TYPE_COLOR
-            } else if array_contains(DIRECTIVE_KEYWORDS, word) {
-                color = DIRECTIVE_COLOR
-            } else if word[0] == '#' {
-                color = ERROR_COLOR
-            }
-        } else if text[it] == '"' || text[it] == '\'' {
-            it += 1
-            
-            escape := false
-            char_count := 0
-            color = STRING_COLOR
-        
-            while it < text.count {                
-                if text[it] == '\\' && !escape {
-                    it += 1
-                    escape = true
-                } else if text[it] == '\n' {
-                    color = ERROR_COLOR
-                    break
-                } else if !escape && text[it] == start_char {
-                    it += 1
-                    break
-                } else {
-                    char_count += 1
-                    it         += 1
-                    escape = false
-                }
-            }
-            
-            if start_char == '\'' && char_count != 1
-                color = ERROR_COLOR
-            
-        } else if it + 1 < text.count && cast() cast([]u8) text[it .. it + 2] == "//" {
-            it += 2
-            
-            while it < text.count {
-                
-                if text[it] == '\n'
-                    break;
-            
-                it += 1
-            }
-            
-            color = COMMENT_COLOR
-        } else if it + 1 < text.count && cast() cast([]u8) text[it .. it + 2] == "/*" {
-            it += 2
-            
-            block_comment_nest_count := 0
-        
-            while it < text.count {                   
-                if it + 1 < text.count && cast() cast([]u8) text[it .. it + 2] == "*/" {
-                    it += 2
-                    
-                    if block_comment_nest_count == 0
-                        break;
-                        
-                    block_comment_nest_count -= 1
-                } else if it + 1 < text.count && cast() cast([]u8) text[it .. it + 2] == "/*" {
-                    it += 2
-                    
-                    block_comment_nest_count += 1
-                } else {
-                    it += 1
-                }                    
-            }
-            
-            color = COMMENT_COLOR
-        } else if it + 1 < text.count && cast() cast([]u8) text[it .. it + 2] == "--" {
-            it += 2
-            
-            color = VALUE_COLOR
-        } else if it + 1 < text.count && cast() cast([]u8) text[it .. it + 2] == ".." {
-            it += 2
-        } else if ('0' <= text[it] && text[it] <= '9') || text[it] == '.' || text[it] == '+' || text[it] == '-' {
-            if text[it] == '+' || text[it] == '-' {
-                it += 1
-                
-                if it >= text.count continue;
-            }
-            
-            decimal := false
-            
-            if text[it] == '.' {
-                decimal = true
-                it += 1
-                
-                if it >= text.count {
-                    it = start_index + 1
-                    continue;
-                }
-            }
-            
-            if '0' > text[it] || text[it] > '9' {
-                it = start_index + 1
-                continue;
-            }
-            
-            color = VALUE_COLOR
-        
-            base := 10
-            
-            is_digit :: (c: u8, base := 10) -> bool {
-                if c == '_' return true
-            
-                if base == {
-                    case 2  return c == '0' || c == '1'
-                    case 10 return '0' <= c && c <= '9'
-                    case 16 return ('0' <= c && c <= '9') || ('a' <= c && c <= 'f') || ('A' <= c && c <= 'F')
-                    else return false
-                }
-            }
-            
-            if !decimal && it + 1 < text.count {
-                prefix := cast(string) cast([]u8) text[it .. it + 2]
-                
-                if prefix == "0x" || prefix == "0X" {
-                    it += 2
-                    
-                    base = 16
-                } else if prefix == "0b" || prefix == "0B" {
-                    it += 2
-                    
-                    base = 2
-                }
-            }
-            
-            had_digit := false
-            
-            while !decimal && it < text.count {
-                if is_digit(text[it], base) {
-                    it += 1
-                    had_digit |= text[it] != '_'
-                } else if text[it] == '.' {
-                    if it + 1 < text.count && text[it + 1] == '.'
-                        continue outer
-                    
-                    it += 1
-                    decimal = true
-                    break
-                } else {
-                    break
-                }
-            }
-            
-            while decimal && it < text.count {                
-                if is_digit(text[it], base) {
-                    it += 1
-                    had_digit |= text[it] != '_'
-                } else {
-                    break
-                }
-            }
-            if !had_digit
-                color = ERROR_COLOR
-            
-            if text[it] == 'e' || text[it] == 'E' || text[it] == 'p' || text[it] == 'P' {
-                it += 1
-                
-                if it < text.count && (text[it] == '+' || text[it] == '-') {
-                    it += 1
-                }
-                
-                had_exponent := false
-                
-                while it < text.count {
-                    if is_digit(text[it]) {
-                        had_exponent |= text[it] != '_'
-                        it += 1
-                    } else {
-                        break
-                    }
-                }
-                
-                if !had_exponent
-                    color = ERROR_COLOR
-            }
-        } else {
-            it += 1
-        }
-    }
-    
-    open_braces: [..]u64
-    defer array_free(open_braces)
-    
-    remove_best_matching_paren :: (using editor: *Editor, open_braces: *[..]u64, current_index: u64, match_type: u8) 
-        -> bool {
-        if !open_braces.count
-            return false
-            
-        /*
-        row := location_pos(editor, current_index)
-        indentation := get_indentation(editor, row)
-        
-        i := open_braces.count
-        
-        while i > 0 {
-            i -= 1
-            
-            open_index := (<<open_braces)[i]
-            
-            if text[open_index] != match_type
-                continue;
-            
-            open_row := location_pos(editor, open_index)
-            
-            if get_indentation(editor, open_row) == indentation {
-                open_braces.count -= 1
-                for * (<<open_braces)[i..] {
-                    it[0] = it[1]
-                }
-                return true
-            }
-        }
-        */
-        
-        open_braces.count -= 1
-        if text[(<<open_braces)[open_braces.count]] == match_type {
-            return true
-        } else {
-            colors[(<<open_braces)[open_braces.count]] = ERROR_COLOR
-            return false
-        }
-    }
-    
-    for text {
-        if colors[it_index] == STRING_COLOR || colors[it_index] == COMMENT_COLOR
-            continue;
-    
-        if it == {
-            case '{' #through
-            case '[' #through
-            case '('
-                array_add(*open_braces, it_index)
-            
-            case '}'
-                if !remove_best_matching_paren(editor, *open_braces, it_index, '{')
-                    colors[it_index] = ERROR_COLOR            
-            case ']'
-                if !remove_best_matching_paren(editor, *open_braces, it_index, '[')
-                    colors[it_index] = ERROR_COLOR 
-            case ')'
-                if !remove_best_matching_paren(editor, *open_braces, it_index, '(')
-                    colors[it_index] = ERROR_COLOR 
-        }
-    }
-    
-    for open_braces {
-        colors[it] = ERROR_COLOR
-    }
-}
-
-Font :: struct {
-    ATLAS_SIZE :: 256
-    FIRST_CHAR :: ' '
-    LAST_CHAR  :: '~'
-    texture_id: u32
-    width:      f32
-    height:     f32
-    ascent:     f32
-    descent:    f32
-    line_gap:   f32
-    chars: [LAST_CHAR - FIRST_CHAR + 1]stbtt_bakedchar     = --
-    rgba_bitmap: [Font.ATLAS_SIZE * Font.ATLAS_SIZE * 4]u8 = --
-}
-
-
-
-#run precompute_font("Mechanical.ttf", 20)
-font: *Font
-
-precompute_font :: (filename: string, size: f32) {
-    result: Font = --
-
-    file_data := read_entire_file(filename)
-    
-    single_channel_bitmap := new_array(u8, Font.ATLAS_SIZE * Font.ATLAS_SIZE, initialized = false)
-    defer free_array(single_channel_bitmap)
-    
-    stbtt_BakeFontBitmap(file_data.data, 0, size, single_channel_bitmap.data, Font.ATLAS_SIZE, Font.ATLAS_SIZE, Font.FIRST_CHAR, cast() result.chars.count, result.chars.data)
-   
-    result.width = result.chars[0].xadvance
-    
-    font_info: stbtt_fontinfo
-    stbtt_InitFont(*font_info, file_data.data, 0)
-    
-    scale := stbtt_ScaleForPixelHeight(*font_info, size)
-    
-    unscaled_ascent:   s32
-    unscaled_descent:  s32
-    unscaled_line_gap: s32
-    
-    stbtt_GetFontVMetrics(*font_info, *unscaled_ascent, *unscaled_descent, *unscaled_line_gap)
-    
-    result.ascent   = cast() unscaled_ascent   * scale
-    result.descent  = cast() unscaled_descent  * scale
-    result.line_gap = cast() unscaled_line_gap * scale
-    result.height   = result.ascent - result.descent + result.line_gap
-    
-    for single_channel_bitmap {
-        result.rgba_bitmap[4 * it_index + 0] = 255
-        result.rgba_bitmap[4 * it_index + 1] = 255
-        result.rgba_bitmap[4 * it_index + 2] = 255
-        result.rgba_bitmap[4 * it_index + 3] = it
-    }
-
-    write_entire_file("font.bin", .{data = cast() *result, count = size_of(Font)})
-}
-
-load_font :: () -> bool {
-    data, success := read_entire_file(get_path_relative_to_executable("font.bin"))
-    
-    if !success || data.count != size_of(Font)  
-        return false
-        
-    font = cast() data.data
-
-    glGenTextures(1, *font.texture_id)
-    glBindTexture(GL_TEXTURE_2D, font.texture_id)
-    
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP)
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP)
-    
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, Font.ATLAS_SIZE, Font.ATLAS_SIZE, 0, GL_RGBA, GL_UNSIGNED_BYTE, font.rgba_bitmap.data)
-    
-    return true
-}
-
-draw_character :: (x: *f32, y: *f32, char: u8, color: u8) {
-    using font
-    using quad: stbtt_aligned_quad = --
-    
-    stbtt_GetBakedQuad(chars.data, Font.ATLAS_SIZE, Font.ATLAS_SIZE, cast() (char - Font.FIRST_CHAR), x, y, *quad, 1)
-    
-    if char == ' '
-        return;
-        
-    draw_textured(.{x0, y0, x1, y1}, color, .{s0, t0, s1, t1})
-}
-
-TAB_SIZE: u64: 4
-
-leading_spaces :: (s: string) -> u64 {
-    for s {
-        if it != ' '
-            return it_index
-    }
-    
-    return s.count
-}
-
-all_spaces :: (s: string) -> bool {
-    return leading_spaces(s) == s.count
-}
-
-normalise_text :: (text: string) -> [..]u8 {
-    result: [..]u8
-    array_reserve(*result, text.count)
-    
-    remaining := text
-    
-    while remaining {
-        if remaining[0] == {
-            case '\t'
-                for TAB_SIZE
-                    array_add(*result, ' ')
-            case '\r'
-                array_add(*result, '\n')
-                if remaining.count >= 2 && remaining[1] == '\n'
-                    remaining = remaining[1..]
-            case '\n'
-                array_add(*result, '\n')
-            else if remaining[0] >= Font.FIRST_CHAR && remaining[0] <= Font.LAST_CHAR
-                array_add(*result, remaining[0])
-        }
-        remaining = remaining[1..]
-    }
-    
-    return result
-}
-
-grow_to :: (using editor: *Editor, size: u64) {
-    new_size := max(text.capacity, 1024)
-    
-    while new_size < size
-        new_size *= 2
-        
-    array_reserve(*text, new_size)
-}
-
-delete_selection :: (using editor: *Editor) {
-    if selection < cursor {
-        delete_count := cursor - selection
-        cursor = selection
-        delete_text(editor, delete_count)        
-    } else if selection > cursor {
-        delete_text(editor, selection - cursor)
-        selection = cursor
-    }
-}
-
-insert_text :: (using editor: *Editor, insert: string) {
-    delete_selection(editor)
-    
-    if !insert.count return;
-    grow_to(editor, text.count + insert.count)
-    
-    i := text.count
-    
-    while i > cursor {
-        i -= 1
-        
-        text[i + insert.count] = text[i]
-    }
-    
-    change_count += 1
-    
-    if insert.data {
-        memory_copy(*text[cursor], insert.data, insert.count)
-    } else {
-        fill_array(text[cursor .. cursor + insert.count], ' ')
-    }
-    
-    if current_transaction
-        array_add(*modifications, .{(cursor << 1) | cast() Modification.Kind.INSERT, copy_string(insert)})
-    
-    text.count += insert.count
-    cursor     += insert.count
-    selection = cursor
-    
-    recompute_lines(editor)
-}
-
-insert_spaces :: (using editor: *Editor, count: u64) {
-    insert_text(editor, .{count = count})
-}
-
-delete_text :: (using editor: *Editor, count: u64) {
-    if cursor >= text.count
-        return;
-
-    delete_count := min(count, text.count - cursor)
-    
-    if !delete_count
-        return;
-    
-    change_count += 1
-    
-    if current_transaction
-        array_add(*modifications, .{(cursor << 1) | cast() Modification.Kind.DELETE, copy_string(cast() text[cursor .. cursor + delete_count])})
-    
-    for cursor + delete_count .. text.count {
-        text[it - delete_count] = text[it]
-    }
-    
-    text.count -= delete_count
-    
-    recompute_lines(editor)
-}
-
-insert_char :: (using editor: *Editor, char: u8) {
-    char_ := char
-    
-    insert_text(editor, .{data = *char_, count = 1})
-}
-
-Char_Type :: enum {
-    WORD
-    SYMBOL
-    SPACE
-    NEWLINE
-}
-
-is_word_character :: (char: u8) -> bool {
-    return char == '_' ||
-           ('0' <= char && char <= '9') ||
-           ('a' <= char && char <= 'z') ||
-           ('A' <= char && char <= 'Z')
-}
-
-get_char_type :: (char: u8) -> Char_Type {
-    if char == {
-        case ' '
-            return .SPACE
-        case '\n'
-            return .NEWLINE
-        else if is_word_character(char)
-            return .WORD
-        else
-            return .SYMBOL
-    }
-}
-
-find_boundary_left :: (using editor: *Editor, strict := false) -> u64 {
-    if cursor == 0
-        return 0
-
-    i := cursor
-    
-    previous_type := get_char_type(text[i - 1])
-    
-    while i > 0 {
-        char_type := get_char_type(text[i - 1])
-        
-        if (strict || previous_type != .SPACE) && previous_type != char_type
-            break;
-
-        previous_type = char_type
-        
-        i -= 1
-    }
-    
-    return i
-}
-
-find_boundary_right :: (using editor: *Editor, strict := false) -> u64 {
-    if cursor == text.count
-        return text.count
-    
-    i := cursor
-    
-    previous_type := get_char_type(text[i])
-    
-    while i < text.count {
-        char_type := get_char_type(text[i])
-        
-        if previous_type != char_type && (strict || char_type != .SPACE)
-            break;
-            
-        previous_type = char_type
-        
-        i += 1
-    }
-        
-    return i
-}
-
-MARGIN: f32 : 8
-
-window: *Window
-gl_context: GL_Context
-gl_vertices:   [..]f32
-gl_tex_coords: [..]f32
-gl_colors:     [..]f32
-
-draw_textured :: (rect: Rectangle, color: u8, tex_rect: Rectangle) {
-    draw_untextured(rect, color)
-    
-    array_add(*gl_tex_coords, tex_rect.left)
-    array_add(*gl_tex_coords, tex_rect.top)
-    array_add(*gl_tex_coords, tex_rect.left)
-    array_add(*gl_tex_coords, tex_rect.bottom)
-    array_add(*gl_tex_coords, tex_rect.right)
-    array_add(*gl_tex_coords, tex_rect.bottom)
-    array_add(*gl_tex_coords, tex_rect.right)
-    array_add(*gl_tex_coords, tex_rect.top)
-}
-
-draw_untextured :: (rect: Rectangle, color: u8) {
-    array_add(*gl_vertices, rect.left)
-    array_add(*gl_vertices, rect.top)
-    array_add(*gl_vertices, rect.left)
-    array_add(*gl_vertices, rect.bottom)
-    array_add(*gl_vertices, rect.right)
-    array_add(*gl_vertices, rect.bottom)
-    array_add(*gl_vertices, rect.right)
-    array_add(*gl_vertices, rect.top)
-    
-    for 4
-        for COLORS[color]
-            array_add(*gl_colors, it)
-}
-
-begin_draw :: ($textured: bool) {
-    #if textured {
-        glEnable(GL_TEXTURE_2D)
-        glBindTexture(GL_TEXTURE_2D, font.texture_id)
-        glEnableClientState(GL_TEXTURE_COORD_ARRAY)
-        gl_tex_coords.count = 0
-    } else {
-        glDisableClientState(GL_TEXTURE_COORD_ARRAY)
-        glDisable(GL_TEXTURE_2D)
-    }
-    
-    gl_vertices.count = 0
-    gl_colors.count   = 0
-}
-
-end_draw :: ($textured: bool) {
-    glVertexPointer(2, GL_FLOAT, 0, gl_vertices.data)
-    glColorPointer(3, GL_FLOAT, 0, gl_colors.data)
-    
-    #if textured {
-        glTexCoordPointer(2, GL_FLOAT, 0, gl_tex_coords.data)
-    }
-    
-    glDrawArrays(GL_QUADS, 0, cast() (gl_vertices.count / 2))
-}
-
-update_cursor :: (using editor: *Editor) {
-    last_cursor_move_time = get_performance_timer()
-    
-    cursor_rect := get_cursor_rect(editor)
-    
-    if cursor_rect.left - scroll_x < MARGIN {
-        scroll_x = cursor_rect.left - MARGIN
-    } else if cursor_rect.right - scroll_x > bounds.right - bounds.left - MARGIN {
-        scroll_x = cursor_rect.right - (bounds.right - bounds.left - MARGIN)
-    }
-    
-    if cursor_rect.top - scroll_y < MARGIN {
-        scroll_y = cursor_rect.top - MARGIN
-    } else if cursor_rect.bottom - scroll_y > bounds.bottom - bounds.top - MARGIN {
-        scroll_y = cursor_rect.bottom - (bounds.bottom - bounds.top - MARGIN)
-    }
-}
-
-update_scroll_limits :: (using editor: *Editor) {
-    scroll_limits: Rectangle
-
-    scroll_limits.left = -MARGIN
-    scroll_limits.top = -MARGIN - font.ascent
-        
-    max_width: u64 = 0
-    
-    for editor.lines
-        max_width = max(it.count, max_width)
-    
-    scroll_limits.right = cast() max_width * font.width - (bounds.right - bounds.left - MARGIN)
-    scroll_limits.right = max(scroll_limits.right, scroll_limits.left)    
-    
-    scroll_limits.bottom = cast() editor.lines.count * font.height + font.descent - (bounds.bottom - bounds.top - MARGIN)
-    scroll_limits.bottom = max(scroll_limits.bottom, scroll_limits.top)
-    
-    
-    scroll_x = min(max(scroll_x, scroll_limits.left), scroll_limits.right)
-    scroll_y = min(max(scroll_y, scroll_limits.top),  scroll_limits.bottom)
-}
-
-cursor_should_be_active :: (using editor: *Editor) -> bool {
-    CURSOR_PERIOD_MILLIS  :: 1000
-    CURSOR_ON_TIME_MILLIS :: 500
-    
-    delta_time := cast(s64) ((get_performance_timer() - last_cursor_move_time) * 1000)
-    delta_time %= CURSOR_PERIOD_MILLIS
-    
-    return delta_time < CURSOR_ON_TIME_MILLIS
-}
-
-cursor_pos :: (using editor: *Editor) -> (u64, u64) {
-    row, col := location_pos(editor, cursor)
-    
-    return row, col
-}
-
-get_offset :: (using editor: *Editor, row: u64, col: u64) -> u64 {
-    row_ := min(row, lines.count - 1)
-    col_ := min(col, lines[row].count)
-
-    return cast() (*lines[row_][col_] - text.data)
-    
-}
-
-set_cursor_pos :: (using editor: *Editor, row: u64, col: u64) {
-    cursor = get_offset(editor, row, col)
-}
-
-location_pos :: (using editor: *Editor, location: u64) -> (u64, u64) {
-    low: u64 = 0
-    high := lines.count
-    
-    while low != high {
-        mid := (low + high) / 2
-        
-        line := lines[mid]
-        line_start := cast(u64) (line.data - text.data)
-        
-        if location < line_start {
-            high = mid
-        } else if location > line_start + line.count {
-            low = mid
-        } else {
-            return mid, location - line_start
-        }
-    }
-    
-    assert(false)
-    return lines.count - 1, lines[lines.count - 1].count
-}
-
-is_tab :: (using editor: *Editor, location: u64) -> bool {
-    row, col := location_pos(editor, location)
-    
-    if col % TAB_SIZE != 0
-        return false
-        
-    if col + TAB_SIZE > lines[row].count
-        return false
-        
-    return all_spaces(lines[row][col .. col + TAB_SIZE])
-}
-
-Session_Info :: struct {
-    VERSION :: 1
-    version := 1
     cursor: u64
     scroll_x:   f32
     scroll_y:   f32
 }
 
 Config_Info :: struct {
-    VERSION :: 1
-    version := 1
+    version := 2
     placement: WINDOWPLACEMENT
+    current_tab: u64
+    tabs: []File_Session_Info
 }
 
-read_settings :: ($info: type, data: []u8) -> (bool, info, []u8) {
-    if data.count < size_of(info) {
-        return false, .{}, data
+settings_size :: (using settings: any) -> u64 {
+    if value_type.tag == {
+        case .STRING
+            text := cast(string) settings
+            
+            return size_of(u64) + text.count
+        case .STRUCT
+            total_size: u64 = 0
+            
+            struct_ := cast(*Type_Info_Struct) value_type
+            
+            for struct_.members {
+                total_size += settings_size(.{value_pointer + it.offset, it.member_type})
+            }
+            
+            return total_size
+        case .ARRAY
+            array := cast(*Type_Info_Array) settings.value_type
+            
+            
+            
+            if array.flavor == .FIXED {
+                values := cast([1]u8) settings
+                
+                total_size: u64 = 0
+                
+                for array.count {
+                    total_size += settings_size(.{values.data + it_index * array.element_type.size, array.element_type})
+                }
+                return total_size
+            } else {
+                values := cast([]u8) settings
+                
+                total_size: u64 = size_of(u64)
+                
+                for values.count {
+                    total_size += settings_size(.{values.data + it_index * array.element_type.size, array.element_type})
+                }
+                return total_size
+            }
+        else
+            return value_type.size
     }
-    
-    result := cast(*info) data.data
-    
-    if result.version != info.VERSION {
-        return false, .{}, data
+}
+
+serialize_settings :: (using settings: any, dest: *u8) -> *u8 {
+    if value_type.tag == {
+        case .STRING
+            text := cast(string) settings
+            
+            memory_copy(dest, *text.count, size_of(u64))
+            memory_copy(dest + size_of(u64), text.data, text.count)
+            
+            return dest + text.count + size_of(u64)
+        case .STRUCT
+            struct_ := cast(*Type_Info_Struct) value_type
+            
+            dest_ := dest
+            for struct_.members {
+                dest_ = serialize_settings(.{value_pointer + it.offset, it.member_type}, dest_)
+            }
+            
+            return dest_
+        case .ARRAY
+            array := cast(*Type_Info_Array) value_type
+            
+            if array.flavor == .FIXED {
+                values := cast([1]u8) settings
+                
+                dest_ := dest
+                
+                for array.count {
+                    offset := it * array.element_type.size
+                
+                    dest_ = serialize_settings(.{values.data + offset, array.element_type}, dest_)
+                }
+                
+                return dest_
+            } else {
+                values := cast([]u8) settings
+                
+                memory_copy(dest, *values.count, size_of(u64))
+                dest_ := dest + size_of(u64)
+                
+                for values.count {
+                    offset := it * array.element_type.size
+                
+                    dest_ = serialize_settings(.{values.data + offset, array.element_type}, dest_)
+                }
+                
+                return dest_
+            }
+        else
+            memory_copy(dest, value_pointer, value_type.size)
+            return dest + value_type.size
     }
-    
-    return true, <<result, data[size_of(info)..]
 }
 
-get_session_file :: (filename: string) -> string {
-    return sprint("%.session", filename)
+deserialize_settings :: (using settings: any, source: *u8) -> *u8 {
+    if value_type.tag == {
+        case .STRING
+            text := cast(*string) settings.value_pointer;
+            
+            count := <<cast(*u64) source;
+            
+            <<text = new_string(count, initialized = false)
+            memory_copy(text.data, source + size_of(u64), text.count)
+            
+            return source + size_of(u64) + text.count
+        case .STRUCT
+            struct_ := cast(*Type_Info_Struct) value_type
+            
+            source_ := source
+            
+            for struct_.members {
+                if it_index == 0 && it.name == "version" && it.member_type.size == 8
+                    if <<cast(*u64) it.initial_value != <<cast(*u64) source_
+                        return null
+            
+                source_ = deserialize_settings(.{value_pointer + it.offset, it.member_type}, source_)
+                
+                if !source_
+                    return null
+            }
+            
+            return source_
+        case .ARRAY
+            array := cast(*Type_Info_Array) value_type
+            
+            if array.flavor == .FIXED {
+                values := cast(*[1]u8) settings.value_pointer;
+                
+                source_ := source
+                
+                for array.count {
+                    offset := it * array.element_type.size
+                
+                    source_ = deserialize_settings(.{values.data + offset, array.element_type}, source_)
+                    if !source_
+                        return null
+                }
+                
+                return source_
+            } else {
+                values := cast(*[]u8) settings.value_pointer;
+                
+                count := <<cast(*u64) source;
+                
+                <<values = new_array(u8, count * array.element_type.size, initialized = false)
+                values.count = count
+                
+                source_ := source + size_of(u64)
+                
+                for values.count {
+                    offset := it * array.element_type.size
+                
+                    source_ = deserialize_settings(.{values.data + offset, array.element_type}, source_)
+                    if !source_
+                        return null
+                }
+                
+                return source_
+            }
+        else
+            memory_copy(value_pointer, source, value_type.size)
+            return source + value_type.size
+    }
 }
 
-save :: (using editor: *Editor) {
+save :: (using tab: *Tab) {
+    using file_editor
     success := write_entire_file(filename, text)
     
     if !success {
@@ -1074,1441 +206,309 @@ save :: (using editor: *Editor) {
     }
     
     save_change_index = change_count
+}
+
+save_session :: (config_file: string) {
+    config: Config_Info
     
-    session_file := get_session_file(filename)
-    defer free_string(session_file)
+    GetWindowPlacement(window.handle, *config.placement)
+    config.current_tab = current_tab
+    config.tabs = new_array(File_Session_Info, tabs.count)
     
-    session := Session_Info.{cursor = cursor, scroll_x = scroll_x, scroll_y = scroll_y}
+    for * config.tabs {
+        it.filename = tabs[it_index].filename
+        it.cursor   = tabs[it_index].file_editor.cursor
+        it.scroll_x = tabs[it_index].file_editor.scroll_x
+        it.scroll_y = tabs[it_index].file_editor.scroll_y
+    }
     
-    success = write_entire_file(session_file, []u8.{count = size_of(Session_Info), data = cast() *session})
+    buffer := new_array(u8, settings_size(config), initialized = false)
+    defer free_array(buffer)
     
-    if !success {
-        print("Failed to create session file %\n", session_file)
+    serialize_settings(config, buffer.data)
+    write_entire_file(config_file, buffer)
+}
+
+load_session :: (config_file: string) {
+    buffer, success := read_entire_file(config_file)
+    defer free_array(buffer)
+    
+    if !success
+        return;
+    
+    config: Config_Info
+    
+    if !deserialize_settings(.{*config, type_info(type_of(config))}, buffer.data)
+        return;
+    
+    defer free_array(config.tabs)
+    
+    for config.tabs {
+        tab := load(it.filename)
+        
+        tab.file_editor.cursor    = min(it.cursor, tab.file_editor.text.count)
+        tab.file_editor.selection = tab.file_editor.cursor
+        tab.file_editor.scroll_x  = it.scroll_x
+        tab.file_editor.scroll_y  = it.scroll_y
+        
+        array_add(*tabs, tab)
+    }
+    update_tab_bounds()
+    
+    current_tab = config.current_tab
+    
+    SetWindowPlacement(window.handle, *config.placement)
+    
+    if IsIconic(window.handle) {
+        bring_to_top(window)
     }
 }
 
-load :: (using editor: *Editor, filename_: string) -> bool{
-    set_editor_text(editor, "")
+load :: (filename_: string) -> *Tab {
+    using result := new(Tab)
+    set_editor_text(*command_editor, "")
+    set_editor_text(*file_editor, "")
 
     new_text, success := read_entire_file(filename_)
     defer free_array(new_text)
     
     if !success 
-        return false
+        return result
         
     filename = filename_
     
     normalised := normalise_text(cast() new_text)
     defer array_free(normalised)
     
-    set_editor_text(editor, cast() cast([]u8) normalised)
+    set_editor_text(*file_editor, cast() cast([]u8) normalised)
     
-    session_file := get_session_file(filename)
-    defer free_string(session_file)
+    return result
+}
+
+window: *Window
+gl_context: GL_Context
+
+Tab :: struct {
+    file_editor:    Editor
+    command_editor: Editor
+    editor_label: string
+    filename:     string
     
-    session_data: []u8
-    session_data, success = read_entire_file(session_file)
-    defer free_array(session_data)
+    display_name: string
+    rect: Rectangle
     
-    if !success {
-        return true
+    command_state: Command_State
+}
+
+tabs: [..]*Tab
+current_tab: u64 = 0
+
+active_editor :: (using tab: *Tab) -> *Editor {
+    if command_state == .NONE
+        return *file_editor
+    else
+        return *command_editor
+}
+
+PIPE_NAME :: "\\\\.\\pipe\\milo_edit-70663138"
+open_existing_instance :: (full_path: string) {
+    handle := CreateFileA(PIPE_NAME.data, GENERIC_WRITE, 0, null, OPEN_EXISTING, 0, null)
+    
+    if handle == INVALID_HANDLE_VALUE
+        return;
+    defer CloseHandle(handle)
+    
+    count := full_path.count
+    WriteFile(handle, *count, size_of(type_of(count)), null, null)
+    WriteFile(handle, full_path.data, cast() count, null, null)
+}
+
+receive_pipe: HANDLE
+pipe_connect_overlapped: OVERLAPPED
+
+open_or_load_tab :: (filename: string) {
+    for tabs {
+        if it.filename == filename {
+            current_tab = it_index
+            break
+        }
+    } or {
+        array_add(*tabs, load(filename))
+        current_tab = tabs.count - 1
+        update_tab_bounds()
+    }
+}
+
+check_pipe_for_file_open :: () -> bool {
+    num_bytes: u32
+    if !GetOverlappedResult(receive_pipe, *pipe_connect_overlapped, *num_bytes, 0)
+        return false
+    
+    count: u64
+    
+    if !ReadFile(receive_pipe, *count, size_of(type_of(count)), *num_bytes) || num_bytes != size_of(type_of(count))
+        return false
+        
+    new_filename := new_string(count, initialized = false)
+        
+    if !ReadFile(receive_pipe, new_filename.data, cast() count, *num_bytes) || num_bytes != count {
+        free_string(new_filename)
+        return false
     }
     
-    valid, session := read_settings(Session_Info, session_data)
+    DisconnectNamedPipe(receive_pipe, null)
+    ConnectNamedPipe(receive_pipe, *pipe_connect_overlapped)
     
-    if !valid {
-        print("Failed to read session file %\n", session_file)
-        return true
-    }
+    open_or_load_tab(new_filename)
+    bring_to_top(window)
     
-    cursor    = min(session.cursor, text.count)
-    selection = cursor
-    scroll_x  = session.scroll_x
-    scroll_y  = session.scroll_y
+    ConnectNamedPipe(receive_pipe, *pipe_connect_overlapped)
     
     return true
 }
 
-set_editor_text :: (using editor: *Editor, new_text: string) {
-    grow_to(editor, new_text.count)
+update_tab_bounds :: () {
     
-    memory_copy(text.data, new_text.data, new_text.count)
-    text.count = new_text.count
-    cursor              = 0
-    selection           = 0
-    change_count        = 1
-    save_change_index   = 1
-    colors_change_index = 0
-    redo_index          = 0
-    transactions.count  = 0
-    modifications.count = 0
-    current_transaction = null
-    scroll_x            = MARGIN
-    scroll_y            = MARGIN + font.ascent
+    display_names := new_array(u64, tabs.count)
+    defer free_array(display_names)
     
-    recompute_lines(editor)
-    
-    update_cursor(editor)
-}
-
-get_indentation :: (using editor: *Editor, row: u64) -> u64 {
-    current_row := row
-    
-    while true {
-        for lines[current_row]
-            if it != ' '
-                return it_index
-                
-        if current_row == 0
-            break;
-            
-        current_row -= 1
+    for tabs {
+        display_names[it_index] = find_last(it.filename, '\\') + 1
     }
     
-    return 0
-}
-
-get_cursor_rect :: (using editor: *Editor) -> Rectangle {
-    CURSOR_WIDTH :: 2
+    identical_names: [..]u64
+    defer array_free(identical_names)
     
-    row, col := cursor_pos(editor)
-    
-    
-    x := cast(f32) col * font.width
-    y := cast(f32) row * font.height
-
-
-    return .{x, y - font.ascent, x + CURSOR_WIDTH, y - font.descent}
-}
-
-screen_coords_to_cursor :: (using editor: *Editor, mouse_x: s64, mouse_y: s64, x_rounding: f32 = 0.5) -> u64 {
-    x := scroll_x + cast() mouse_x - bounds.left
-    y := scroll_y + cast() mouse_y - bounds.top
-    
-    col := 0
-    row := 0
-    
-    if x > 0
-        col = cast() (x / font.width + x_rounding)
-    
-    if y > 0
-        row = cast() ((y - font.descent + font.line_gap * 0.5) / font.height + 0.5)
-    
-    row = min(row, cast() editor.lines.count - 1)
-    col = min(col, cast() editor.lines[row].count)
-    
-    return cast() (editor.lines[row].data - editor.text.data + col)
-}
-
-last_gl_color: u8 = 255
-
-set_gl_color :: (color: u8) {
-    if color == last_gl_color
-        return;
-
-    glColor3f(COLORS[color][0], COLORS[color][1], COLORS[color][2])
-}
-
-get_selected_text :: (using editor: *Editor) -> (string, u64, u64) {
-    selection_start := min(cursor, selection)
-    selection_end   := max(cursor, selection)
-    
-    selected_text := text[selection_start .. selection_end]
-    
-    return cast() selected_text, selection_start, selection_end
-}
-
-clipboard_should_paste_line := false
-clipboard_first_line_indentation: u64
-
-editor_event :: (using editor: *Editor, event: Event) {
-    if event.kind == {
-        case .KEY
-            using event.key
-            if down if key == {
-                case .ENTER
-                    row, col := cursor_pos(editor)
-                    
-                    indentation := leading_spaces(lines[row])
-                    
-                    is_brace_pair := false
-                    
-                    begin_transaction(editor)
-                    defer end_transaction(editor)
-                    
-                    if modifiers & .SHIFT {
-                        set_cursor_pos(editor, row, lines[row].count)
-                        selection = cursor
-                    }  else if cursor == selection && 0 < col && col < lines[row].count if lines[row][col - 1 .. col + 1] == {
-                        case "()" #through
-                        case "{}" #through
-                        case "[]" is_brace_pair = true
-                    } else if cursor == selection && col < indentation {
-                        set_cursor_pos(editor, row, indentation)
-                        selection = cursor
-                    }
-                    
-                    insert_char(editor, '\n')
-                    
-                    cursor_set_point := cursor + indentation
-                    
-                    if is_brace_pair {
-                        insert_spaces(editor, indentation + TAB_SIZE)
-                        
-                        cursor_set_point = cursor
-                            
-                        insert_char(editor, '\n')
-                    }
-                    
-                    insert_spaces(editor, indentation)
-                        
-                    cursor    = cursor_set_point
-                    selection = cursor_set_point
-                    update_cursor(editor)
-                case .BACKSPACE
-                    if cursor == 0
-                        return;
-                    
-                    if modifiers & .CONTROL {
-                        begin_transaction(editor)
-                        defer end_transaction(editor)
-                        start := find_boundary_left(editor)
-                        
-                        delete_count := cursor - start
-                        cursor    = start
-                        selection = cursor
-                        delete_text(editor, delete_count)                              
-                    } else {
-                        if selection != cursor {
-                            begin_transaction(editor)
-                            defer end_transaction(editor)
-                            delete_selection(editor)
-                        } else {
-                            begin_transaction(editor, .BACKSPACE_OR_DELETE)
-                            defer end_transaction(editor)
-                            if cursor >= TAB_SIZE && is_tab(editor, cursor - TAB_SIZE) {
-                                cursor -= TAB_SIZE
-                                selection = cursor
-                                delete_text(editor, TAB_SIZE)
-                            } else {                                    
-                                cursor -= 1
-                                selection = cursor
-                                delete_text(editor, 1)
-                            }
-                        }
-                    }
-                    update_cursor(editor)
-                case .DELETE
-                    if cursor == text.count
-                        return;
-                    if modifiers == {
-                        case .CONTROL
-                            begin_transaction(editor)
-                            defer end_transaction(editor)
-                            end := find_boundary_right(editor)
-                            
-                            selection = cursor
-                            delete_text(editor, end - cursor)
-                            update_cursor(editor)
-                        case 0
-                            if selection != cursor {
-                                begin_transaction(editor)
-                                defer end_transaction(editor)
-                                delete_selection(editor)
-                            } else {
-                                begin_transaction(editor, .BACKSPACE_OR_DELETE)
-                                defer end_transaction(editor)
-                                if is_tab(editor, cursor)
-                                    delete_text(editor, TAB_SIZE)
-                                else if cursor < text.count && text[cursor] == '\n' {
-                                  delete_text(editor, 1)
-                                  
-                                  delete_text(editor, leading_spaces(cast() editor.text[editor.cursor..]))  
-                                } else
-                                    delete_text(editor, 1)
-                            }
-                            update_cursor(editor)
-                    }
-                    
-                case .LEFT
-                    break_transaction_combining(editor)
-                    
-                    if selection != cursor && !modifiers {
-                        cursor    = min(cursor, selection)
-                        selection = cursor
-                    } else {
-                        if cursor == 0
-                            return;
-                        
-                        if modifiers & .CONTROL {
-                            cursor = find_boundary_left(editor)
-                        } else {
-                                if cursor >= TAB_SIZE && is_tab(editor, cursor - TAB_SIZE)
-                                    cursor -= TAB_SIZE
-                                else
-                                    cursor -= 1
-                        }
-                        
-                        if !(modifiers & .SHIFT)
-                            selection = cursor
-                    }
-                    
-                    update_cursor(editor)
-                case .RIGHT
-                    break_transaction_combining(editor)
-                    
-                    if selection != cursor && !modifiers {
-                        cursor    = max(cursor, selection)
-                        selection = cursor
-                    } else {
-                        if cursor == text.count
-                            return;
-                        
-                        if modifiers & .CONTROL {
-                            cursor = find_boundary_right(editor)
-                        } else {
-                            if is_tab(editor, cursor)
-                                cursor += TAB_SIZE
-                            else
-                                cursor += 1
-                        }
-                        
-                        if !(modifiers & .SHIFT)
-                            selection = cursor
-                    }
-                    update_cursor(editor)
-                case .UP
-                    
-                    if modifiers == .ALT {
-                        
-                        _, selection_start, selection_end := get_selected_text(editor)
-                        
-                        if selection_end > selection_start
-                            selection_end -= 1
-                        
-                        start_line := location_pos(editor, selection_start)
-                        end_line   := location_pos(editor, selection_end)
-                        
-                        if start_line == 0
-                            return;
-                            
-                        last_line  := end_line + 1 == lines.count
-                        
-                        cursor_offset    := cursor    - cast() (lines[start_line].data - text.data)
-                        selection_offset := selection - cast() (lines[start_line].data - text.data)
-                        
-                        if start_line == 0
-                            return;
-                            
-                        text_to_move := cast(string) text[get_offset(editor, start_line, 0) .. get_offset(editor, end_line, lines[end_line].count)]
-                        
-                        if !last_line
-                            text_to_move.count += 1
-                        
-                        text_to_move = copy_string(text_to_move)
-                        defer free_string(text_to_move)
-                        
-                        begin_transaction(editor)
-                        defer end_transaction(editor)
-                        set_cursor_pos(editor, start_line, 0)
-                        selection = cursor
-                        
-                        delete_text(editor, text_to_move.count)
-                        
-                        set_cursor_pos(editor, start_line - 1, 0)
-                        selection = cursor
-                        
-                        insert_text(editor, text_to_move)
-                        
-                        if last_line {
-                            insert_char(editor, '\n')
-                            cursor = text.count - 1
-                            delete_text(editor, 1)
-                        }
-                        
-                        set_cursor_pos(editor, start_line - 1, 0)
-                        selection = cursor
-                        
-                        cursor    += cursor_offset
-                        selection += selection_offset
-                        
-                        cursor    = min(cursor,    text.count)
-                        selection = min(selection, text.count)
-                        
-                        update_cursor(editor)
-                        
-                    } else {
-                        row, col := cursor_pos(editor)
-                        break_transaction_combining(editor)
-                        
-                        if row == 0 {
-                            cursor = 0
-                        } else {
-                            set_cursor_pos(editor, row - 1, col)
-                        }
-                        
-                        if !(modifiers & .SHIFT)
-                            selection = cursor
-                    }
-                        
-                    update_cursor(editor)
-                case .DOWN
-                    if modifiers == .ALT {
-                        
-                        _, selection_start, selection_end := get_selected_text(editor)
-                        
-                        if selection_end > selection_start
-                            selection_end -= 1
-                            
-                        start_line := location_pos(editor, selection_start)
-                        end_line   := location_pos(editor, selection_end)
-                        
-                        if end_line + 1 == lines.count
-                            return;
-                            
-                        last_line  := end_line + 2 == lines.count
-                        
-                        cursor_offset    := cursor    - cast() (lines[start_line].data - text.data)
-                        selection_offset := selection - cast() (lines[start_line].data - text.data)
-                            
-                        text_to_move := cast(string) text[get_offset(editor, start_line, 0) .. get_offset(editor, end_line, lines[end_line].count) + 1]
-                            
-                        text_to_move = copy_string(text_to_move)
-                        defer free_string(text_to_move)
-                        
-                        begin_transaction(editor)
-                        defer end_transaction(editor)
-                        set_cursor_pos(editor, start_line, 0)
-                        selection = cursor
-                        
-                        delete_text(editor, text_to_move.count)
-                        
-                        if last_line {
-                            cursor    = text.count
-                            selection = cursor
-                            insert_char(editor, '\n')
-                        }
-                        
-                        set_cursor_pos(editor, start_line + 1, 0)
-                        selection = cursor
-                        
-                        insert_text(editor, text_to_move)
-                        
-                        if last_line {
-                            cursor    = text.count - 1
-                            selection = cursor
-                            delete_text(editor, 1)
-                        }
-                        
-                        set_cursor_pos(editor, start_line + 1, 0)
-                        selection = cursor
-                        
-                        cursor    += cursor_offset
-                        selection += selection_offset
-                        
-                        cursor    = min(cursor,    text.count)
-                        selection = min(selection, text.count)
-                        
-                        update_cursor(editor)
-                        
-                    } else {
-                        row, col := cursor_pos(editor)
-                        break_transaction_combining(editor)
-                        
-                        if row + 1 == lines.count {
-                            cursor = text.count
-                        } else {
-                            set_cursor_pos(editor, row + 1, col)
-                        }
-                        
-                        if !(modifiers & .SHIFT)
-                            selection = cursor
-                            
-                        
-                        update_cursor(editor)
-                    }
-                case .TAB
-                    _, selection_start, selection_end := get_selected_text(editor)
-                    
-                    start_line := location_pos(editor, selection_start)
-                    end_line   := location_pos(editor, selection_end)
-                    
-                    if start_line == end_line {
-                        if modifiers & .SHIFT {
-                    
-                            row, col := cursor_pos(editor)
-                            indentation := leading_spaces(lines[row])
-                        
-                            if col <= indentation {
-                                if !indentation
-                                    return;
-                            
-                                tab_start := indentation - indentation % TAB_SIZE
-                            
-                                if tab_start == indentation
-                                    tab_start -= TAB_SIZE
-                            
-                                begin_transaction(editor)
-                                defer end_transaction(editor)    
-                                set_cursor_pos(editor, row, tab_start)
-                                selection = cursor
-                                delete_text(editor, indentation - tab_start)
-                                
-                            } else {
-                                if !col
-                                    return;
-                                
-                                tab_start := col - col % TAB_SIZE
-                            
-                                if tab_start == col
-                                    tab_start -= TAB_SIZE
-                            
-                                if all_spaces(lines[row][tab_start .. col]) {
-                                    begin_transaction(editor)
-                                    defer end_transaction(editor)
-                                
-                                    set_cursor_pos(editor, row, tab_start)
-                                    selection = cursor
-                                    delete_text(editor, col - tab_start)
-                                } else {
-                                    break_transaction_combining(editor)
-                                    set_cursor_pos(editor, row, tab_start)
-                                    selection = cursor
-                                }
-                            }      
-                        } else {
-                            begin_transaction(editor)
-                            defer end_transaction(editor)
-                        
-                            delete_selection(editor)
-                        
-                            row, col := cursor_pos(editor)
-                            
-                            indentation := leading_spaces(lines[row])
-                            
-                            if col < indentation {
-                                set_cursor_pos(editor, row, indentation)
-                                selection = cursor
-                                col = indentation
-                            }
-                            
-                            insert_spaces(editor, TAB_SIZE - col % TAB_SIZE)
-                        }
-                    } else {
-                        if modifiers & .SHIFT {
-                            begin_transaction(editor)
-                            defer end_transaction(editor)
-                            
-                            for start_line .. end_line + 1 {
-                                indentation := leading_spaces(lines[it])
-                                
-                                if !indentation continue;
-                                
-                                tab_start := indentation - indentation % TAB_SIZE
-                                if tab_start == indentation
-                                    tab_start -= 4
-                                
-                                set_cursor_pos(editor, it, tab_start)
-                                selection = cursor
-                                delete_text(editor, indentation - tab_start)
-                            }
-                            
-                            set_cursor_pos(editor, end_line, lines[end_line].count)
-                            selection = get_offset(editor, start_line, 0)
-                        } else {
-                            begin_transaction(editor)
-                            defer end_transaction(editor)
-                            
-                            for start_line .. end_line + 1 {
-                                indentation := leading_spaces(lines[it])
-                        
-                                set_cursor_pos(editor, it, indentation)
-                                selection = cursor
-                                
-                                insert_spaces(editor, TAB_SIZE - indentation % TAB_SIZE)
-                            }
-                            
-                            set_cursor_pos(editor, end_line, lines[end_line].count)
-                            selection = get_offset(editor, start_line, 0)
-                        }   
-                    }
-                    
-                    update_cursor(editor)
-                case .S
-                    if modifiers == .CONTROL {
-                        save(editor)
-                    }
-                case .A
-                    if modifiers == {
-                        case .CONTROL
-                            break_transaction_combining(editor)
-                            
-                            selection = 0
-                            cursor    = text.count
-                            update_cursor(editor)
-                        case .ALT
-                            selected_text := get_selected_text(editor)
-                            
-                            activate_command_editor(.ALIGN, "Align: ", selected_text)
-                      
-                    }
-                case .X #through
-                case .C
-                    if modifiers != .CONTROL
-                        return;
-                        
-                    if selection == cursor {
-                        clipboard_should_paste_line      = true
-                        clipboard_first_line_indentation = 0
-                        
-                        row := cursor_pos(editor)
-                    
-                        if !OpenClipboard(window.handle)
-                            return;
-                        
-                        defer CloseClipboard()
-                        
-                        if !EmptyClipboard()
-                            return;
-                            
-                        text_handle := GlobalAlloc(GMEM_MOVEABLE, lines[row].count + 3)
-                        
-                        if !text_handle
-                            return;
-                        
-                        text := cast(*u8) GlobalLock(text_handle)
-                        if !text {
-                            GlobalFree(text_handle)
-                            return;
-                        }
-                        
-                        defer GlobalUnlock(text_handle)
-                        
-                        memory_copy(text, lines[row].data, lines[row].count)
-                        text[lines[row].count    ] = '\r'
-                        text[lines[row].count + 1] = '\n'
-                        text[lines[row].count + 2] = 0
-                        
-                        SetClipboardData(CF_TEXT, text_handle)
-                    
-                        if key == .X {
-                            begin_transaction(editor)
-                            defer end_transaction(editor)
-                            
-                            set_cursor_pos(editor, row, 0)
-                            selection = cursor
-                            delete_text(editor, lines[row].count + 1)
-                            
-                            update_cursor(editor)
-                        }
-                    } else {
-                        clipboard_should_paste_line = false
-                    
-                        selected_text, selection_start, selection_end := get_selected_text(editor)
-                        
-                        start_line := location_pos(editor, selection_start)
-                        
-                        selected_lines := location_pos(editor, selection_end) - start_line
-                        
-                        clipboard_first_line_indentation = leading_spaces(lines[start_line])
-                        
-                        {
-                            if !OpenClipboard(window.handle)
-                                return;
-                            
-                            defer CloseClipboard()
-                            
-                            if !EmptyClipboard()
-                                return;
-                                
-                            text_handle := GlobalAlloc(GMEM_MOVEABLE, selected_text.count + selected_lines + 1)
-                            
-                            if !text_handle
-                                return;
-                            
-                            text := cast(*u8) GlobalLock(text_handle)
-                            if !text {
-                                GlobalFree(text_handle)
-                                return;
-                            }
-                            
-                            defer GlobalUnlock(text_handle)
-                            
-                            for selected_text {
-                                if it == '\n' {
-                                    <<text = '\r'
-                                    text += 1
-                                }
-                                <<text = it
-                                text += 1
-                            }
-                            <<text = 0
-                            
-                            SetClipboardData(CF_TEXT, text_handle)
-                        }
-                        
-                        if key == .X {
-                            begin_transaction(editor)
-                            defer end_transaction(editor)
-                            delete_selection(editor)
-                            
-                            update_cursor(editor)
-                        }
-                    }
-                    
-                case .V
-                    if modifiers != .CONTROL
-                        return;
-                    if !IsClipboardFormatAvailable(CF_TEXT)
-                        return;
-                    
-                    text: [..]u8
-                    defer array_free(text)
-                    {
-                        if !OpenClipboard(window.handle)
-                            return;
-                            
-                        defer CloseClipboard()
-                            
-                        text_handle := GetClipboardData(CF_TEXT)
-                        
-                        if !text_handle
-                            return;
-                            
-                        c_text := GlobalLock(text_handle)
-                        if !c_text
-                            return;
-                            
-                        text = normalise_text(from_c_string(c_text))
-                        
-                        GlobalUnlock(text_handle)
-                    }
-                    
-                    begin_transaction(editor)
-                    defer end_transaction(editor)
-                    
-                    special_paste_behavior := editor.cursor == editor.selection && GetClipboardOwner() == window.handle
-                    
-                    if clipboard_should_paste_line && special_paste_behavior {
-                        row := cursor_pos(editor)
-                        
-                        previous_cursor := cursor
-                        
-                        if row + 1 == lines.count {
-                            cursor    = editor.text.count
-                            selection = cursor
-                            insert_char(editor, '\n')
-                            
-                            insert_text(editor, cast() cast([]u8) text)
-                            cursor -= 1
-                            selection = cursor
-                            delete_text(editor, 1)
-                            
-                            cursor    = previous_cursor + text.count
-                            selection = cursor
-                            update_cursor(editor)
-                        } else {
-                            set_cursor_pos(editor, row + 1, 0)
-                            selection = cursor
-                            
-                            insert_text(editor, cast() cast([]u8) text)
-                            cursor    = previous_cursor + text.count
-                            selection = cursor
-                            update_cursor(editor)
-                        }
-                        
-                    } else if special_paste_behavior {
-                        delete_selection(editor)               
-                        
-                        start_line        := cursor_pos(editor)
-                        start_indentation := leading_spaces(lines[start_line])
-                        
-                        
-                        
-                        line, remaining, found := split_at_first(cast() cast([]u8) text, '\n')
-                        insert_text(editor, line)
-                        
-                        
-                        while found {
-                            insert_char(editor, '\n')
-                            
-                            line, remaining, found = split_at_first(remaining, '\n')
-                            
-                            line_indentation := leading_spaces(line)
-                            
-                            relative_indentation := cast(s64) line_indentation - cast() clipboard_first_line_indentation + cast() start_indentation
-                            
-                            if relative_indentation > 0
-                                insert_spaces(editor, cast() relative_indentation)
-                            
-                            insert_text(editor, line[line_indentation..])
-                        }
-                        
-                    } else {
-                        insert_text(editor, cast() cast([]u8) text)
-                        update_cursor(editor)                        
-                    }
-                case .D
-                    if modifiers != .CONTROL
-                        return;
-                        
-                    row := cursor_pos(editor)
-                
-                    begin_transaction(editor)
-                    defer end_transaction(editor)
-                    
-                    line := copy_string(lines[row])
-                    defer free_string(line)
-                    
-                    previous_cursor := cursor
-                    set_cursor_pos(editor, row, line.count)
-                    selection = cursor
-                    insert_char(editor, '\n')
-                    insert_text(editor, line)
-                    cursor    = previous_cursor + line.count + 1
-                    selection = cursor
-                    update_cursor(editor)
-                    
-                case .Z
-                    if modifiers != .CONTROL
-                        return;
-                        
-                    if !redo_index
-                        return;
-                        
-                    current_transaction = null
-                    
-                    redo_index -= 1
-                    transaction := transactions[redo_index]
-                    modifications_start := transaction.modifications_start >> 2
-                    modifications_end   := modifications.count
-                    
-                    if redo_index + 1 < transactions.count {
-                        modifications_end = transactions[redo_index + 1].modifications_start >> 2
-                    }
-                    
-                    modification_index := modifications_end
-                    
-                    while modification_index > modifications_start {
-                        modification_index -= 1
-                        
-                        modification := modifications[modification_index]
-                        
-                        cursor    = modification.location >> 1
-                        selection = cursor
-                        
-                        if cast(Modification.Kind) (modification.location & 1) == #complete {
-                            case .INSERT
-                                delete_text(editor, modification.text.count)
-                            case .DELETE
-                                insert_text(editor, modification.text)
-                        }
-                    }
-                    
-                    change_count -= 2 * (modifications_end - modifications_start)
-                    
-                    cursor    = transaction.start_cursor
-                    selection = transaction.start_selection
-                    
-                    update_cursor(editor)
-                    
-                case .Y
-                    if modifiers != .CONTROL
-                        return;
-                        
-                    if redo_index == transactions.count
-                        return;
-                        
-                    current_transaction = null
-                    
-                    transaction := transactions[redo_index]
-                    modifications_start := transaction.modifications_start >> 2
-                    modifications_end   := modifications.count
-                    
-                    if redo_index + 1 < transactions.count {
-                        modifications_end = transactions[redo_index + 1].modifications_start >> 2
-                    }
-                    
-                    redo_index += 1
-                    
-                    for modification: modifications[modifications_start ..  modifications_end] {    
-                        cursor = modification.location >> 1
-                        selection = cursor
-                        
-                        if cast(Modification.Kind) (modification.location & 1) == #complete {
-                            case .INSERT
-                                insert_text(editor, modification.text)
-                            case .DELETE
-                                delete_text(editor, modification.text.count)
-                        }
-                    }
-                    
-                    cursor    = transaction.end_cursor
-                    selection = transaction.end_selection
-                    
-                    update_cursor(editor)
-                
-                case .F
-                    if modifiers != .CONTROL
-                        return;
-                    
-                    selected_text := get_selected_text(editor)
-                    
-                    activate_command_editor(.FIND, "Find: ", selected_text)
-                
-                case .R
-                    if modifiers != .CONTROL
-                        return;
-                    
-                    selected_text := get_selected_text(editor)
-                    
-                    activate_command_editor(.REPLACE_SET_QUERY, "Query: ", selected_text)
-                
-                case .G
-                    if modifiers != .CONTROL
-                        return;
-                    
-                    row, col := cursor_pos(editor)
-                    
-                    line_string := sprint("%,%", row + 1, col + 1)  
-                    defer free_string(line_string)    
-                    
-                    activate_command_editor(.GOTO, "Goto: ", line_string)
-                case .SLASH
-                    if modifiers != .CONTROL
-                        return;
-                    
-                    _, selection_start, selection_end := get_selected_text(editor)
-                    
-                    if selection_end - selection_start >= 4 && cast() text[selection_start .. selection_start + 2] == "/*" && cast() text[selection_end - 2 .. selection_end] == "*/" {
-                        begin_transaction(editor)
-                        defer end_transaction(editor)
-                        
-                        cursor =    selection_end - 2
-                        selection = cursor
-                        
-                        delete_text(editor, 2)
-                        
-                        cursor    = selection_start
-                        selection = cursor
-                        
-                        delete_text(editor, 2)
-                        
-                        cursor    = selection_end - 4
-                        selection = selection_start
-                        update_cursor(editor)
-                    } else if selection_start == selection_end {
-                        row := cursor_pos(editor)
-                    
-                        comment_offset, found := find_first(s = lines[row], find = "//")
-                        
-                        begin_transaction(editor)
-                        defer end_transaction(editor)
-                        if found && comment_offset == leading_spaces(lines[row]) {
-                            set_cursor_pos(editor, row, comment_offset)
-                            selection = cursor
-                            
-                            delete_text(editor, 2)
-                        } else {
-                            set_cursor_pos(editor, row, 0)
-                            selection = cursor
-                            
-                            insert_text(editor, "//")
-                        }
-                        
-                        set_cursor_pos(editor, row + 1, 0)
-                        selection = cursor
-                        update_cursor(editor)
-                    } else {
-                        begin_transaction(editor)
-                        defer end_transaction(editor)
-                        
-                        cursor =    selection_end
-                        selection = cursor
-                        
-                        insert_text(editor, "*/")
-                        
-                        cursor    = selection_start
-                        selection = cursor
-                        
-                        insert_text(editor, "/*")
-                        
-                        cursor    = selection_end + 4
-                        selection = selection_start
-                        
-                        update_cursor(editor)
-                    }
-            }
-        
-        case .CHAR
-            using event.char                
-            if Font.FIRST_CHAR > char || char > Font.LAST_CHAR
-                return;
+    while outer: true {
+        for tabs {
+            name := it.filename[display_names[it_index]..]
             
-            has_selection := cursor != selection
-                
-            if !has_selection {
-                begin_transaction(editor, .TYPING)
-            } else {
-                begin_transaction(editor, .OTHER)                    
-            }
-            defer end_transaction(editor)
+            for tabs
+                if name == it.filename[display_names[it_index]..]
+                    array_add(*identical_names, it_index)
             
-            do_not_insert := false
-            special_behavior := editor == *file_editor && !has_selection
-            
-            if special_behavior && cursor < text.count && text[cursor] == char if char == {
-                case ')'  #through
-                case ']'  #through
-                case '}'  #through
-                case '"'  #through
-                case '\'' do_not_insert = true
-            }
-            
-            if do_not_insert {
-                cursor += 1
-                selection = cursor
-            } else {
-                if special_behavior && cursor_in_code(editor) if char == {
-                    case '('  insert_text(editor, "()")     cursor -= 1  selection = cursor
-                    case '{'  insert_text(editor, "{}")     cursor -= 1  selection = cursor
-                    case '['  insert_text(editor, "[]")     cursor -= 1  selection = cursor
-                    case '"'  insert_text(editor, "\"\"")   cursor -= 1  selection = cursor
-                    case '\'' insert_text(editor, "''")     cursor -= 1  selection = cursor
-                    else      insert_char(editor, cast() char)
-                } else {
-                    insert_char(editor, cast() char)
+            if identical_names.count >= 2 {
+                for identical_names {
+                    display_names[it] = find_last(tabs[it].filename[..display_names[it] - 1], '\\') + 1
                 }
             }
             
-            update_cursor(editor)
-        
-        case .SCROLL
-            if event.scroll.modifiers == {
-                case .SHIFT
-                    scroll_x += cast() event.scroll.scroll_x
-                    scroll_x -= cast() event.scroll.scroll_y
-                
-                case 0
-                    scroll_x += cast() event.scroll.scroll_x
-                    scroll_y -= cast() event.scroll.scroll_y
-            }
-        
-        case .MOUSE
-            using event.mouse
-            if down if button == {
-                case .LEFT_MOUSE
-                    break_transaction_combining(editor)
-                    
-                    
-                    if double_click {
-                        cursor = screen_coords_to_cursor(editor, x, y, x_rounding = 0)
-                        
-                        if cursor != text.count
-                            cursor += 1
-                    
-                        selection = find_boundary_left(editor, strict = true)
-                        cursor -= 1
-                        cursor = find_boundary_right(editor, strict = true)
-                    } else {
-                        cursor    = screen_coords_to_cursor(editor, x, y)
-                        selection = cursor
-                    }
-                    
-                    update_cursor(editor)
-            }
-        case .MOUSE_MOVE
-            using event.mouse_move
-        
-            if window.keys[cast(u64) Key.LEFT_MOUSE] {
-                break_transaction_combining(editor)
-                cursor = screen_coords_to_cursor(editor, x, y)
-                update_cursor(editor)
-            }
-    }
-}
-
-set_region :: (using bounds: Rectangle, background: u8) {
-    glViewport(cast() left, window.height - cast() bottom, cast() (right - left), cast() (bottom - top))
-        
-    glMatrixMode(GL_PROJECTION)
-    glLoadIdentity()
-    glOrtho(cast() left, cast() right, cast() bottom, cast() top, -1, 1)
-    glMatrixMode(GL_MODELVIEW)
-    glLoadIdentity()
-    
-    begin_draw    (textured = false)
-    defer end_draw(textured = false)
-    
-    draw_untextured(bounds, background)
-}
-
-get_visible_range :: (using editor: *Editor) -> (u64, u64) {
-    first_line := cast(u64) (scroll_y / font.height + 1)
-    last_line  := first_line + cast() ((bounds.bottom - bounds.top) / font.height + 1)
-    
-    first_line = min(first_line, lines.count - 1)
-    last_line  = max(min(last_line, lines.count), first_line)
-    
-    return first_line, last_line
-}
-
-draw_editor :: (using editor: *Editor, background: u8) {
-    set_region(bounds, background)
-    
-    glPushMatrix()
-    defer glPopMatrix()
-    
-    glTranslatef(-scroll_x + bounds.left, -scroll_y + bounds.top, 0)
-    
-    first_line, last_line := get_visible_range(editor)
-    
-    {
-        begin_draw    (textured = false)
-        defer end_draw(textured = false)
-        
-        y: f32 = cast() first_line * font.height
-        for lines[first_line .. last_line] {
-            top    := y - font.ascent  - font.line_gap * 0.5
-            bottom := y - font.descent + font.line_gap * 0.5
-        
-            
-            for * it[0 .. it.count + 1] {
-                x: f32 = cast() it_index * font.width
-                character_index := cast(u64) (it - text.data)
-                
-                if (selection < cursor && character_index >= selection && character_index < cursor) || 
-                    (cursor < selection && character_index >= cursor && character_index < selection) {
-                    draw_untextured(.{x, top, x + font.width, bottom}, SELECTION_COLOR)
-                }
-            }
-            
-        
-            indent_level := get_indentation(editor, it_index + first_line)
-            
-            col := TAB_SIZE
-            
-            while col < indent_level {
-                x: f32 = cast() col * font.width
-            
-                draw_untextured(.{x, top, x + 1, bottom}, MENU_COLOR)
-            
-                col += TAB_SIZE
-            }
-        
-        
-            y += font.height
+            identical_names.count = 0
         }
+        
+        break
     }
     
-    {
-        begin_draw    (textured = true)
-        defer end_draw(textured = true)
-        
-        y: f32 = cast() first_line * font.height
-        for lines[first_line .. last_line] {
-            x: f32 = 0
-            
-            for * it {
-                character_index := cast(u64) (it - text.data)
-                draw_character(*x, *y, <<it, colors[character_index])
-            }
-            
-            y += font.height
-        
-        }
-    }
+    top: f32 = 0
+    bottom: f32 = font.height + 2 * MARGIN 
     
-    if editor == active_editor && cursor_should_be_active(editor) {
-        begin_draw    (textured = false)
-        defer end_draw(textured = false)
+    x: f32 = 0
+    for tabs {
+        it.display_name = it.filename[display_names[it_index]..]
         
-        cursor_rect := get_cursor_rect(editor)
-        draw_untextured(cursor_rect, TEXT_COLOR)
+        it.rect.top = top
+        it.rect.left = x
+        it.rect.bottom = bottom
+        it.rect.right = x + cast() (it.display_name.count + 1) * font.width + 3 * MARGIN
+        
+        x = it.rect.right
     }
 }
 
-file_editor: Editor
-command_editor: Editor
-editor_label: string
-
-active_editor: *Editor
-
-set_editor_bounds :: (width: f32, height: f32) {
-    command_editor.bounds.top    = height - font.height - 2 * MARGIN
-    command_editor.bounds.bottom = height
-    command_editor.bounds.left   = font.width * cast() editor_label.count + 2 * MARGIN
-    command_editor.bounds.right  = width
-    
-    file_editor.bounds.top    = 0
-    file_editor.bounds.right  = width
-    file_editor.bounds.left   = font.width * 5 + 2 * MARGIN
-    file_editor.bounds.bottom = command_editor.bounds.top
+rectangle_contains :: (using rectangle: Rectangle, x: f32, y: f32) -> bool {
+    return top <= y && y < bottom && left <= x && x < right
 }
 
-activate_command_editor :: (state: type_of(command_state), label: string, text: string, select := true) {
-    active_editor = *command_editor
-    command_state = state
-    
-    editor_label = label
-    
-    set_editor_text(active_editor, text)
-    
-    active_editor.cursor = text.count
-    if select
-        active_editor.selection = 0
-       
-    update_cursor(active_editor)
+tab_is_saved :: (using tab: *Tab) -> bool {
+    return file_editor.save_change_index == file_editor.change_count
 }
 
-deactivate_command_editor :: () {
-    active_editor = *file_editor
-    command_state = .NONE
+close_tab :: (index: u64) {
+    using tab := tabs[index]
     
-    command_editor.text.count = 0
-    command_editor.cursor = 0
-    command_editor.selection = 0
-    
-    recompute_lines(*command_editor)
-}
+    free_editor(file_editor)
+    free_editor(command_editor)
+    free_string(filename)
+    free(tab)
 
-draw :: () {
-    if !gl_context.handle
-        return;
-    
-    if active_editor == *file_editor {
-        row, col := cursor_pos(*file_editor)
-        editor_label = sprint("%:%,%", get_final_path_name(file_editor.filename), row + 1, col + 1)
-    }
+    tabs.count -= 1
 
-    set_editor_bounds(cast() window.width, cast() window.height)
-    
-    compute_colors(*file_editor)
-    
-    if command_is_valid()
-        set_plain_color(*command_editor, TEXT_COLOR)
-    else
-        set_plain_color(*command_editor, ERROR_COLOR)
-    
-    
-    update_scroll_limits(*file_editor)
-    update_scroll_limits(*command_editor)
-    
-    glClearColor(COLORS[BACKGROUND_COLOR][0], COLORS[BACKGROUND_COLOR][1], COLORS[BACKGROUND_COLOR][1], 1.0)
-    glClear(GL_COLOR_BUFFER_BIT)
-    
-    draw_editor(*file_editor, BACKGROUND_COLOR)
-    draw_editor(*command_editor, MENU_COLOR)
-    
-    {
-        set_region(.{top = file_editor.bounds.top, left = 0, bottom = file_editor.bounds.bottom, right = file_editor.bounds.left}, MENU_COLOR)
-        
-        glPushMatrix()
-        defer glPopMatrix()
-        glTranslatef(MARGIN, -file_editor.scroll_y + file_editor.bounds.top, 0)
-        
-        first_line, last_line := get_visible_range(*file_editor)
-        
-        begin_draw    (textured = true)
-        defer end_draw(textured = true)
-        
-        y: f32 = cast() first_line * font.height
-        for first_line .. last_line {
-            x: f32 = 0
-            
-            line_number := u64_to_string(it + 1)
-            defer free_string(line_number)
-            
-            for line_number {
-                draw_character(*x, *y, it, TEXT_COLOR)
-            }
-            
-            y += font.height
-        
-        }
+    for * tabs[index .. tabs.count] {
+        it[0] = it[1]
     }
     
-    {
-        set_region(.{top = command_editor.bounds.top, left = 0, bottom = command_editor.bounds.bottom, right = command_editor.bounds.left}, MENU_COLOR)
-        
-        glPushMatrix()
-        defer glPopMatrix()
-        glTranslatef(MARGIN, command_editor.bounds.top + MARGIN + font.ascent, 0)
-        
-        begin_draw    (textured = true)
-        defer end_draw(textured = true)
-        
-        y: f32 = 0
-        x: f32 = 0
-        
-        for editor_label {
-            draw_character(*x, *y, it, TEXT_COLOR)
-        }
+    if tabs.count == 0 {
+        close_window(window)
+    } else if current_tab == index {
+        current_tab = tabs.count - 2
     }
     
-    swap_buffers(gl_context)
-    
-    if active_editor == *file_editor {
-        free_string(editor_label)
-    }
+    update_tab_bounds()
 }
 
-command_state: enum {
-    NONE
-    FIND
-    REPLACE_SET_QUERY
-    REPLACE
-    GOTO
-    ALIGN
-    SAVE_BEFORE_CLOSE
-}
-
-replace_query_string: string
-
-command_is_valid :: () -> bool {
-    file_text := cast(string) cast([]u8) file_editor.text
-    command_text := cast(string) cast([]u8) command_editor.text
-
-    if command_state == {
-        case .REPLACE_SET_QUERY #through
-        case .FIND
-            if !command_text
-                return false
-                
-            index, found := find_first(s = file_text, find = command_text)
-            
-            return found
-        case .REPLACE
-            index, found := find_first(s = file_text, find = replace_query_string)
-            
-            return found
-        case .GOTO
-            if !command_text
-                return false
-                
-            before, after, found := split_at_first(command_text, ',')
-            if found {
-                if !before || !after
-                    return false
-                
-                _, remaining := read_u64(before)
-                
-                if remaining
-                    return false
-                
-                _, remaining = read_u64(after)
-                
-                return !remaining
-            } else {
-                _, remaining := read_u64(command_text)
-                
-                return !remaining
-            }
-        case .ALIGN
-            if !command_text
-                return false
-        
-            row := cursor_pos(*file_editor)
-            
-            index, found := find_first(s = file_editor.lines[row], find = command_text)
-            
-            return found
-        case .SAVE_BEFORE_CLOSE
-            if !command_text
-                return false
-            
-            else if command_text[0] == {
-                case 'y' #through
-                case 'Y' #through
-                case 'n' #through
-                case 'N' return true
-                else     return false
-            }
-        else
+go_to_next_unsaved_tab :: () -> bool {
+    while tabs.count {
+        if tab_is_saved(tabs[0]) {
+            close_tab(0)
+        } else {
+            current_tab = 0
             return true
+        }
     }
+    
+    return false
 }
 
-do_find :: (find: string, modifiers: Modifiers) {
-    file_text := cast(string) cast([]u8) file_editor.text
+steal_command_editor :: (using tab: *Tab) -> Editor {
+    result := command_editor
+    command_editor = .{}
+    set_editor_text(*command_editor, "")
     
-    if modifiers & .SHIFT {
-        start := min(file_editor.cursor, file_editor.selection)
-    
-        index, found := find_last(s = file_text[..start], find = find)
-        
-        if !found {
-            index, found = find_last(s = file_text[start..], find = find)
-            index += start
-        }
-        
-        if found {
-            break_transaction_combining(*file_editor)
-            file_editor.cursor    = index + find.count
-            file_editor.selection = index
-        
-            update_cursor(*file_editor)
-        }
-    } else {
-        start := max(file_editor.cursor, file_editor.selection)
-    
-        index, found := find_first(s = file_text[start .. ], find = find)
-        
-        if found
-            index += start
-        else
-            index, found = find_first(s = file_text[.. start], find = find)
-        
-        
-        if found {
-            break_transaction_combining(*file_editor)
-            file_editor.cursor    = index + find.count
-            file_editor.selection = index
-        
-            update_cursor(*file_editor)
-        }
-    }
-}
-
-do_goto :: (goto: string) {
-    row := read_u64(goto)
-    if row > 0
-        row -= 1
-    
-    row = min(row, file_editor.lines.count - 1)
-    col := file_editor.lines[row].count
-        
-    before, after, found := split_at_first(goto, ',')
-    
-    if found {
-        col = read_u64(after)
-        
-        if col > 0
-            col -= 1
-    }
-    
-    set_cursor_pos(*file_editor, row, col)
-    file_editor.selection = file_editor.cursor
-    update_cursor(*file_editor)
+    return result
 }
 
 main :: () {
+
     AttachConsole(ATTACH_PARENT_PROCESS)
-    active_editor = *file_editor
     
     args := get_command_line_arguments()
     
-    if args.count != 2 {
+    if args.count > 2 {
         print("Usage: % <filename>", args[0])
+        print("       %",            args[0])
         return;
     }
+    
+    full_path := ""
+    
+    if args.count >= 2
+        full_path = get_full_path(args[1])
+    
+    receive_pipe = CreateNamedPipeA(PIPE_NAME.data, 
+                                     PIPE_ACCESS_INBOUND | cast() FILE_FLAG_FIRST_PIPE_INSTANCE | cast() FILE_FLAG_OVERLAPPED, 
+                                     PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 
+                                     1, 0, 64 * 1024)
+                                     
+    if receive_pipe == INVALID_HANDLE_VALUE {
+        if full_path {
+            open_existing_instance(full_path)
+        }
+        return
+    }
+    defer CloseHandle(receive_pipe)
+    
+    ConnectNamedPipe(receive_pipe, *pipe_connect_overlapped)
+                                     
     
     window = create_window("Milo Edit", 1600, 900)
     window.draw = draw
     window.destroy_on_close = false
     
-    cursor := LoadCursorW(null, IDC_IBEAM)
-    SetClassLongPtrW(window.handle, GCLP_HCURSOR, cast() cursor)
+    text_cursor  := LoadCursorW(null, IDC_IBEAM)
+    arrow_cursor := LoadCursorW(null, IDC_ARROW)
+    
+    current_cursor := arrow_cursor
+    
     icon := LoadImageW(null, to_windows_string(get_path_relative_to_executable("milo_edit.ico")).data, IMAGE_ICON, 0, 0, LR_DEFAULTSIZE | LR_LOADFROMFILE)
     SetClassLongPtrW(window.handle, GCLP_HICON, cast() icon)
     SetTimer(window.handle, 1, 10)
@@ -2542,171 +542,99 @@ main :: () {
     
     last_cursor_active := false
     
-    load(*file_editor, args[1])
-    set_editor_text(*command_editor, "")
-    
     show_window(window)
-    {
-        config_data, success := read_entire_file(config_file)
-        
-        if success {
-            valid, config := read_settings(Config_Info, config_data)
-            
-            if valid {
-                SetWindowPlacement(window.handle, *config.placement)
-                
-                if IsIconic(window.handle) {
-                    bring_to_top(window)
-                }
-            }
-        }
-    }
     
-    while wait_events(window) {
-        had_event := window.events.count != 0
+    load_session(config_file)
+    
+    if full_path
+        open_or_load_tab(full_path)
+
+    if !tabs.count
+        return;
+    
+    while outer: wait_events(window) {
+        redraw_needed := window.events.count != 0
+        
+        redraw_needed |= check_pipe_for_file_open()
     
         for event: get_window_events(window) {
+            using tab := tabs[current_tab]
             if event.kind == {
                 case .CLOSE
-                    if file_editor.save_change_index == file_editor.change_count || command_state == .SAVE_BEFORE_CLOSE {
-                        config: Config_Info
-                        
-                        GetWindowPlacement(window.handle, *config.placement)
-                        write_entire_file(config_file, .{data = cast() *config, count = size_of(Config_Info)})
-                        
-                        
+                    if command_state == .SAVE_BEFORE_CLOSE_ALL {
                         close_window(window)
                     } else {
-                        bring_to_top(window)
-                        activate_command_editor(.SAVE_BEFORE_CLOSE, "Save before close (y/n/ESC to cancel)? ", "y")
+                        save_session(config_file)
+                    
+                        current_tab = 0
+                        
+                        if !go_to_next_unsaved_tab() {
+                            close_window(window)
+                        } else {
+                            bring_to_top(window)
+                            activate_command_editor(tabs[current_tab], .SAVE_BEFORE_CLOSE_ALL, SAVE_BEFORE_CLOSE_TEXT, "y")   
+                        }
                     }
                 case .KEY {
-                    using event.key
-                
-                    file_text := cast(string) cast([]u8) file_editor.text
-                    command_text := cast(string) cast([]u8) command_editor.text
-                    
-                    if down if key == {
-                        case .ENTER                        
-                            if active_editor == *file_editor {
-                                editor_event(active_editor, event)
-                            } else if command_is_valid() if command_state == {
-                                case .FIND
-                                    do_find(command_text, modifiers)
-                                case .GOTO
-                                    do_goto(command_text)
-                                    deactivate_command_editor()
-                                case .REPLACE_SET_QUERY
-                            
-                                    free_string(replace_query_string)
-                                    replace_query_string = copy_string(cast() cast([]u8) command_editor.text)
-                                    activate_command_editor(.REPLACE, "Replace: ", "")
-                                    
-                                case .REPLACE
-                                    
-                                    selected_text, selection_start, selection_end := get_selected_text(*file_editor)
-                                    
-                                    if selected_text == replace_query_string {
-                                        begin_transaction(*file_editor)
-                                        
-                                        file_editor.cursor = selection_start
-                                        file_editor.selection = selection_end
-                                        
-                                        insert_text(*file_editor, command_text)
-                                        
-                                        end_transaction(*file_editor)
-                                        update_cursor(*file_editor)
-                                    }
-                                    
-                                    do_find(replace_query_string, modifiers)
-                                case .ALIGN
-                                    row := cursor_pos(*file_editor)
-                                    
-                                    max_col := find_first(s = file_editor.lines[row], find = command_text)
-                                    
-                                    max_line := row + 1
-                                    
-                                    while max_line < file_editor.lines.count {
-                                        index, found := find_first(s = file_editor.lines[max_line], find = command_text)
-                                        
-                                        if !found
-                                            break;
-                                        
-                                        max_col = max(max_col, index)
-                                        max_line += 1
-                                    }
-                                    
-                                    min_line := row
-                                    
-                                    while min_line > 0 {
-                                        index, found := find_first(s = file_editor.lines[min_line - 1], find = command_text)
-                                        
-                                        if !found
-                                            break;
-                                        
-                                        max_col = max(max_col, index)
-                                        min_line -= 1
-                                    }
-                                    
-                                    begin_transaction(*file_editor)
-                                    defer end_transaction(*file_editor)
-                                    for min_line .. max_line {
-                                        col := find_first(s = file_editor.lines[it], find = command_text)
-                                        
-                                        set_cursor_pos(*file_editor, it, col)
-                                        file_editor.selection = file_editor.cursor
-                                        
-                                        insert_spaces(*file_editor, max_col - col)
-                                    }
-                                    
-                                    update_cursor(*file_editor)
-                                    deactivate_command_editor()
-                                case .SAVE_BEFORE_CLOSE
-                                    
-                                    if command_text[0] == 'y' || command_text[0] == 'Y'
-                                        save(*file_editor)
-                                    
-                                    close_window(window)
-                            }
-                        case .TAB {
-                            if active_editor == *file_editor {
-                                editor_event(*file_editor, event)
-                            } else if command_is_valid() if command_state == {
-                                case .FIND #through
-                                case .REPLACE_SET_QUERY
-                                    do_find(command_text, modifiers)
-                                case .GOTO
-                                    do_goto(command_text)                                    
-                                case .REPLACE                                    
-                                    do_find(replace_query_string, modifiers)
-                                  
-                            }
-                        } case .ESCAPE
-                            deactivate_command_editor()
-                        case .R {
-                            if active_editor == *file_editor
-                                editor_event(active_editor, event)
-                            else if modifiers == .CONTROL && 
-                                    (command_state == .FIND || command_state == .REPLACE_SET_QUERY) &&
-                                    command_is_valid() {                                
-                                free_string(replace_query_string)
-                                replace_query_string = copy_string(cast() cast([]u8) command_editor.text)
-                                activate_command_editor(.REPLACE, "Replace: ", "")
-                            }
-                        } else
-                            editor_event(active_editor, event)
-                    }
+                    if command_state == .NONE
+                        editor_event(tab, *file_editor, event)
+                    else 
+                        command_editor_event(tab, event)
                 } 
                 case .SCROLL
-                    editor_event(*file_editor, event)
+                    editor_event(tab, *file_editor, event)
+                case .MOUSE {
+                    using event.mouse
+                    
+                    if rectangle_contains(active_editor(tab).bounds, cast() x, cast() y)
+                        editor_event(tab, active_editor(tab), event)
+                    else if command_state != .SAVE_BEFORE_CLOSE_ALL && command_state != .SAVE_BEFORE_CLOSE {
+                        for tabs {
+                            if (!down && button == .LEFT_MOUSE   && tab_x_button_contains(it,   cast() x, cast() y)) || 
+                               (!down && button == .MIDDLE_MOUSE && rectangle_contains(it.rect, cast() x, cast() y)) {
+                                if tab_is_saved(tabs[it_index]) {
+                                    close_tab(it_index)
+                                } else {
+                                    current_tab = it_index
+                                    activate_command_editor(tabs[it_index], .SAVE_BEFORE_CLOSE, SAVE_BEFORE_CLOSE_TEXT, "y")
+                                }
+                                
+                                break
+                            } else if down && button == .LEFT_MOUSE && rectangle_contains(it.rect, cast() x, cast() y) {
+                                current_tab = it_index
+                                break
+                            }
+                        }
+                    }
+                }
                 else
-                    editor_event(active_editor, event) 
+                    editor_event(tab, active_editor(tab), event) 
             }
+            
+            if current_tab >= tabs.count
+                break outer
         }
         
-        active_cursor := cursor_should_be_active(active_editor)
+        active_cursor := cursor_should_be_active(active_editor(tabs[current_tab]))
+        redraw_needed |= last_cursor_active != active_cursor
         
-        if had_event || last_cursor_active != active_cursor {
+        if redraw_needed {
+            using tab := tabs[current_tab]
+            
+            cursor := arrow_cursor
+            
+            if rectangle_contains(tab.file_editor.bounds, cast() window.mouse_x, cast() window.mouse_y) || 
+                (tab.command_state != .NONE && rectangle_contains(tab.command_editor.bounds, cast() window.mouse_x, cast() window.mouse_y))
+                cursor = text_cursor
+            
+            if cursor != current_cursor {
+                current_cursor = cursor
+                SetClassLongPtrW(window.handle, GCLP_HCURSOR, cast() cursor)
+                pos: POINT
+                GetCursorPos(*pos)
+                SetCursorPos(pos.x, pos.y)
+            }
+        
             last_cursor_active = active_cursor
             draw()
             set_swap_interval(1)

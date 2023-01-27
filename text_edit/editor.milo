@@ -1,0 +1,425 @@
+Undo :: struct {
+    Kind :: enum u8 {   
+        TYPING
+        BACKSPACE_OR_DELETE
+        OTHER
+    }
+
+    modifications_start: u64
+    start_cursor:        u64
+    start_selection:     u64
+    end_cursor:          u64
+    end_selection:       u64
+}
+
+Modification :: struct {
+    Kind :: enum u8 {
+        INSERT
+        DELETE
+    }
+
+    location: u64
+    using text: string
+}
+
+Editor :: struct {
+    text:   [..]u8
+    colors: []u8
+    lines_: [..]string
+    cursor:    u64
+    selection: u64
+    
+    change_count:        u64 = 1
+    colors_change_index: u64
+    lines_change_index:  u64
+    save_change_index:   u64
+    
+    modifications: [..]Modification
+    
+    redo_index: u64
+    transactions:     [..]Undo
+    current_transaction: *Undo
+    
+    bounds: Rectangle
+    scroll_x: f32
+    scroll_y: f32
+    last_cursor_move_time: f64
+}
+
+free_editor :: (using editor: Editor) {
+    array_free(text)
+    free_array(colors)
+    array_free(lines_)
+    
+    for modifications
+        if it.data
+            free_string(it)
+    
+    array_free(modifications)
+    array_free(transactions)
+}
+
+get_lines :: (using editor: *Editor) -> []string {
+    if lines_change_index != change_count
+        recompute_lines(editor)
+    
+    return lines_
+}
+
+begin_transaction :: (using editor: *Editor, kind := Undo.Kind.OTHER) {
+    if redo_index < transactions.count {
+        start_of_modifications_for_redo := transactions[redo_index].modifications_start >> 2
+        
+        for modifications[start_of_modifications_for_redo..] {
+            free_string(it)
+        }
+        
+        modifications.count = start_of_modifications_for_redo
+        transactions.count  = redo_index
+        current_transaction = null
+    }
+
+    if kind == .OTHER || !current_transaction || cast() (current_transaction.modifications_start & 0x3) != kind {
+        current_transaction = array_push(*transactions, initialized = false)
+        editor.redo_index += 1
+        
+        current_transaction.modifications_start = (modifications.count << 2) | cast() kind
+        current_transaction.start_cursor    = cursor
+        current_transaction.start_selection = selection
+    }
+}
+
+end_transaction :: (using editor: *Editor) {
+    if modifications.count == current_transaction.modifications_start >> 2 {
+        current_transaction = null
+        editor.redo_index  -= 1
+        transactions.count -= 1
+        return;
+    }
+
+    current_transaction.end_cursor    = cursor
+    current_transaction.end_selection = selection
+}
+
+break_transaction_combining :: (using editor: *Editor) {
+    current_transaction = null
+}
+
+recompute_lines :: (using editor: *Editor) {
+    lines_change_index = change_count
+    lines_.count = 0
+    
+    line := array_push(*lines_)
+    line.data = text.data
+    
+    for * text {
+        if <<it == '\n' {
+            line.count = cast() (it - line.data)
+            line = array_push(*lines_)
+            line.data = it + 1
+        }
+    }
+    
+    line.count = cast() (text.data + text.count - line.data)
+}
+
+TAB_SIZE: u64: 4
+
+leading_spaces :: (s: string) -> u64 {
+    for s {
+        if it != ' '
+            return it_index
+    }
+    
+    return s.count
+}
+
+all_spaces :: (s: string) -> bool {
+    return leading_spaces(s) == s.count
+}
+
+normalise_text :: (text: string) -> [..]u8 {
+    result: [..]u8
+    array_reserve(*result, text.count)
+    
+    remaining := text
+    
+    while remaining {
+        if remaining[0] == {
+            case '\t'
+                for TAB_SIZE
+                    array_add(*result, ' ')
+            case '\r'
+                array_add(*result, '\n')
+                if remaining.count >= 2 && remaining[1] == '\n'
+                    remaining = remaining[1..]
+            case '\n'
+                array_add(*result, '\n')
+            else if remaining[0] >= Font.FIRST_CHAR && remaining[0] <= Font.LAST_CHAR
+                array_add(*result, remaining[0])
+        }
+        remaining = remaining[1..]
+    }
+    
+    return result
+}
+
+grow_to :: (using editor: *Editor, size: u64) {
+    new_size := max(text.capacity, 1024)
+    
+    while new_size < size
+        new_size *= 2
+        
+    array_reserve(*text, new_size)
+}
+
+delete_selection :: (using editor: *Editor) {
+    if selection < cursor {
+        delete_count := cursor - selection
+        cursor = selection
+        delete_text(editor, delete_count)        
+    } else if selection > cursor {
+        delete_text(editor, selection - cursor)
+        selection = cursor
+    }
+}
+
+insert_text :: (using editor: *Editor, insert: string) {
+    delete_selection(editor)
+    
+    if !insert.count return;
+    grow_to(editor, text.count + insert.count)
+    
+    i := text.count
+    
+    while i > cursor {
+        i -= 1
+        
+        text[i + insert.count] = text[i]
+    }
+    
+    change_count += 1
+    
+    if insert.data {
+        memory_copy(*text[cursor], insert.data, insert.count)
+    } else {
+        fill_array(text[cursor .. cursor + insert.count], ' ')
+    }
+    
+    if current_transaction
+        array_add(*modifications, .{(cursor << 1) | cast() Modification.Kind.INSERT, copy_string(insert)})
+    
+    text.count += insert.count
+    cursor     += insert.count
+    selection = cursor
+}
+
+insert_spaces :: (using editor: *Editor, count: u64) {
+    insert_text(editor, .{count = count})
+}
+
+delete_text :: (using editor: *Editor, count: u64) {
+    if cursor >= text.count
+        return;
+
+    delete_count := min(count, text.count - cursor)
+    
+    if !delete_count
+        return;
+    
+    change_count += 1
+    
+    if current_transaction
+        array_add(*modifications, .{(cursor << 1) | cast() Modification.Kind.DELETE, copy_string(cast() text[cursor .. cursor + delete_count])})
+    
+    for cursor + delete_count .. text.count {
+        text[it - delete_count] = text[it]
+    }
+    
+    text.count -= delete_count
+}
+
+insert_char :: (using editor: *Editor, char: u8) {
+    char_ := char
+    
+    insert_text(editor, .{data = *char_, count = 1})
+}
+
+Char_Type :: enum {
+    WORD
+    SYMBOL
+    SPACE
+    NEWLINE
+}
+
+is_word_character :: (char: u8) -> bool {
+    return char == '_' ||
+           ('0' <= char && char <= '9') ||
+           ('a' <= char && char <= 'z') ||
+           ('A' <= char && char <= 'Z')
+}
+
+get_char_type :: (char: u8) -> Char_Type {
+    if char == {
+        case ' '
+            return .SPACE
+        case '\n'
+            return .NEWLINE
+        else if is_word_character(char)
+            return .WORD
+        else
+            return .SYMBOL
+    }
+}
+
+find_boundary_left :: (using editor: *Editor, strict := false) -> u64 {
+    if cursor == 0
+        return 0
+
+    i := cursor
+    
+    previous_type := get_char_type(text[i - 1])
+    
+    while i > 0 {
+        char_type := get_char_type(text[i - 1])
+        
+        if (strict || previous_type != .SPACE) && previous_type != char_type
+            break;
+
+        previous_type = char_type
+        
+        i -= 1
+    }
+    
+    return i
+}
+
+find_boundary_right :: (using editor: *Editor, strict := false) -> u64 {
+    if cursor == text.count
+        return text.count
+    
+    i := cursor
+    
+    previous_type := get_char_type(text[i])
+    
+    while i < text.count {
+        char_type := get_char_type(text[i])
+        
+        if previous_type != char_type && (strict || char_type != .SPACE)
+            break;
+            
+        previous_type = char_type
+        
+        i += 1
+    }
+        
+    return i
+}
+
+cursor_pos :: (using editor: *Editor) -> (u64, u64) {
+    row, col := location_pos(editor, cursor)
+    
+    return row, col
+}
+
+get_offset :: (using editor: *Editor, row: u64, col: u64) -> u64 {
+    lines := get_lines(editor)
+
+    row_ := min(row, lines.count - 1)
+    col_ := min(col, lines[row].count)
+
+    return cast() (*lines[row_][col_] - text.data)
+    
+}
+
+set_cursor_pos :: (using editor: *Editor, row: u64, col: u64) {
+    cursor = get_offset(editor, row, col)
+}
+
+location_pos :: (using editor: *Editor, location: u64) -> (u64, u64) {
+    lines := get_lines(editor)
+    
+    low: u64 = 0
+    high := lines.count
+    
+    while low != high {
+        mid := (low + high) / 2
+        
+        line := lines[mid]
+        line_start := cast(u64) (line.data - text.data)
+        
+        if location < line_start {
+            high = mid
+        } else if location > line_start + line.count {
+            low = mid
+        } else {
+            return mid, location - line_start
+        }
+    }
+    
+    assert(false)
+    return lines.count - 1, lines[lines.count - 1].count
+}
+
+is_tab :: (using editor: *Editor, location: u64) -> bool {
+    lines := get_lines(editor)
+
+    row, col := location_pos(editor, location)
+    
+    if col % TAB_SIZE != 0
+        return false
+        
+    if col + TAB_SIZE > lines[row].count
+        return false
+        
+    return all_spaces(lines[row][col .. col + TAB_SIZE])
+}
+
+set_editor_text :: (using editor: *Editor, new_text: string) {
+    grow_to(editor, new_text.count)
+    
+    memory_copy(text.data, new_text.data, new_text.count)
+    text.count = new_text.count
+    cursor              = 0
+    selection           = 0
+    change_count        = 1
+    save_change_index   = 1
+    lines_change_index  = 0
+    colors_change_index = 0
+    redo_index          = 0
+    transactions.count  = 0
+    modifications.count = 0
+    current_transaction = null
+    scroll_x            = MARGIN
+    scroll_y            = MARGIN + font.ascent
+    
+    update_cursor(editor)
+}
+
+get_indentation :: (using editor: *Editor, row: u64) -> u64 {
+    lines := get_lines(editor)
+
+    current_row := row
+    
+    while true {
+        for lines[current_row]
+            if it != ' '
+                return it_index
+                
+        if current_row == 0
+            break;
+            
+        current_row -= 1
+    }
+    
+    return 0
+}
+
+get_selected_text :: (using editor: *Editor) -> (string, u64, u64) {
+    selection_start := min(cursor, selection)
+    selection_end   := max(cursor, selection)
+    
+    selected_text := text[selection_start .. selection_end]
+    
+    return cast() selected_text, selection_start, selection_end
+}

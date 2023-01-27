@@ -398,6 +398,8 @@ GWLP_USERDATA :: -21
 SetWindowLongPtrW :: (hWnd: HWND, nIndex: s32, dwNewLong: s64) -> s64 #external "user32"
 GetWindowLongPtrW :: (hWnd: HWND, nIndex: s32) -> s64 #external "user32"
 
+SetWindowTextW :: (hWnd: HWND, lpString: *u16) -> s32 #external "user32"
+
 GCLP_HCURSOR :: -12
 GCLP_HICON   :: -14
 
@@ -769,6 +771,8 @@ SECURITY_ATTRIBUTES :: struct {
     bInheritHandle: s32
 }
 
+GetOverlappedResult :: (hFile: HANDLE, lpOverlapped: *OVERLAPPED, lpNumberOfBytesTransferred: *u32, bWait: s32) -> s32 #external "kernel32"
+
 OVERLAPPED :: struct {
     Internal: u64
     InternalHigh: u64
@@ -793,7 +797,9 @@ CloseHandle :: (hObject: HANDLE) -> s32 #external "kernel32"
 
 CreateFileW :: (lpFileName: *u16, dwDesiredAccess: Access_Flags, dwShareMode: File_Share_Flag, lpSecurityAttributes: *SECURITY_ATTRIBUTES = null, 
                 dwCreationDisposition: File_Create_Option, dwFlagsAndAttributes: File_Flag, hTemplateFile: HANDLE = null) -> HANDLE #external "kernel32"
-                
+CreateFileA :: (lpFileName: *u8, dwDesiredAccess: Access_Flags, dwShareMode: File_Share_Flag, lpSecurityAttributes: *SECURITY_ATTRIBUTES = null, 
+                dwCreationDisposition: File_Create_Option, dwFlagsAndAttributes: File_Flag, hTemplateFile: HANDLE = null) -> HANDLE #external "kernel32"
+               
 GetFileSizeEx :: (hFile: HANDLE, lpFileSize: *s64) -> s32 #external "kernel32"
 
 ReadFile :: (hFile: HANDLE, lpBuffer: *void, nNumberOfBytesToRead: u32, lpNumberOfBytesRead: *u32, lpOverlapped: *OVERLAPPED = null) -> s32 #external "kernel32"
@@ -804,6 +810,7 @@ FindNextFileW :: (lpFindFile: HANDLE, lpFindFileData: *WIN32_FIND_DATAW) -> s32 
 FindClose :: (lpFindFile: HANDLE) -> s32 #external "kernel32"
 
 GetFullPathNameW :: (lpFileName: *u16, nBufferLength: u32, lpBuffer: *u16, lpFilePart: **u16) -> u32 #external "kernel32"
+GetLongPathNameW :: (lpszShortPath: *u16, lpszLongPath: *u16, cchBuffer: u32) -> u32 #external "kernel32"
 
 FILETIME :: struct {
     dwLowDateTime:  u32
@@ -872,20 +879,19 @@ using File_Flag :: enum_flags u32 {
     FILE_ATTRIBUTE_VIRTUAL               :: 0x0001_0000
     FILE_ATTRIBUTE_NO_SCRUB_DATA         :: 0x0002_0000
     FILE_ATTRIBUTE_RECALL_ON_OPEN        :: 0x0004_0000
-    FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS :: 0x0040_0000 // This is not a mistake, there is a file attribute in the middle of the file flags range
-
-    FILE_FLAG_OPEN_NO_RECALL     :: 0x0010_0000
-    FILE_FLAG_OPEN_REPARSE_POINT :: 0x0020_0000
-    // This gap contains FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS for some reason
-    FILE_FLAG_SESSION_AWARE      :: 0x0080_0000
-    FILE_FLAG_POSIX_SEMANCTICS   :: 0x0100_0000
-    FILE_FLAG_BACKUP_SEMANTICS   :: 0x0200_0000
-    FILE_FLAG_DELETE_ON_CLOSE    :: 0x0400_0000
-    FILE_FLAG_SEQUENTIAL_SCAN    :: 0x0800_0000
-    FILE_FLAG_RANDOM_ACCESS      :: 0x1000_0000
-    FILE_FLAG_NO_BUFFERING       :: 0x2000_0000
-    FILE_FLAG_OVERLAPPED         :: 0x4000_0000
-    FILE_FLAG_WRITETHROUGH       :: 0x8000_0000
+    FILE_FLAG_FIRST_PIPE_INSTANCE        :: 0x0008_0000
+    FILE_FLAG_OPEN_NO_RECALL             :: 0x0010_0000
+    FILE_FLAG_OPEN_REPARSE_POINT         :: 0x0020_0000
+    FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS :: 0x0040_0000
+    FILE_FLAG_SESSION_AWARE              :: 0x0080_0000
+    FILE_FLAG_POSIX_SEMANCTICS           :: 0x0100_0000
+    FILE_FLAG_BACKUP_SEMANTICS           :: 0x0200_0000
+    FILE_FLAG_DELETE_ON_CLOSE            :: 0x0400_0000
+    FILE_FLAG_SEQUENTIAL_SCAN            :: 0x0800_0000
+    FILE_FLAG_RANDOM_ACCESS              :: 0x1000_0000
+    FILE_FLAG_NO_BUFFERING               :: 0x2000_0000
+    FILE_FLAG_OVERLAPPED                 :: 0x4000_0000
+    FILE_FLAG_WRITETHROUGH               :: 0x8000_0000
 }
 
 AttachConsole :: (dwProcessId: u32) -> s32 #external "kernel32"
@@ -991,6 +997,7 @@ using Console_Mode :: enum_flags u32 {
 SetConsoleMode :: (hConsoleHandle: HANDLE, dwMode:  Console_Mode) -> s32 #external "kernel32"
 GetConsoleMode :: (hConsoleHandle: HANDLE, lpMode: *Console_Mode) -> s32 #external "kernel32"
 
+FlashWindow :: (hWnd: HWND, bInvert: s32 = 0) -> s32 #external "user32"
 DwmSetWindowAttribute :: (hWnd: HWND, dwAttribute: DWMWINDOWATTRIBUTE, pvAttribute: *void, cbAttribute: u32) -> s32 #external "dwmapi"
 
 using DWMWINDOWATTRIBUTE  :: enum u32 {
@@ -1020,3 +1027,45 @@ using DWMWINDOWATTRIBUTE  :: enum u32 {
     DWMWA_SYSTEMBACKDROP_TYPE
     DWMWA_LAST
 }
+
+using Pipe_Access :: enum_flags u32 {
+    PIPE_ACCESS_INBOUND  :: 0x1
+    PIPE_ACCESS_OUTBOUND :: 0x2
+    PIPE_ACCESS_DUPLEX   :: PIPE_ACCESS_INBOUND | PIPE_ACCESS_OUTBOUND
+    
+    WRITE_DAC              :: 0x00040000
+    WRITE_OWNER            :: 0x00080000
+    ACCESS_SYSTEM_SECURITY :: 0x01000000
+}
+
+using Pipe_Mode :: enum_flags u32 {
+    PIPE_TYPE_BYTE    :: 0x0
+    PIPE_TYPE_MESSAGE :: 0x4
+    
+    PIPE_READMODE_BYTE    :: 0x0
+    PIPE_READMODE_MESSAGE :: 0x2
+    
+    PIPE_WAIT   :: 0x0
+    PIPE_NOWAIT :: 0x1
+    
+    PIPE_ACCEPT_REMOTE_CLIENTS :: 0x0
+    PIPE_REJECT_REMOTE_CLIENTS :: 0x8
+}
+
+PIPE_UNLIMITED_INSTANCES :: 255
+
+NMPWAIT_USE_DEFAULT_WAIT :: 0
+NMPWAIT_WAIT_FOREVER     :: 0xFFFF_FFFF
+
+CreateNamedPipeA :: (lpName: *u8, dwOpenMode: Pipe_Access, dwPipeMode: Pipe_Mode, nMaxInstances: u32 = PIPE_UNLIMITED_INSTANCES, nOutBufferSize: u32, 
+                     nInBufferSize: u32, nDefaultTimeout: u32 = NMPWAIT_WAIT_FOREVER, lpSecurityAttributes: *SECURITY_ATTRIBUTES = null) -> HANDLE #external "kernel32"
+                     
+ConnectNamedPipe    :: (hNamedPipe: HANDLE, lpOverlapped: *OVERLAPPED) -> s32 #external "kernel32"
+DisconnectNamedPipe :: (hNamedPipe: HANDLE, lpOverlapped: *OVERLAPPED) -> s32 #external "kernel32"
+
+CreateEventA :: (lpEventAttributes: *SECURITY_ATTRIBUTES = null, bManualReset: s32 = 0, bInitalState: s32 = 0, lpName: *u8 = null) -> HANDLE #external "kernel32"
+
+GetCursorPos :: (lpPoint: *POINT) -> s32 #external "kernel32"
+SetCursorPos :: (X: s32, Y: s32) -> s32 #external "kernel32"
+
+GetCaretBlinkTime :: ()  -> u32 #external "user32"

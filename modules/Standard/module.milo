@@ -314,7 +314,7 @@ array_copy :: (using array: []$T) -> []T {
 	return result
 }
 
-array_contains :: (using array: []$T, value: T) {
+array_contains :: (using array: []$T, value: T) -> bool {
 	for array if it == value return true
 	return false
 }

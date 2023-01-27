@@ -1,381 +1,407 @@
 #import "Standard"
 
 read_line :: (s: string) -> (line: string, remaining: string) {
-	remaining := s
-	line := s
-	line.count = 0
+    remaining := s
+    line := s
+    line.count = 0
 
-	while remaining && remaining[0] != '\r' && remaining[0] != '\n' {
-		remaining = remaining[1..]
-		line.count += 1
-	}
-	
-	if remaining.count >= 2 && remaining[0..2] == "\r\n"
-		remaining = remaining[2..]
-	else if remaining
-		remaining = remaining[1..]
-		
-	return line, remaining
+    while remaining && remaining[0] != '\r' && remaining[0] != '\n' {
+        remaining = remaining[1..]
+        line.count += 1
+    }
+    
+    if remaining.count >= 2 && remaining[0..2] == "\r\n"
+        remaining = remaining[2..]
+    else if remaining
+        remaining = remaining[1..]
+        
+    return line, remaining
 }
 
 begins_with :: (s: string, prefix: string) -> bool {
-	return prefix.count <= s.count && s[..prefix.count] == prefix
-	
+    return prefix.count <= s.count && s[..prefix.count] == prefix
+    
 }
 
 is_whitespace :: (c: u32) -> bool {
-	if c == {
-		case ' '  #through
-		case '\n' #through
-		case '\t' #through
-		case '\r' #through
-		case '\f' #through
-		case '\v' #through
-		case '\u85' #through
-		case '\uA0' #through
-		case '\u1680' #through // not actually blank but still considered whitespace by unicode
-		case '\u2000' #through
-		case '\u2001' #through
-		case '\u2002' #through
-		case '\u2003' #through
-		case '\u2004' #through
-		case '\u2005' #through
-		case '\u2006' #through
-		case '\u2007' #through
-		case '\u2008' #through
-		case '\u2009' #through
-		case '\u200A' #through
-		case '\u2028' #through
-		case '\u2029' #through
-		case '\u202F' #through
-		case '\u205F' #through
-		case '\u3000'
-			return true
-		else
-			return false
-	}
+    if c == {
+        case ' '  #through
+        case '\n' #through
+        case '\t' #through
+        case '\r' #through
+        case '\f' #through
+        case '\v' #through
+        case '\u85' #through
+        case '\uA0' #through
+        case '\u1680' #through // not actually blank but still considered whitespace by unicode
+        case '\u2000' #through
+        case '\u2001' #through
+        case '\u2002' #through
+        case '\u2003' #through
+        case '\u2004' #through
+        case '\u2005' #through
+        case '\u2006' #through
+        case '\u2007' #through
+        case '\u2008' #through
+        case '\u2009' #through
+        case '\u200A' #through
+        case '\u2028' #through
+        case '\u2029' #through
+        case '\u202F' #through
+        case '\u205F' #through
+        case '\u3000'
+            return true
+        else
+            return false
+    }
 }
 
 trim_leading_whitespace :: (s: string) -> string {
-	remaining := s
-	
-	while remaining {
-		if remaining[0] < 128 {
-			if is_whitespace(remaining[0])
-				remaining = remaining[1..]
-			else 
-				break
-		} else {
-			// unicode slow path
-			c, after := read_character(s)
-			
-			if is_whitespace(c)
-				remaining = after
-			else
-				break
-		}
-	}
-	
-	return remaining
+    remaining := s
+    
+    while remaining {
+        if remaining[0] < 128 {
+            if is_whitespace(remaining[0])
+                remaining = remaining[1..]
+            else 
+                break
+        } else {
+            // unicode slow path
+            c, after := read_character(s)
+            
+            if is_whitespace(c)
+                remaining = after
+            else
+                break
+        }
+    }
+    
+    return remaining
 }
 
 Utf8_Constants :: struct {
-	ONE_BYTE:           u8: 0b0000_0000
-	ONE_BYTE_MASK:      u8: 0b1000_0000
-	
-	TWO_BYTE:           u8: 0b1100_0000
-	TWO_BYTE_MASK:      u8: 0b1110_0000
-	
-	THREE_BYTE:         u8: 0b1110_0000
-	THREE_BYTE_MASK:    u8: 0b1111_0000
-	
-	FOUR_BYTE:          u8: 0b1111_0000
-	FOUR_BYTE_MASK:     u8: 0b1111_1000
-	
-	TRAILING_BYTE:      u8: 0b1000_0000
-	TRAILING_BYTE_MASK: u8: 0b1100_0000	
+    ONE_BYTE:           u8: 0b0000_0000
+    ONE_BYTE_MASK:      u8: 0b1000_0000
+    
+    TWO_BYTE:           u8: 0b1100_0000
+    TWO_BYTE_MASK:      u8: 0b1110_0000
+    
+    THREE_BYTE:         u8: 0b1110_0000
+    THREE_BYTE_MASK:    u8: 0b1111_0000
+    
+    FOUR_BYTE:          u8: 0b1111_0000
+    FOUR_BYTE_MASK:     u8: 0b1111_1000
+    
+    TRAILING_BYTE:      u8: 0b1000_0000
+    TRAILING_BYTE_MASK: u8: 0b1100_0000    
 }
 
 // Read a charcter from a UTF-8 string as a UTF codepoint, returns cast(u32)-1 on failure
 read_character :: (s: string) -> (character: u32, remaining: string) {
-	using Utf8_Constants
+    using Utf8_Constants
 
-	if !s return cast() -1, s
-	
-	first := cast(u32) s[0]
+    if !s return cast() -1, s
+    
+    first := cast(u32) s[0]
 
-	if first & ONE_BYTE_MASK == ONE_BYTE { // Single byte character
-		return first, s[1..]
-	} else if first & TWO_BYTE_MASK == TWO_BYTE {
-		first &= ~TWO_BYTE_MASK
-	
-		if s.count < 2 return cast() -1, s
-		
-		second := cast(u32) s[1]
-		
-		if second & TRAILING_BYTE_MASK != TRAILING_BYTE return cast() -1, s
-		
-		second &= ~TRAILING_BYTE_MASK
-		return first << 6 | second, s[2..]
-	} else if first & THREE_BYTE_MASK == THREE_BYTE {
-		first &= ~THREE_BYTE_MASK
-		
-		if s.count < 3 return cast() -1, s
-		
-		second := cast(u32) s[1]
-		third  := cast(u32) s[2]
-		
-		if second & TRAILING_BYTE_MASK != TRAILING_BYTE return cast() -1, s
-		if third  & TRAILING_BYTE_MASK != TRAILING_BYTE return cast() -1, s
-		
-		second &= ~TRAILING_BYTE_MASK
-		third  &= ~TRAILING_BYTE_MASK
-		
-		return first << 12 | second << 6 | third, s[3..]
-	} else if first & FOUR_BYTE_MASK == FOUR_BYTE {
-		first &= ~FOUR_BYTE_MASK
-		
-		if s.count < 4 return cast() -1, s
-		
-		second  := cast(u32) s[1]
-		third   := cast(u32) s[2]
-		fourth  := cast(u32) s[3]
-		
-		if second & TRAILING_BYTE_MASK != TRAILING_BYTE return cast() -1, s
-		if third  & TRAILING_BYTE_MASK != TRAILING_BYTE return cast() -1, s
-		if fourth & TRAILING_BYTE_MASK != TRAILING_BYTE return cast() -1, s
-		
-		second &= ~TRAILING_BYTE_MASK
-		third  &= ~TRAILING_BYTE_MASK
-		fourth &= ~TRAILING_BYTE_MASK
-		
-		return first << 18 | second << 12 | third << 6 | fourth, s[4..]
-	} else {
-		return cast() -1, s
-	}
+    if first & ONE_BYTE_MASK == ONE_BYTE { // Single byte character
+        return first, s[1..]
+    } else if first & TWO_BYTE_MASK == TWO_BYTE {
+        first &= ~TWO_BYTE_MASK
+    
+        if s.count < 2 return cast() -1, s
+        
+        second := cast(u32) s[1]
+        
+        if second & TRAILING_BYTE_MASK != TRAILING_BYTE return cast() -1, s
+        
+        second &= ~TRAILING_BYTE_MASK
+        return first << 6 | second, s[2..]
+    } else if first & THREE_BYTE_MASK == THREE_BYTE {
+        first &= ~THREE_BYTE_MASK
+        
+        if s.count < 3 return cast() -1, s
+        
+        second := cast(u32) s[1]
+        third  := cast(u32) s[2]
+        
+        if second & TRAILING_BYTE_MASK != TRAILING_BYTE return cast() -1, s
+        if third  & TRAILING_BYTE_MASK != TRAILING_BYTE return cast() -1, s
+        
+        second &= ~TRAILING_BYTE_MASK
+        third  &= ~TRAILING_BYTE_MASK
+        
+        return first << 12 | second << 6 | third, s[3..]
+    } else if first & FOUR_BYTE_MASK == FOUR_BYTE {
+        first &= ~FOUR_BYTE_MASK
+        
+        if s.count < 4 return cast() -1, s
+        
+        second  := cast(u32) s[1]
+        third   := cast(u32) s[2]
+        fourth  := cast(u32) s[3]
+        
+        if second & TRAILING_BYTE_MASK != TRAILING_BYTE return cast() -1, s
+        if third  & TRAILING_BYTE_MASK != TRAILING_BYTE return cast() -1, s
+        if fourth & TRAILING_BYTE_MASK != TRAILING_BYTE return cast() -1, s
+        
+        second &= ~TRAILING_BYTE_MASK
+        third  &= ~TRAILING_BYTE_MASK
+        fourth &= ~TRAILING_BYTE_MASK
+        
+        return first << 18 | second << 12 | third << 6 | fourth, s[4..]
+    } else {
+        return cast() -1, s
+    }
 }
 
 get_digit :: (c: u8, base: u64 = 10) -> (u64, bool) {
-	numeral_min :: '0'
-	numeral_max := '0' - 1 + min(base, 10)
-	lower_min :: 'a'
-	lower_max := 'a' + base - 11
-	upper_min :: 'A'
-	upper_max := 'A' + base - 11
-	
-	if numeral_min <= c && c <= numeral_max
-		return c - '0', true
-	else if lower_min   <= c && c <= lower_max
-		return c - 'a', true
-	else if upper_min   <= c && c <= upper_max
-		return c - 'A', true
-	
-	return 0, false
+    numeral_min :: '0'
+    numeral_max := '0' - 1 + min(base, 10)
+    lower_min :: 'a'
+    lower_max := 'a' + base - 11
+    upper_min :: 'A'
+    upper_max := 'A' + base - 11
+    
+    if numeral_min <= c && c <= numeral_max
+        return c - '0', true
+    else if lower_min   <= c && c <= lower_max
+        return c - 'a', true
+    else if upper_min   <= c && c <= upper_max
+        return c - 'A', true
+    
+    return 0, false
 }
 
 read_u64 :: (s: string, base: u64 = 10) -> (value: u64, remaining: string) {
-	assert(2 <= base && base <= 36)
-	remaining := s
-	
-	value: u64
-	
-	
-	while remaining {
-		digit, success := get_digit(remaining[0], base)
-		
-		if !success
-			break;
-		
-		value *= base
-		value += digit
-		remaining = remaining[1..]
-	}
+    assert(2 <= base && base <= 36)
+    remaining := s
+    
+    value: u64
+    
+    
+    while remaining {
+        digit, success := get_digit(remaining[0], base)
+        
+        if !success
+            break;
+        
+        value *= base
+        value += digit
+        remaining = remaining[1..]
+    }
 
-	return value, remaining
+    return value, remaining
+}
+
+find_first :: (s: string, find: u8) -> (index: u64, found: bool) {
+    for s
+        if it == find
+            return it_index, true
+            
+    return s.count, false
 }
 
 find_first :: (s: string, find: string) -> (index: u64, found: bool) {
-	if find.count > s.count
-		return 0, false
-	
-	for s.count - find.count + 1 {
-		if s[it .. it + find.count] == find
-			return it, true
-	}
-	
-	return s.count, false
+    if find.count > s.count
+        return 0, false
+    
+    for s.count - find.count + 1 {
+        if s[it .. it + find.count] == find
+            return it, true
+    }
+    
+    return s.count, false
+}
+
+find_last :: (s: string, find: u8) -> (index: u64, found: bool) {
+    i := s.count
+    
+    while i > 0 {
+        i -= 1
+        
+        if s[i] == find
+            return i, true
+    }
+    
+    return s.count, false
 }
 
 find_last :: (s: string, find: string) -> (index: u64, found: bool) {
-	if find.count > s.count
-		return 0, false
-		
-	i := s.count - find.count + 1
-	
-	while i > 0 {
-		i -= 1
-		
-		if s[i .. i + find.count] == find
-			return i, true
-	}
-	
-	return s.count, false
+    if find.count > s.count
+        return 0, false
+        
+    i := s.count - find.count + 1
+    
+    while i > 0 {
+        i -= 1
+        
+        if s[i .. i + find.count] == find
+            return i, true
+    }
+    
+    return s.count, false
 }
 
 read_s64 :: (s: string) -> (value: s64, remaining: string) {
-	remaining := s
-	negative := false
+    remaining := s
+    negative := false
 
-	if s if s[0] == {
-		case '-' 
-			remaining = remaining[1..]
-			negative = true
-		case '+' 
-			remaining = remaining[1..]
-	}
+    if s if s[0] == {
+        case '-' 
+            remaining = remaining[1..]
+            negative = true
+        case '+' 
+            remaining = remaining[1..]
+    }
 
-	value_u64, remaining_after_u64 := read_u64(remaining)
+    value_u64, remaining_after_u64 := read_u64(remaining)
 
-	if remaining_after_u64.count == remaining.count
-		return 0, s
+    if remaining_after_u64.count == remaining.count
+        return 0, s
 
-	if (value_u64 > 0x8000_0000_0000_0000 && negative) || (value_u64 >= 0x8000_0000_0000_0000 && !negative)
-		return 0, s
+    if (value_u64 > 0x8000_0000_0000_0000 && negative) || (value_u64 >= 0x8000_0000_0000_0000 && !negative)
+        return 0, s
 
-	if negative
-		return -cast(s64) value_u64, remaining_after_u64
-	else
-		return cast(s64) value_u64, remaining_after_u64
+    if negative
+        return -cast(s64) value_u64, remaining_after_u64
+    else
+        return cast(s64) value_u64, remaining_after_u64
 }
 
-// @Unicode
-split_at_first :: (s: string, c: u8) -> (before: string, after: string, found: bool) {
-	before := s
-	after := s
-	
-	before.count = 0
-	
-	for s {
-		after = after[1..]
-		
-		if it == c {
-			return before, after, true
-			
-			
-		}
-		
-		before.count += 1
-	}
-	
-	return before, after, false
+split_at_first :: (s: string, split_at: u8) -> (before: string, after: string, found: bool) {
+    index, found := find_first(s, split_at)
+
+    if found
+        return s[..index], s[index + 1..], true
+    else 
+        return s, "", false
 }
 
-split_at_first :: (s: string, split_at: string) -> (before: string, after: string) {
-	found, index := find_first(s, split_at)
+split_at_first :: (s: string, split_at: string) -> (before: string, after: string, found: bool) {
+    index, found := find_first(s, split_at)
 
-	if found
-		return s[..index], s[index + split_at.count..]
-	else 
-		return s, ""
+    if found
+        return s[..index], s[index + split_at.count..], true
+    else 
+        return s, "", false
+}
+
+split_at_last :: (s: string, split_at: u8) -> (before: string, after: string, found: bool) {
+    index, found := find_last(s, split_at)
+
+    if found
+        return s[..index], s[index + 1..], true
+    else 
+        return "", s, false
+}
+
+split_at_last :: (s: string, split_at: string) -> (before: string, after: string, found: bool) {
+    index, found := find_last(s, split_at)
+
+    if found
+        return s[..index], s[index + split_at.count..], true
+    else 
+        return "", s, false
 }
 
 split :: (s: string, split_at: string) -> []string {
-	result: [..]string
+    result: [..]string
 
-	remaining := s
+    remaining := s
 
-	while true {
-		found, index := find_first(remaining, split_at)
+    while true {
+        found, index := find_first(remaining, split_at)
 
-		if !found
-			break;
+        if !found
+            break;
 
-		array_add(*result, remaining[..index])
+        array_add(*result, remaining[..index])
 
-		remaining = remaining[index + split_at.count..]
-	}
+        remaining = remaining[index + split_at.count..]
+    }
 
-	array_add(*result, remaining)
-	return result
+    array_add(*result, remaining)
+    return result
 }
 
 get_line :: (s: string) -> (before: string, after: string) {
-	before := s
-	after := s
-	
-	before.count = 0
-	
-	for s {
-		defer after = after[1..]
-		
-		if it == '\r' {
-			if after.count >= 2 && after[1] == '\n'
-				after = after[1..]
-			break;
-		} else if it == '\n' {
-			break;
-		}
-		
-		before.count += 1
-	}
-	
-	return before, after
+    before := s
+    after := s
+    
+    before.count = 0
+    
+    for s {
+        defer after = after[1..]
+        
+        if it == '\r' {
+            if after.count >= 2 && after[1] == '\n'
+                after = after[1..]
+            break;
+        } else if it == '\n' {
+            break;
+        }
+        
+        before.count += 1
+    }
+    
+    return before, after
 }
 
 // Appends a Unicode codepoint to a dynamic array representing a unicode string, the passed codepoint must be in the range of 
 // values representable in UTF8 (0 <= codepoint <= 0x1F_FFFF)
 append :: (string_buffer: *[..]u8, codepoint: u32) {
-	using Utf8_Constants
+    using Utf8_Constants
 
-	if codepoint < 128 {
-		array_add(string_buffer, cast() codepoint)
-	} else if codepoint < 1 << 11 {
-		array_add(string_buffer, cast() (codepoint >> 6                       ) | TWO_BYTE)
-		array_add(string_buffer, cast() (codepoint       & ~TRAILING_BYTE_MASK) | TRAILING_BYTE)
-	} else if codepoint < 1 << 16 {
-		array_add(string_buffer, cast() (codepoint >> 12                      ) | THREE_BYTE)
-		array_add(string_buffer, cast() (codepoint >> 6  & ~TRAILING_BYTE_MASK) | TRAILING_BYTE)
-		array_add(string_buffer, cast() (codepoint       & ~TRAILING_BYTE_MASK) | TRAILING_BYTE)
-	} else if codepoint < 1 << 21 {
-		array_add(string_buffer, cast() (codepoint >> 18                      ) | FOUR_BYTE)
-		array_add(string_buffer, cast() (codepoint >> 12 & ~TRAILING_BYTE_MASK) | TRAILING_BYTE)
-		array_add(string_buffer, cast() (codepoint >> 6  & ~TRAILING_BYTE_MASK) | TRAILING_BYTE)
-		array_add(string_buffer, cast() (codepoint       & ~TRAILING_BYTE_MASK) | TRAILING_BYTE)
-	} else {
-		assert(false)
-	}
+    if codepoint < 128 {
+        array_add(string_buffer, cast() codepoint)
+    } else if codepoint < 1 << 11 {
+        array_add(string_buffer, cast() (codepoint >> 6                       ) | TWO_BYTE)
+        array_add(string_buffer, cast() (codepoint       & ~TRAILING_BYTE_MASK) | TRAILING_BYTE)
+    } else if codepoint < 1 << 16 {
+        array_add(string_buffer, cast() (codepoint >> 12                      ) | THREE_BYTE)
+        array_add(string_buffer, cast() (codepoint >> 6  & ~TRAILING_BYTE_MASK) | TRAILING_BYTE)
+        array_add(string_buffer, cast() (codepoint       & ~TRAILING_BYTE_MASK) | TRAILING_BYTE)
+    } else if codepoint < 1 << 21 {
+        array_add(string_buffer, cast() (codepoint >> 18                      ) | FOUR_BYTE)
+        array_add(string_buffer, cast() (codepoint >> 12 & ~TRAILING_BYTE_MASK) | TRAILING_BYTE)
+        array_add(string_buffer, cast() (codepoint >> 6  & ~TRAILING_BYTE_MASK) | TRAILING_BYTE)
+        array_add(string_buffer, cast() (codepoint       & ~TRAILING_BYTE_MASK) | TRAILING_BYTE)
+    } else {
+        assert(false)
+    }
 }
 
 concatenate :: (s: string.., delimiter: string = "") -> string {
-	total_size: u64 = 0
-	
-	for s  total_size += it.count
-	
-	if s
-		total_size += delimiter.count * (s.count - 1)
-	
-	if !total_size
-		return ""
-	
-	result := new_string(total_size, initialized = false)
-	
-	cursor := result.data
-	
-	for s {
-		memory_copy(cursor, it.data, it.count)
-		cursor += it.count
-		
-		if it_index + 1 != s.count {
-			memory_copy(cursor, delimiter.data, delimiter.count)
-			cursor += delimiter.count
-		}
-	}
-	
-	return result
+    total_size: u64 = 0
+    
+    for s  total_size += it.count
+    
+    if s
+        total_size += delimiter.count * (s.count - 1)
+    
+    if !total_size
+        return ""
+    
+    result := new_string(total_size, initialized = false)
+    
+    cursor := result.data
+    
+    for s {
+        memory_copy(cursor, it.data, it.count)
+        cursor += it.count
+        
+        if it_index + 1 != s.count {
+            memory_copy(cursor, delimiter.data, delimiter.count)
+            cursor += delimiter.count
+        }
+    }
+    
+    return result
 }
 
 lower :: (c: u8) -> u8 {
-	if 'A' <= c && c <= 'Z' {
-		return c - 'A' + 'a'
-	}
+    if 'A' <= c && c <= 'Z' {
+        return c - 'A' + 'a'
+    }
 }

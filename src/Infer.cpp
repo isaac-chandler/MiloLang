@@ -66,22 +66,24 @@ ExprLiteral *createIntLiteral(CodeLocation start, EndLocation end, Type *type, u
 }
 
 ExprLiteral *createInBoundsIntLiteral(CodeLocation start, EndLocation end, Type *type, u64 value) {
-	auto underlying = type;
+	if (value != 0) { // @Hack so we don't crash when doing an implicit cast from a 0 to enum_flags that hasn't had its underlying type inferred
+		auto underlying = type;
 
-	if (type->flavor == TypeFlavor::ENUM) {
-		underlying = static_cast<TypeEnum *>(type)->integerType;
-	}
+		if (type->flavor == TypeFlavor::ENUM) {
+			underlying = static_cast<TypeEnum *>(type)->integerType;
+		}
 
-	if (underlying == &TYPE_BOOL) {
-		value = value != 0;
-	}
-	else if (underlying->flavor == TypeFlavor::INTEGER && (underlying->flags & TYPE_INTEGER_IS_SIGNED)) {
-		u64 sign = 1ULL << (underlying->size * 8 - 1);
-		u64 mask = (sign - 1) | sign;
-		value &= mask;
+		if (underlying == &TYPE_BOOL) {
+			value = value != 0;
+		}
+		else if (underlying->flavor == TypeFlavor::INTEGER && (underlying->flags & TYPE_INTEGER_IS_SIGNED)) {
+			u64 sign = 1ULL << (underlying->size * 8 - 1);
+			u64 mask = (sign - 1) | sign;
+			value &= mask;
 
-		if ((underlying->flags & TYPE_INTEGER_IS_SIGNED) && (value & sign)) {
-			value |= ~mask;
+			if ((underlying->flags & TYPE_INTEGER_IS_SIGNED) && (value & sign)) {
+				value |= ~mask;
+			}
 		}
 	}
 

@@ -1,0 +1,292 @@
+activate_command_editor :: (using tab: *Tab, state: Command_State, label: string, text: string, select := true) {
+    command_state = state
+    
+    editor_label = label
+    
+    set_editor_text(*command_editor, text)
+    
+    command_editor.cursor = text.count
+    if select
+        command_editor.selection = 0
+       
+    update_cursor(*command_editor)
+}
+
+deactivate_command_editor :: (using tab: *Tab) {
+    command_state = .NONE
+    
+    set_editor_text(*command_editor, "")
+}
+
+Command_State :: enum {
+    NONE
+    FIND
+    REPLACE_SET_QUERY
+    REPLACE
+    GOTO
+    ALIGN
+    SAVE_BEFORE_CLOSE
+    SAVE_BEFORE_CLOSE_ALL
+}
+
+replace_query_string: string
+
+command_is_valid :: (using tab: *Tab) -> bool {
+    file_text    := cast(string) cast([]u8) file_editor.text
+    command_text := cast(string) cast([]u8) command_editor.text
+
+    if command_state == {
+        case .REPLACE_SET_QUERY #through
+        case .FIND
+            if !command_text
+                return false
+                
+            index, found := find_first(s = file_text, find = command_text)
+            
+            return found
+        case .REPLACE
+            index, found := find_first(s = file_text, find = replace_query_string)
+            
+            return found
+        case .GOTO
+            if !command_text
+                return false
+                
+            before, after, found := split_at_first(command_text, ',')
+            if found {
+                if !before || !after
+                    return false
+                
+                _, remaining := read_u64(before)
+                
+                if remaining
+                    return false
+                
+                _, remaining = read_u64(after)
+                
+                return !remaining
+            } else {
+                _, remaining := read_u64(command_text)
+                
+                return !remaining
+            }
+        case .ALIGN
+            if !command_text
+                return false
+        
+            row := cursor_pos(*file_editor)
+            
+            index, found := find_first(s = get_lines(*file_editor)[row], find = command_text)
+            
+            return found
+        case .SAVE_BEFORE_CLOSE #through
+        case .SAVE_BEFORE_CLOSE_ALL
+            if !command_text
+                return false
+            
+            else if command_text[0] == {
+                case 'y' #through
+                case 'Y' #through
+                case 'n' #through
+                case 'N' return true
+                else     return false
+            }
+        else
+            return true
+    }
+}
+
+do_find :: (using tab: *Tab, find: string, modifiers: Modifiers) {
+    file_text := cast(string) cast([]u8) file_editor.text
+    
+    if modifiers & .SHIFT {
+        start := min(file_editor.cursor, file_editor.selection)
+    
+        index, found := find_last(s = file_text[..start], find = find)
+        
+        if !found {
+            index, found = find_last(s = file_text[start..], find = find)
+            index += start
+        }
+        
+        if found {
+            break_transaction_combining(*file_editor)
+            file_editor.cursor    = index + find.count
+            file_editor.selection = index
+        
+            update_cursor(*file_editor)
+        }
+    } else {
+        start := max(file_editor.cursor, file_editor.selection)
+    
+        index, found := find_first(s = file_text[start .. ], find = find)
+        
+        if found
+            index += start
+        else
+            index, found = find_first(s = file_text[.. start], find = find)
+        
+        
+        if found {
+            break_transaction_combining(*file_editor)
+            file_editor.cursor    = index + find.count
+            file_editor.selection = index
+        
+            update_cursor(*file_editor)
+        }
+    }
+}
+
+do_goto :: (using tab: *Tab, goto: string) {
+    row := read_u64(goto)
+    if row > 0
+        row -= 1
+    
+    lines := get_lines(*file_editor)
+    row = min(row, lines.count - 1)
+    col := lines[row].count
+        
+    before, after, found := split_at_first(goto, ',')
+    
+    if found {
+        col = read_u64(after)
+        
+        if col > 0
+            col -= 1
+    }
+    
+    set_cursor_pos(*file_editor, row, col)
+    file_editor.selection = file_editor.cursor
+    update_cursor(*file_editor)
+}
+
+SAVE_BEFORE_CLOSE_TEXT :: "Save before close (y/n/ESC to cancel)? "
+
+command_editor_event :: (using tab: *Tab, using event: Event) {
+    if event.kind == .KEY {
+        using event.key
+    
+        file_text    := cast(string) cast([]u8) file_editor.text
+        command_text := cast(string) cast([]u8) command_editor.text
+        
+        if down if key == {
+            case .ENTER                        
+                if command_is_valid(tab) if command_state == {
+                    case .FIND
+                        do_find(tab, command_text, modifiers)
+                    case .GOTO
+                        do_goto(tab, command_text)
+                        deactivate_command_editor(tab)
+                    case .REPLACE_SET_QUERY
+                
+                        free_string(replace_query_string)
+                        replace_query_string = copy_string(cast() cast([]u8) command_editor.text)
+                        activate_command_editor(tab, .REPLACE, "Replace: ", "")
+                        
+                    case .REPLACE
+                        
+                        selected_text, selection_start, selection_end := get_selected_text(*file_editor)
+                        
+                        if selected_text == replace_query_string {
+                            begin_transaction(*file_editor)
+                            
+                            file_editor.cursor = selection_start
+                            file_editor.selection = selection_end
+                            
+                            insert_text(*file_editor, command_text)
+                            
+                            end_transaction(*file_editor)
+                            update_cursor(*file_editor)
+                        }
+                        
+                        do_find(tab, replace_query_string, modifiers)
+                    case .ALIGN
+                        row := cursor_pos(*file_editor)
+                        
+                        lines := get_lines(*file_editor)
+                        max_col := find_first(s = lines[row], find = command_text)
+                        
+                        max_line := row + 1
+                        
+                        while max_line < lines.count {
+                            index, found := find_first(s = lines[max_line], find = command_text)
+                            
+                            if !found
+                                break;
+                            
+                            max_col = max(max_col, index)
+                            max_line += 1
+                        }
+                        
+                        min_line := row
+                        
+                        while min_line > 0 {
+                            index, found := find_first(s = lines[min_line - 1], find = command_text)
+                            
+                            if !found
+                                break;
+                            
+                            max_col = max(max_col, index)
+                            min_line -= 1
+                        }
+                        
+                        begin_transaction(*file_editor)
+                        defer end_transaction(*file_editor)
+                        for min_line .. max_line {
+                            col := find_first(s = get_lines(*file_editor)[it], find = command_text)
+                            
+                            set_cursor_pos(*file_editor, it, col)
+                            file_editor.selection = file_editor.cursor
+                            
+                            insert_spaces(*file_editor, max_col - col)
+                        }
+                        
+                        update_cursor(*file_editor)
+                        deactivate_command_editor(tab)
+                    case .SAVE_BEFORE_CLOSE
+                        if command_text[0] == 'y' || command_text[0] == 'Y'
+                            save(tab)
+                        
+                        close_tab(current_tab)
+                    case .SAVE_BEFORE_CLOSE_ALL
+                        
+                        if command_text[0] == 'y' || command_text[0] == 'Y'
+                            save(tab)
+                        
+                        new_command_editor := steal_command_editor(tab)
+                        
+                        close_tab(current_tab)
+                        
+                        if go_to_next_unsaved_tab() {
+                            free_editor(tabs[current_tab].command_editor)
+                            tabs[current_tab].command_editor = new_command_editor
+                            tabs[current_tab].command_state = .SAVE_BEFORE_CLOSE_ALL
+                            tabs[current_tab].editor_label = SAVE_BEFORE_CLOSE_TEXT
+                        } else {
+                            close_window(window)
+                        }
+                }
+            case .TAB {
+                if command_is_valid(tab) if command_state == {
+                    case .FIND #through
+                    case .REPLACE_SET_QUERY
+                        do_find(tab, command_text, modifiers)
+                    case .GOTO
+                        do_goto(tab, command_text)                                    
+                    case .REPLACE                                    
+                        do_find(tab, replace_query_string, modifiers)
+                        
+                }
+            } case .ESCAPE
+                deactivate_command_editor(tab)
+            case .R {
+                if modifiers == .CONTROL && (command_state == .FIND || command_state == .REPLACE_SET_QUERY) && command_is_valid(tab) {                              
+                    free_string(replace_query_string)
+                    replace_query_string = copy_string(cast() cast([]u8) command_editor.text)
+                    activate_command_editor(tab, .REPLACE, "Replace: ", "")
+                }
+            } else
+                editor_event(tab, *command_editor, event)
+        }
+    }
+}

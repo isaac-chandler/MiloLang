@@ -1,0 +1,931 @@
+clipboard_should_paste_line := false
+clipboard_first_line_indentation: u64
+
+editor_key_down_event :: (using tab: *Tab, using editor: *Editor, using event: type_of(Event.{}.key)) {
+    if key == {
+        case .ENTER
+            row, col := cursor_pos(editor)
+            line := get_lines(editor)[row]
+            
+            indentation := leading_spaces(line)
+            
+            is_brace_pair := false
+            
+            begin_transaction(editor)
+            defer end_transaction(editor)
+            
+            if modifiers & .SHIFT {
+                set_cursor_pos(editor, row, line.count)
+                selection = cursor
+            } else if editor == *file_editor && cursor == selection && 0 < col && col < line.count && cursor_in_code(editor) if line[col - 1 .. col + 1] == {
+                case "()" #through
+                case "{}" #through
+                case "[]" is_brace_pair = true
+            } else if cursor == selection && col < indentation {
+                set_cursor_pos(editor, row, indentation)
+                selection = cursor
+            }
+            
+            insert_char(editor, '\n')
+            
+            cursor_set_point := cursor + indentation
+            
+            if is_brace_pair {
+                insert_spaces(editor, indentation + TAB_SIZE)
+                
+                cursor_set_point = cursor
+                    
+                insert_char(editor, '\n')
+            }
+            
+            insert_spaces(editor, indentation)
+                
+            cursor    = cursor_set_point
+            selection = cursor_set_point
+            update_cursor(editor)
+        case .BACKSPACE
+            if cursor == 0
+                return;
+            
+            if modifiers & .CONTROL {
+                begin_transaction(editor)
+                defer end_transaction(editor)
+                start := find_boundary_left(editor)
+                
+                delete_count := cursor - start
+                cursor    = start
+                selection = cursor
+                delete_text(editor, delete_count)                              
+            } else {
+                if selection != cursor {
+                    begin_transaction(editor)
+                    defer end_transaction(editor)
+                    delete_selection(editor)
+                } else {
+                    begin_transaction(editor, .BACKSPACE_OR_DELETE)
+                    defer end_transaction(editor)
+                    if cursor >= TAB_SIZE && is_tab(editor, cursor - TAB_SIZE) {
+                        cursor -= TAB_SIZE
+                        selection = cursor
+                        delete_text(editor, TAB_SIZE)
+                    } else {
+                        cursor -= 1
+                        selection = cursor
+                        if cursor == selection && cursor + 2 <= text.count && editor == *file_editor && cursor_in_code(editor) 
+                            if cast(string) text[cursor .. cursor + 2] == {
+                                case"\"\"" #through
+                                case "''"  #through
+                                case "()"  #through
+                                case "{}"  #through
+                                case "[]"  delete_text(editor, 2)
+                                else       delete_text(editor, 1)
+                                
+                            } 
+                        else
+                            delete_text(editor, 1)
+                    }
+                }
+            }
+            update_cursor(editor)
+        case .DELETE
+            if cursor == text.count
+                return;
+            if modifiers == {
+                case .CONTROL
+                    begin_transaction(editor)
+                    defer end_transaction(editor)
+                    end := find_boundary_right(editor)
+                    
+                    selection = cursor
+                    delete_text(editor, end - cursor)
+                    update_cursor(editor)
+                case 0
+                    if selection != cursor {
+                        begin_transaction(editor)
+                        defer end_transaction(editor)
+                        delete_selection(editor)
+                    } else {
+                        begin_transaction(editor, .BACKSPACE_OR_DELETE)
+                        defer end_transaction(editor)
+                        if is_tab(editor, cursor)
+                            delete_text(editor, TAB_SIZE)
+                        else if cursor < text.count && text[cursor] == '\n' {
+                          delete_text(editor, 1)
+                          
+                          delete_text(editor, leading_spaces(cast() editor.text[editor.cursor..]))  
+                        } else
+                            delete_text(editor, 1)
+                    }
+                    update_cursor(editor)
+            }
+            
+        case .LEFT
+            break_transaction_combining(editor)
+            
+            if selection != cursor && !modifiers {
+                cursor    = min(cursor, selection)
+                selection = cursor
+            } else {
+                if cursor == 0
+                    return;
+                
+                if modifiers & .CONTROL {
+                    cursor = find_boundary_left(editor)
+                } else {
+                        if cursor >= TAB_SIZE && is_tab(editor, cursor - TAB_SIZE)
+                            cursor -= TAB_SIZE
+                        else
+                            cursor -= 1
+                }
+                
+                if !(modifiers & .SHIFT)
+                    selection = cursor
+            }
+            
+            update_cursor(editor)
+        case .RIGHT
+            break_transaction_combining(editor)
+            
+            if selection != cursor && !modifiers {
+                cursor    = max(cursor, selection)
+                selection = cursor
+            } else {
+                if cursor == text.count
+                    return;
+                
+                if modifiers & .CONTROL {
+                    cursor = find_boundary_right(editor)
+                } else {
+                    if is_tab(editor, cursor)
+                        cursor += TAB_SIZE
+                    else
+                        cursor += 1
+                }
+                
+                if !(modifiers & .SHIFT)
+                    selection = cursor
+            }
+            update_cursor(editor)
+        case .UP
+            
+            if modifiers == .ALT {
+                
+                _, selection_start, selection_end := get_selected_text(editor)
+                
+                if selection_end > selection_start
+                    selection_end -= 1
+                
+                start_line := location_pos(editor, selection_start)
+                end_line   := location_pos(editor, selection_end)
+                
+                if start_line == 0
+                    return;
+                    
+                lines := get_lines(editor)
+                    
+                last_line  := end_line + 1 == lines.count
+                
+                cursor_offset    := cursor    - cast() (lines[start_line].data - text.data)
+                selection_offset := selection - cast() (lines[start_line].data - text.data)
+                
+                if start_line == 0
+                    return;
+                    
+                text_to_move := cast(string) text[get_offset(editor, start_line, 0) .. get_offset(editor, end_line, lines[end_line].count)]
+                
+                if !last_line
+                    text_to_move.count += 1
+                
+                text_to_move = copy_string(text_to_move)
+                defer free_string(text_to_move)
+                
+                begin_transaction(editor)
+                defer end_transaction(editor)
+                set_cursor_pos(editor, start_line, 0)
+                selection = cursor
+                
+                delete_text(editor, text_to_move.count)
+                
+                set_cursor_pos(editor, start_line - 1, 0)
+                selection = cursor
+                
+                insert_text(editor, text_to_move)
+                
+                if last_line {
+                    insert_char(editor, '\n')
+                    cursor = text.count - 1
+                    delete_text(editor, 1)
+                }
+                
+                set_cursor_pos(editor, start_line - 1, 0)
+                selection = cursor
+                
+                cursor    += cursor_offset
+                selection += selection_offset
+                
+                cursor    = min(cursor,    text.count)
+                selection = min(selection, text.count)
+                
+                update_cursor(editor)
+                
+            } else {
+                row, col := cursor_pos(editor)
+                break_transaction_combining(editor)
+                
+                if row == 0 {
+                    cursor = 0
+                } else {
+                    set_cursor_pos(editor, row - 1, col)
+                }
+                
+                if !(modifiers & .SHIFT)
+                    selection = cursor
+            }
+                
+            update_cursor(editor)
+        case .DOWN
+            if modifiers == .ALT {
+                
+                _, selection_start, selection_end := get_selected_text(editor)
+                
+                if selection_end > selection_start
+                    selection_end -= 1
+                    
+                start_line := location_pos(editor, selection_start)
+                end_line   := location_pos(editor, selection_end)
+                
+                lines := get_lines(editor)
+                if end_line + 1 == lines.count
+                    return;
+                    
+                last_line  := end_line + 2 == lines.count
+                
+                cursor_offset    := cursor    - cast() (lines[start_line].data - text.data)
+                selection_offset := selection - cast() (lines[start_line].data - text.data)
+                    
+                text_to_move := cast(string) text[get_offset(editor, start_line, 0) .. get_offset(editor, end_line, lines[end_line].count) + 1]
+                    
+                text_to_move = copy_string(text_to_move)
+                defer free_string(text_to_move)
+                
+                begin_transaction(editor)
+                defer end_transaction(editor)
+                set_cursor_pos(editor, start_line, 0)
+                selection = cursor
+                
+                delete_text(editor, text_to_move.count)
+                
+                if last_line {
+                    cursor    = text.count
+                    selection = cursor
+                    insert_char(editor, '\n')
+                }
+                
+                set_cursor_pos(editor, start_line + 1, 0)
+                selection = cursor
+                
+                insert_text(editor, text_to_move)
+                
+                if last_line {
+                    cursor    = text.count - 1
+                    selection = cursor
+                    delete_text(editor, 1)
+                }
+                
+                set_cursor_pos(editor, start_line + 1, 0)
+                selection = cursor
+                
+                cursor    += cursor_offset
+                selection += selection_offset
+                
+                cursor    = min(cursor,    text.count)
+                selection = min(selection, text.count)
+                
+                update_cursor(editor)
+                
+            } else {
+                row, col := cursor_pos(editor)
+                break_transaction_combining(editor)
+                
+                if row + 1 == get_lines(editor).count {
+                    cursor = text.count
+                } else {
+                    set_cursor_pos(editor, row + 1, col)
+                }
+                
+                if !(modifiers & .SHIFT)
+                    selection = cursor
+                    
+                
+                update_cursor(editor)
+            }
+        case .TAB
+            _, selection_start, selection_end := get_selected_text(editor)
+            
+            start_line := location_pos(editor, selection_start)
+            end_line   := location_pos(editor, selection_end)
+            
+            if start_line == end_line {
+                if modifiers & .SHIFT {
+            
+                    row, col := cursor_pos(editor)
+                    line := get_lines(editor)[row]
+                    indentation := leading_spaces(line)
+                
+                    if col <= indentation {
+                        if !indentation
+                            return;
+                    
+                        tab_start := indentation - indentation % TAB_SIZE
+                    
+                        if tab_start == indentation
+                            tab_start -= TAB_SIZE
+                    
+                        begin_transaction(editor)
+                        defer end_transaction(editor)    
+                        set_cursor_pos(editor, row, tab_start)
+                        selection = cursor
+                        delete_text(editor, indentation - tab_start)
+                        
+                    } else {
+                        if !col
+                            return;
+                        
+                        tab_start := col - col % TAB_SIZE
+                    
+                        if tab_start == col
+                            tab_start -= TAB_SIZE
+                    
+                        if all_spaces(line[tab_start .. col]) {
+                            begin_transaction(editor)
+                            defer end_transaction(editor)
+                        
+                            set_cursor_pos(editor, row, tab_start)
+                            selection = cursor
+                            delete_text(editor, col - tab_start)
+                        } else {
+                            break_transaction_combining(editor)
+                            set_cursor_pos(editor, row, tab_start)
+                            selection = cursor
+                        }
+                    }      
+                } else {
+                    begin_transaction(editor)
+                    defer end_transaction(editor)
+                
+                    delete_selection(editor)
+                
+                    row, col := cursor_pos(editor)
+                    
+                    indentation := leading_spaces(get_lines(editor)[row])
+                    
+                    if col < indentation {
+                        set_cursor_pos(editor, row, indentation)
+                        selection = cursor
+                        col = indentation
+                    }
+                    
+                    insert_spaces(editor, TAB_SIZE - col % TAB_SIZE)
+                }
+            } else {
+                if modifiers & .SHIFT {
+                    begin_transaction(editor)
+                    defer end_transaction(editor)
+                    
+                    for start_line .. end_line + 1 {
+                        indentation := leading_spaces(get_lines(editor)[it])
+                        
+                        if !indentation continue;
+                        
+                        tab_start := indentation - indentation % TAB_SIZE
+                        if tab_start == indentation
+                            tab_start -= 4
+                        
+                        set_cursor_pos(editor, it, tab_start)
+                        selection = cursor
+                        delete_text(editor, indentation - tab_start)
+                    }
+                    
+                    set_cursor_pos(editor, end_line, get_lines(editor)[end_line].count)
+                    selection = get_offset(editor, start_line, 0)
+                } else {
+                    begin_transaction(editor)
+                    defer end_transaction(editor)
+                    
+                    for start_line .. end_line + 1 {
+                        indentation := leading_spaces(get_lines(editor)[it])
+                
+                        set_cursor_pos(editor, it, indentation)
+                        selection = cursor
+                        
+                        insert_spaces(editor, TAB_SIZE - indentation % TAB_SIZE)
+                    }
+                    
+                    set_cursor_pos(editor, end_line, get_lines(editor)[end_line].count)
+                    selection = get_offset(editor, start_line, 0)
+                }   
+            }
+            
+            update_cursor(editor)
+        case .S
+            if modifiers == .CONTROL {
+                save(tab)
+            }
+        case .A
+            if modifiers == {
+                case .CONTROL
+                    break_transaction_combining(editor)
+                    
+                    selection = 0
+                    cursor    = text.count
+                    update_cursor(editor)
+                case .ALT
+                    selected_text := get_selected_text(editor)
+                    
+                    activate_command_editor(tab, .ALIGN, "Align: ", selected_text)
+              
+            }
+        case .X #through
+        case .C
+            if modifiers != .CONTROL
+                return;
+                
+            if selection == cursor {
+                clipboard_should_paste_line      = true
+                clipboard_first_line_indentation = 0
+                
+                row := cursor_pos(editor)
+            
+                if !OpenClipboard(window.handle)
+                    return;
+                
+                defer CloseClipboard()
+                
+                if !EmptyClipboard()
+                    return;
+                
+                line := get_lines(editor)[row]
+                text_handle := GlobalAlloc(GMEM_MOVEABLE, line.count + 3)
+                
+                if !text_handle
+                    return;
+                
+                text := cast(*u8) GlobalLock(text_handle)
+                if !text {
+                    GlobalFree(text_handle)
+                    return;
+                }
+                
+                defer GlobalUnlock(text_handle)
+                
+                memory_copy(text, line.data, line.count)
+                text[line.count    ] = '\r'
+                text[line.count + 1] = '\n'
+                text[line.count + 2] = 0
+                
+                SetClipboardData(CF_TEXT, text_handle)
+            
+                if key == .X {
+                    begin_transaction(editor)
+                    defer end_transaction(editor)
+                    
+                    set_cursor_pos(editor, row, 0)
+                    selection = cursor
+                    delete_text(editor, line.count + 1)
+                    
+                    update_cursor(editor)
+                }
+            } else {
+                clipboard_should_paste_line = false
+            
+                selected_text, selection_start, selection_end := get_selected_text(editor)
+                
+                start_line := location_pos(editor, selection_start)
+                
+                selected_lines := location_pos(editor, selection_end) - start_line
+                
+                clipboard_first_line_indentation = leading_spaces(get_lines(editor)[start_line])
+                
+                {
+                    if !OpenClipboard(window.handle)
+                        return;
+                    
+                    defer CloseClipboard()
+                    
+                    if !EmptyClipboard()
+                        return;
+                        
+                    text_handle := GlobalAlloc(GMEM_MOVEABLE, selected_text.count + selected_lines + 1)
+                    
+                    if !text_handle
+                        return;
+                    
+                    text := cast(*u8) GlobalLock(text_handle)
+                    if !text {
+                        GlobalFree(text_handle)
+                        return;
+                    }
+                    
+                    defer GlobalUnlock(text_handle)
+                    
+                    for selected_text {
+                        if it == '\n' {
+                            <<text = '\r'
+                            text += 1
+                        }
+                        <<text = it
+                        text += 1
+                    }
+                    <<text = 0
+                    
+                    SetClipboardData(CF_TEXT, text_handle)
+                }
+                
+                if key == .X {
+                    begin_transaction(editor)
+                    defer end_transaction(editor)
+                    delete_selection(editor)
+                    
+                    update_cursor(editor)
+                }
+            }
+            
+        case .V
+            if modifiers != .CONTROL
+                return;
+            if !IsClipboardFormatAvailable(CF_TEXT)
+                return;
+            
+            text: [..]u8
+            defer array_free(text)
+            {
+                if !OpenClipboard(window.handle)
+                    return;
+                    
+                defer CloseClipboard()
+                    
+                text_handle := GetClipboardData(CF_TEXT)
+                
+                if !text_handle
+                    return;
+                    
+                c_text := GlobalLock(text_handle)
+                if !c_text
+                    return;
+                    
+                text = normalise_text(from_c_string(c_text))
+                
+                GlobalUnlock(text_handle)
+            }
+            
+            begin_transaction(editor)
+            defer end_transaction(editor)
+            
+            special_paste_behavior := editor.cursor == editor.selection && GetClipboardOwner() == window.handle
+            
+            if clipboard_should_paste_line && special_paste_behavior {
+                row := cursor_pos(editor)
+                
+                previous_cursor := cursor
+                
+                if row + 1 == get_lines(editor).count {
+                    cursor    = editor.text.count
+                    selection = cursor
+                    insert_char(editor, '\n')
+                    
+                    insert_text(editor, cast() cast([]u8) text)
+                    cursor -= 1
+                    selection = cursor
+                    delete_text(editor, 1)
+                    
+                    cursor    = previous_cursor + text.count
+                    selection = cursor
+                    update_cursor(editor)
+                } else {
+                    set_cursor_pos(editor, row + 1, 0)
+                    selection = cursor
+                    
+                    insert_text(editor, cast() cast([]u8) text)
+                    cursor    = previous_cursor + text.count
+                    selection = cursor
+                    update_cursor(editor)
+                }
+                
+            } else if special_paste_behavior {
+                delete_selection(editor)               
+                
+                start_line        := cursor_pos(editor)
+                start_indentation := leading_spaces(get_lines(editor)[start_line])
+                
+                line, remaining, found := split_at_first(cast() cast([]u8) text, '\n')
+                insert_text(editor, line)
+                
+                while found {
+                    insert_char(editor, '\n')
+                    
+                    line, remaining, found = split_at_first(remaining, '\n')
+                    
+                    line_indentation := leading_spaces(line)
+                    
+                    relative_indentation := cast(s64) line_indentation - cast() clipboard_first_line_indentation + cast() start_indentation
+                    
+                    if relative_indentation > 0
+                        insert_spaces(editor, cast() relative_indentation)
+                    
+                    insert_text(editor, line[line_indentation..])
+                }
+                
+            } else {
+                insert_text(editor, cast() cast([]u8) text)
+                update_cursor(editor)                        
+            }
+        case .D
+            if modifiers != .CONTROL
+                return;
+                
+            row := cursor_pos(editor)
+        
+            begin_transaction(editor)
+            defer end_transaction(editor)
+            
+            line := copy_string(get_lines(editor)[row])
+            defer free_string(line)
+            
+            previous_cursor := cursor
+            set_cursor_pos(editor, row, line.count)
+            selection = cursor
+            insert_char(editor, '\n')
+            insert_text(editor, line)
+            cursor    = previous_cursor + line.count + 1
+            selection = cursor
+            update_cursor(editor)
+            
+        case .Z
+            if modifiers != .CONTROL
+                return;
+                
+            if !redo_index
+                return;
+                
+            current_transaction = null
+            
+            redo_index -= 1
+            transaction := transactions[redo_index]
+            modifications_start := transaction.modifications_start >> 2
+            modifications_end   := modifications.count
+            
+            if redo_index + 1 < transactions.count {
+                modifications_end = transactions[redo_index + 1].modifications_start >> 2
+            }
+            
+            modification_index := modifications_end
+            
+            while modification_index > modifications_start {
+                modification_index -= 1
+                
+                modification := modifications[modification_index]
+                
+                cursor    = modification.location >> 1
+                selection = cursor
+                
+                if cast(Modification.Kind) (modification.location & 1) == #complete {
+                    case .INSERT
+                        delete_text(editor, modification.text.count)
+                    case .DELETE
+                        insert_text(editor, modification.text)
+                }
+            }
+            
+            change_count -= 2 * (modifications_end - modifications_start)
+            
+            cursor    = transaction.start_cursor
+            selection = transaction.start_selection
+            
+            update_cursor(editor)
+            
+        case .Y
+            if modifiers != .CONTROL
+                return;
+                
+            if redo_index == transactions.count
+                return;
+                
+            current_transaction = null
+            
+            transaction := transactions[redo_index]
+            modifications_start := transaction.modifications_start >> 2
+            modifications_end   := modifications.count
+            
+            if redo_index + 1 < transactions.count {
+                modifications_end = transactions[redo_index + 1].modifications_start >> 2
+            }
+            
+            redo_index += 1
+            
+            for modification: modifications[modifications_start ..  modifications_end] {    
+                cursor = modification.location >> 1
+                selection = cursor
+                
+                if cast(Modification.Kind) (modification.location & 1) == #complete {
+                    case .INSERT
+                        insert_text(editor, modification.text)
+                    case .DELETE
+                        delete_text(editor, modification.text.count)
+                }
+            }
+            
+            cursor    = transaction.end_cursor
+            selection = transaction.end_selection
+            
+            update_cursor(editor)
+        
+        case .F
+            if modifiers != .CONTROL
+                return;
+            
+            selected_text := get_selected_text(editor)
+            
+            activate_command_editor(tab, .FIND, "Find: ", selected_text)
+        
+        case .R
+            if modifiers != .CONTROL
+                return;
+            
+            selected_text := get_selected_text(editor)
+            
+            activate_command_editor(tab, .REPLACE_SET_QUERY, "Query: ", selected_text)
+        
+        case .G
+            if modifiers != .CONTROL
+                return;
+            
+            row, col := cursor_pos(editor)
+            
+            line_string := sprint("%,%", row + 1, col + 1)  
+            defer free_string(line_string)    
+            
+            activate_command_editor(tab, .GOTO, "Goto: ", line_string)
+        case .SLASH
+            if modifiers != .CONTROL
+                return;
+            
+            _, selection_start, selection_end := get_selected_text(editor)
+            
+            if selection_end - selection_start >= 4 && cast() text[selection_start .. selection_start + 2] == "/*" && cast() text[selection_end - 2 .. selection_end] == "*/" {
+                begin_transaction(editor)
+                defer end_transaction(editor)
+                
+                cursor    = selection_end - 2
+                selection = cursor
+                
+                delete_text(editor, 2)
+                
+                cursor    = selection_start
+                selection = cursor
+                
+                delete_text(editor, 2)
+                
+                cursor    = selection_end - 4
+                selection = selection_start
+                update_cursor(editor)
+            } else if selection_start == selection_end {
+                row  := cursor_pos(editor)
+                line := get_lines(editor)[row]
+                
+                comment_offset, found := find_first(s = line, find = "//")
+                
+                begin_transaction(editor)
+                defer end_transaction(editor)
+                if found && comment_offset == leading_spaces(line) {
+                    set_cursor_pos(editor, row, comment_offset)
+                    selection = cursor
+                    
+                    delete_text(editor, 2)
+                } else {
+                    set_cursor_pos(editor, row, 0)
+                    selection = cursor
+                    
+                    insert_text(editor, "//")
+                }
+                
+                set_cursor_pos(editor, row + 1, 0)
+                selection = cursor
+                update_cursor(editor)
+            } else {
+                begin_transaction(editor)
+                defer end_transaction(editor)
+                
+                cursor =    selection_end
+                selection = cursor
+                
+                insert_text(editor, "*/")
+                
+                cursor    = selection_start
+                selection = cursor
+                
+                insert_text(editor, "/*")
+                
+                cursor    = selection_end + 4
+                selection = selection_start
+                
+                update_cursor(editor)
+            }
+    }
+}
+
+editor_char_event :: (using tab: *Tab, using editor: *Editor, using event: type_of(Event.{}.char)) {
+    if Font.FIRST_CHAR > char || char > Font.LAST_CHAR
+        return;
+    
+    has_selection := cursor != selection
+        
+    if !has_selection {
+        begin_transaction(editor, .TYPING)
+    } else {
+        begin_transaction(editor, .OTHER)                    
+    }
+    defer end_transaction(editor)
+    
+    do_not_insert := false
+    special_behavior := editor == *file_editor && !has_selection
+    
+    if special_behavior && cursor < text.count && text[cursor] == char if char == {
+        case ')'  #through
+        case ']'  #through
+        case '}'  #through
+        case '"'  #through
+        case '\'' do_not_insert = true
+    }
+    
+    if do_not_insert {
+        cursor += 1
+        selection = cursor
+    } else {
+        if special_behavior && cursor_in_code(editor) if char == {
+            case '('  insert_text(editor, "()")     cursor -= 1  selection = cursor
+            case '{'  insert_text(editor, "{}")     cursor -= 1  selection = cursor
+            case '['  insert_text(editor, "[]")     cursor -= 1  selection = cursor
+            case '"'  insert_text(editor, "\"\"")   cursor -= 1  selection = cursor
+            case '\'' insert_text(editor, "''")     cursor -= 1  selection = cursor
+            else      insert_char(editor, cast() char)
+        } else {
+            insert_char(editor, cast() char)
+        }
+    }
+    
+    update_cursor(editor)
+}
+
+
+editor_event :: (using tab: *Tab, using editor: *Editor, event: Event) {
+    if event.kind == {
+        case .KEY
+            if event.key.down
+                editor_key_down_event(tab, editor, event.key)
+        
+        case .CHAR
+            editor_char_event(tab, editor, event.char)
+        
+        case .SCROLL
+            if event.scroll.modifiers == {
+                case .SHIFT
+                    scroll_x += cast() event.scroll.scroll_x
+                    scroll_x -= cast() event.scroll.scroll_y
+                
+                case 0
+                    scroll_x += cast() event.scroll.scroll_x
+                    scroll_y -= cast() event.scroll.scroll_y
+            }
+        
+        case .MOUSE
+            using event.mouse
+            if down if button == {
+                case .LEFT_MOUSE
+                    break_transaction_combining(editor)
+                    
+                    if double_click {
+                        cursor = screen_coords_to_cursor(editor, x, y, x_rounding = 0)
+                        
+                        if cursor != text.count
+                            cursor += 1
+                    
+                        selection = find_boundary_left(editor, strict = true)
+                        cursor -= 1
+                        cursor = find_boundary_right(editor, strict = true)
+                    } else {
+                        cursor    = screen_coords_to_cursor(editor, x, y)
+                        selection = cursor
+                    }
+                    
+                    update_cursor(editor)
+            }
+        case .MOUSE_MOVE
+            using event.mouse_move
+        
+            if window.keys[cast(u64) Key.LEFT_MOUSE] {
+                break_transaction_combining(editor)
+                cursor = screen_coords_to_cursor(editor, x, y)
+                update_cursor(editor)
+            }
+    }
+}

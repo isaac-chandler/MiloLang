@@ -1,0 +1,514 @@
+draw :: () {
+    if !gl_context.handle
+        return;
+        
+    glClearColor(COLORS[BACKGROUND_COLOR][0], COLORS[BACKGROUND_COLOR][1], COLORS[BACKGROUND_COLOR][1], 1.0)
+    glClear(GL_COLOR_BUFFER_BIT)
+    
+    if current_tab < tabs.count
+        draw_tab(tabs[current_tab])
+    draw_header()
+    
+    swap_buffers(gl_context)
+}
+
+draw_header :: () {
+    top: f32    = 0
+    bottom := font.height + 2 * MARGIN
+
+    set_region(.{top = top, left = 0, bottom = bottom, right = cast() window.width}, MENU_COLOR)
+    x: f32 = 0
+    
+    for tabs {
+        using it
+        
+        begin_draw(textured = false)
+        
+        if it_index == current_tab {
+            draw_untextured(rect, ACTIVE_COLOR)
+        
+            title := sprint("% - Milo Edit", display_name)
+            defer free_string(title)
+            title_windows := to_windows_string(title)
+            defer free_array(title_windows)
+            
+            SetWindowTextW(window.handle, title_windows.data)
+            
+        }
+        
+        draw_untextured(.{top = top, left = rect.left, bottom = bottom, right = rect.left + 3}, BACKGROUND_COLOR)
+        draw_untextured(.{top = top, left = rect.right - 3, bottom = bottom, right = rect.right}, BACKGROUND_COLOR)
+        end_draw(textured = false)
+        
+            
+        color := TEXT_COLOR
+        if !tab_is_saved(it)
+            color = STRING_COLOR
+        begin_draw(textured = true)
+        draw_text(rect.left + MARGIN, top + MARGIN + font.ascent, display_name, color)
+        
+        x_color := ERROR_COLOR
+        
+        if tab_x_button_contains(it, cast() window.mouse_x, cast() window.mouse_y)
+            x_color = DIRECTIVE_COLOR
+        
+        draw_text(rect.right - font.width - MARGIN, top + MARGIN + font.ascent, "x", x_color)
+        end_draw(textured = true)
+        
+        x = rect.right
+    }
+}
+
+draw_tab :: (using tab: *Tab) {
+    if command_state == .NONE {
+        row, col := cursor_pos(*file_editor)
+        editor_label = sprint("%:%,%", filename, row + 1, col + 1)
+    }
+
+    set_editor_bounds(tab, cast() window.width, cast() window.height)
+    
+    compute_colors(*file_editor)
+    
+    if command_is_valid(tab)
+        set_plain_color(*command_editor, TEXT_COLOR)
+    else
+        set_plain_color(*command_editor, ERROR_COLOR)
+    
+    update_scroll_limits(*file_editor)
+    update_scroll_limits(*command_editor)
+    
+    draw_editor(*file_editor, BACKGROUND_COLOR, active = command_state == .NONE)
+    draw_editor(*command_editor,    MENU_COLOR, active = command_state != .NONE)
+    
+    {
+        set_region(.{top = file_editor.bounds.top, left = 0, bottom = file_editor.bounds.bottom, right = file_editor.bounds.left}, MENU_COLOR)
+        
+        glPushMatrix()
+        defer glPopMatrix()
+        glTranslatef(MARGIN, -file_editor.scroll_y + file_editor.bounds.top, 0)
+        
+        first_line, last_line := get_visible_range(*file_editor)
+        
+        begin_draw    (textured = true)
+        defer end_draw(textured = true)
+        
+        y: f32 = cast() first_line * font.height
+        for first_line .. last_line {
+            line_number := u64_to_string(it + 1)
+            defer free_string(line_number)
+            
+            draw_text(0, y, line_number)
+            y += font.height
+        
+        }
+    }
+    
+    {
+        set_region(.{top = command_editor.bounds.top, left = 0, bottom = command_editor.bounds.bottom, right = command_editor.bounds.left}, MENU_COLOR)
+        
+        glPushMatrix()
+        defer glPopMatrix()
+        glTranslatef(MARGIN, command_editor.bounds.top + MARGIN + font.ascent, 0)
+        
+        begin_draw    (textured = true)
+        defer end_draw(textured = true)
+        
+        y: f32 = 0
+        x: f32 = 0
+        
+        for editor_label {
+            draw_character(*x, *y, it, TEXT_COLOR)
+        }
+    }
+    
+    if command_state == .NONE {
+        free_string(editor_label)
+    }
+}
+
+tab_x_button_contains :: (using tab: *Tab, x: f32, y: f32) -> bool {
+    return rectangle_contains(.{top    = rect.top,    left  = rect.right - MARGIN * 1.5 - font.width, 
+                                bottom = rect.bottom, right = rect.right}, 
+                              x, y)
+}
+
+set_editor_bounds :: (using tab: *Tab, width: f32, height: f32) {
+    command_editor.bounds.top    = height - font.height - 2 * MARGIN
+    command_editor.bounds.bottom = height
+    command_editor.bounds.left   = font.width * cast() editor_label.count + 2 * MARGIN
+    command_editor.bounds.right  = width
+    
+    file_editor.bounds.top    = font.height + 2 * MARGIN
+    file_editor.bounds.right  = width
+    file_editor.bounds.left   = font.width * 5 + 2 * MARGIN
+    file_editor.bounds.bottom = command_editor.bounds.top
+}
+
+draw_text :: (x: f32, y: f32, text: string, color: u8 = TEXT_COLOR) {
+    x_ := x
+    y_ := y
+    
+    for text {
+        draw_character(*x_, *y_, it, color)
+    }
+}
+
+draw_text :: (x: f32, y: f32, text: string, colors: []u8) {
+    x_ := x
+    y_ := y
+    
+    for text {
+        draw_character(*x_, *y_, it, colors[it_index])
+    }
+}
+
+draw_editor :: (using editor: *Editor, background: u8, active: bool) {
+    set_region(bounds, background)
+    
+    glPushMatrix()
+    defer glPopMatrix()
+    
+    glTranslatef(-scroll_x + bounds.left, -scroll_y + bounds.top, 0)
+    
+    first_line, last_line := get_visible_range(editor)
+    
+    lines := get_lines(editor)
+    {
+        begin_draw    (textured = false)
+        defer end_draw(textured = false)
+        
+        y: f32 = cast() first_line * font.height
+        for lines[first_line .. last_line] {
+            top    := y - font.ascent  - font.line_gap * 0.5
+            bottom := y - font.descent + font.line_gap * 0.5
+        
+            
+            for * it[0 .. it.count + 1] {
+                x: f32 = cast() it_index * font.width
+                character_index := cast(u64) (it - text.data)
+                
+                if (selection < cursor && character_index >= selection && character_index < cursor) || 
+                    (cursor < selection && character_index >= cursor && character_index < selection) {
+                    draw_untextured(.{x, top, x + font.width, bottom}, SELECTION_COLOR)
+                }
+            }
+            
+        
+            indent_level := get_indentation(editor, it_index + first_line)
+            
+            col := TAB_SIZE
+            
+            while col < indent_level {
+                x: f32 = cast() col * font.width
+            
+                draw_untextured(.{x, top, x + 1, bottom}, MENU_COLOR)
+            
+                col += TAB_SIZE
+            }
+        
+        
+            y += font.height
+        }
+    }
+    
+    {
+        begin_draw    (textured = true)
+        defer end_draw(textured = true)
+        
+        y: f32 = cast() first_line * font.height
+        for lines[first_line .. last_line] {
+            draw_text(0, y, it, colors[it.data - text.data..])
+            y += font.height
+        }
+    }
+    
+    if active && cursor_should_be_active(editor) {
+        begin_draw    (textured = false)
+        defer end_draw(textured = false)
+        
+        cursor_rect := get_cursor_rect(editor)
+        draw_untextured(cursor_rect, TEXT_COLOR)
+    }
+}
+
+set_region :: (using bounds: Rectangle, background: u8) {
+    glViewport(cast() left, window.height - cast() bottom, cast() (right - left), cast() (bottom - top))
+        
+    glMatrixMode(GL_PROJECTION)
+    glLoadIdentity()
+    glOrtho(cast() left, cast() right, cast() bottom, cast() top, -1, 1)
+    glMatrixMode(GL_MODELVIEW)
+    glLoadIdentity()
+    
+    begin_draw    (textured = false)
+    defer end_draw(textured = false)
+    
+    draw_untextured(bounds, background)
+}
+
+get_visible_range :: (using editor: *Editor) -> (u64, u64) {
+    first_line := cast(u64) (scroll_y / font.height + 1)
+    last_line  := first_line + cast() ((bounds.bottom - bounds.top) / font.height + 1)
+    
+    lines := get_lines(editor)
+    first_line = min(first_line, lines.count - 1)
+    last_line  = max(min(last_line, lines.count), first_line)
+    
+    return first_line, last_line
+}
+
+gl_vertices:   [..]f32
+gl_tex_coords: [..]f32
+gl_colors:     [..]f32
+
+draw_textured :: (rect: Rectangle, color: u8, tex_rect: Rectangle) {
+    draw_untextured(rect, color)
+    
+    array_add(*gl_tex_coords, tex_rect.left)
+    array_add(*gl_tex_coords, tex_rect.top)
+    array_add(*gl_tex_coords, tex_rect.left)
+    array_add(*gl_tex_coords, tex_rect.bottom)
+    array_add(*gl_tex_coords, tex_rect.right)
+    array_add(*gl_tex_coords, tex_rect.bottom)
+    array_add(*gl_tex_coords, tex_rect.right)
+    array_add(*gl_tex_coords, tex_rect.top)
+}
+
+draw_untextured :: (rect: Rectangle, color: u8) {
+    array_add(*gl_vertices, rect.left)
+    array_add(*gl_vertices, rect.top)
+    array_add(*gl_vertices, rect.left)
+    array_add(*gl_vertices, rect.bottom)
+    array_add(*gl_vertices, rect.right)
+    array_add(*gl_vertices, rect.bottom)
+    array_add(*gl_vertices, rect.right)
+    array_add(*gl_vertices, rect.top)
+    
+    for 4
+        for COLORS[color]
+            array_add(*gl_colors, it)
+}
+
+begin_draw :: ($textured: bool) {
+    #if textured {
+        glEnable(GL_TEXTURE_2D)
+        glBindTexture(GL_TEXTURE_2D, font.texture_id)
+        glEnableClientState(GL_TEXTURE_COORD_ARRAY)
+        gl_tex_coords.count = 0
+    } else {
+        glDisableClientState(GL_TEXTURE_COORD_ARRAY)
+        glDisable(GL_TEXTURE_2D)
+    }
+    
+    gl_vertices.count = 0
+    gl_colors.count   = 0
+}
+
+end_draw :: ($textured: bool) {
+    glVertexPointer(2, GL_FLOAT, 0, gl_vertices.data)
+    glColorPointer(3, GL_FLOAT, 0, gl_colors.data)
+    
+    #if textured {
+        glTexCoordPointer(2, GL_FLOAT, 0, gl_tex_coords.data)
+    }
+    
+    glDrawArrays(GL_QUADS, 0, cast() (gl_vertices.count / 2))
+}
+
+Font :: struct {
+    ATLAS_SIZE :: 256
+    FIRST_CHAR :: ' '
+    LAST_CHAR  :: '~'
+    texture_id: u32
+    width:      f32
+    height:     f32
+    ascent:     f32
+    descent:    f32
+    line_gap:   f32
+    chars: [LAST_CHAR - FIRST_CHAR + 1]stbtt_bakedchar     = --
+    rgba_bitmap: [Font.ATLAS_SIZE * Font.ATLAS_SIZE * 4]u8 = --
+}
+
+#run precompute_font("Mechanical.ttf", 20)
+font: *Font
+
+precompute_font :: (filename: string, size: f32) {
+    result: Font = --
+
+    file_data := read_entire_file(filename)
+    
+    single_channel_bitmap := new_array(u8, Font.ATLAS_SIZE * Font.ATLAS_SIZE, initialized = false)
+    defer free_array(single_channel_bitmap)
+    
+    stbtt_BakeFontBitmap(file_data.data, 0, size, single_channel_bitmap.data, Font.ATLAS_SIZE, Font.ATLAS_SIZE, Font.FIRST_CHAR, cast() result.chars.count, result.chars.data)
+   
+    result.width = result.chars[0].xadvance
+    
+    font_info: stbtt_fontinfo
+    stbtt_InitFont(*font_info, file_data.data, 0)
+    
+    scale := stbtt_ScaleForPixelHeight(*font_info, size)
+    
+    unscaled_ascent:   s32
+    unscaled_descent:  s32
+    unscaled_line_gap: s32
+    
+    stbtt_GetFontVMetrics(*font_info, *unscaled_ascent, *unscaled_descent, *unscaled_line_gap)
+    
+    result.ascent   = cast() unscaled_ascent   * scale
+    result.descent  = cast() unscaled_descent  * scale
+    result.line_gap = cast() unscaled_line_gap * scale
+    result.height   = result.ascent - result.descent + result.line_gap
+    
+    for single_channel_bitmap {
+        result.rgba_bitmap[4 * it_index + 0] = 255
+        result.rgba_bitmap[4 * it_index + 1] = 255
+        result.rgba_bitmap[4 * it_index + 2] = 255
+        result.rgba_bitmap[4 * it_index + 3] = it
+    }
+
+    write_entire_file("font.bin", .{data = cast() *result, count = size_of(Font)})
+}
+
+load_font :: () -> bool {
+    data, success := read_entire_file(get_path_relative_to_executable("font.bin"))
+    
+    if !success || data.count != size_of(Font)  
+        return false
+        
+    font = cast() data.data
+
+    glGenTextures(1, *font.texture_id)
+    glBindTexture(GL_TEXTURE_2D, font.texture_id)
+    
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP)
+    
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, Font.ATLAS_SIZE, Font.ATLAS_SIZE, 0, GL_RGBA, GL_UNSIGNED_BYTE, font.rgba_bitmap.data)
+    
+    return true
+}
+
+draw_character :: (x: *f32, y: *f32, char: u8, color: u8) {
+    using font
+    using quad: stbtt_aligned_quad = --
+    
+    stbtt_GetBakedQuad(chars.data, Font.ATLAS_SIZE, Font.ATLAS_SIZE, cast() (char - Font.FIRST_CHAR), x, y, *quad, 1)
+    
+    if char == ' '
+        return;
+        
+    draw_textured(.{x0, y0, x1, y1}, color, .{s0, t0, s1, t1})
+}
+
+Rectangle :: struct {
+    left:   f32
+    top:    f32
+    right:  f32
+    bottom: f32
+}
+
+MARGIN: f32 : 8
+
+update_cursor :: (using editor: *Editor) {
+    last_cursor_move_time = get_performance_timer()
+    
+    cursor_rect := get_cursor_rect(editor)
+    
+    if cursor_rect.left - scroll_x < MARGIN {
+        scroll_x = cursor_rect.left - MARGIN
+    } else if cursor_rect.right - scroll_x > bounds.right - bounds.left - MARGIN {
+        scroll_x = cursor_rect.right - (bounds.right - bounds.left - MARGIN)
+    }
+    
+    if cursor_rect.top - scroll_y < MARGIN {
+        scroll_y = cursor_rect.top - MARGIN
+    } else if cursor_rect.bottom - scroll_y > bounds.bottom - bounds.top - MARGIN {
+        scroll_y = cursor_rect.bottom - (bounds.bottom - bounds.top - MARGIN)
+    }
+}
+
+update_scroll_limits :: (using editor: *Editor) {
+    scroll_limits: Rectangle
+
+    scroll_limits.left = -MARGIN
+    scroll_limits.top = -MARGIN - font.ascent
+        
+    max_width: u64 = 0
+    
+    for get_lines(editor)
+        max_width = max(it.count, max_width)
+    
+    scroll_limits.right = cast() max_width * font.width - (bounds.right - bounds.left - MARGIN)
+    scroll_limits.right = max(scroll_limits.right, scroll_limits.left)    
+    
+    scroll_limits.bottom = cast() get_lines(editor).count * font.height + font.descent - (bounds.bottom - bounds.top - MARGIN)
+    scroll_limits.bottom = max(scroll_limits.bottom, scroll_limits.top)
+    
+    
+    scroll_x = min(max(scroll_x, scroll_limits.left), scroll_limits.right)
+    scroll_y = min(max(scroll_y, scroll_limits.top),  scroll_limits.bottom)
+}
+
+cursor_should_be_active :: (using editor: *Editor) -> bool {
+    CURSOR_PERIOD_MILLIS  :: 1000
+    CURSOR_ON_TIME_MILLIS :: 500
+    
+    delta_time := cast(s64) ((get_performance_timer() - last_cursor_move_time) * 1000)
+    delta_time %= CURSOR_PERIOD_MILLIS
+    
+    return delta_time < CURSOR_ON_TIME_MILLIS
+}
+
+get_cursor_rect :: (using editor: *Editor) -> Rectangle {
+    CURSOR_WIDTH :: 2
+    
+    row, col := cursor_pos(editor)
+    
+    
+    x := cast(f32) col * font.width
+    y := cast(f32) row * font.height
+
+
+    return .{x, y - font.ascent, x + CURSOR_WIDTH, y - font.descent}
+}
+
+screen_coords_to_cursor :: (using editor: *Editor, mouse_x: s64, mouse_y: s64, x_rounding: f32 = 0.5) -> u64 {
+    x := scroll_x + cast() mouse_x - bounds.left
+    y := scroll_y + cast() mouse_y - bounds.top
+    
+    col := cast(s64) (x / font.width + x_rounding)
+    row := cast(s64) ((y - font.descent + font.line_gap * 0.5) / font.height + 0.5)
+    
+    return get_offset(editor, cast() max(row, 0), cast() max(col, 0))
+}
+
+TEXT_COLOR         :u8: 0
+BACKGROUND_COLOR   :u8: 1
+SELECTION_COLOR    :u8: 2
+CONTROL_FLOW_COLOR :u8: 3
+VALUE_COLOR        :u8: 4
+TYPE_COLOR         :u8: 5
+STRING_COLOR       :u8: 6
+COMMENT_COLOR      :u8: 7
+DIRECTIVE_COLOR    :u8: 8
+MENU_COLOR         :u8: 9
+ERROR_COLOR        :u8: 10
+ACTIVE_COLOR       :u8: 11
+
+COLORS :: [3]f32.[
+    .[0.95, 0.95, 0.95], 
+    .[0.1,  0.12, 0.12], 
+    .[0.1,  0.1,  0.7 ], 
+    .[0.6,  0.3,  0.9 ], 
+    .[0.9,  0.6,  0.1 ], 
+    .[0.1,  0.9,  0.9 ],
+    .[0.8,  0.9,  0.1 ], 
+    .[0.1,  0.5,  0.3 ], 
+    .[0.9,  0.3,  0.4 ], 
+    .[0.2,  0.24, 0.24], 
+    .[0.8,  0.1,  0.1 ], 
+    .[0.4, 0.48, 0.48]
+]

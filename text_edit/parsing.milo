@@ -1,0 +1,429 @@
+cursor_in_code :: (using editor: *Editor) -> bool {
+    it: u64 = 0
+    while it < cursor {   
+        start_char := text[it]
+        
+        if text[it] == '"' || text[it] == '\'' {
+            it += 1
+            
+            escape := false
+        
+            while it < cursor {                
+                if text[it] == '\\' && !escape {
+                    it += 1
+                    escape = true
+                } else if text[it] == '\n' {
+                    break
+                } else if !escape && text[it] == start_char {
+                    it += 1
+                    break
+                } else {
+                    it += 1
+                    escape = false
+                }
+            } or {
+                return false
+            }
+        } else if it + 1 < cursor && cast() cast([]u8) text[it .. it + 2] == "//" {
+            it += 2
+            
+            while it < cursor {
+                
+                if text[it] == '\n'
+                    break;
+            
+                it += 1
+            } or {
+                return false
+            }
+        } else if it + 1 < cursor && cast() cast([]u8) text[it .. it + 2] == "/*" {
+            it += 2
+            
+            block_comment_nest_count := 0
+        
+            while it < cursor {                   
+                if it + 1 < cursor && cast() cast([]u8) text[it .. it + 2] == "*/" {
+                    it += 2
+                    
+                    if block_comment_nest_count == 0
+                        break;
+                        
+                    block_comment_nest_count -= 1
+                } else if it + 1 < cursor && cast() cast([]u8) text[it .. it + 2] == "/*" {
+                    it += 2
+                    
+                    block_comment_nest_count += 1
+                } else {
+                    it += 1
+                }                    
+            } or {
+                return false
+            }
+        } else {
+            it += 1
+        }
+    }
+    
+    return true
+}
+
+CONTROL_FLOW_KEYWORDS :: string.[
+    "if", 
+    "#if", 
+    "else", 
+    "case", 
+    "while", 
+    "for",
+    "or", 
+    "using", 
+    "break", 
+    "continue", 
+    "remove", 
+    "return", 
+    "push_context", 
+    "defer", 
+    "cast"
+]
+
+VALUE_KEYWORDS :: string.[
+    "true", 
+    "false", 
+    "null"
+]
+
+TYPE_KEYWORDS :: string.[
+    "u8", 
+    "u16", 
+    "u32", 
+    "u64", 
+    "s8", 
+    "s16", 
+    "s32", 
+    "s64", 
+    "bool", 
+    "type", 
+    "void", 
+    "string", 
+    "size_of", 
+    "type_of", 
+    "struct", 
+    "union", 
+    "f32", 
+    "f64", 
+    "enum", 
+    "enum_flags", 
+    "type_info", 
+    "any", 
+    "Context", 
+    "align_of", 
+    "is_constant"
+]
+
+DIRECTIVE_KEYWORDS :: string.[
+    "#external", 
+    "#load", 
+    "#pack", 
+    "#must", 
+    "#complete", 
+    "#through", 
+    "#run", 
+    "#c_call", 
+    "#if", 
+    "#import", 
+    "#scope_module", 
+    "#scope_export", 
+    "#add_context"
+]
+
+set_plain_color :: (using editor: *Editor, color: u8) {
+    if colors.count < text.count {
+        colors = new_array(u8, text.capacity)
+    }
+    
+    fill_array(colors, color)
+}
+
+compute_colors :: (using editor: *Editor, color := TEXT_COLOR) {
+    if change_count == colors_change_index
+        return;
+        
+    colors_change_index = change_count
+
+    set_plain_color(editor, color)
+    
+    it: u64 = 0
+    
+    while outer: it < text.count {   
+        start_char := text[it]
+        start_index := it
+        
+        color := TEXT_COLOR
+        defer fill_array(colors[start_index .. it], color)
+        
+        if text[it] == '#' || text[it] == '_' || ('a' <= text[it] && text[it] <= 'z') || ('A' <= text[it] && text[it] <= 'Z') {
+            it += 1
+            
+            while it < text.count
+                if text[it] == '_' || ('a' <= text[it] && text[it] <= 'z') || ('A' <= text[it] && text[it] <= 'Z') || ('0' <= text[it] && text[it] <= '9')
+                    it += 1
+                else
+                    break;
+            
+            word := cast(string) text[start_index .. it]
+            
+            if array_contains(CONTROL_FLOW_KEYWORDS, word) {
+                color = CONTROL_FLOW_COLOR
+            } else if array_contains(VALUE_KEYWORDS, word) {
+                color = VALUE_COLOR
+            } else if array_contains(TYPE_KEYWORDS, word) {
+                color = TYPE_COLOR
+            } else if array_contains(DIRECTIVE_KEYWORDS, word) {
+                color = DIRECTIVE_COLOR
+            } else if word[0] == '#' {
+                color = ERROR_COLOR
+            }
+        } else if text[it] == '"' || text[it] == '\'' {
+            it += 1
+            
+            escape := false
+            char_count := 0
+            color = STRING_COLOR
+        
+            while it < text.count {                
+                if text[it] == '\\' && !escape {
+                    it += 1
+                    escape = true
+                } else if text[it] == '\n' {
+                    color = ERROR_COLOR
+                    break
+                } else if !escape && text[it] == start_char {
+                    it += 1
+                    break
+                } else {
+                    char_count += 1
+                    it         += 1
+                    escape = false
+                }
+            }
+            
+            if start_char == '\'' && char_count != 1
+                color = ERROR_COLOR
+            
+        } else if it + 1 < text.count && cast() cast([]u8) text[it .. it + 2] == "//" {
+            it += 2
+            
+            while it < text.count {
+                
+                if text[it] == '\n'
+                    break;
+            
+                it += 1
+            }
+            
+            color = COMMENT_COLOR
+        } else if it + 1 < text.count && cast() cast([]u8) text[it .. it + 2] == "/*" {
+            it += 2
+            
+            block_comment_nest_count := 0
+        
+            while it < text.count {                   
+                if it + 1 < text.count && cast() cast([]u8) text[it .. it + 2] == "*/" {
+                    it += 2
+                    
+                    if block_comment_nest_count == 0
+                        break;
+                        
+                    block_comment_nest_count -= 1
+                } else if it + 1 < text.count && cast() cast([]u8) text[it .. it + 2] == "/*" {
+                    it += 2
+                    
+                    block_comment_nest_count += 1
+                } else {
+                    it += 1
+                }                    
+            }
+            
+            color = COMMENT_COLOR
+        } else if it + 1 < text.count && cast() cast([]u8) text[it .. it + 2] == "--" {
+            it += 2
+            
+            color = VALUE_COLOR
+        } else if it + 1 < text.count && cast() cast([]u8) text[it .. it + 2] == ".." {
+            it += 2
+        } else if ('0' <= text[it] && text[it] <= '9') || text[it] == '.' || text[it] == '+' || text[it] == '-' {
+            if text[it] == '+' || text[it] == '-' {
+                it += 1
+                
+                if it >= text.count continue;
+            }
+            
+            decimal := false
+            
+            if text[it] == '.' {
+                decimal = true
+                it += 1
+                
+                if it >= text.count {
+                    it = start_index + 1
+                    continue;
+                }
+            }
+            
+            if '0' > text[it] || text[it] > '9' {
+                it = start_index + 1
+                continue;
+            }
+            
+            color = VALUE_COLOR
+        
+            base := 10
+            
+            is_digit :: (c: u8, base := 10) -> bool {
+                if c == '_' return true
+            
+                if base == {
+                    case 2  return c == '0' || c == '1'
+                    case 10 return '0' <= c && c <= '9'
+                    case 16 return ('0' <= c && c <= '9') || ('a' <= c && c <= 'f') || ('A' <= c && c <= 'F')
+                    else return false
+                }
+            }
+            
+            if !decimal && it + 1 < text.count {
+                prefix := cast(string) cast([]u8) text[it .. it + 2]
+                
+                if prefix == "0x" || prefix == "0X" {
+                    it += 2
+                    
+                    base = 16
+                } else if prefix == "0b" || prefix == "0B" {
+                    it += 2
+                    
+                    base = 2
+                }
+            }
+            
+            had_digit := false
+            
+            while !decimal && it < text.count {
+                if is_digit(text[it], base) {
+                    it += 1
+                    had_digit |= text[it] != '_'
+                } else if text[it] == '.' {
+                    if it + 1 < text.count && text[it + 1] == '.'
+                        continue outer
+                    
+                    it += 1
+                    decimal = true
+                    break
+                } else {
+                    break
+                }
+            }
+            
+            while decimal && it < text.count {                
+                if is_digit(text[it], base) {
+                    it += 1
+                    had_digit |= text[it] != '_'
+                } else {
+                    break
+                }
+            }
+            if !had_digit
+                color = ERROR_COLOR
+            
+            if text[it] == 'e' || text[it] == 'E' || text[it] == 'p' || text[it] == 'P' {
+                it += 1
+                
+                if it < text.count && (text[it] == '+' || text[it] == '-') {
+                    it += 1
+                }
+                
+                had_exponent := false
+                
+                while it < text.count {
+                    if is_digit(text[it]) {
+                        had_exponent |= text[it] != '_'
+                        it += 1
+                    } else {
+                        break
+                    }
+                }
+                
+                if !had_exponent
+                    color = ERROR_COLOR
+            }
+        } else {
+            it += 1
+        }
+    }
+    
+    open_braces: [..]u64
+    defer array_free(open_braces)
+    
+    remove_best_matching_paren :: (using editor: *Editor, open_braces: *[..]u64, current_index: u64, match_type: u8) 
+        -> bool {
+        if !open_braces.count
+            return false
+            
+        /*
+        row := location_pos(editor, current_index)
+        indentation := get_indentation(editor, row)
+        
+        i := open_braces.count
+        
+        while i > 0 {
+            i -= 1
+            
+            open_index := (<<open_braces)[i]
+            
+            if text[open_index] != match_type
+                continue;
+            
+            open_row := location_pos(editor, open_index)
+            
+            if get_indentation(editor, open_row) == indentation {
+                open_braces.count -= 1
+                for * (<<open_braces)[i..] {
+                    it[0] = it[1]
+                }
+                return true
+            }
+        }
+        */
+        
+        open_braces.count -= 1
+        if text[(<<open_braces)[open_braces.count]] == match_type {
+            return true
+        } else {
+            colors[(<<open_braces)[open_braces.count]] = ERROR_COLOR
+            return false
+        }
+    }
+    
+    for text {
+        if colors[it_index] == STRING_COLOR || colors[it_index] == COMMENT_COLOR
+            continue;
+    
+        if it == {
+            case '{' #through
+            case '[' #through
+            case '('
+                array_add(*open_braces, it_index)
+            
+            case '}'
+                if !remove_best_matching_paren(editor, *open_braces, it_index, '{')
+                    colors[it_index] = ERROR_COLOR            
+            case ']'
+                if !remove_best_matching_paren(editor, *open_braces, it_index, '[')
+                    colors[it_index] = ERROR_COLOR 
+            case ')'
+                if !remove_best_matching_paren(editor, *open_braces, it_index, '(')
+                    colors[it_index] = ERROR_COLOR 
+        }
+    }
+    
+    for open_braces {
+        colors[it] = ERROR_COLOR
+    }
+}
