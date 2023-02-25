@@ -2230,7 +2230,7 @@ bool generateIrForFunction(ExprFunction *function) {
 	irInstructions += function->state.ir.count;
 
 	function->flags |= EXPR_FUNCTION_RUN_READY;
-	_ReadWriteBarrier();
+	read_write_barrier();
 	inferQueue.add(InferQueueJob(function, nullptr));
 
 	CoffJob job;

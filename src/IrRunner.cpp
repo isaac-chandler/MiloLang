@@ -6,6 +6,7 @@
 #include "Infer.h"
 #include "CompilerMain.h"
 #include "Error.h"
+#include <math.h>
 
 struct StackNode {
 	StackNode *next;
@@ -1139,7 +1140,7 @@ char cCallCallback(DCCallback *pcb, DCArgs *args, DCValue *result, void *userdat
 
 	bool bigReturn = !isStandardSize(returnType->size);
 
-	u64 *resultPointer = &result->L;
+	u64 *resultPointer = reinterpret_cast<u64 *>(&result->L);
 
 	Ir dummyOp;
 	dummyOp.op = IrOp::CALL;

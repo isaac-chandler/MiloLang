@@ -3,35 +3,13 @@
 #define _SILENCE_CXX17_ITERATOR_BASE_CLASS_DEPRECATION_WARNING
 
 #include <iostream>
+
+#if BUILD_WINDOWS
 #include <Windows.h>
-#include <assert.h>
-#include <cstring>
-#include <stdint.h>
-#include <initializer_list>
-#include <atomic>
-#include <fstream>
-#include <sstream>
-#include <thread>
-#include <algorithm>
-#include <stdlib.h>
-#include <mutex>
-#include <intrin.h>
-#include <string_view>
-#include <cinttypes>
-#include <stdarg.h>
 #include <Shlwapi.h>
+#endif
 
-
-#undef small
-#undef min
-#undef max
-#undef CONST
-#undef TRUE
-#undef FALSE
-#undef VOID
-
-
-
+#if !BUILD_NO_LLVM
 #pragma warning(push)
 #pragma warning(disable: 4141 4146 4244 4267 4530 4624 4996)
 #include <llvm/IR/Module.h>
@@ -56,6 +34,42 @@
 #include <llvm/CodeGen/CommandFlags.h>
 #include <llvm/DebugInfo/PDB/PDB.h>
 #pragma warning(pop)
+#else
+namespace llvm {
+	class Value;
+	class GlobalVariable;
+	class Function;
+	class Type;
+	class DIType;
+	class BasicBlock;
+}
+
+#endif
+
+#include <assert.h>
+#include <cstring>
+#include <stdint.h>
+#include <initializer_list>
+#include <atomic>
+#include <fstream>
+#include <sstream>
+#include <thread>
+#include <algorithm>
+#include <stdlib.h>
+#include <mutex>
+#include <string_view>
+#include <cinttypes>
+#include <stdarg.h>
+#include <immintrin.h>
+
+
+#undef small
+#undef min
+#undef max
+#undef CONST
+#undef TRUE
+#undef FALSE
+#undef VOID
 
 #pragma warning(error: 4715)
 
@@ -117,15 +131,15 @@ T validate_(T value) {
 #endif
 
 
-typedef uint8_t u8;
-typedef uint16_t u16;
-typedef uint32_t u32;
-typedef uint64_t u64;
+typedef unsigned char      u8;
+typedef unsigned short     u16;
+typedef unsigned int       u32;
+typedef unsigned long long u64;
 
-typedef int8_t s8;
-typedef int16_t s16;
-typedef int32_t s32;
-typedef int64_t s64;
+typedef signed char s8;
+typedef short       s16;
+typedef int         s32;
+typedef long long   s64;
 
 template<typename T>
 struct MiloArray {
@@ -137,6 +151,11 @@ struct MiloString {
 	u8 *data;
 	u64 count;
 };
+
+#if BUILD_LINUX
+#pragma GCC diagnostic ignored "-Winvalid-offsetof"
+#pragma GCC diagnostic ignored "-Wvolatile"
+#endif
 
 #define CAST_FROM_SUBSTRUCT(castTo, subStruct, castFrom) (	reinterpret_cast<castTo *>(reinterpret_cast<u8 *>(castFrom) - offsetof(castTo, subStruct)) + ((decltype(castFrom)) 0 - (decltype(&((castTo *) 0)->subStruct)) 0)	)
 
@@ -182,9 +201,9 @@ struct Timer {
 
 		write->name = name;
 
-		_ReadWriteBarrier();
+		read_write_barrier();
 		write->time = __rdtsc();
-		_ReadWriteBarrier();
+		read_write_barrier();
 	}
 
 	__forceinline Timer(const char *name, const char *color) {
@@ -193,17 +212,17 @@ struct Timer {
 		write->name = name;
 		write->color = color;
 
-		_ReadWriteBarrier();
+		read_write_barrier();
 		write->time = __rdtsc();
-		_ReadWriteBarrier();
+		read_write_barrier();
 	}
 
 	__forceinline ~Timer() {
 		Profile *write = profileIndex++;
 
-		_ReadWriteBarrier();
+		read_write_barrier();
 		write->time = __rdtsc();
-		_ReadWriteBarrier();
+		read_write_barrier();
 	}
 };
 

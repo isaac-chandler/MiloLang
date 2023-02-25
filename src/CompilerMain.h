@@ -58,7 +58,7 @@ struct Module *getModule(String name);
 
 struct Library {
 	String name;
-	HMODULE handle;
+	void *handle;
 
 	bool operator==(const Library &other) const {
 		return other.name == name;
@@ -77,12 +77,13 @@ void loadNewFile(String file, struct Module *module);
 
 inline ArraySet<Library> libraries;
 
+char *mprintf(const char *format, ...);
 String msprintf(const char *format, ...);
 
 inline bool linkLibC = false;
 
-inline char modulePath[1024];
+inline char *modulePath;
 
 #define PROGRAM_START "__program_start"
 inline struct ExprFunction *programStart;
-inline volatile long totalLines;
+inline volatile s64 totalLines;

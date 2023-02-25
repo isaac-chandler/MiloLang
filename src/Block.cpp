@@ -5,7 +5,7 @@
 #include "Error.h"
 
 // Modified from original
-__forceinline u64 MurmurHash64A(const void *key, u64 len, u64 seed) {
+u64 MurmurHash64A(const void *key, u64 len, u64 seed) {
 	static_assert(sizeof(u64) == 8);
 	constexpr static u64 multiplier = 0xc6a4a7935bd1e995;
 	constexpr static u64 shift = 47;

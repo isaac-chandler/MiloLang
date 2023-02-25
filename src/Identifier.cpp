@@ -11,7 +11,7 @@ static Identifier **table;
 static u32 capacity;
 static u32 count;
 
-#define lock(x) while (InterlockedCompareExchange(&(x), 1, 0) != 0)
+#define lock(x) while (CompareExchange(&(x), (u32) 1, (u32) 0))
 #define unlock(x) (x) = 0
 
 void identifierRehash() {

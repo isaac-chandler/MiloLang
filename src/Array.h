@@ -1,13 +1,12 @@
 #pragma once
 
 #include "Basic.h"
+#include "OS.h"
 
 inline u32 findHigherPowerOf2(u32 value) {
 	if (value == 0) return 1;
 
-	u32 index;
-
-	_BitScanForward((unsigned long *)&index, value);
+	u32 index = bitScanReverse(value);
 
 	if ((value & value - 1) == 0) [[likely]] {
 		return index;
@@ -58,10 +57,8 @@ struct ArrayAllocator {
 	}
 
 	void free(u32 size, u8 *data) {
-		u32 powerOf2;
-		
 		assert(size && (size & size - 1) == 0);
-		_BitScanReverse((unsigned long *)&powerOf2, size);
+		u32 powerOf2 = bitScanReverse(size);
 
 		ArrayAllocatorBlock *block = (ArrayAllocatorBlock *) (data - 8);
 
@@ -84,7 +81,7 @@ public:
 	u32 count = 0;
 	u32 capacity = 0;
 
-	__declspec(noinline) void resize(u32 newCapacity) {
+	void resize(u32 newCapacity) {
 		PROFILE_FUNC();
 		assert(newCapacity >= count);
 

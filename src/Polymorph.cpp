@@ -460,7 +460,7 @@ Expr *copyExpr(Expr *srcExpr) {
 		return nullptr;
 	}
 
-#undef c;
+#undef c
 }
 
 void copyDeclaration(Declaration *dest, Declaration *src) {	

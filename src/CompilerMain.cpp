@@ -9,8 +9,8 @@
 #include "UTF.h"
 #include "Lexer.h"
 #include "TypeTable.h"
-#include "Find.h"
 #include "Error.h"
+#include "Find.h"
 
 #define NUM_PARSE_THREADS 4
 
@@ -97,7 +97,7 @@ char *mprintf(const char *format, ...) {
 
 	char *buffer = static_cast<char *>(malloc(size));
 
-	vsprintf_s(buffer, size, format, args2);
+	vsnprintf(buffer, size, format, args2);
 
 	va_end(args2);
 
@@ -117,31 +117,11 @@ String msprintf(const char *format, ...) {
 
 	char *buffer = static_cast<char *>(malloc(size));
 
-	vsprintf_s(buffer, size, format, args2);
+	vsnprintf(buffer, size, format, args2);
 
 	va_end(args2);
 
 	return { buffer, size - 1 };
-}
-
-wchar_t *mprintf(const wchar_t *format, ...) {
-
-	va_list args1;
-	va_start(args1, format);
-
-	va_list args2;
-	va_copy(args2, args1);
-
-	s64 size = 1LL + _vsnwprintf(NULL, 0, format, args1);
-	va_end(args1);
-
-	wchar_t *buffer = static_cast<wchar_t *>(malloc(sizeof(wchar_t) * size));
-
-	vswprintf_s(buffer, size, format, args2);
-
-	va_end(args2);
-
-	return buffer;
 }
 
 Module *getModule(String name) {
@@ -186,44 +166,20 @@ Module *getModule(String name) {
 	return module;
 }
 
-void stompLastBackslash(char *name) {
-	char *lastBackslash = nullptr;
-	for (char *cursor = name; *cursor; ++cursor) {
-		if (*cursor == '\\') lastBackslash = cursor;
-	}
+void chopFinalDir(char *path) {
+	char *lastSlash = strrchr(path, '/');
 
-	if (lastBackslash) {
-		*lastBackslash = 0;
-	}
+	if (lastSlash)
+		*lastSlash = 0;
 }
 
-void stompLastBackslash(wchar_t *name) {
-	wchar_t *lastBackslash = nullptr;
-	for (wchar_t *cursor = name; *cursor; ++cursor) {
-		if (*cursor == '\\') lastBackslash = cursor;
-	}
+char *getFileName(char *path) {
+	char *lastSlash = strrchr(path, '/');
 
-	if (lastBackslash) {
-		*lastBackslash = 0;
-	}
-}
-
-bool fileExists(wchar_t *file) {
-	DWORD attributes = GetFileAttributesW(file);
-
-	return (attributes != INVALID_FILE_ATTRIBUTES &&
-		!(attributes & FILE_ATTRIBUTE_DIRECTORY));
-}
-
-bool directoryExists(wchar_t *file) {
-	DWORD attributes = GetFileAttributesW(file);
-
-	return (attributes != INVALID_FILE_ATTRIBUTES &&
-		(attributes & FILE_ATTRIBUTE_DIRECTORY));
-}
-
-bool compareNoCase(String a, String b) {
-	return a.length == b.length && _strnicmp(a.characters, b.characters, a.length) == 0;
+	if (lastSlash)
+		return lastSlash + 1;
+	else
+		return path;
 }
 
 static const char *getLibC() {
@@ -253,8 +209,7 @@ int main(int argc, char *argv[]) {
 	tls_callback(nullptr, DLL_THREAD_ATTACH, nullptr);
 	u64 startTsc = __rdtsc();
 
-	u64 startTime;
-	QueryPerformanceCounter(reinterpret_cast<LARGE_INTEGER *>(&startTime));
+	u64 startTime = performance_time();
 #endif
 
 
@@ -266,26 +221,9 @@ int main(int argc, char *argv[]) {
 
 	int firstBuildArgument = argc;
 
-	{
-		GetModuleFileNameA(nullptr, modulePath, sizeof(modulePath));
-		char *lastBackslash = strrchr(modulePath, '\\');
-
-		if (lastBackslash) {
-			*lastBackslash = 0;
-
-			lastBackslash = strrchr(modulePath, '\\');
-
-			if (lastBackslash) {
-				lastBackslash[1] = 0;
-			}
-			else {
-				modulePath[0] = 0;
-			}
-		}
-		else {
-			modulePath[0] = 0;
-		}
-	}
+	modulePath = exePath();
+	chopFinalDir(modulePath);
+	chopFinalDir(modulePath);
 
 
 	for (int i = 1; i < argc; i++) {
@@ -330,12 +268,12 @@ int main(int argc, char *argv[]) {
 				
 
 				if (*end)
-					QueryPerformanceCounter((LARGE_INTEGER *) &seed);
+					seed = performance_time();
 				else
 					i++;
 			}
 			else {
-				QueryPerformanceCounter((LARGE_INTEGER *) &seed);
+				seed = performance_time();
 			}
 
 			SHUFFLE_JOBS = true;
@@ -371,56 +309,24 @@ int main(int argc, char *argv[]) {
 		reportError("Usage: %s <file>", argv[0]);
 	}
 
-	char pathToInputFile[1024];
-	char *filePart;
-	if (GetFullPathNameA(input, sizeof(pathToInputFile) / sizeof(pathToInputFile[0]), pathToInputFile, &filePart) && filePart) {
-		input = filePart;
+	char *pathToInputFile = fullPath(input);
 
-		if (filePart > pathToInputFile) {
-			filePart[-1] = 0;
-			SetCurrentDirectoryA(pathToInputFile);
-		}
+	if (pathToInputFile) {
+		input = getFileName(pathToInputFile);
 
-		auto inputFileName = filePart;
+		chopFinalDir(pathToInputFile);
 
-		char *lastDot = nullptr;
+		char *lastDot = strrchr(input, '.');
 
-		while (char c = *inputFileName) {
-			if (c == '.') {
-				lastDot = inputFileName;
-			}
-
-			inputFileName++;
-		}
-
-		if (lastDot) {
+		if (lastDot && lastDot != input) {
 			buildOptions.output_name.count = lastDot - input;
-		}
-		else {
-			buildOptions.output_name.count = inputFileName - input;
+		} else {
+			buildOptions.output_name.count = strlen(input);
 		}
 	}
 	else {
-		char *inputFile = input;
-		char *lastSlash = nullptr;
-		char *lastDot   = nullptr;
-
-		while (char c = *inputFile) {
-			if (c == '\\' || c == '/')
-				lastSlash = inputFile;
-			else if (c == '.')
-				lastDot = inputFile;
-
-			inputFile++;
-		}
-
-
-		if (lastDot > lastSlash) {
-			buildOptions.output_name.count = lastDot - input;
-		}
-		else {
-			buildOptions.output_name.count = inputFile - input;
-		}
+		reportError("Error: File %s does not exist", input);
+		return 1;
 	}
 
 	buildOptions.output_name.data = new u8[buildOptions.output_name.count];
@@ -437,12 +343,12 @@ int main(int argc, char *argv[]) {
 
 
 		for (u32 i = 0; i < (noThreads ? 1 : NUM_PARSE_THREADS); i++) {
-			wchar_t name[] = L"Parser  ";
+			char name[] = "Parser  ";
 
-			name[7] = static_cast<wchar_t>(i + '1');
+			name[7] = i + '1';
 
 			std::thread parserThread(runParser);
-			SetThreadDescription(parserThread.native_handle(), name);
+			setThreadName(parserThread, name);
 			
 			parserThread.detach();
 		}
@@ -450,7 +356,7 @@ int main(int argc, char *argv[]) {
 
 		mainThread = std::this_thread::get_id();
 
-		SetThreadDescription(irGenerator.native_handle(), L"Ir Generator");
+		setThreadName(irGenerator, "Ir Generator");
 
 		irGenerator.detach();
 
@@ -519,6 +425,10 @@ int main(int argc, char *argv[]) {
 		}
 
 		objectFileName = mprintf("%.*s.obj", STRING_PRINTF(outputFileName));
+#elif BUILD_LINUX
+		outputFileName = { (char *)buildOptions.output_name.data, static_cast<u32>(buildOptions.output_name.count) };
+		objectFileName = mprintf("%.*s.o", STRING_PRINTF(outputFileName));
+
 #endif
 
 		auto backendStart = high_resolution_clock::now();
@@ -849,20 +759,17 @@ int main(int argc, char *argv[]) {
 	}
 #else
 	// @Platform
-#error "Non windows builds are not supported" 
 #endif
 
 #if BUILD_PROFILE
 	{
 		std::ofstream out("profile.json", std::ios::out | std::ios::trunc);
 
-		u64 pcf;
-		QueryPerformanceFrequency(reinterpret_cast<LARGE_INTEGER *>(&pcf));
+		u64 pcf = performance_frequency();
 
-		u64 endTime;
 		u64 endTsc = __rdtsc();
 
-		QueryPerformanceCounter(reinterpret_cast<LARGE_INTEGER *>(&endTime));
+		u64 endTime = performance_time();
 
 		double tscFactor = 1.0e9 * (double) (endTime - startTime) / (double) (endTsc - startTsc) / (double) pcf;
 
@@ -906,7 +813,7 @@ int main(int argc, char *argv[]) {
 
 
 
-#if BUILD_DEBUG
+#if BUILD_DEBUG && BUILD_WINDOWS
 	if (IsDebuggerPresent()) {
 		std::cin.get();
 	}

@@ -2,6 +2,7 @@
 
 #include "Find.h"
 
+#if BUILD_WINDOWS
 //
 // Author:   Jonathan Blow
 // Version:  2
@@ -587,3 +588,4 @@ Find_Result find_visual_studio_and_windows_sdk() {
 
     return result;
 }
+#endif

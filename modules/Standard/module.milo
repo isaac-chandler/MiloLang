@@ -1,7 +1,7 @@
 #if TARGET_WINDOWS {
-    #load "Windows.milo"
+	#load "Windows.milo"
 } else {
-    unsupported_os: u64 = "error"
+	#load "Linux.milo"
 }
 
 Concatenator :: struct {

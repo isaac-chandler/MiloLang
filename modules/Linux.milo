@@ -1,0 +1,38 @@
+stdin  :: 0
+stdout :: 1
+stderr :: 2
+
+write :: (fd: s32, buf: *void, count: u64) -> s64 #external "c"
+read :: (fd: s32, buf: *void, count: u64) -> s64 #external "c"
+
+malloc :: (size: u64) -> *void #external "c"
+free :: (ptr: *void) #external "c"
+realloc :: (ptr: *void, size: u64) -> *void #external "c"
+
+exit :: (status: s32) #external "c"
+
+using clockid_t :: enum u32 {
+    CLOCK_REALTIME           :: 0
+    CLOCK_MONOTONIC          :: 1
+    CLOCK_PROCESS_CPUTIME_ID :: 2
+    CLOCK_THREAD_CPUTIME_ID  :: 3
+    CLOCK_MONOTONIC_RAW      :: 4
+    CLOCK_REALTIME_COARSE    :: 5
+    CLOCK_MONOTONIC_COARSE   :: 6
+    CLOCK_BOOTTIME           :: 7
+    CLOCK_REALTIME_ALARM     :: 8
+    CLOCK_BOOTTIME_ALARM     :: 9
+    CLOCK_TAI                :: 11
+}
+
+timespec :: struct {
+    tv_sec:  s64
+    tv_nsec: s64
+}
+
+clock_gettime :: (__clock_id: clockid_t, __tp: *timespec) -> s32 #external "c"
+
+pid_t :: s32
+
+system :: (command: *u8) -> s32 #external "c"
+fork :: () -> pid_t #external "c"

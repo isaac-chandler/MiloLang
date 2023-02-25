@@ -4,6 +4,7 @@
 #include "String.h"
 #include "Error.h"
 #include "UTF.h"
+#include <math.h>
 
 struct Keyword {
 	String name;
@@ -1893,64 +1894,55 @@ exponent:
 
 bool LexerFile::open(FileInfo *file) {
 	PROFILE_FUNC();
-	LARGE_INTEGER size;
 
 	if (file->module->name.length) {
 		if (file->path.length) {
-			file->path = msprintf("%smodules\\%.*s\\%.*s", modulePath, STRING_PRINTF(file->module->name), STRING_PRINTF(file->path));
+			file->path = msprintf("%s/modules/%.*s/%.*s", modulePath, STRING_PRINTF(file->module->name), STRING_PRINTF(file->path));
 		}
 		else {
-			if (PathIsDirectoryW(utf8ToWString(msprintf("%smodules\\%.*s", modulePath, STRING_PRINTF(file->module->name))))) {
-				file->path = msprintf("%smodules\\%.*s\\module.milo", modulePath, STRING_PRINTF(file->module->name));
+			if (directoryExists(mprintf("%s/modules/%.*s", modulePath, STRING_PRINTF(file->module->name)))) {
+				file->path = msprintf("%s/modules/%.*s/module.milo", modulePath, STRING_PRINTF(file->module->name));
 			}
 			else {
-				file->path = msprintf("%smodules\\%.*s.milo", modulePath, STRING_PRINTF(file->module->name));
+				file->path = msprintf("%s/modules/%.*s.milo", modulePath, STRING_PRINTF(file->module->name));
 			}
 		}
 	}
 
-	auto handle = CreateFileW(utf8ToWString(file->path), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+	auto pathString = toCString(file->path);
 
-
-	if (handle == INVALID_HANDLE_VALUE) {
+	if (!fileExists(pathString)) {
 		reportError("Error: Failed to open file: %.*s", STRING_PRINTF(file->path));
 		return false;
 	}
 
-	GetFileSizeEx(handle, &size);
+	auto handle = fopen_utf8(pathString, "rb");
+	free(pathString);
 
-
-	text = static_cast<char *>(malloc(size.QuadPart));
-	file->data = text;
-	
-	DWORD bytesRead = 0;
-
-	u64 toRead = size.QuadPart;
-
-	char *buffer = text;
-
-	while (toRead) {
-		u32 readAmount = static_cast<u32>(my_min(toRead, UINT32_MAX));
-
-		if (!ReadFile(handle, buffer, readAmount, &bytesRead, nullptr) || bytesRead != readAmount) {
-			CloseHandle(handle);
-			reportError("Error: failed to read file: %.*s", STRING_PRINTF(file->path));
-			return false;
-		}
-
-		toRead -= readAmount;
-		buffer += readAmount;
+	if (!handle) {
+		reportError("Error: Failed to open file: %.*s", STRING_PRINTF(file->path));
+		return false;
 	}
 
-	CloseHandle(handle);
+	fseek(handle, 0, SEEK_END);
+	s64 size = ftell(handle);
+	fseek(handle, 0, SEEK_SET);
+
+
+	text = static_cast<char *>(malloc(size));
+	file->data = text;
+	
+	fread(file->data, size, 1, handle);
+
+	fclose(handle);
 
 	location.line = 1;
 	location.column = 0;
 	location.locationInMemory = 0;
 	location.fileUid = file->fileUid;
-	bytesRemaining = size.QuadPart;
+	bytesRemaining = size;
 
-	file->size = size.QuadPart;
+	file->size = size;
 
 	identifierSerial = 0;
 	currentBlock = nullptr;

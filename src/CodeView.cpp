@@ -56,7 +56,7 @@ u32 createFunctionIDType(ExprFunction *function) {
 void addStructUniqueNumber(BucketedArenaAllocator *debugTypes, u32 name = debugTypeId) {
 	char buffer[32];
 
-	_itoa(static_cast<int>(name - 0x1000), buffer, 16);
+	snprintf(buffer, sizeof(buffer), "%x", static_cast<int>(name - 0x1000));
 
 	debugTypes->addNullTerminatedString(buffer);
 }
@@ -78,8 +78,8 @@ bool appendCoffName(BucketedArenaAllocator *debugSymbols, Type *type) {
 			appendCoffName(debugSymbols, array->arrayOf);
 			debugSymbols->addString(" [");
 
-			char buffer[16];
-			_itoa(array->count, buffer, 10);
+			char buffer[32];
+			snprintf(buffer, sizeof(buffer), "%u", array->count);
 
 			debugSymbols->addString(buffer);
 			debugSymbols->add1(']');
@@ -362,9 +362,7 @@ u32 createTypeImpl(Type *type, CodeViewTypeInfo *codeView) {
 				u64 value = static_cast<ExprLiteral *>(declaration->initialValue)->unsignedValue;
 
 				if (value && !(value & value - 1)) { // If exactly one bit is set
-					unsigned long bit;
-
-					_BitScanForward64(&bit, value);
+					u32 bit = bitScanForward64(value);
 
 					DEBUG_LEAF{
 						debugTypes->ensure(8);

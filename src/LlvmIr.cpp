@@ -1,11 +1,12 @@
 #include "Basic.h"
 
-#ifndef BUILD_NO_LLVM
+#include "Error.h"
+
+#if !BUILD_NO_LLVM
 
 #include "CoffWriter.h"
 #include "Lexer.h"
 #include "IrGenerator.h"
-#include "Error.h"
 
 static llvm::Type *createLlvmType(llvm::LLVMContext &context, Type *type);
 

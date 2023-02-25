@@ -9,6 +9,45 @@
 #include "CodeView.h"
 #include "IrGenerator.h"
 
+#if !BUILD_WINDOWS
+#define IMAGE_SYM_TYPE_NULL      0
+#define IMAGE_SYM_CLASS_EXTERNAL 2
+#define IMAGE_SYM_CLASS_STATIC   3
+
+#define IMAGE_REL_AMD64_ABSOLUTE 0
+#define IMAGE_REL_AMD64_ADDR64   1
+#define IMAGE_REL_AMD64_ADDR32NB 3
+#define IMAGE_REL_AMD64_REL32    4
+#define IMAGE_REL_AMD64_SECREL   11
+#define IMAGE_REL_AMD64_SECTION  10
+
+#define IMAGE_SCN_CNT_CODE               0x0000'0020
+#define IMAGE_SCN_CNT_INITIALIZED_DATA   0x0000'0040
+#define IMAGE_SCN_CNT_UNINITIALIZED_DATA 0x0000'0080
+#define IMAGE_SCN_ALIGN_1BYTES           0x0010'0000
+#define IMAGE_SCN_ALIGN_2BYTES           0x0020'0000
+#define IMAGE_SCN_ALIGN_4BYTES           0x0030'0000
+#define IMAGE_SCN_ALIGN_8BYTES           0x0040'0000
+#define IMAGE_SCN_ALIGN_16BYTES          0x0050'0000
+#define IMAGE_SCN_ALIGN_32BYTES          0x0060'0000
+#define IMAGE_SCN_ALIGN_64BYTES          0x0070'0000
+#define IMAGE_SCN_ALIGN_128BYTES         0x0080'0000
+#define IMAGE_SCN_ALIGN_256BYTES         0x0090'0000
+#define IMAGE_SCN_ALIGN_512BYTES         0x00A0'0000
+#define IMAGE_SCN_ALIGN_1024BYTES        0x00B0'0000
+#define IMAGE_SCN_ALIGN_2048BYTES        0x00C0'0000
+#define IMAGE_SCN_ALIGN_4096BYTES        0x00D0'0000
+#define IMAGE_SCN_ALIGN_8192BYTES        0x00E0'0000
+#define IMAGE_SCN_LNK_NRELOC_OVFL        0x0100'0000
+#define IMAGE_SCN_MEM_DISCARDABLE        0x0200'0000    
+#define IMAGE_SCN_MEM_EXECUTE            0x2000'0000
+#define IMAGE_SCN_MEM_READ               0x4000'0000
+#define IMAGE_SCN_MEM_WRITE              0x8000'0000
+
+#define IMAGE_FILE_MACHINE_AMD64 0x8664      
+
+#endif
+
 union SymbolName {
 	char name[8];
 	struct {
@@ -1171,6 +1210,8 @@ void runCoffWriter() {
 
 #if BUILD_WINDOWS
 		const char *compilerName = "Milo Compiler 0.1.1 (Windows-x64)";
+#elif BUILD_LINUX
+		const char *compilerName = "Milo Compiler 0.1.1 (Linux-x64)";
 #endif
 
 		debugSymbols->add2(static_cast<u16>(sizeof(compileFlags) + strlen(compilerName) + 1));
@@ -3125,16 +3166,14 @@ void runCoffWriter() {
 		u32 totalSize = 0;
 
 		for (auto file : compilerFiles) {
-			char buffer[1024]; // @Robustness
-
 			file->offsetInStringTable = totalSize;
 
-			GetFullPathNameA(toCString(file->path) /* @Leak */, sizeof(buffer), buffer, 0);
+			char *filepath = fullPath(toCString(file->path) /* @Leak */);
 
-			u32 len = static_cast<u32>(strlen(buffer));
+			u32 len = static_cast<u32>(strlen(filepath));
 			totalSize += len + 1;
 
-			debugSymbols->addNullTerminatedString({ buffer, len });
+			debugSymbols->addNullTerminatedString({ filepath, len });
 		}
 
 		*sizePointer = totalSize;
@@ -3158,6 +3197,7 @@ void runCoffWriter() {
 		FileHeader header = {};
 		header.machine = IMAGE_FILE_MACHINE_AMD64;
 		header.numberOfSections = sections.count;
+		header.timestamp = (u32) time(0);
 		header.pointerToSymbolTable = sizeof(FileHeader) + sizeof(SectionHeader) * sections.count;
 		header.numberOfSymbols = symbols.count();
 
@@ -3272,38 +3312,31 @@ void runCoffWriter() {
 			}
 		}
 
-		HANDLE out = CreateFileW(utf8ToWString(objectFileName), GENERIC_WRITE | GENERIC_READ, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
-
-		if (out == INVALID_HANDLE_VALUE) {
+		if (hadError)
+			return;
+		
+		FILE *out = fopen(objectFileName, "wb");
+		if (!out) {
 			reportError("Error: Could not open %s intermediate for writing", objectFileName);
 			return;
 		}
 
-		HANDLE mapping = CreateFileMappingA(out, 0, PAGE_READWRITE, 0, sectionPointer, 0);
-
-		u8 *view = (u8 *) MapViewOfFile(mapping, FILE_MAP_WRITE, 0, 0, 0);
-
-		const auto mappedWriteFile = [&](void *data, u32 size) {
-			memcpy(view, data, size);
-			view += size;
-		};
-
-		const auto doWrite = mappedWriteFile;
-
-		const auto writeAllocator = [&](HANDLE out, BucketedArenaAllocator allocator) {
+		#define doWrite(ptr, size) fwrite((ptr), (size), 1, out)
+		
+		const auto writeAllocator = [&](FILE *out, BucketedArenaAllocator allocator) {
 			for (auto bucket = allocator.first; bucket; bucket = bucket->next) {
 				u32 count = (bucket->size - bucket->remaining);
 
 				doWrite(bucket->memory - count, count);
 			}
 		};
+
 			
 		doWrite(&header, sizeof(header));
-
 		doWrite(sectionHeaders.storage, sectionHeaders.count * sizeof(SectionHeader));
 			
 
-		//assert(ftell(out) == header.pointerToSymbolTable);
+		assert(ftell(out) == header.pointerToSymbolTable);
 		writeAllocator(out, symbols.allocator);
 
 		if (printDiagnostics) {
@@ -3347,10 +3380,7 @@ void runCoffWriter() {
 
 		{
 			PROFILE_ZONE("fclose");
-
-			UnmapViewOfFile(view);
-			CloseHandle(mapping);
-			CloseHandle(out);
+			fclose(out);
 		}
 	}
 }

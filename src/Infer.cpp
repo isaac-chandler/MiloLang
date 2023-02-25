@@ -10,6 +10,7 @@
 #include "ArraySet.h"
 #include "Error.h"
 #include "Polymorph.h"
+#include <math.h>
 
 BucketedArenaAllocator inferArena(1024 * 1024);
 
@@ -119,7 +120,7 @@ void goToSleep(SubJob *job, Array<SubJob *> *sleepingOnMe, const char *reason, S
 	
 	sleepingOnMe->add(job);
 
-#ifdef BUILD_DEBUG
+#if BUILD_DEBUG
 	job->sleepReason = reason;
 #endif
 }
@@ -133,7 +134,7 @@ void goToSleep(SubJob *job, Array<SubJob *> *sleepingOnMe, const char *reason) {
 
 	sleepingOnMe->add(job);
 
-#ifdef BUILD_DEBUG
+#if BUILD_DEBUG
 	job->sleepReason = reason;
 #endif
 }
@@ -8435,27 +8436,29 @@ bool inferRun(SubJob *subJob) {
 				assert(lib);
 
 				if (!lib->handle) {
-#if BUILD_WINDOWS
-					if (lib->name == "c") {
+					if (BUILD_WINDOWS && lib->name == "c") {
 						if (buildOptions.c_runtime_library & Build_Options::C_Runtime_Library::DEBUG) {
-							lib->handle = LoadLibraryA("ucrtbased");
+							lib->handle = open_library("ucrtbased");
 						}
 						else {
-							lib->handle = LoadLibraryA("ucrtbase");
+							lib->handle = open_library("ucrtbase");
 
 						}
-					} 
-					else
-#endif
-						lib->handle = LoadLibraryA(toCString(functionLibrary)); // @Leak
-					
+					} else {
+						auto libName = toCString(functionLibrary);
+
+						lib->handle = open_library(libName);
+
+						free(libName);
+					}
+
 					if (!lib->handle) {
 						reportError(function->body, "Error: Failed to load library %.*s", STRING_PRINTF(functionLibrary));
 						return false;
 					}
 				}
 
-				function->loadedFunctionPointer = GetProcAddress(lib->handle, toCString(function->valueOfDeclaration->name)); // @Leak
+				function->loadedFunctionPointer = library_find(lib->handle, toCString(function->valueOfDeclaration->name)); // @Leak
 				if (!function->loadedFunctionPointer) {
 					reportError(function->valueOfDeclaration, 
 						"Error: Could not find function %.*s in library %.*s", STRING_PRINTF(function->valueOfDeclaration->name), STRING_PRINTF(functionLibrary));
@@ -8566,6 +8569,20 @@ void createBasicDeclarations() {
 	targetWindows->flags |= DECLARATION_IS_CONSTANT;
 
 	addDeclaration(targetWindows, runtimeModule);
+
+	Declaration *targetLinux = INFER_NEW(Declaration);
+	targetLinux->enclosingScope = nullptr;
+	targetLinux->start = {};
+	targetLinux->end = {};
+	targetLinux->name = "TARGET_LINUX";
+
+	literal = createIntLiteral(targetLinux->start, targetLinux->end, &TYPE_BOOL, BUILD_LINUX);
+
+	targetLinux->initialValue = literal;
+	targetLinux->type = nullptr;
+	targetLinux->flags |= DECLARATION_IS_CONSTANT;
+
+	addDeclaration(targetLinux, runtimeModule);
 }
 
 bool doJob(SubJob *job) {

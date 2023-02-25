@@ -1,13 +1,7 @@
 #pragma once
 
 #include "Basic.h"
-#include <intrin.h>
-
-template <typename T>
-T *CompareExchangePointers(T *volatile *dest, T *value, T *compare) {
-	return reinterpret_cast<T *>(_InterlockedCompareExchange64(reinterpret_cast<volatile s64 *>(dest), reinterpret_cast<s64>(value), reinterpret_cast<s64>(compare)));
-}
-
+#include "OS.h"
 
 template <typename T>
 struct alignas(64) SPSCWorkQueue {
@@ -53,7 +47,7 @@ struct alignas(64) SPSCWorkQueue {
 
 				Buffer *newFree = newInput->next;
 
-				if (CompareExchangePointers(&free, newFree, newInput) == newInput)
+				if (CompareExchange(&free, newFree, newInput))
 					break;
 				_mm_pause();
 			}
@@ -66,7 +60,7 @@ struct alignas(64) SPSCWorkQueue {
 		}
 
 		input->data[inCompleteCount & (BUFFER_SIZE - 1)] = job;
-		_ReadWriteBarrier();
+		read_write_barrier();
 
 		++inCompleteCount;
 	}
@@ -87,7 +81,7 @@ struct alignas(64) SPSCWorkQueue {
 				_mm_pause();
 
 				if (count++ > 128) {
-					SwitchToThread();
+					yieldThread();
 				}
 			}
 		}
@@ -99,7 +93,7 @@ struct alignas(64) SPSCWorkQueue {
 				auto oldFree = free;
 				output->next = oldFree;
 
-				if (CompareExchangePointers(&free, output, oldFree) == oldFree) {
+				if (CompareExchange(&free, output, oldFree)) {
 					break;
 				}
 			}
@@ -148,7 +142,7 @@ struct alignas(64) MPMCWorkQueue {
 	void add(T job) {
 		PROFILE_FUNC();
 
-		s64 index = _InterlockedExchangeAdd64(&inStartCount, 1);
+		s64 index = atomicFetchAdd(&inStartCount, 1);
 
 		while (index > insertSize) _mm_pause();
 
@@ -166,7 +160,7 @@ struct alignas(64) MPMCWorkQueue {
 
 				Buffer *newFree = newInput->next;
 
-				if (CompareExchangePointers(&free, newFree, newInput) == newInput)
+				if (CompareExchange(&free, newFree, newInput))
 					break;
 				_mm_pause();
 			}
@@ -178,22 +172,22 @@ struct alignas(64) MPMCWorkQueue {
 			input->next = newInput;
 
 			input = newInput;
-			_ReadWriteBarrier();
+			read_write_barrier();
 
-			_InlineInterlockedAdd64(&insertSize, BUFFER_SIZE);
+			atomicFetchAdd(&insertSize, BUFFER_SIZE);
 		}
 
 		input->data[index & (BUFFER_SIZE - 1)] = job;
-		_ReadWriteBarrier();
+		read_write_barrier();
 
 		input->completed[index & (BUFFER_SIZE - 1)] = true;
-		_InterlockedExchangeAdd64(&inCompleteCount, 1);
+		atomicFetchAdd(&inCompleteCount, 1);
 	}
 
 	T take() {
 		PROFILE_FUNC();
 
-		s64 index = _InterlockedExchangeAdd64(&outStartCount, 1);
+		s64 index = atomicFetchAdd(&outStartCount, 1);
 
 		{
 			s64 count = 0;
@@ -201,7 +195,7 @@ struct alignas(64) MPMCWorkQueue {
 				_mm_pause();
 
 				if (count++ > 128) {
-					SwitchToThread();
+					yieldThread();
 				}
 			}
 		}
@@ -213,7 +207,7 @@ struct alignas(64) MPMCWorkQueue {
 					_mm_pause();
 
 					if (count++ > 128) {
-						SwitchToThread();
+						yieldThread();
 					}
 				}
 			}
@@ -227,15 +221,15 @@ struct alignas(64) MPMCWorkQueue {
 				auto oldFree = free;
 				output->next = oldFree;
 
-				if (CompareExchangePointers(&free, output, oldFree) == oldFree) {
+				if (CompareExchange(&free, output, oldFree)) {
 					break;
 				}
 			}
 			
 			output = newOutput;
-			_ReadWriteBarrier();
+			read_write_barrier();
 
-			_InterlockedExchangeAdd64(&removeSize, BUFFER_SIZE);
+			atomicFetchAdd(&removeSize, BUFFER_SIZE);
 		}
 
 		{
@@ -244,14 +238,14 @@ struct alignas(64) MPMCWorkQueue {
 				_mm_pause();
 
 				if (count++ > 128) {
-					SwitchToThread();
+					yieldThread();
 				}
 			}
 		}
 
 		auto result = output->data[index & (BUFFER_SIZE - 1)];
-		_ReadWriteBarrier();
-		_InterlockedExchangeAdd64(&outCompleteCount, 1);
+		read_write_barrier();
+		atomicFetchAdd(&outCompleteCount, 1);
 		return result;
 	}
 };

@@ -1,0 +1,7 @@
+#import "Standard"
+
+main :: () {
+    print("Hello, World!\n")
+}
+
+#run main()

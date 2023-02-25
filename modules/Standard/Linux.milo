@@ -1,0 +1,153 @@
+Linux :: #import "Linux"
+
+default_allocator :: (mode: Allocator.Mode, allocator_data: *void, size: u64, alignment: u64, pointer: *void, old_size: u64) -> *void {
+	init_process_heap()
+
+	if mode == #complete {
+		case .NEW
+			return Linux.malloc(size)
+		case .EXPAND
+			return Linux.realloc(pointer, size)
+		case .FREE
+			Linux.free(pointer)
+			return null
+		case .FREE_ALL #through
+		else
+			assert(false)
+			return null
+	}
+}
+
+exit :: (code: u32 = 0) {
+	Linux.exit(cast() code)
+}
+
+// @Unicode
+print_buffer :: (buffer: []u8) {
+	Linux.write(Linux.stdout, buffer.data, buffer.count)
+}
+
+print_buffer :: (c: *Concatenator) {
+	init_std_out()
+	bucket := c.current_bucket
+	
+	while bucket {
+		Linux.write(Linux.stdout, bucket.data.data, bucket.offset)
+		
+		bucket = bucket.next
+	}
+}
+
+/*
+get_command_line_arguments :: () -> []string {
+	count: s32
+
+	windows_args := CommandLineToArgvW(GetCommandLineW(), *count)
+	
+	if !windows_args {
+		return .{}
+	}
+	
+	args := new_array(string, cast() count, initialized = false)
+	
+	for * args {
+		<<it = from_windows_string(windows_args[it_index])
+	}
+
+	return args
+}
+*/
+
+run_command_async :: (command: string) -> bool {
+	result := Linux.fork()
+
+	if result == -1
+		return false
+
+	if result == 0 {
+		Linux.exit(Linux.system(to_c_string(command)))
+	}
+
+	return true
+}
+
+run_command :: (command: string) -> u32 {
+	c_string := to_c_string(command)
+	defer free_string(c_string)
+	
+	return cast() Linux.system(c_string)
+}
+
+enable_console_colors :: () -> bool {
+	return true
+}
+
+
+// @Incomplete: This is probably the slowest read_line function ever written, what is the correct way to do this in win32?
+read_line :: () -> (string, bool) {
+	input_buffer.count = 0
+
+
+	while true {
+		c: u8
+
+		if Linux.read(Linux.stdin, *c, 1) != 1
+			break
+
+		if c == '\n' {
+			if had_carriage_return {
+				had_carriage_return = false
+				continue
+			}
+		}
+
+		had_carriage_return = c == '\r'
+
+
+		if c == '\n' || c == '\r' {
+			s := new_string(input_buffer.count, initialized = false)
+			memory_copy(s.data, input_buffer.data, input_buffer.count)
+
+			return s, true
+		}
+
+		array_add(*input_buffer, c)
+	}
+
+	return "", false
+}
+
+
+get_performance_timer :: () -> f64 {
+	tp: Linux.timespec = --
+
+	Linux.clock_gettime(Linux.CLOCK_MONOTONIC, *tp)
+
+	return cast(f64) tp.tv_sec + cast(f64) tp.tv_nsec * 1e-9
+}
+
+get_performance_ticks :: () -> s64 {
+	tp: Linux.timespec = --
+
+	Linux.clock_gettime(Linux.CLOCK_MONOTONIC, *tp)
+
+	return tp.tv_sec * 1_000_000_000 + tp.tv_nsec
+}
+
+get_performance_tickrate :: () -> s64 {
+	return 1_000_000_000
+}
+
+get_system_timer :: () -> f64 {
+	tp: Linux.timespec = --
+
+	Linux.clock_gettime(Linux.CLOCK_REALTIME, *tp)
+
+	return cast(f64) tp.tv_sec + cast(f64) tp.tv_nsec * 1e-9
+}
+
+#scope_module
+
+had_carriage_return: bool
+
+input_buffer: [..]u8

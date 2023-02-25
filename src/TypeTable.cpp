@@ -1,5 +1,3 @@
-#pragma once
-
 #include "Basic.h"
 #include "TypeTable.h"
 #include "Ast.h"
@@ -330,7 +328,7 @@ TypeArray *getStaticArray(Type *type, u32 count) {
 	
 	char *buffer = result->name.characters + 1;
 
-	_ui64toa(count, buffer, 10);
+	snprintf(buffer, maxCount + 1, "%u", count);
 	buffer = strchr(buffer, 0);
 	buffer[0] = ']';
 

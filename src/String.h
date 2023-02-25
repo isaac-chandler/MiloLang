@@ -34,7 +34,8 @@ inline char *copyString(const char *s) {
 	char *ss = (char *) malloc(len + 1);
 
 	assert(ss);
-	strcpy_s(ss, len + 1, s);
+	memcpy(ss, s, len);
+	ss[len] = 0;
 
 	return ss;
 }

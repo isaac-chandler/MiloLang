@@ -1,5 +1,6 @@
 *.exe
 *.obj
+*.o
 *.pdb
 *.ir
 *.ilk
@@ -20,3 +21,4 @@ x64
 tests/log.txt
 bin
 profile.json
+build/

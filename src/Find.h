@@ -2,6 +2,7 @@
 
 #include "Basic.h"
 
+#if BUILD_WINDOWS
 //
 // Author:   Jonathan Blow
 // Version:  2
@@ -69,3 +70,4 @@ struct Find_Result {
 Find_Result find_visual_studio_and_windows_sdk();
 
 void free_resources(Find_Result *result);
+#endif

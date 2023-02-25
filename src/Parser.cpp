@@ -3112,7 +3112,7 @@ void runParser() {
 
 				assert(lexer->currentBlock == nullptr);
 
-				_ReadWriteBarrier();
+				read_write_barrier();
 
 				assert(!(declaration->flags & DECLARATION_MARKED_AS_USING));
 
@@ -3134,7 +3134,7 @@ void runParser() {
 					declaration->enclosingScope = nullptr;
 					declaration->serial = 0;
 
-					_ReadWriteBarrier();
+					read_write_barrier();
 
 					inferQueue.add(InferQueueJob(declaration, lexer->module));
 
@@ -3216,7 +3216,7 @@ void runParser() {
 		}
 
 
-		InterlockedAdd(&totalLines, lexer->totalLines);
+		atomicFetchAdd(&totalLines, lexer->totalLines);
 		lexer->totalLines = 0;
 		inferQueue.add(InferQueueJob(file->fileUid, lexer->module));
 
@@ -3228,7 +3228,6 @@ void runParser() {
 
 	if (printDiagnostics) {
 		wchar_t *name;
-		GetThreadDescription(GetCurrentThread(), &name);
-		reportInfo("%ls memory used %ukb", name, lexer->parserArena.totalSize / 1024);
+		reportInfo("Parser memory used %ukb", name, lexer->parserArena.totalSize / 1024);
 	}
 }

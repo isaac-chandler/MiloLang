@@ -2,7 +2,7 @@
 #include "Basic.h"
 
 
-#ifdef BUILD_WINDOWS
+#if BUILD_WINDOWS
 #define CHECK_PRINTF _Printf_format_string_
 #else
 // @Incomplete: other compilers have versions of this

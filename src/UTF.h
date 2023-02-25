@@ -67,7 +67,7 @@ constexpr u32 utf8Max[4] = {
 
 #define UTF8_IN_RANGE(value, num) ((value) >= utf8Min[(num) - 1] && (value) <= utf8Max[(num) - 1])
 
-inline __forceinline u8 utf8ByteCount(u8 leadingByte) {
+inline u8 utf8ByteCount(u8 leadingByte) {
 	if (UTF8_IS_BYTE(leadingByte, 1)) return 1;
 	else if (UTF8_IS_BYTE(leadingByte, 2)) return 2;
 	else if (UTF8_IS_BYTE(leadingByte, 3)) return 3;
@@ -76,7 +76,7 @@ inline __forceinline u8 utf8ByteCount(u8 leadingByte) {
 	return 0;
 }
 
-inline __forceinline u32 utf32Build(const u8 *characters, u8 count) {
+inline u32 utf32Build(const u8 *characters, u8 count) {
 	assert(count >= 1);
 	assert(count <= 4);
 	u32 total = characters[0] & ~utf8ByteMask[count - 1] << (6 * (count - 1));
@@ -102,6 +102,3 @@ u32 getSingleUtf32FromUtf8(String string, String *newString);
 void appendUtf32ToUtf8(Array<u8> &string, u32 c);
 
 wchar_t *utf8ToWString(String filename);
-
-HANDLE createFileUtf8(u8 *filename, DWORD desiredAccess, DWORD shareMode, DWORD creationDisposition, DWORD flags);
-HANDLE createFileUtf8(String filename, DWORD desiredAccess, DWORD shareMode, DWORD creationDisposition, DWORD flags);
