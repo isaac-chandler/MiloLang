@@ -52,7 +52,6 @@ struct SectionHeader {
 };
 
 
-
 union Symbol {
 	struct {
 		SymbolName name;
@@ -73,14 +72,79 @@ struct Relocation {
 };
 #pragma pack(pop)
 
+#define SECTION_READ        0x01
+#define SECTION_WRITE       0x02
+#define SECTION_EXECUTE     0x04
+#define SECTION_DISCARD     0x08
+#define SECTION_INITIALIZED 0x10
+
+struct Section : public BucketedArenaAllocator {
+	Section() : BucketedArenaAllocator(65536) {}
+
+	const char *name;
+	u64 sectionNumber;
+	u64 alignment;
+	u64 flags;
+	BucketArray<Relocation> relocations;
+
+	void addRelocation(u32 symbolTableIndex, u16 type) {
+		relocations.add(Relocation{ totalSize, symbolTableIndex, type });
+	}
+
+	u32 *addRel32Relocation(u32 symbolTableIndex) {
+		addRelocation(symbolTableIndex, IMAGE_REL_AMD64_REL32);
+		return add4Unchecked(0);
+	}
+
+	u64 *addPointerRelocation(u32 symbolTableIndex) {
+		relocations.add(Relocation{ totalSize, symbolTableIndex, IMAGE_REL_AMD64_ADDR64 });
+		return add8Unchecked(0);
+	}
+
+	u32 *addAddr32NBRelocation(u32 symbolTableIndex) {
+		relocations.add(Relocation{ totalSize, symbolTableIndex, IMAGE_REL_AMD64_ADDR32NB });
+		return add4Unchecked(0);
+	}
+
+	u32 *addSectionRelocations(u32 symbolTableInex) {
+		relocations.add(Relocation{ totalSize, symbolTableInex, IMAGE_REL_AMD64_SECREL });
+		auto result = add4Unchecked(0);
+		relocations.add(Relocation{ totalSize, symbolTableInex, IMAGE_REL_AMD64_SECTION });
+		add2Unchecked(0);
+		
+		return result;
+	}
+
+	void addPointerRelocation(u32 symbolTableIndex, u32 offset) {
+		relocations.add(Relocation{ offset, symbolTableIndex, IMAGE_REL_AMD64_ADDR64 });
+	}
+};
+
+Array<Section *> sections;
+
+Section *makeSection(const char *name, u64 alignment, u64 flags) {	
+	Section *result = sections.add(new Section);
+	result->name = name;
+	result->sectionNumber = sections.count;
+	result->alignment = alignment;
+	result->flags = flags;
+
+	return result;
+}
+
 BucketedArenaAllocator stringTable(65536);
 BucketArray<Symbol> symbols;
 
 s64 emptyStringSymbolIndex = -1;
 
-BucketedArenaAllocator code(65536);
-BucketedArenaAllocator data(65536);
-BucketedArenaAllocator rdata(65536);
+Section *code;
+Section *data;
+Section *rdata;
+Section *bss;
+Section *debugSymbols;
+Section *debugTypes;
+Section *pdata;
+Section *xdata;
 
 void setSectionName(char *header, u64 size, const char *name) {
 	u64 len = strlen(name);
@@ -205,20 +269,173 @@ u32 getRegisterOffset(ExprFunction *function, u32 regNo) {
 #define C_G 0xF
 #define C_NLE 0xF
 
-void writeRSPOffsetByte(u8 physicalRegister, u32 offset) {
-	if (offset >= 0x80) {
-		code.add1Unchecked(0x84 | (physicalRegister << 3));
-		code.add1Unchecked(0x24);
-		code.add4Unchecked(offset);
-	}
-	else if (offset != 0) {
-		code.add1Unchecked(0x44 | (physicalRegister << 3));
-		code.add1Unchecked(0x24);
-		code.add1Unchecked(static_cast<u8>(offset));
+#define REX   0x40
+#define REX_B 0x41
+#define REX_R 0x42
+#define REX_X 0x44
+#define REX_W 0x48
+
+#define OPERAND_SIZE_OVERRIDE 0x66
+
+#define MODRM_MOD_INDIRECT           0b00
+#define MODRM_MOD_INDIRECT_OFFSET_8  0b01
+#define MODRM_MOD_INDIRECT_OFFSET_32 0b10
+#define MODRM_MOD_DIRECT             0b11
+
+#define MODRM_RM_SIB       0b100
+#define MODRM_RM_RIP_OFFSET_32 0b101
+
+#define SIB_SCALE_1 0b00
+#define SIB_SCALE_2 0b01
+#define SIB_SCALE_4 0b10
+#define SIB_SCALE_8 0b11
+
+#define SIB_INDEX_NONE 0b100
+
+#define SIB_BASE_NONE 0b101 // Requires ModR/M mod to be 0b00, otherwise this uses RBP as expected
+
+#define FLOAT_64_PREFIX 0xF2
+#define FLOAT_32_PREFIX 0xF3
+
+#define REPNE_PREFIX 0xF2
+#define REP_PREFIX   0xF3
+
+
+#define ADD_REG_MEM_BASE 0x02
+
+#define OR_REG_MEM_BASE 0x0A
+
+#define AND_REG_MEM_BASE 0x22
+
+#define SUB_MEM_REG_BASE 0x28
+#define SUB_REG_MEM_BASE 0x2A
+
+#define XOR_REG_MEM_BASE 0x32
+
+#define CMP_REG_MEM_BASE 0x3A
+
+#define PUSH_BASE 0x50
+#define POP_BASE 0x58
+
+#define MOVSX_REG_MEM_32 0x63
+
+#define JCC_DIRECT_8_BASE 0x70
+
+#define INT_OP_MEM_IMM_32_MODRM_X 0x81
+#define INT_OP_MEM_IMM_8_MODRM_X 0x83
+
+#define INT_OP_MODRM_ADD 0
+#define INT_OP_MODRM_AND 4
+#define INT_OP_MODRM_SUB 5
+
+#define TEST_MEM_REG_BASE 0x84
+
+#define MOV_MEM_REG_BASE 0x88
+#define MOV_REG_MEM_BASE 0x8A
+
+#define LEA	0x8D
+
+#define CBW 0x98
+#define CDQ 0x99
+
+#define MOVS_BASE 0xA4
+
+#define STOS_BASE 0xAA
+
+#define MOV_REG_IMM_WORD_BASE 0xB8
+
+#define RET 0xC3
+
+#define MOV_MEM_IMM_BASE_MODRM_0 0xC6
+
+#define SHIFT_1_BASE_MODRM_X 0xD0
+#define SHIFT_RCX_BASE_MODRM_X 0xD2
+
+#define SHIFT_MODRM_SHL 4
+#define SHIFT_MODRM_SHR 5
+#define SHIFT_MODRM_SAR 7
+
+#define CALL_DIRECT 0xE8
+#define JMP_DIRECT 0xE9
+
+#define JMP_DIRECT_8 0xEB
+
+#define UNARY_INT_OP_BASE_MODRM_X 0xF6
+
+#define UNARY_INT_OP_MODRM_NOT 2
+#define UNARY_INT_OP_MODRM_NEG 3
+#define UNARY_INT_OP_MODRM_IMUL_MEM 5
+#define UNARY_INT_OP_MODRM_DIV_MEM  6
+#define UNARY_INT_OP_MODRM_IDIV_MEM 7
+
+#define CALL_INDIRECT_MODRM_2 0xFF
+
+#define OPCODE_EXT 0x0F
+
+#define EXT_MOVSf_REG_MEM 0x10
+#define EXT_MOVSf_MEM_REG 0x11
+
+#define EXT_CVTSI2Sf_REG_MEM 0x2A
+#define EXT_CVTTSf2SI_REG_MEM 0x2C
+
+#define EXT_COMISf_REG_MEM 0x2F
+
+#define EXT_XORPf_REG_MEM 0x57
+#define EXT_ADDSf_REG_MEM 0x58
+#define EXT_MULSf_REG_MEM 0x59
+
+#define EXT_SUBSf_REG_MEM 0x5C
+
+#define EXT_CVTSf2Sf_REG_MEM 0x5A
+
+#define EXT_DIVSf_REG_MEM 0x5E
+
+#define EXT_JCC_DIRECT_BASE 0x80
+
+#define EXT_SETCC_MEM_BASE 0x90
+
+#define EXT_IMUL_REG_MEM 0xAF
+
+#define EXT_MOVZX_REG_MEM_BASE 0xB6
+
+#define EXT_BSF_REG_MEM 0xBC
+#define EXT_BSR_REG_MEM 0xBC
+#define EXT_MOVSX_REG_MEM_BASE 0xBE
+
+#define REP_EXT_POPCNT_REG_MEM 0xB8
+
+
+void sizedIntInstruction(u64 size, u8 baseOpcode) {
+	if (size == 1) {
+		code->add1Unchecked(baseOpcode);
 	}
 	else {
-		code.add1Unchecked(0x04 | (physicalRegister << 3));
-		code.add1Unchecked(0x24);
+		code->add1Unchecked(baseOpcode | 1);
+	}
+}
+
+void writeModRM(u8 mod, u8 reg, u8 rm) {
+	code->add1Unchecked((mod << 6) | (reg << 3) | rm);
+}
+
+void writeSIB(u8 scale, u8 index, u8 base) {
+	code->add1Unchecked((scale << 6) | (index << 3) | base);
+}
+
+void writeRSPOffsetByte(u8 physicalRegister, u32 offset) {
+	if (offset >= 0x80) {
+		writeModRM(MODRM_MOD_INDIRECT_OFFSET_32, physicalRegister, MODRM_RM_SIB);
+		writeSIB(SIB_SCALE_1, SIB_INDEX_NONE, RSP);
+		code->add4Unchecked(offset);
+	}
+	else if (offset != 0) {
+		writeModRM(MODRM_MOD_INDIRECT_OFFSET_8, physicalRegister, MODRM_RM_SIB);
+		writeSIB(SIB_SCALE_1, SIB_INDEX_NONE, RSP);
+		code->add1Unchecked(static_cast<u8>(offset));
+	}
+	else {
+		writeModRM(MODRM_MOD_INDIRECT, physicalRegister, MODRM_RM_SIB);
+		writeSIB(SIB_SCALE_1, SIB_INDEX_NONE, RSP);
 	}
 }
 
@@ -226,100 +443,117 @@ void writeRSPRegisterByte(ExprFunction *function, u8 physicalRegister, u32 stack
 	writeRSPOffsetByte(physicalRegister, getRegisterOffset(function, stackRegister) + addition);
 }
 
-void loadIntoIntRegister(ExprFunction *function, u64 size, u8 loadInto, u32 regNo) {
-	u8 rex = 0x40;
+void writeIntegerPrefixXB(u64 size, u8 *xReg, u8 *bReg) {
+	u8 rex = 0;
 
+	if (size == 1 && (*xReg > 4 || *bReg > 4))
+		rex |= REX;
+	else if (size == 8)
+		rex |= REX_W;
+	else if (size == 2)
+		code->add1Unchecked(OPERAND_SIZE_OVERRIDE);
+
+	if (*xReg >= 8)
+		rex |= REX_X;
+	if (*bReg >= 8)
+		rex |= REX_B;
+
+	// Separate these because xReg and bReg could be the same pointer
+
+	if (*xReg >= 8)
+		*xReg -= 8;
+	if (*bReg >= 8)
+		*bReg -= 8;
+
+
+	if (rex)
+		code->add1Unchecked(rex);
+}
+
+void writeIntegerPrefixX(u64 size, u8 *xReg) {
+	u8 rex = 0;
+	
+	if (size == 1 && *xReg > 4)
+		rex |= REX;
+	else if (size == 8)
+		rex |= REX_W;
+	else if (size == 2)
+		code->add1Unchecked(OPERAND_SIZE_OVERRIDE);
+	
+	if (*xReg >= 8) {
+		*xReg -= 8;
+		rex |= REX_X;
+	}
+
+	if (rex)
+		code->add1Unchecked(rex);
+}
+
+void writeIntegerPrefix(u64 size) {
+	if (size == 8)
+			code->add1Unchecked(REX_W);
+	else if (size == 2)
+		code->add1Unchecked(OPERAND_SIZE_OVERRIDE);
+}
+
+void writeIntegerPrefixRep(u64 size) {
+	if (size == 2)
+		code->add1Unchecked(OPERAND_SIZE_OVERRIDE);
+
+	code->add1Unchecked(REP_PREFIX);
+
+	if (size == 8)
+		code->add1Unchecked(REX_W);
+}
+
+void writeFloatPrefix(u64 size) {
+	if (size == 8)
+		code->add1Unchecked(FLOAT_64_PREFIX);
+	else
+		code->add1Unchecked(FLOAT_32_PREFIX);
+}
+
+void writeFloatPrefixX(u64 size, u8 *xReg) {
+	writeFloatPrefix(size);
+
+	if (*xReg >= 8) {
+		*xReg -= 8;
+		code->add1Unchecked(REX_X);
+	}
+}
+
+void writeFloatLegacyPrefix(u64 size) {
 	if (size == 8) {
-		rex |= 8;
+		code->add1Unchecked(OPERAND_SIZE_OVERRIDE);
 	}
+}
 
-	if (loadInto >= 8) {
-		rex |= 4;
-		loadInto -= 8;
-	}
-
-	if (size == 2) {
-		code.add1Unchecked(0x66);
-	}
-
-	if (rex != 0x40) {
-		code.add1Unchecked(rex);
-	}
-
-	if (size == 1) {
-		code.add1Unchecked(0x8a);
-	}
-	else {
-		code.add1Unchecked(0x8b);
-	}
-
+void loadIntoIntRegister(ExprFunction *function, u64 size, u8 loadInto, u32 regNo) {
+	writeIntegerPrefixX(size, &loadInto);
+	sizedIntInstruction(size, MOV_REG_MEM_BASE);
 	writeRSPRegisterByte(function, loadInto, regNo);
 }
 
 void storeFromIntRegister(ExprFunction *function, u64 size, u32 regNo, u8 storeFrom) {
-	u8 rex = 0x40;
-
-	if (size == 8) {
-		rex |= 8;
-	}
-
-	if (storeFrom >= 8) {
-		rex |= 4;
-		storeFrom -= 8;
-	}
-
-	if (size == 2) {
-		code.add1Unchecked(0x66);
-	}
-
-	if (rex != 0x40) {
-		code.add1Unchecked(rex);
-	}
-
-	if (size == 1) {
-		code.add1Unchecked(0x88);
-	}
-	else {
-		code.add1Unchecked(0x89);
-	}
-
+	writeIntegerPrefixX(size, &storeFrom);
+	sizedIntInstruction(size, MOV_MEM_REG_BASE);
 	writeRSPRegisterByte(function, storeFrom, regNo);
 }
 
 void loadIntoFloatRegister(ExprFunction *function, u64 size, u8 loadInto, u32 regNo) {
-	if (size == 8) {
-		code.add1Unchecked(0xF2);
-	}
-	else {
-		code.add1Unchecked(0xF3);
-	}
+	writeFloatPrefixX(size, &loadInto);
 
-	if (loadInto >= 8) {
-		code.add1Unchecked(0x44);
-		loadInto -= 8;
-	}
-
-	code.add1Unchecked(0x0F);
-	code.add1Unchecked(0x10);
+	code->add1Unchecked(OPCODE_EXT);
+	code->add1Unchecked(EXT_MOVSf_REG_MEM);
 
 	writeRSPRegisterByte(function, loadInto, regNo);
 }
 
 void storeFromFloatRegister(ExprFunction *function, u64 size, u32 regNo, u8 storeFrom) {
-	if (size == 8) {
-		code.add1Unchecked(0xF2);
-	}
-	else {
-		code.add1Unchecked(0xF3);
-	}
+	writeFloatPrefixX(size, &storeFrom);
 
-	if (storeFrom >= 8) {
-		code.add1Unchecked(0x44);
-		storeFrom -= 8;
-	}
-
-	code.add1Unchecked(0x0F);
-	code.add1Unchecked(0x11);
+	code->add1Unchecked(OPCODE_EXT);
+	code->add1Unchecked(EXT_MOVSf_MEM_REG);
 
 	writeRSPRegisterByte(function, storeFrom, regNo);
 }
@@ -328,128 +562,78 @@ void storeImmediate(ExprFunction *function, u64 size, u32 regNo, u64 immediate) 
 	assert(isStandardSize(size));
 
 	if (size == 8 && static_cast<s64>(immediate) != static_cast<s64>(static_cast<s32>(immediate))) {
-		code.add1Unchecked(0x48); // mov rax, ir.a
-		code.add1Unchecked(0xB8);
-		code.add8Unchecked(immediate);
+		writeIntegerPrefix(8);
+		code->add1Unchecked(MOV_REG_IMM_WORD_BASE | RAX);
+		code->add8Unchecked(immediate);
 
 		storeFromIntRegister(function, 8, regNo, RAX);
 	}
 	else {
-		if (size == 2) {
-			code.add1Unchecked(0x66);
-		}
-		else if (size == 8) {
-			code.add1Unchecked(0x48);
-		}
-
-		if (size == 1) {
-			code.add1Unchecked(0xC6);
-		}
-		else {
-			code.add1Unchecked(0xC7);
-		}
-
+		writeIntegerPrefix(size);
+		sizedIntInstruction(size, MOV_MEM_IMM_BASE_MODRM_0);
 		writeRSPRegisterByte(function, 0, regNo);
 
 		if (size == 1) {
-			code.add1Unchecked(static_cast<u8>(immediate));
+			code->add1Unchecked(static_cast<u8>(immediate));
 		}
 		else if (size == 2) {
-			code.add2Unchecked(static_cast<u16>(immediate));
+			code->add2Unchecked(static_cast<u16>(immediate));
 		}
 		else if (size == 4 || size == 8) {
-			code.add4Unchecked(static_cast<u32>(immediate));
+			code->add4Unchecked(static_cast<u32>(immediate));
 		}
 	}
 }
 
 void setCondition(ExprFunction *function, u32 dest, u8 condition) {
-	code.add1Unchecked(0x0F);
-	code.add1Unchecked(0x90 | condition);
+	code->add1Unchecked(OPCODE_EXT);
+	code->add1Unchecked(EXT_SETCC_MEM_BASE | condition);
 	writeRSPRegisterByte(function, 0, dest);
 }
 
 void setConditionInt(ExprFunction *function, u64 size, u32 dest, u32 a, u32 b, u8 condition) {
 	loadIntoIntRegister(function, size, RAX, a);
-	loadIntoIntRegister(function, size, RCX, b);
 
-	if (size == 8) {
-		code.add1Unchecked(0x48);
-	}
-	else if (size == 2) {
-		code.add1Unchecked(0x66);
-	}
-
-	if (size == 1) {
-		code.add1Unchecked(0x38);
-	}
-	else {
-		code.add1Unchecked(0x39);
-	}
-
-	code.add1Unchecked(0xC8);
+	writeIntegerPrefix(size);
+	sizedIntInstruction(size, CMP_REG_MEM_BASE);
+	writeRSPRegisterByte(function, RAX, b);
 
 	setCondition(function, dest, condition);
 }
 
 void setConditionFloat(ExprFunction *function, u64 size, u32 dest, u32 a, u32 b, u8 condition) {
 	loadIntoFloatRegister(function, size, 0, a);
-	loadIntoFloatRegister(function, size, 1, b);
 
-	if (size == 8) {
-		code.add1Unchecked(0x66);
-	}
+	writeFloatLegacyPrefix(size);
 
-	code.add1Unchecked(0x0F);
-	code.add1Unchecked(0x2F);
-	code.add1Unchecked(0xC1);
+
+	code->add1Unchecked(OPCODE_EXT);
+	code->add1Unchecked(EXT_COMISf_REG_MEM);
+	writeRSPRegisterByte(function, 0, b);
 
 	setCondition(function, dest, condition);
 }
 
-void loadImmediateIntoRAX(u64 immediate) {
-	if (static_cast<s64>(immediate) != static_cast<s64>(static_cast<s32>(immediate))) {
-		code.add1Unchecked(0x48);
-		code.add1Unchecked(0xB8);
-		code.add8Unchecked(immediate);
+void loadImmediateIntoIntRegister64(u8 regNo, u64 immediate) {
+	if (immediate == 0) {
+		writeIntegerPrefixXB(4, &regNo, &regNo);
+		sizedIntInstruction(4, XOR_REG_MEM_BASE);
+		writeModRM(MODRM_MOD_DIRECT, regNo, regNo);
+	} else if (immediate <= 0xFFFF'FFFFULL) {
+		writeIntegerPrefixX(4, &regNo);
+		code->add1Unchecked(MOV_REG_IMM_WORD_BASE | regNo);
+		code->add4Unchecked(static_cast<u32>(immediate));
+	}
+	else if (static_cast<s64>(immediate) == static_cast<s64>(static_cast<s32>(immediate))) {
+		writeIntegerPrefix(8);
+		sizedIntInstruction(8, MOV_MEM_IMM_BASE_MODRM_0);
+		writeModRM(MODRM_MOD_DIRECT, 0, regNo);
+		code->add4Unchecked(static_cast<u32>(immediate));
 	}
 	else {
-		code.add1Unchecked(0x48);
-		code.add1Unchecked(0xC7);
-		code.add1Unchecked(0xC0);
-		code.add4Unchecked(static_cast<u32>(immediate));
-	}
-}
-
-
-void loadImmediateIntoIntRegister(u8 loadInto, u64 immediate) {
-	if (loadInto == RAX) {
-		loadImmediateIntoRAX(immediate);
-	}
-	else {
-		if (immediate <= 0x7FFF'FFFF) {
-			if (loadInto >= 8) {
-				code.add1Unchecked(0x41);
-				loadInto -= 8;
-			}
-
-			code.add1Unchecked(0xB8 | loadInto);
-			code.add4Unchecked(static_cast<u32>(immediate));
-		}
-		else {
-			loadImmediateIntoRAX(immediate);
-
-			if (loadInto >= 8) {
-				code.add1Unchecked(0x49);
-				loadInto -= 8;
-			}
-			else {
-				code.add1Unchecked(0x48);
-			}
-
-			code.add1Unchecked(0x89);
-			code.add1Unchecked(0xC0 | loadInto);
-		}
+		writeIntegerPrefix(8);
+		code->add1Unchecked(MOV_REG_IMM_WORD_BASE | regNo);
+		code->add8Unchecked(immediate);
 	}
 }
 
@@ -459,33 +643,14 @@ void writeSet(ExprFunction *function, u64 size, u32 dest, u32 src) {
 	storeFromIntRegister(function, size, dest, RAX);
 }
 
-#define RDATA_SECTION_NUMBER 1
-#define BSS_SECTION_NUMBER 2
-#define DATA_SECTION_NUMBER 3
-#define TEXT_SECTION_NUMBER 4
-#define DEBUG_SYMBOL_SECTION_NUMBER 5
-#define DEBUG_TYPE_SECTION_NUMBER 6
-#define PDATA_SECTION_NUMBER 7
-#define XDATA_SECTION_NUMBER 8
-
 Array<CoffTypeIndexPatch> coffTypePatches;
 Array<CoffFunctionIDTypeIndexPatch> coffFunctionIdTypePatches;
-
-
-u32 *addRelocationToUnkownSymbol(BucketedArenaAllocator *allocator, u32 virtualAddress, u16 type) {
-	allocator->ensure(10);
-	allocator->add4Unchecked(virtualAddress);
-	u32 *value = allocator->add4Unchecked(0);
-	allocator->add2Unchecked(type);
-
-	return value;
-}
 
 u32 createRdataPointer() {
 	Symbol symbol;
 	setSymbolName(&symbol.name, symbols.count());
-	symbol.value = static_cast<u32>(rdata.totalSize);
-	symbol.sectionNumber = RDATA_SECTION_NUMBER;
+	symbol.value = static_cast<u32>(rdata->totalSize);
+	symbol.sectionNumber = rdata->sectionNumber;
 	symbol.type = 0;
 	symbol.storageClass = IMAGE_SYM_CLASS_STATIC;
 	symbol.numberOfAuxSymbols = 0;
@@ -493,13 +658,6 @@ u32 createRdataPointer() {
 	symbols.add(symbol);
 
 	return symbols.count() - 1;
-}
-
-void addPointerRelocation(BucketedArenaAllocator *relocations, u32 address, u32 symbol) {
-	relocations->ensure(10);
-	relocations->add4Unchecked(address);
-	relocations->add4Unchecked(symbol);
-	relocations->add2Unchecked(IMAGE_REL_AMD64_ADDR64);
 }
 
 Symbol *allocateSymbol() {
@@ -524,15 +682,15 @@ u32 createSymbolForString(ExprStringLiteral *string) {
 
 			Symbol emptyString;
 			setSymbolName(&emptyString.name, "@emptyString");
-			emptyString.value = static_cast<u32>(rdata.totalSize);
-			emptyString.sectionNumber = RDATA_SECTION_NUMBER;
+			emptyString.value = static_cast<u32>(rdata->totalSize);
+			emptyString.sectionNumber = rdata->sectionNumber;
 			emptyString.type = 0;
 			emptyString.storageClass = IMAGE_SYM_CLASS_EXTERNAL;
 			emptyString.numberOfAuxSymbols = 0;
 
 			symbols.add(emptyString);
 
-			rdata.add1(0);
+			rdata->add1(0);
 		}
 
 		return static_cast<u32>(emptyStringSymbolIndex);
@@ -546,12 +704,12 @@ u32 createSymbolForString(ExprStringLiteral *string) {
 
 		setSymbolName(&string->symbol->name, symbols.count());
 		string->symbol->storageClass = IMAGE_SYM_CLASS_STATIC;
-		string->symbol->value = static_cast<u32>(rdata.totalSize);
-		string->symbol->sectionNumber = RDATA_SECTION_NUMBER;
+		string->symbol->value = static_cast<u32>(rdata->totalSize);
+		string->symbol->sectionNumber = rdata->sectionNumber;
 		string->symbol->type = 0;
 		string->symbol->numberOfAuxSymbols = 0;
 
-		rdata.addNullTerminatedString(string->string);
+		rdata->addNullTerminatedString(string->string);
 	}
 
 	return string->physicalStorage;
@@ -683,23 +841,23 @@ struct TypePatch {
 	u64 *location;
 };
 
-void writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataAllocator, BucketedArenaAllocator *dataRelocations, Expr *value);
+void writeValue(u32 dataSize, u8 *data, Section *section, Expr *value);
 
-void writeArrayLiteral(u32 dataSize, u8 *data, BucketedArenaAllocator *dataAllocator, BucketedArenaAllocator *dataRelocations, ExprArrayLiteral *array) {
+void writeArrayLiteral(u32 dataSize, u8 *data, Section *section, ExprArrayLiteral *array) {
 	auto arrayType = static_cast<TypeArray *>(array->type);
 
 	auto elementSize = arrayType->arrayOf->size;
 	auto arrayCount = arrayType->flags & TYPE_ARRAY_IS_FIXED ? arrayType->count : array->count;
 
 	for (u64 i = 0; i < arrayCount; i++) {
-		writeValue(dataSize, data, dataAllocator, dataRelocations, array->values[i]);
+		writeValue(dataSize, data, section, array->values[i]);
 
 		dataSize += elementSize;
 		data += elementSize;
 
 		if (i + 1 == array->count && arrayCount > array->count) {
 			for (u64 j = i + 1; j < arrayCount; j++) {
-				writeValue(dataSize, data, dataAllocator, dataRelocations, array->values[i]);
+				writeValue(dataSize, data, section, array->values[i]);
 				dataSize += elementSize;
 				data += elementSize;
 			}
@@ -710,9 +868,7 @@ void writeArrayLiteral(u32 dataSize, u8 *data, BucketedArenaAllocator *dataAlloc
 }
 
 
-void writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataAllocator, BucketedArenaAllocator *dataRelocations, Expr *value) {
-	assert(dataAllocator == &rdata || dataAllocator == &::data);
-
+void writeValue(u32 dataSize, u8 *data, Section *section, Expr *value) {
 	auto type = getTypeForExpr(value);
 
 
@@ -727,51 +883,51 @@ void writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataAllocator, B
 	if (value->flavor == ExprFlavor::FUNCTION) {
 		assert(type->size == 8);
 
-		addPointerRelocation(dataRelocations, dataSize, createSymbolForFunction(static_cast<ExprFunction *>(value)));
+		section->addPointerRelocation(createSymbolForFunction(static_cast<ExprFunction *>(value)), dataSize);
 
 		*reinterpret_cast<u64 *>(data) = 0;
 	}
 	else if (value->flavor == ExprFlavor::STRING_LITERAL) {
 		u32 string = createSymbolForString(static_cast<ExprStringLiteral *>(value));
 
-		addPointerRelocation(dataRelocations, dataSize, string);
+		section->addPointerRelocation(string, dataSize + offsetof(MiloString, data));
 
-		reinterpret_cast<u64 *>(data)[0] = 0;
-		reinterpret_cast<u64 *>(data)[1] = static_cast<ExprStringLiteral *>(value)->string.length;
+		auto stringData = reinterpret_cast<MiloString *>(data);
+		stringData->data = nullptr;
+		stringData->count = static_cast<ExprStringLiteral *>(value)->string.length;
 	}
 	else if (value->flavor == ExprFlavor::ARRAY_LITERAL) {
 		auto array = static_cast<ExprArrayLiteral *>(value);
 		
 		if (array->type->flags & TYPE_ARRAY_IS_FIXED) {
-			writeArrayLiteral(dataSize, data, dataAllocator, dataRelocations, array);
+			writeArrayLiteral(dataSize, data, section, array);
 		}
 		else {
 			auto arrayType = static_cast<TypeArray *>(array->type);
 
-			u32 newSize = dataAllocator->totalSize;
+			u32 newSize = section->totalSize;
 			
-			dataAllocator->allocateUnaligned(AlignPO2(rdata.totalSize, arrayType->arrayOf->alignment) - rdata.totalSize);
+			section->allocateUnaligned(AlignPO2(rdata->totalSize, arrayType->arrayOf->alignment) - rdata->totalSize);
 
 			u32 symbolId = symbols.count();
 			auto symbol = allocateSymbol();
 
 			setSymbolName(&symbol->name, symbols.count());
 			symbol->storageClass = IMAGE_SYM_CLASS_STATIC;
-			symbol->value = static_cast<u32>(dataAllocator->totalSize);
-			symbol->sectionNumber = dataAllocator == &rdata ? RDATA_SECTION_NUMBER : DATA_SECTION_NUMBER;
+			symbol->value = static_cast<u32>(section->totalSize);
+			symbol->sectionNumber = section->sectionNumber;
 			symbol->type = 0;
 			symbol->numberOfAuxSymbols = 0;
 
-			u32 offset = dataAllocator->totalSize; // do this in a separate statement because within a c++ statement, subexpressions can execute in any order
-										  // which meant that allocateUnaligned happened _before_ rdata.totalSize was evaluated, causing the addresses 
-										  // for any patch applied to the literal to be wrong
-			writeArrayLiteral(offset, static_cast<u8 *>(dataAllocator->allocateUnaligned(arrayType->arrayOf->size * array->count)), dataAllocator, dataRelocations, array);
+			u32 offset = section->totalSize;
+			auto arrayData = static_cast<u8 *>(section->allocateUnaligned(arrayType->arrayOf->size * array->count));
+			writeArrayLiteral(offset, arrayData, section, array);
 
+			section->addPointerRelocation(symbolId, dataSize + offsetof(MiloArray<u8>, data));
 
-			addPointerRelocation(dataRelocations, dataSize, symbolId);
-
-			reinterpret_cast<u64 *>(data)[0] = 0;
-			reinterpret_cast<u64 *>(data)[1] = array->count;
+			auto arrayPointer = reinterpret_cast<MiloArray<u8> *>(data);
+			arrayPointer->data = nullptr;
+			arrayPointer->count = array->count;
 		}
 	}
 	else if (value->flavor == ExprFlavor::FLOAT_LITERAL) {
@@ -796,9 +952,11 @@ void writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataAllocator, B
 		}
 	}
 	else if (value->flavor == ExprFlavor::TYPE_LITERAL) {
+		assert(type->size == 8);
+
 		markUsedTypeInfoInType(static_cast<ExprLiteral *>(value)->typeValue);
 
-		addPointerRelocation(dataRelocations, dataSize, static_cast<ExprLiteral *>(value)->typeValue->physicalStorage);
+		section->addPointerRelocation(static_cast<ExprLiteral *>(value)->typeValue->physicalStorage, dataSize);
 
 		*reinterpret_cast<u64 *>(data) = 0;
 	}
@@ -807,7 +965,7 @@ void writeValue(u32 dataSize, u8 *data, BucketedArenaAllocator *dataAllocator, B
 
 		for (u32 i = 0; i < literal->initializers.count; i++) {
 			auto offset = literal->initializers.declarations[i]->physicalStorage;
-			writeValue(dataSize + offset, data + offset, dataAllocator, dataRelocations, literal->initializers.values[i]);
+			writeValue(dataSize + offset, data + offset, section, literal->initializers.values[i]);
 		}
 	}
 	else {
@@ -955,6 +1113,7 @@ void emitBasicTypeDebugInfo(BucketedArenaAllocator *debugSymbols) {
 	emitBasicType(debugSymbols, T_UINT8, "u64");
 	emitBasicType(debugSymbols, T_REAL32, "f32");
 	emitBasicType(debugSymbols, T_REAL64, "f64");
+	emitBasicType(debugSymbols, T_REAL64, "f64");
 
 	*subsectionSizePatch = debugSymbols->totalSize - previousSize;
 	alignAllocator(debugSymbols, 4);
@@ -968,24 +1127,23 @@ bool placeValueInBSSSection(Declaration *declaration) {
 
 void runCoffWriter() {
 	PROFILE_FUNC();
+
+	code = makeSection(".text", 16, SECTION_EXECUTE | SECTION_READ | SECTION_INITIALIZED);
+	data = makeSection(".data", 16, SECTION_READ | SECTION_WRITE | SECTION_INITIALIZED);
+	rdata = makeSection(".rdata", 16, SECTION_READ | SECTION_INITIALIZED);
+	bss = makeSection(".bss", 16, SECTION_READ | SECTION_WRITE);
+	debugSymbols = makeSection(".debug$S", 1, SECTION_READ | SECTION_INITIALIZED | SECTION_DISCARD);
+	debugTypes = makeSection(".debug$T", 1, SECTION_READ | SECTION_INITIALIZED | SECTION_DISCARD);
+	pdata = makeSection(".pdata", 4, SECTION_READ | SECTION_INITIALIZED);
+	xdata = makeSection(".xdata", 4, SECTION_READ | SECTION_INITIALIZED);
+
 	if (hadError)
 		return;
 
-	BucketedArenaAllocator codeRelocations(65536);
-	BucketedArenaAllocator dataRelocations(65536);
-	BucketedArenaAllocator rdataRelocations(65536);
-	BucketedArenaAllocator debugSymbols(65536);
-	BucketedArenaAllocator debugSymbolsRelocations(65536);
-	BucketedArenaAllocator debugTypes(65536);
-	BucketedArenaAllocator pdata(65536);
-	BucketedArenaAllocator pdataRelocations(65536);
-	BucketedArenaAllocator xdata(65536);
-
-	SectionHeader bssSection = {};
-	bssSection.sizeOfRawData = 0;
-
 	s64 f32ToU64ConstantSymbolIndex = -1;
 	s64 f64ToU64ConstantSymbolIndex = -1;
+	s64 u64ToF32ConstantSymbolIndex = -1;
+	s64 u64ToF64ConstantSymbolIndex = -1;
 	s64 chkstkSymbolIndex = -1;
 
 	u64 alignmentPadding = 0;
@@ -997,25 +1155,13 @@ void runCoffWriter() {
 	Array<ColumnInfo> columnInfo;
 	Array<u32 *> blockOffsetStack;
 
-	u32 textSectionSymbolIndex = symbols.count();
-
-	Symbol textSectionSymbol;
-	setSymbolName(&textSectionSymbol.name, ".text");
-	textSectionSymbol.value = 0;
-	textSectionSymbol.sectionNumber = TEXT_SECTION_NUMBER;
-	textSectionSymbol.type = IMAGE_SYM_TYPE_NULL;
-	textSectionSymbol.storageClass = IMAGE_SYM_CLASS_STATIC;
-	textSectionSymbol.numberOfAuxSymbols = 0;
-
-	symbols.add(textSectionSymbol);
-
-	debugSymbols.add4(4);
-	debugTypes.add4(4);
+	debugSymbols->add4(4);
+	debugTypes->add4(4);
 
 	{
-		debugSymbols.add4(0xF1);
-		auto subsectionSizePatch = debugSymbols.add4(0);
-		u32 subsectionOffset = debugSymbols.totalSize;
+		debugSymbols->add4(0xF1);
+		auto subsectionSizePatch = debugSymbols->add4(0);
+		u32 subsectionOffset = debugSymbols->totalSize;
 
 		COMPILESYM3 compileFlags;
 		compileFlags.flags.iLanguage = 20; // @Cleanup Check no other language uses this
@@ -1025,17 +1171,17 @@ void runCoffWriter() {
 		const char *compilerName = "Milo Compiler 0.1.1 (Windows-x64)";
 #endif
 
-		debugSymbols.add2(static_cast<u16>(sizeof(compileFlags) + strlen(compilerName) + 1));
-		debugSymbols.add(&compileFlags, sizeof(compileFlags));
+		debugSymbols->add2(static_cast<u16>(sizeof(compileFlags) + strlen(compilerName) + 1));
+		debugSymbols->add(&compileFlags, sizeof(compileFlags));
 
-		debugSymbols.addNullTerminatedString(compilerName);
+		debugSymbols->addNullTerminatedString(compilerName);
 
-		*subsectionSizePatch = debugSymbols.totalSize - subsectionOffset;
+		*subsectionSizePatch = debugSymbols->totalSize - subsectionOffset;
 
-		alignAllocator(&debugSymbols, 4);
+		alignAllocator(debugSymbols, 4);
 	}
 
-	emitBasicTypeDebugInfo(&debugSymbols);
+	emitBasicTypeDebugInfo(debugSymbols);
 
 	while (true) {
 
@@ -1074,11 +1220,11 @@ void runCoffWriter() {
 			lineInfo.clear();
 			columnInfo.clear();
 
-			u32 functionStart = code.totalSize;
+			u32 functionStart = code->totalSize;
 
 
 			{
-				addLineInfo(&lineInfo, &columnInfo, code.totalSize - functionStart, function->start, function->end);
+				addLineInfo(&lineInfo, &columnInfo, code->totalSize - functionStart, function->start, function->end);
 
 				auto symbol = function->symbol;
 
@@ -1098,8 +1244,8 @@ void runCoffWriter() {
 					setSymbolName(&symbol->name, symbols.count());
 				}
 
-				symbol->value = static_cast<u32>(code.totalSize);
-				symbol->sectionNumber = TEXT_SECTION_NUMBER;
+				symbol->value = static_cast<u32>(code->totalSize);
+				symbol->sectionNumber = code->sectionNumber;
 				symbol->type = 0x20;
 
 
@@ -1108,41 +1254,29 @@ void runCoffWriter() {
 
 			u32 spaceToAllocate = getSpaceToAllocate(function);
 
-			debugSymbols.ensure(8);
-			debugSymbols.add4Unchecked(0xF1);
-			auto subsectionSizePatch = debugSymbols.add4Unchecked(0);
-			u32 subsectionOffset = debugSymbols.totalSize;
+			debugSymbols->ensure(8);
+			debugSymbols->add4Unchecked(0xF1);
+			auto subsectionSizePatch = debugSymbols->add4Unchecked(0);
+			u32 subsectionOffset = debugSymbols->totalSize;
 
 			auto name = function->valueOfDeclaration ? function->valueOfDeclaration->name : "__unnamed";
 
-			debugSymbols.ensure(39);
-			debugSymbolsRelocations.ensure(20);
-			debugSymbols.add2Unchecked(static_cast<u16>(sizeof(PROCSYM32) + name.length - 1));
-			debugSymbols.add2Unchecked(0x1147); // S_GPROC32_ID
-			debugSymbols.add4Unchecked(0);
-			debugSymbols.add4Unchecked(0);
-			debugSymbols.add4Unchecked(0);
-			u32 *functionLengthPatch = debugSymbols.add4Unchecked(code.totalSize - functionStart);
-			u32 *functionPreambleEndPatch = debugSymbols.add4Unchecked(0);
-			u32 *functionPostambleStartPatch = debugSymbols.add4Unchecked(0);
-			u32 *patch = debugSymbols.add4Unchecked(0);
+			debugSymbols->ensure(39);
+			debugSymbols->add2Unchecked(static_cast<u16>(sizeof(PROCSYM32) + name.length - 1));
+			debugSymbols->add2Unchecked(0x1147); // S_GPROC32_ID
+			debugSymbols->add4Unchecked(0);
+			debugSymbols->add4Unchecked(0);
+			debugSymbols->add4Unchecked(0);
+			u32 *functionLengthPatch = debugSymbols->add4Unchecked(code->totalSize - functionStart);
+			u32 *functionPreambleEndPatch = debugSymbols->add4Unchecked(0);
+			u32 *functionPostambleStartPatch = debugSymbols->add4Unchecked(0);
+			u32 *patch = debugSymbols->add4Unchecked(0);
 			coffFunctionIdTypePatches.add({ patch, function });
 			
+			debugSymbols->addSectionRelocations(function->physicalStorage);
 
-			debugSymbolsRelocations.add4Unchecked(debugSymbols.totalSize);
-			debugSymbolsRelocations.add4Unchecked(function->physicalStorage);
-			debugSymbolsRelocations.add2Unchecked(IMAGE_REL_AMD64_SECREL);
-
-			debugSymbols.add4Unchecked(0);
-
-			debugSymbolsRelocations.add4Unchecked(debugSymbols.totalSize);
-			debugSymbolsRelocations.add4Unchecked(function->physicalStorage);
-			debugSymbolsRelocations.add2Unchecked(IMAGE_REL_AMD64_SECTION);
-
-			debugSymbols.add2Unchecked(0);
-
-			debugSymbols.add1Unchecked(0);
-			debugSymbols.addNullTerminatedString(name);
+			debugSymbols->add1Unchecked(0);
+			debugSymbols->addNullTerminatedString(name);
 
 			FRAMEPROCSYM frame;
 			frame.cbFrame = spaceToAllocate;
@@ -1151,29 +1285,27 @@ void runCoffWriter() {
 			frame.flags.encodedParamBasePointer = 1; // RSP
 			frame.flags.pad = 0;
 
-			debugSymbols.add(&frame, sizeof(frame));
+			debugSymbols->add(&frame, sizeof(frame));
 
 			u32 paramOffset = 0;
 
-			code.ensure(256);
+			code->ensure(256);
 
 
-			constexpr u8 intRegisters[4] = { 0x4C, 0x54, 0x44, 0x4C };
+			constexpr u8 intRegisters[4] = { RCX, RDX, 8, 9 };
 			if (!isStandardSize(getDeclarationType(function->returns.declarations[0])->size)) {
-				code.add1Unchecked(0x48);
-				code.add1Unchecked(0x89);
-				code.add1Unchecked(intRegisters[paramOffset]);
-				code.add1Unchecked(0x24);
-				code.add1Unchecked((paramOffset + 1) << 3);
+				u8 reg = paramOffset + 1;
+				writeIntegerPrefixX(8, &reg);
+				sizedIntInstruction(8, MOV_MEM_REG_BASE);
+				writeRSPOffsetByte(reg, (paramOffset + 1) * 8);
 				paramOffset++;
 			}
 			
 			if (!(function->flags & EXPR_FUNCTION_IS_C_CALL)) {
-				code.add1Unchecked(0x48);
-				code.add1Unchecked(0x89);
-				code.add1Unchecked(intRegisters[paramOffset]);
-				code.add1Unchecked(0x24);
-				code.add1Unchecked((paramOffset + 1) << 3);
+				u8 reg = paramOffset + 1;
+				writeIntegerPrefixX(8, &reg);
+				sizedIntInstruction(8, MOV_MEM_REG_BASE);
+				writeRSPOffsetByte(reg, (paramOffset + 1) * 8);
 				paramOffset++;
 
 				REGREL32 contextInfo;
@@ -1181,12 +1313,12 @@ void runCoffWriter() {
 				contextInfo.off = getRegisterOffset(function, function->state.contextRegister);
 				contextInfo.typind = 0;
 
-				debugSymbols.ensure(2 + sizeof(contextInfo));
-				debugSymbols.add2Unchecked(static_cast<u16>(sizeof(contextInfo) + 1 + 7));
-				REGREL32 *patch = (REGREL32 *) debugSymbols.addUnchecked(&contextInfo, sizeof(contextInfo));
+				debugSymbols->ensure(2 + sizeof(contextInfo));
+				debugSymbols->add2Unchecked(static_cast<u16>(sizeof(contextInfo) + 1 + 7));
+				REGREL32 *patch = (REGREL32 *) debugSymbols->addUnchecked(&contextInfo, sizeof(contextInfo));
 				coffTypePatches.add({ &patch->typind, &TYPE_CONTEXT });
 
-				debugSymbols.addNullTerminatedString("context");
+				debugSymbols->addNullTerminatedString("context");
 			}
 			
 
@@ -1205,12 +1337,12 @@ void runCoffWriter() {
 
 				argumentInfo.typind = 0;
 
-				debugSymbols.ensure(2 + sizeof(argumentInfo));
-				debugSymbols.add2Unchecked(static_cast<u16>(sizeof(argumentInfo) + 1 + argument->name.length));
-				REGREL32 *patch = (REGREL32 *)debugSymbols.addUnchecked(&argumentInfo, sizeof(argumentInfo));
+				debugSymbols->ensure(2 + sizeof(argumentInfo));
+				debugSymbols->add2Unchecked(static_cast<u16>(sizeof(argumentInfo) + 1 + argument->name.length));
+				REGREL32 *patch = (REGREL32 *)debugSymbols->addUnchecked(&argumentInfo, sizeof(argumentInfo));
 				coffTypePatches.add({ &patch->typind, getDeclarationType(argument) });
 
-				debugSymbols.addNullTerminatedString(argument->name);
+				debugSymbols->addNullTerminatedString(argument->name);
 			}
 
 			for (u32 i = 0; i < my_min(4 - paramOffset, function->arguments.declarations.count + function->returns.declarations.count - 1); i++) {
@@ -1224,55 +1356,35 @@ void runCoffWriter() {
 				}
 
 				if (type->flavor == TypeFlavor::FLOAT) {
-					if (type->size == 4) {
-						code.add1Unchecked(0xF3);
-					}
-					else if (type->size == 8) {
-						code.add1Unchecked(0xF2);
-					}
+					writeFloatPrefix(type->size);
 
-					code.add1Unchecked(0x0F);
-					code.add1Unchecked(0x11);
-					code.add1Unchecked(0x44 | (static_cast<u8>(i + paramOffset) << 3));
+					code->add1Unchecked(OPCODE_EXT);
+					code->add1Unchecked(EXT_MOVSf_MEM_REG);
+					writeModRM(MODRM_MOD_INDIRECT_OFFSET_8, i + paramOffset, MODRM_RM_SIB);
 				}
 				else {
-					if (type->size == 2) {
-						code.add1Unchecked(0x66);
-					}
+					u8 reg = intRegisters[i + paramOffset];
 
-					u8 rex = 0x40;
+					u64 size = isStandardSize(type->size) ? type->size : 8;
 
-					if (i + paramOffset >= 2) rex |= 0x04;
-					if (type->size == 8 || !isStandardSize(type->size)) rex |= 0x08;
-
-					if (rex != 0x40) {
-						code.add1Unchecked(rex);
-					}
-
-					if (type->size == 1) {
-						code.add1Unchecked(0x88);
-					}
-					else {
-						code.add1Unchecked(0x89);
-					}
-
-					code.add1Unchecked(intRegisters[i + paramOffset]);
+					writeIntegerPrefixX(size, &reg);
+					sizedIntInstruction(size, MOV_MEM_REG_BASE);
+					writeModRM(MODRM_MOD_INDIRECT_OFFSET_8, reg, MODRM_RM_SIB);
 				}
 
-				code.add1Unchecked(0x24);
-				code.add1Unchecked((static_cast<u8>(i + paramOffset) + 1) * 8);
+				writeSIB(SIB_SCALE_1, SIB_INDEX_NONE, RSP);
+				code->add1Unchecked((static_cast<u8>(i + paramOffset) + 1) * 8);
 			}
 
-			code.add1Unchecked(0x56); // push rsi
-			u32 pushRsiOffset = code.totalSize - functionStart;
-			code.add1Unchecked(0x57); // push rdi
-			u32 pushRdiOffset = code.totalSize - functionStart;
+			code->add1Unchecked(PUSH_BASE | RSI);
+			u32 pushRsiOffset = code->totalSize - functionStart;
+			code->add1Unchecked(PUSH_BASE | RDI);
+			u32 pushRdiOffset = code->totalSize - functionStart;
 
 			if (spaceToAllocate >= 4096) {
-				loadImmediateIntoRAX(spaceToAllocate);
+				loadImmediateIntoIntRegister64(RAX, spaceToAllocate);
 
-				// call __chkstk
-				code.add1(0xE8);
+				code->add1(CALL_DIRECT);
 
 				if (chkstkSymbolIndex == -1) {
 					chkstkSymbolIndex = symbols.count();
@@ -1287,55 +1399,45 @@ void runCoffWriter() {
 
 					symbols.add(chkstk);
 				}
+				
+				code->addRel32Relocation(static_cast<u32>(chkstkSymbolIndex));
 
-				codeRelocations.ensure(10);
-				codeRelocations.add4Unchecked(code.totalSize);
-				codeRelocations.add4Unchecked(static_cast<u32>(chkstkSymbolIndex));
-				codeRelocations.add2Unchecked(IMAGE_REL_AMD64_REL32);
-				code.add4(0);
-
-				// sub rsp, rax
-				code.add1(0x48);
-				code.add1(0x29);
-				code.add1(0xC4);
+				writeIntegerPrefix(8);
+				sizedIntInstruction(8, SUB_MEM_REG_BASE);
+				writeModRM(MODRM_MOD_DIRECT, RAX, RSP);
 			}
 			else if (spaceToAllocate < 0x80) {
-				// sub rsp, spaceToAllocate
-				code.add1Unchecked(0x48);
-				code.add1Unchecked(0x83);
-				code.add1Unchecked(0xEC);
-				code.add1Unchecked(static_cast<u8>(spaceToAllocate));
+				writeIntegerPrefix(8);
+				sizedIntInstruction(8, INT_OP_MEM_IMM_8_MODRM_X);
+				writeModRM(MODRM_MOD_DIRECT, INT_OP_MODRM_SUB, RSP);
+				code->add1Unchecked(static_cast<u8>(spaceToAllocate));
 			}
 			else {
-				// sub rsp, spaceToAllocate
-				code.add1Unchecked(0x48);
-				code.add1Unchecked(0x81);
-				code.add1Unchecked(0xEC);
-				code.add4Unchecked(static_cast<u32>(spaceToAllocate));
+				writeIntegerPrefix(8);
+				sizedIntInstruction(8, INT_OP_MEM_IMM_32_MODRM_X);
+				writeModRM(MODRM_MOD_DIRECT, INT_OP_MODRM_SUB, RSP);
+				code->add4Unchecked(static_cast<u32>(spaceToAllocate));
 			}
-			u32 subRspOffset = code.totalSize - functionStart;
+			u32 subRspOffset = code->totalSize - functionStart;
 
-			u32 functionPreambleEnd = code.totalSize - functionStart;
+			u32 functionPreambleEnd = code->totalSize - functionStart;
 			*functionPreambleEndPatch = functionPreambleEnd;
 
 			for (u32 index = 0; index < function->state.ir.count; index++) {
 				auto &ir = function->state.ir[index];
 
-				instructionOffsets.add(code.totalSize);
+				instructionOffsets.add(code->totalSize);
 
-				code.ensure(128);
+				code->ensure(128);
 
 				switch (ir.op) {
 				case IrOp::TYPE: {
 					auto type = static_cast<Type *>(ir.data);
 					markUsedTypeInfoInType(type);
 
-					code.add1Unchecked(0x48);
-					code.add1Unchecked(0xB8);
-
-					addPointerRelocation(&codeRelocations, code.totalSize, type->physicalStorage);
-
-					code.add8Unchecked(0);
+					writeIntegerPrefix(8);
+					code->add1Unchecked(MOV_REG_IMM_WORD_BASE | RAX);
+					code->addPointerRelocation(type->physicalStorage);
 
 					storeFromIntRegister(function, 8, ir.dest, RAX);
 
@@ -1346,15 +1448,9 @@ void runCoffWriter() {
 					if (ir.flags & IR_FLOAT_OP) {
 						loadIntoFloatRegister(function, ir.opSize, 0, ir.a);
 
-						if (ir.opSize == 8) {
-							code.add1Unchecked(0xF2);
-						}
-						else {
-							code.add1Unchecked(0xF3);
-						}
-
-						code.add1Unchecked(0x0F);
-						code.add1Unchecked(0x58);
+						writeFloatPrefix(ir.opSize);
+						code->add1Unchecked(OPCODE_EXT);
+						code->add1Unchecked(EXT_ADDSf_REG_MEM);
 						writeRSPRegisterByte(function, 0, ir.b);
 
 						storeFromFloatRegister(function, ir.opSize, ir.dest, 0);
@@ -1362,20 +1458,8 @@ void runCoffWriter() {
 					else {
 						loadIntoIntRegister(function, ir.opSize, RAX, ir.a);
 
-						if (ir.opSize == 8) {
-							code.add1Unchecked(0x48);
-						}
-						else if (ir.opSize == 2) {
-							code.add1Unchecked(0x66);
-						}
-
-						if (ir.opSize == 1) {
-							code.add1Unchecked(0x02);
-						}
-						else {
-							code.add1Unchecked(0x03);
-						}
-
+						writeIntegerPrefix(ir.opSize);
+						sizedIntInstruction(ir.opSize, ADD_REG_MEM_BASE);
 						writeRSPRegisterByte(function, RAX, ir.b);
 
 						storeFromIntRegister(function, ir.opSize, ir.dest, RAX);
@@ -1386,22 +1470,10 @@ void runCoffWriter() {
 						writeSet(function, ir.opSize, ir.dest, ir.a);
 					}
 					else {
-						loadImmediateIntoRAX(ir.immediate);
+						loadImmediateIntoIntRegister64(RAX, ir.immediate);
 
-						if (ir.opSize == 8) {
-							code.add1Unchecked(0x48);
-						}
-						else if (ir.opSize == 2) {
-							code.add1Unchecked(0x48);
-						}
-
-						if (ir.opSize == 1) {
-							code.add1Unchecked(0x02);
-						}
-						else {
-							code.add1Unchecked(0x03);
-						}
-
+						writeIntegerPrefix(ir.opSize);
+						sizedIntInstruction(ir.opSize, ADD_REG_MEM_BASE);
 						writeRSPRegisterByte(function, RAX, ir.a);
 
 						storeFromIntRegister(function, ir.opSize, ir.dest, RAX);
@@ -1411,16 +1483,10 @@ void runCoffWriter() {
 					if (ir.flags & IR_FLOAT_OP) {
 						loadIntoFloatRegister(function, ir.opSize, 0, ir.a);
 
-						if (ir.opSize == 8) {
-							code.add1Unchecked(0xF2);
-						}
-						else {
-							code.add1Unchecked(0xF3);
-						}
 
-						code.add1Unchecked(0x0F);
-						code.add1Unchecked(0x5C);
-
+						writeFloatPrefix(ir.opSize);
+						code->add1Unchecked(OPCODE_EXT);
+						code->add1Unchecked(EXT_SUBSf_REG_MEM);
 						writeRSPRegisterByte(function, 0, ir.b);
 
 						storeFromFloatRegister(function, ir.opSize, ir.dest, 0);
@@ -1428,20 +1494,8 @@ void runCoffWriter() {
 					else {
 						loadIntoIntRegister(function, ir.opSize, RAX, ir.a);
 
-						if (ir.opSize == 8) {
-							code.add1Unchecked(0x48);
-						}
-						else if (ir.opSize == 2) {
-							code.add1Unchecked(0x66);
-						}
-
-						if (ir.opSize == 1) {
-							code.add1Unchecked(0x2A);
-						}
-						else {
-							code.add1Unchecked(0x2B);
-						}
-
+						writeIntegerPrefix(ir.opSize);
+						sizedIntInstruction(ir.opSize, SUB_REG_MEM_BASE);
 						writeRSPRegisterByte(function, RAX, ir.b);
 
 						storeFromIntRegister(function, ir.opSize, ir.dest, RAX);
@@ -1451,16 +1505,9 @@ void runCoffWriter() {
 					if (ir.flags & IR_FLOAT_OP) {
 						loadIntoFloatRegister(function, ir.opSize, 0, ir.a);
 
-						if (ir.opSize == 8) {
-							code.add1Unchecked(0xF2);
-						}
-						else {
-							code.add1Unchecked(0xF3);
-						}
-
-						code.add1Unchecked(0x0F);
-						code.add1Unchecked(0x59);
-
+						writeFloatPrefix(ir.opSize);
+						code->add1Unchecked(OPCODE_EXT);
+						code->add1Unchecked(EXT_MULSf_REG_MEM);
 						writeRSPRegisterByte(function, 0, ir.b);
 
 						storeFromFloatRegister(function, ir.opSize, ir.dest, 0);
@@ -1469,23 +1516,17 @@ void runCoffWriter() {
 						if (ir.opSize == 1) {
 							loadIntoIntRegister(function, 1, RAX, ir.a);
 
-							code.add1Unchecked(0xF6);
-							writeRSPRegisterByte(function, 5, ir.b);
+							sizedIntInstruction(1, UNARY_INT_OP_BASE_MODRM_X);
+							writeRSPRegisterByte(function, UNARY_INT_OP_MODRM_IMUL_MEM, ir.b);
 
 							storeFromIntRegister(function, 1, ir.dest, RAX);
 						}
 						else {
 							loadIntoIntRegister(function, ir.opSize, RAX, ir.a);
 
-							if (ir.opSize == 8) {
-								code.add1Unchecked(0x48);
-							}
-							else if (ir.opSize == 2) {
-								code.add1Unchecked(0x66);
-							}
-
-							code.add1Unchecked(0x0F);
-							code.add1Unchecked(0xAF);
+							writeIntegerPrefix(ir.opSize);
+							code->add1Unchecked(OPCODE_EXT);
+							code->add1Unchecked(EXT_IMUL_REG_MEM);
 							writeRSPRegisterByte(function, RAX, ir.b);
 
 							storeFromIntRegister(function, ir.opSize, ir.dest, RAX);
@@ -1495,100 +1536,67 @@ void runCoffWriter() {
 				case IrOp::MUL_BY_CONSTANT: {
 					assert(ir.opSize == 8);
 
-					if (ir.immediate == 0) {
-						storeImmediate(function, ir.opSize, ir.dest, 0);
-					}
-					else {
-						loadImmediateIntoRAX(ir.immediate);
+					loadImmediateIntoIntRegister64(RAX, ir.immediate);
 
-						code.add1Unchecked(0x48);
-						code.add1Unchecked(0x0F);
-						code.add1Unchecked(0xAF);
-						writeRSPRegisterByte(function, RAX, ir.a);
+					writeIntegerPrefix(8);
+					code->add1Unchecked(OPCODE_EXT);
+					code->add1Unchecked(EXT_IMUL_REG_MEM);
+					writeRSPRegisterByte(function, RAX, ir.a);
 
-						storeFromIntRegister(function, ir.opSize, ir.dest, RAX);
-					}
+					storeFromIntRegister(function, ir.opSize, ir.dest, RAX);
 				} break;
 				case IrOp::DIV: {
 					if (ir.flags & IR_FLOAT_OP) {
 						loadIntoFloatRegister(function, ir.opSize, 0, ir.a);
-						loadIntoFloatRegister(function, ir.opSize, 1, ir.b);
 
-						if (ir.opSize == 8) {
-							code.add1Unchecked(0xF2);
-						}
-						else {
-							code.add1Unchecked(0xF3);
-						}
-						code.add1Unchecked(0x0F);
-						code.add1Unchecked(0x5E);
-						code.add1Unchecked(0xC1);
+						writeFloatPrefix(ir.opSize);
+						code->add1Unchecked(OPCODE_EXT);
+						code->add1Unchecked(EXT_DIVSf_REG_MEM);
+						writeRSPRegisterByte(function, 0, ir.b);
 
 						storeFromFloatRegister(function, ir.opSize, ir.dest, 0);
 					}
 					else {
-						loadIntoIntRegister(function, ir.opSize, RAX, ir.a);
-						loadIntoIntRegister(function, ir.opSize, RCX, ir.b);
 
 						if (ir.flags & IR_SIGNED_OP) {
+							loadIntoIntRegister(function, ir.opSize, RAX, ir.a);
+
 							if (ir.opSize == 1) {
-								code.add1Unchecked(0x66); // cbw
-								code.add1Unchecked(0x98);
+								code->add1Unchecked(OPERAND_SIZE_OVERRIDE);
+								code->add1Unchecked(CBW);
 
-								code.add1Unchecked(0xF6); // idiv cl
-								code.add1Unchecked(0xF9);
-
+								sizedIntInstruction(1, UNARY_INT_OP_BASE_MODRM_X);
+								writeRSPRegisterByte(function, UNARY_INT_OP_MODRM_IDIV_MEM, ir.b);
 							}
 							else {
-								if (ir.opSize == 2) {
-									code.add1Unchecked(0x66);
-								}
-								else if (ir.opSize == 8) {
-									code.add1Unchecked(0x48);
-								}
+								writeIntegerPrefix(ir.opSize);
+								code->add1Unchecked(CDQ);
 
-								code.add1Unchecked(0x99);
-
-								if (ir.opSize == 2) {
-									code.add1Unchecked(0x66);
-								}
-								else if (ir.opSize == 8) {
-									code.add1Unchecked(0x48);
-								}
-								code.add1Unchecked(0xF7);
-								code.add1Unchecked(0xF9);
+								writeIntegerPrefix(ir.opSize);
+								sizedIntInstruction(ir.opSize, UNARY_INT_OP_BASE_MODRM_X);
+								writeRSPRegisterByte(function, UNARY_INT_OP_MODRM_IDIV_MEM, ir.b);
 							}
 						}
 						else {
 							if (ir.opSize == 1) {
-								code.add1Unchecked(0x66); // movzx ax, al
-								code.add1Unchecked(0x0F);
-								code.add1Unchecked(0xB6);
-								code.add1Unchecked(0xC0);
+								code->add1Unchecked(OPERAND_SIZE_OVERRIDE);
+								code->add1Unchecked(OPCODE_EXT);
+								code->add1Unchecked(EXT_MOVZX_REG_MEM_BASE);
+								writeRSPRegisterByte(function, RAX, ir.a);
 
-								code.add1Unchecked(0xF6); // div cl
-								code.add1Unchecked(0xF1);
-
+								sizedIntInstruction(1, UNARY_INT_OP_BASE_MODRM_X);
+								writeRSPRegisterByte(function, UNARY_INT_OP_MODRM_DIV_MEM, ir.b);
 							}
 							else {
-								if (ir.opSize == 2) {
-									code.add1Unchecked(0x66);
-								}
-								else if (ir.opSize == 8) {
-									code.add1Unchecked(0x48);
-								}
+								loadIntoIntRegister(function, ir.opSize, RAX, ir.a);
 
-								code.add1Unchecked(0x31);
-								code.add1Unchecked(0xD2);
+								sizedIntInstruction(4, XOR_REG_MEM_BASE);
+								writeModRM(MODRM_MOD_DIRECT, RDX, RDX);
 
-								if (ir.opSize == 2) {
-									code.add1Unchecked(0x66);
-								}
-								else if (ir.opSize == 8) {
-									code.add1Unchecked(0x48);
-								}
-								code.add1Unchecked(0xF7);
-								code.add1Unchecked(0xF1);
+
+								writeIntegerPrefix(ir.opSize);
+								sizedIntInstruction(ir.opSize, UNARY_INT_OP_BASE_MODRM_X);
+								writeRSPRegisterByte(function, UNARY_INT_OP_MODRM_DIV_MEM, ir.b);
 							}
 						}
 
@@ -1596,20 +1604,17 @@ void runCoffWriter() {
 					}
 				} break;
 				case IrOp::DIVIDE_BY_CONSTANT: {
-					loadImmediateIntoRAX(ir.immediate);
-
-					code.add1Unchecked(0x48); // mov rcx, rax
-					code.add1Unchecked(0x89);
-					code.add1Unchecked(0xC1);
+					assert(ir.opSize == 8);
+					loadImmediateIntoIntRegister64(RCX, ir.immediate);
 
 					loadIntoIntRegister(function, 8, RAX, ir.a);
 
-					code.add1Unchecked(0x48); // cqo
-					code.add1Unchecked(0x99);
+					writeIntegerPrefix(8);
+					code->add1Unchecked(CDQ);
 
-					code.add1Unchecked(0x48); // div rcx
-					code.add1Unchecked(0xF7);
-					code.add1Unchecked(0xF1);
+					writeIntegerPrefix(8);
+					sizedIntInstruction(ir.opSize, UNARY_INT_OP_BASE_MODRM_X);
+					writeModRM(MODRM_MOD_DIRECT, UNARY_INT_OP_MODRM_DIV_MEM, RCX);
 
 					storeFromIntRegister(function, ir.opSize, ir.dest, RAX);
 				} break;
@@ -1619,90 +1624,75 @@ void runCoffWriter() {
 						assert(false);
 					}
 					else {
-						loadIntoIntRegister(function, ir.opSize, RAX, ir.a);
-						loadIntoIntRegister(function, ir.opSize, RCX, ir.b);
+						if (ir.flags & IR_FLOAT_OP) {
+							loadIntoFloatRegister(function, ir.opSize, 0, ir.a);
 
-						if (ir.flags & IR_SIGNED_OP) {
-							if (ir.opSize == 1) {
-								code.add1Unchecked(0x66); // cbw
-								code.add1Unchecked(0x98);
+							writeFloatPrefix(ir.opSize);
+							code->add1Unchecked(OPCODE_EXT);
+							code->add1Unchecked(EXT_DIVSf_REG_MEM);
+							writeRSPRegisterByte(function, 0, ir.b);
 
-								code.add1Unchecked(0xF6); // idiv cl
-								code.add1Unchecked(0xF9);
-
-							}
-							else {
-								if (ir.opSize == 2) {
-									code.add1Unchecked(0x66);
-								}
-								else if (ir.opSize == 8) {
-									code.add1Unchecked(0x48);
-								}
-
-								code.add1Unchecked(0x99);
-
-								if (ir.opSize == 2) {
-									code.add1Unchecked(0x66);
-								}
-								else if (ir.opSize == 8) {
-									code.add1Unchecked(0x48);
-								}
-								code.add1Unchecked(0xF7);
-								code.add1Unchecked(0xF9);
-							}
+							storeFromFloatRegister(function, ir.opSize, ir.dest, 0);
 						}
 						else {
-							if (ir.opSize == 1) {
-								code.add1Unchecked(0x66); // movzx ax, al
-								code.add1Unchecked(0x0F);
-								code.add1Unchecked(0xB6);
-								code.add1Unchecked(0xC0);
 
-								code.add1Unchecked(0xF6); // div cl
-								code.add1Unchecked(0xF1);
+							if (ir.flags & IR_SIGNED_OP) {
+								loadIntoIntRegister(function, ir.opSize, RAX, ir.a);
 
+								if (ir.opSize == 1) {
+									code->add1Unchecked(OPERAND_SIZE_OVERRIDE);
+									code->add1Unchecked(CBW);
+
+									sizedIntInstruction(1, UNARY_INT_OP_BASE_MODRM_X);
+									writeRSPRegisterByte(function, UNARY_INT_OP_MODRM_IDIV_MEM, ir.b);
+
+									sizedIntInstruction(1, MOV_REG_MEM_BASE);
+									writeModRM(MODRM_MOD_DIRECT, RDX, AH);
+								}
+								else {
+									writeIntegerPrefix(ir.opSize);
+									code->add1Unchecked(CDQ);
+
+									writeIntegerPrefix(ir.opSize);
+									sizedIntInstruction(ir.opSize, UNARY_INT_OP_BASE_MODRM_X);
+									writeRSPRegisterByte(function, UNARY_INT_OP_MODRM_IDIV_MEM, ir.b);
+								}
 							}
 							else {
-								if (ir.opSize == 2) {
-									code.add1Unchecked(0x66);
-								}
-								else if (ir.opSize == 8) {
-									code.add1Unchecked(0x48);
-								}
+								if (ir.opSize == 1) {
+									code->add1Unchecked(OPERAND_SIZE_OVERRIDE);
+									code->add1Unchecked(OPCODE_EXT);
+									code->add1Unchecked(EXT_MOVZX_REG_MEM_BASE);
+									writeRSPRegisterByte(function, RAX, ir.a);
 
-								code.add1Unchecked(0x31);
-								code.add1Unchecked(0xD2);
+									sizedIntInstruction(1, UNARY_INT_OP_BASE_MODRM_X);
+									writeRSPRegisterByte(function, UNARY_INT_OP_MODRM_DIV_MEM, ir.b);
 
-								if (ir.opSize == 2) {
-									code.add1Unchecked(0x66);
+									sizedIntInstruction(1, MOV_REG_MEM_BASE);
+									writeModRM(MODRM_MOD_DIRECT, RDX, AH);
 								}
-								else if (ir.opSize == 8) {
-									code.add1Unchecked(0x48);
+								else {
+									loadIntoIntRegister(function, ir.opSize, RAX, ir.a);
+
+									sizedIntInstruction(4, XOR_REG_MEM_BASE);
+									writeModRM(MODRM_MOD_DIRECT, RDX, RDX);
+
+
+									writeIntegerPrefix(ir.opSize);
+									sizedIntInstruction(ir.opSize, UNARY_INT_OP_BASE_MODRM_X);
+									writeRSPRegisterByte(function, UNARY_INT_OP_MODRM_DIV_MEM, ir.b);
 								}
-								code.add1Unchecked(0xF7);
-								code.add1Unchecked(0xF1);
 							}
-						}
 
-						storeFromIntRegister(function, ir.opSize, ir.dest, ir.opSize == 1 ? AH : RDX);
+							storeFromIntRegister(function, ir.opSize, ir.dest, RDX);
+						}
 					}
 				} break;
 				case IrOp::AND: {
 					loadIntoIntRegister(function, ir.opSize, RAX, ir.a);
 
-					if (ir.opSize == 8) {
-						code.add1Unchecked(0x48);
-					}
-					else if (ir.opSize == 2) {
-						code.add1Unchecked(0x66);
-					}
-
-					if (ir.opSize == 1) {
-						code.add1Unchecked(0x22);
-					}
-					else {
-						code.add1Unchecked(0x23);
-					}
+					writeIntegerPrefix(ir.opSize);
+					sizedIntInstruction(ir.opSize, AND_REG_MEM_BASE);
 					writeRSPRegisterByte(function, RAX, ir.b);
 
 					storeFromIntRegister(function, ir.opSize, ir.dest, RAX);
@@ -1710,19 +1700,8 @@ void runCoffWriter() {
 				case IrOp::OR: {
 					loadIntoIntRegister(function, ir.opSize, RAX, ir.a);
 
-					if (ir.opSize == 8) {
-						code.add1Unchecked(0x48);
-					}
-					else if (ir.opSize == 2) {
-						code.add1Unchecked(0x66);
-					}
-
-					if (ir.opSize == 1) {
-						code.add1Unchecked(0x0A);
-					}
-					else {
-						code.add1Unchecked(0x0B);
-					}
+					writeIntegerPrefix(ir.opSize);
+					sizedIntInstruction(ir.opSize, OR_REG_MEM_BASE);
 					writeRSPRegisterByte(function, RAX, ir.b);
 
 					storeFromIntRegister(function, ir.opSize, ir.dest, RAX);
@@ -1730,92 +1709,90 @@ void runCoffWriter() {
 				case IrOp::XOR: {
 					loadIntoIntRegister(function, ir.opSize, RAX, ir.a);
 
-					if (ir.opSize == 8) {
-						code.add1Unchecked(0x48);
-					}
-					else if (ir.opSize == 2) {
-						code.add1Unchecked(0x66);
-					}
-
-					if (ir.opSize == 1) {
-						code.add1Unchecked(0x32);
-					}
-					else {
-						code.add1Unchecked(0x33);
-					}
+					writeIntegerPrefix(ir.opSize);
+					sizedIntInstruction(ir.opSize, XOR_REG_MEM_BASE);
 					writeRSPRegisterByte(function, RAX, ir.b);
 
 					storeFromIntRegister(function, ir.opSize, ir.dest, RAX);
 				} break;
 				case IrOp::NOT: {
 					loadIntoIntRegister(function, ir.opSize, RAX, ir.a);
-					if (ir.opSize == 8) {
-						code.add1Unchecked(0x48);
-					}
-					else if (ir.opSize == 2) {
-						code.add1Unchecked(0x66);
-					}
 
-					if (ir.opSize == 1) {
-						code.add1Unchecked(0xF6);
-					}
-					else {
-						code.add1Unchecked(0xF7);
-					}
-
-					code.add1Unchecked(0xD0);
+					writeIntegerPrefix(ir.opSize);
+					sizedIntInstruction(ir.opSize, UNARY_INT_OP_BASE_MODRM_X);
+					writeModRM(MODRM_MOD_DIRECT, UNARY_INT_OP_MODRM_NOT, RAX);
 
 					storeFromIntRegister(function, ir.opSize, ir.dest, RAX);
 				} break;
 				case IrOp::POP_COUNT: {
-					loadIntoIntRegister(function, ir.opSize, RAX, ir.a);
 
 					// There is no 8 bit version of popcnt
 					if (ir.opSize == 1) {
-						code.add1Unchecked(0x0f); // movzx eax, al
-						code.add1Unchecked(0xb6);
-						code.add1Unchecked(0xc0);
-					}
+						code->add1Unchecked(OPCODE_EXT);
+						sizedIntInstruction(1, EXT_MOVZX_REG_MEM_BASE);
+						writeRSPRegisterByte(function, RAX, ir.a);
 
-					if (ir.opSize == 8) {
-						code.add1Unchecked(0xf3);
-						code.add1Unchecked(0x48);
-					}
-					else if (ir.opSize == 2) {
-						code.add1Unchecked(0x66);
-						code.add1Unchecked(0xf3);
+						writeIntegerPrefixRep(1);
+						code->add1Unchecked(OPCODE_EXT);
+						code->add1Unchecked(REP_EXT_POPCNT_REG_MEM);
+						writeModRM(MODRM_MOD_DIRECT, RAX, RAX);
 					}
 					else {
-						code.add1Unchecked(0xf3);
+						writeIntegerPrefixRep(ir.opSize);
+						code->add1Unchecked(OPCODE_EXT);
+						code->add1Unchecked(REP_EXT_POPCNT_REG_MEM);
+						writeRSPRegisterByte(function, RAX, ir.a);
 					}
 
-					code.add1Unchecked(0x0F);
-					code.add1Unchecked(0xB8);
-					code.add1Unchecked(0xC0);
 
 					storeFromIntRegister(function, ir.opSize, ir.dest, RAX);
 				} break;
 				case IrOp::BIT_SCAN_FORWARD: {
+
+					// There is no 8 bit version of bsf
+					if (ir.opSize == 1) {
+						code->add1Unchecked(OPCODE_EXT);
+						sizedIntInstruction(1, EXT_MOVZX_REG_MEM_BASE);
+						writeRSPRegisterByte(function, RAX, ir.a);
+
+						writeIntegerPrefix(1);
+						code->add1Unchecked(OPCODE_EXT);
+						code->add1Unchecked(EXT_BSF_REG_MEM);
+						writeModRM(MODRM_MOD_DIRECT, RAX, RAX);
+					}
+					else {
+						writeIntegerPrefix(ir.opSize);
+						code->add1Unchecked(OPCODE_EXT);
+						code->add1Unchecked(EXT_BSF_REG_MEM);
+						writeRSPRegisterByte(function, RAX, ir.a);
+					}
+
+
+					storeFromIntRegister(function, ir.opSize, ir.dest, RAX);
+
+					setCondition(function, ir.b, C_Z);
+				} break;
+				case IrOp::BIT_SCAN_REVERSE: {
 					loadIntoIntRegister(function, ir.opSize, RAX, ir.a);
 
 					// There is no 8 bit version of bsf
 					if (ir.opSize == 1) {
-						code.add1Unchecked(0x0f); // movzx eax, al
-						code.add1Unchecked(0xb6);
-						code.add1Unchecked(0xc0);
+						code->add1Unchecked(OPCODE_EXT);
+						sizedIntInstruction(1, EXT_MOVZX_REG_MEM_BASE);
+						writeRSPRegisterByte(function, RAX, ir.a);
+
+						writeIntegerPrefix(1);
+						code->add1Unchecked(OPCODE_EXT);
+						code->add1Unchecked(EXT_BSR_REG_MEM);
+						writeModRM(MODRM_MOD_DIRECT, RAX, RAX);
+					}
+					else {
+						writeIntegerPrefix(ir.opSize);
+						code->add1Unchecked(OPCODE_EXT);
+						code->add1Unchecked(EXT_BSR_REG_MEM);
+						writeRSPRegisterByte(function, RAX, ir.a);
 					}
 
-					if (ir.opSize == 8) {
-						code.add1Unchecked(0x48);
-					}
-					else if (ir.opSize == 2) {
-						code.add1Unchecked(0x66);
-					}
-
-					code.add1Unchecked(0x0F);
-					code.add1Unchecked(0xBC);
-					code.add1Unchecked(0xC0);
-					
 					storeFromIntRegister(function, ir.opSize, ir.dest, RAX);
 
 					setCondition(function, ir.b, C_Z);
@@ -1824,74 +1801,19 @@ void runCoffWriter() {
 					loadIntoIntRegister(function, ir.opSize, RAX, ir.a);
 					loadIntoIntRegister(function, ir.opSize, RCX, ir.b);
 
-					if (ir.opSize == 8) {
-						code.add1Unchecked(0x48);
-					}
-					else if (ir.opSize == 2) {
-						code.add1Unchecked(0x66);
-					}
-
-					if (ir.opSize == 1) {
-						code.add1Unchecked(0xD2);
-					}
-					else {
-						code.add1Unchecked(0xD3);
-					}
-
-					code.add1Unchecked(0xE0);
+					writeIntegerPrefix(ir.opSize);
+					sizedIntInstruction(ir.opSize, SHIFT_RCX_BASE_MODRM_X);
+					writeModRM(MODRM_MOD_DIRECT, SHIFT_MODRM_SHL, RAX);
 
 					storeFromIntRegister(function, ir.opSize, ir.dest, RAX);
-				} break;
-				case IrOp::BIT_SCAN_REVERSE: {
-					loadIntoIntRegister(function, ir.opSize, RAX, ir.a);
-
-					// There is no 8 bit version of bsr
-					if (ir.opSize == 1) {
-						code.add1Unchecked(0x0f); // movzx eax, al
-						code.add1Unchecked(0xb6);
-						code.add1Unchecked(0xc0);
-					}
-
-					if (ir.opSize == 8) {
-						code.add1Unchecked(0x48);
-					}
-					else if (ir.opSize == 2) {
-						code.add1Unchecked(0x66);
-					}
-
-					code.add1Unchecked(0x0F);
-					code.add1Unchecked(0xBD);
-					code.add1Unchecked(0xC0);
-
-					storeFromIntRegister(function, ir.opSize, ir.dest, RAX);
-
-					setCondition(function, ir.b, C_Z);
 				} break;
 				case IrOp::SHIFT_RIGHT: {
-
 					loadIntoIntRegister(function, ir.opSize, RAX, ir.a);
 					loadIntoIntRegister(function, ir.opSize, RCX, ir.b);
 
-					if (ir.opSize == 8) {
-						code.add1Unchecked(0x48);
-					}
-					else if (ir.opSize == 2) {
-						code.add1Unchecked(0x66);
-					}
-
-					if (ir.opSize == 1) {
-						code.add1Unchecked(0xD2);
-					}
-					else {
-						code.add1Unchecked(0xD3);
-					}
-
-					if (ir.flags & IR_SIGNED_OP) {
-						code.add1Unchecked(0xF8);
-					}
-					else {
-						code.add1Unchecked(0xE8);
-					}
+					writeIntegerPrefix(ir.opSize);
+					sizedIntInstruction(ir.opSize, SHIFT_RCX_BASE_MODRM_X);
+					writeModRM(MODRM_MOD_DIRECT, ir.flags & IR_SIGNED_OP ? SHIFT_MODRM_SAR : SHIFT_MODRM_SHR, RAX);
 
 					storeFromIntRegister(function, ir.opSize, ir.dest, RAX);
 				} break;
@@ -1899,30 +1821,19 @@ void runCoffWriter() {
 					assert(isStandardSize(ir.opSize));
 					loadIntoIntRegister(function, 8, RAX, ir.a);
 
-					if (ir.opSize == 8) {
-						code.add1Unchecked(0x48);
-					}
-					else if (ir.opSize == 2) {
-						code.add1Unchecked(0x66);
-					}
-
-					if (ir.opSize == 1) {
-						code.add1Unchecked(0x8A);
-					}
-					else {
-						code.add1Unchecked(0x8B);
-					}
+					writeIntegerPrefix(ir.opSize);
+					sizedIntInstruction(ir.opSize, MOV_REG_MEM_BASE);
 
 					if (!ir.immediate) {
-						code.add1Unchecked(0x00);
+						writeModRM(MODRM_MOD_INDIRECT, RAX, RAX);
 					}
 					else if (ir.immediate <= 0x7f) {
-						code.add1Unchecked(0x40);
-						code.add1Unchecked(ir.immediate);
+						writeModRM(MODRM_MOD_INDIRECT_OFFSET_8, RAX, RAX);
+						code->add1Unchecked(static_cast<u8>(ir.immediate));
 					}
 					else {
-						code.add1Unchecked(0x80);
-						code.add4Unchecked(ir.immediate);
+						writeModRM(MODRM_MOD_INDIRECT_OFFSET_32, RAX, RAX);
+						code->add4Unchecked(static_cast<u32>(ir.immediate));
 					}
 
 					storeFromIntRegister(function, ir.opSize, ir.dest, RAX);
@@ -1933,125 +1844,65 @@ void runCoffWriter() {
 					loadIntoIntRegister(function, 8, RAX, ir.dest);
 					loadIntoIntRegister(function, ir.opSize, RCX, ir.a);
 
-					if (ir.opSize == 2) {
-						code.add1Unchecked(0x66);
-					}
-					else if (ir.opSize == 8) {
-						code.add1Unchecked(0x48);
-					}
 
-					if (ir.opSize == 1) {
-						code.add1Unchecked(0x88);
-					}
-					else {
-						code.add1Unchecked(0x89);
-					}
+					writeIntegerPrefix(ir.opSize);
+					sizedIntInstruction(ir.opSize, MOV_MEM_REG_BASE);
 
 					if (!ir.immediate) {
-						code.add1Unchecked(0x08);
+						writeModRM(MODRM_MOD_INDIRECT, RCX, RAX);
 					}
 					else if (ir.immediate <= 0x7f) {
-						code.add1Unchecked(0x48);
-						code.add1Unchecked(ir.immediate);
+						writeModRM(MODRM_MOD_INDIRECT_OFFSET_8, RCX, RAX);
+						code->add1Unchecked(static_cast<u8>(ir.immediate));
 					}
 					else {
-						code.add1Unchecked(0x88);
-						code.add4Unchecked(ir.immediate);
+						writeModRM(MODRM_MOD_INDIRECT_OFFSET_32, RCX, RAX);
+						code->add4Unchecked(static_cast<u32>(ir.immediate));
 					}
 				} break;
-				case IrOp::COPY: {					
+				case IrOp::COPY: {
+					assert(!ir.immediate);
 					if (isStandardSize(ir.opSize)) {
 						loadIntoIntRegister(function, 8, RAX, ir.a);
 						loadIntoIntRegister(function, 8, RCX, ir.dest);
 
-						if (ir.immediate) {
-							code.add1Unchecked(0x48);
-							code.add1Unchecked(0x81);
-							code.add1Unchecked(0xC1);
-							code.add4Unchecked(ir.immediate);
-						}
+						writeIntegerPrefix(ir.opSize);
+						sizedIntInstruction(ir.opSize, MOV_REG_MEM_BASE);
+						writeModRM(MODRM_MOD_INDIRECT, RAX, RAX);
 
-						if (ir.opSize == 8) {
-							code.add1Unchecked(0x48);
-						}
-						else if (ir.opSize == 2) {
-							code.add1Unchecked(0x66);
-						}
-
-						if (ir.opSize == 1) {
-							code.add1Unchecked(0x8A);
-						}
-						else {
-							code.add1Unchecked(0x8B);
-						}
-
-						code.add1Unchecked(0x00);
-
-						if (ir.opSize == 8) {
-							code.add1Unchecked(0x48);
-						}
-						else if (ir.opSize == 2) {
-							code.add1Unchecked(0x66);
-						}
-
-						if (ir.opSize == 1) {
-							code.add1Unchecked(0x88);
-						}
-						else {
-							code.add1Unchecked(0x89);
-						}
-
-						code.add1Unchecked(0x01);
+						writeIntegerPrefix(ir.opSize);
+						sizedIntInstruction(ir.opSize, MOV_MEM_REG_BASE);
+						writeModRM(MODRM_MOD_INDIRECT, RAX, RCX);
 					}
 					else {
 						loadIntoIntRegister(function, 8, RDI, ir.dest);
 						loadIntoIntRegister(function, 8, RSI, ir.a);
+						loadImmediateIntoIntRegister64(RCX, ir.opSize);
 
-						if (ir.immediate) {
-							code.add1Unchecked(0x48);
-							code.add1Unchecked(0x81);
-							code.add1Unchecked(0xC7);
-							code.add4Unchecked(ir.immediate);
-						}
-
-						loadImmediateIntoIntRegister(RCX, ir.opSize);
-
-						code.add1Unchecked(0xF3);
-						code.add1Unchecked(0xA4);
+						code->add1Unchecked(REP_PREFIX);
+						sizedIntInstruction(1, MOVS_BASE);
 					}
 				} break;
 				case IrOp::ZERO_MEMORY: {
 					assert(!ir.immediate);
 
-					code.add1Unchecked(0x31);
-					code.add1Unchecked(0xC0);
+					sizedIntInstruction(4, XOR_REG_MEM_BASE);
+					writeModRM(MODRM_MOD_DIRECT, RAX, RAX);
 
 					if (isStandardSize(ir.opSize)) {
 						loadIntoIntRegister(function, 8, RCX, ir.dest);
 
-						if (ir.opSize == 8) {
-							code.add1Unchecked(0x48);
-						}
-						else if (ir.opSize == 2) {
-							code.add1Unchecked(0x66);
-						}
-
-						if (ir.opSize == 1) {
-							code.add1Unchecked(0x88);
-						}
-						else {
-							code.add1Unchecked(0x89);
-						}
-
-						code.add1Unchecked(0x01);
+						writeIntegerPrefix(ir.opSize);
+						sizedIntInstruction(ir.opSize, MOV_MEM_REG_BASE);
+						writeModRM(MODRM_MOD_INDIRECT, RAX, RCX);
 					}
 					else {
 						loadIntoIntRegister(function, 8, RDI, ir.dest);
 
-						loadImmediateIntoIntRegister(RCX, ir.opSize);
+						loadImmediateIntoIntRegister64(RCX, ir.opSize);
 
-						code.add1Unchecked(0xF3);
-						code.add1Unchecked(0xAA);
+						code->add1Unchecked(REP_PREFIX);
+						sizedIntInstruction(1, STOS_BASE);
 					}
 				} break;
 				case IrOp::SET: {
@@ -2061,140 +1912,83 @@ void runCoffWriter() {
 					writeSet(function, 8, ir.dest, ir.a);
 				} break;
 				case IrOp::FLOAT_CAST: {
-					if (ir.opSize == 8) {
-						assert(ir.b == 4);
-
-						code.add1Unchecked(0xF2);
-					}
-					else {
-						assert(ir.opSize == 4);
-						assert(ir.b == 8);
-
-						code.add1Unchecked(0xF3);
-					}
-
-					code.add1Unchecked(0x0F);
-					code.add1Unchecked(0x5A);
-
+					writeFloatPrefix(ir.opSize);
+					code->add1Unchecked(OPCODE_EXT);
+					code->add1Unchecked(EXT_CVTSf2Sf_REG_MEM);
 					writeRSPRegisterByte(function, 0, ir.a);
+
 					storeFromFloatRegister(function, ir.b, ir.dest, 0);
 				} break;
 				case IrOp::EXTEND_INT: {
 					if (ir.flags & IR_SIGNED_OP) {
-						if (ir.opSize == 1) {
-							if (ir.b == 2) {
-								code.add1Unchecked(0x66);
-							}
-							else if (ir.b == 8) {
-								code.add1Unchecked(0x48);
-							}
-
-							code.add1Unchecked(0x0F);
-							code.add1Unchecked(0xBE);
+						if (ir.opSize == 4) {
+							writeIntegerPrefix(ir.b);
+							code->add1Unchecked(MOVSX_REG_MEM_32);
 							writeRSPRegisterByte(function, RAX, ir.a);
 						}
-						else if (ir.opSize == 2) {
-							if (ir.b == 8) {
-								code.add1Unchecked(0x48);
-							}
-
-							code.add1Unchecked(0x0F);
-							code.add1Unchecked(0xBF);
-							writeRSPRegisterByte(function, RAX, ir.a);
-						}
-						else if (ir.opSize == 4) {
-							code.add1Unchecked(0x48);
-							code.add1Unchecked(0x63);
+						else {
+							writeIntegerPrefix(ir.b);
+							code->add1Unchecked(OPCODE_EXT);
+							sizedIntInstruction(ir.opSize, EXT_MOVSX_REG_MEM_BASE);
 							writeRSPRegisterByte(function, RAX, ir.a);
 						}
 					}
 					else {
-						if (ir.opSize == 1) {
-							if (ir.b == 2) {
-								code.add1Unchecked(0x66);
-							}
-
-							code.add1Unchecked(0x0F);
-							code.add1Unchecked(0xB6);
-							writeRSPRegisterByte(function, RAX, ir.a);
-
-
-						}
-						else if (ir.opSize == 2) {
-							code.add1Unchecked(0x0F);
-							code.add1Unchecked(0xB7);
-							writeRSPRegisterByte(function, RAX, ir.a);
-						}
-						else if (ir.opSize == 4) {
+						if (ir.opSize == 4) {
 							loadIntoIntRegister(function, ir.opSize, RAX, ir.a);
+						}
+						else {
+							writeIntegerPrefix(ir.b);
+							code->add1Unchecked(OPCODE_EXT);
+							sizedIntInstruction(ir.opSize, EXT_MOVZX_REG_MEM_BASE);
+							writeRSPRegisterByte(function, RAX, ir.a);
 						}
 					}
 
 					storeFromIntRegister(function, ir.b, ir.dest, RAX);
 				} break;
 				case IrOp::GOTO: {
-					code.add1Unchecked(0xE9);
+					code->add1Unchecked(JMP_DIRECT);
 
 					JumpPatch patch;
 					patch.opToPatch = ir.b;
-					patch.location = reinterpret_cast<s32 *>(code.add4Unchecked(0));
-					patch.rip = code.totalSize;
+					patch.location = reinterpret_cast<s32 *>(code->add4Unchecked(0));
+					patch.rip = code->totalSize;
 
 					jumpPatches.add(patch);
 				} break;
 				case IrOp::IF_Z_GOTO: {
 					loadIntoIntRegister(function, ir.opSize, RAX, ir.a);
 
-					if (ir.opSize == 8) {
-						code.add1Unchecked(0x48);
-					}
-					else if (ir.opSize == 2) {
-						code.add1Unchecked(0x66);
-					}
+					writeIntegerPrefix(ir.opSize);
+					sizedIntInstruction(ir.opSize, TEST_MEM_REG_BASE);
+					writeModRM(MODRM_MOD_DIRECT, RAX, RAX);
 
-					if (ir.opSize == 1) {
-						code.add1Unchecked(0x84);
-					}
-					else {
-						code.add1Unchecked(0x85);
-					}
-					code.add1Unchecked(0xC0);
-
-					code.add1Unchecked(0x0F);
-					code.add1Unchecked(0x80 | C_Z);
+					code->add1Unchecked(OPCODE_EXT);
+					code->add1Unchecked(EXT_JCC_DIRECT_BASE | C_Z);
 
 					JumpPatch patch;
 					patch.opToPatch = ir.b;
-					patch.location = reinterpret_cast<s32 *>(code.add4Unchecked(0));
-					patch.rip = code.totalSize;
+					patch.location = reinterpret_cast<s32 *>(code->add4Unchecked(0));
+					patch.rip = code->totalSize;
 
 					jumpPatches.add(patch);
 				} break;
 				case IrOp::IF_NZ_GOTO: {
 					loadIntoIntRegister(function, ir.opSize, RAX, ir.a);
 
-					if (ir.opSize == 8) {
-						code.add1Unchecked(0x48);
-					}
-					else if (ir.opSize == 2) {
-						code.add1Unchecked(0x66);
-					}
 
-					if (ir.opSize == 1) {
-						code.add1Unchecked(0x84);
-					}
-					else {
-						code.add1Unchecked(0x85);
-					}
-					code.add1Unchecked(0xC0);
+					writeIntegerPrefix(ir.opSize);
+					sizedIntInstruction(ir.opSize, TEST_MEM_REG_BASE);
+					writeModRM(MODRM_MOD_DIRECT, RAX, RAX);
 
-					code.add1Unchecked(0x0F);
-					code.add1Unchecked(0x80 | C_NZ);
+					code->add1Unchecked(OPCODE_EXT);
+					code->add1Unchecked(EXT_JCC_DIRECT_BASE | C_NZ);
 
 					JumpPatch patch;
 					patch.opToPatch = ir.b;
-					patch.location = reinterpret_cast<s32 *>(code.add4Unchecked(0));
-					patch.rip = code.totalSize;
+					patch.location = reinterpret_cast<s32 *>(code->add4Unchecked(0));
+					patch.rip = code->totalSize;
 
 					jumpPatches.add(patch);
 				} break;
@@ -2272,22 +2066,16 @@ void runCoffWriter() {
 					assert(declaration->enclosingScope->flavor == BlockFlavor::GLOBAL);
 					assert(!(declaration->flags & DECLARATION_IS_CONSTANT));
 
-					code.add1Unchecked(0x48);
-					code.add1Unchecked(0x8D);
-					code.add1Unchecked(0x05);
-
-					codeRelocations.ensure(10);
-					codeRelocations.add4Unchecked(static_cast<u32>(code.totalSize));
-					codeRelocations.add4Unchecked(createSymbolForDeclaration(declaration));
-					codeRelocations.add2Unchecked(IMAGE_REL_AMD64_REL32);
-
-					code.add4Unchecked(ir.a);
+					writeIntegerPrefix(8);
+					code->add1Unchecked(LEA);
+					writeModRM(MODRM_MOD_INDIRECT, RAX, MODRM_RM_RIP_OFFSET_32);
+					*code->addRel32Relocation(createSymbolForDeclaration(declaration)) = ir.a;
 
 					storeFromIntRegister(function, 8, ir.dest, RAX);
 				} break;
 				case IrOp::STACK_ADDRESS: {
-					code.add1Unchecked(0x48);
-					code.add1Unchecked(0x8D);
+					writeIntegerPrefix(8);
+					code->add1Unchecked(LEA);
 					writeRSPOffsetByte(RAX, getStackSpaceOffset(function) + ir.immediate);
 
 					storeFromIntRegister(function, 8, ir.dest, RAX);
@@ -2297,20 +2085,11 @@ void runCoffWriter() {
 				} break;
 				case IrOp::FLOAT_TO_INT: {
 					if (ir.flags & IR_SIGNED_OP) {
-						if (ir.opSize == 8) {
-							code.add1Unchecked(0xF2);
-						}
-						else {
-							code.add1Unchecked(0xF3);
-						}
-
-						if (ir.b == 8) {
-							code.add1Unchecked(0x48);
-						}
-
-						code.add1Unchecked(0x0F);
-						code.add1Unchecked(0x2C);
+						writeFloatPrefix(ir.opSize);
+						code->add1Unchecked(OPCODE_EXT);
+						code->add1Unchecked(EXT_CVTTSf2SI_REG_MEM);
 						writeRSPRegisterByte(function, RAX, ir.a);
+
 						storeFromIntRegister(function, ir.b, ir.dest, RAX);
 					}
 					else {
@@ -2321,297 +2100,194 @@ void runCoffWriter() {
 								if (f64ToU64ConstantSymbolIndex == -1) {
 									f64ToU64ConstantSymbolIndex = symbols.count();
 
-									rdata.allocateUnaligned(AlignPO2(rdata.totalSize, 8) - rdata.totalSize);
+									rdata->allocateUnaligned(AlignPO2(rdata->totalSize, 8) - rdata->totalSize);
 
 									Symbol f64ToU64Constant;
 									setSymbolName(&f64ToU64Constant.name, "@f64ToU64Constant");
-									f64ToU64Constant.value = static_cast<u32>(rdata.totalSize);
-									f64ToU64Constant.sectionNumber = RDATA_SECTION_NUMBER;
+									f64ToU64Constant.value = static_cast<u32>(rdata->totalSize);
+									f64ToU64Constant.sectionNumber = rdata->sectionNumber;
 									f64ToU64Constant.type = 0;
 									f64ToU64Constant.storageClass = IMAGE_SYM_CLASS_STATIC;
 									f64ToU64Constant.numberOfAuxSymbols = 0;
 
 									symbols.add(f64ToU64Constant);
 
-									rdata.add8(0x43E0000000000000);
+									rdata->add8(0x43E0000000000000);
 								}
-
-								code.add1Unchecked(0xF2); // movsd xmm1, f32ToU64Constant
-								code.add1Unchecked(0x0F);
-								code.add1Unchecked(0x10);
-								code.add1Unchecked(0x0D);
-
-								codeRelocations.ensure(10);
-								codeRelocations.add4Unchecked(static_cast<u32>(code.totalSize));
-								codeRelocations.add4Unchecked(static_cast<u32>(f64ToU64ConstantSymbolIndex));
-								codeRelocations.add2Unchecked(IMAGE_REL_AMD64_REL32);
-
-								code.add4Unchecked(0);
-
-								code.add1Unchecked(0x31); // xor eax, eax
-								code.add1Unchecked(0xC0);
-
-								code.add1Unchecked(0x66); // comisd xmm0, xmm1
-								code.add1Unchecked(0x0F);
-								code.add1Unchecked(0x2F);
-								code.add1Unchecked(0xC1);
-
-								code.add1Unchecked(0x70 | C_B); // jb .cvt
-								u8 *firstJumpPatch = code.add1Unchecked(0);
-								u64 firstJumpRel = code.totalSize;
-
-								code.add1Unchecked(0xF2); // subsd xmm0, xmm1
-								code.add1Unchecked(0x0F);
-								code.add1Unchecked(0x5C);
-								code.add1Unchecked(0xC1);
-
-								code.add1Unchecked(0x66); // comisd xmm0, xmm1
-								code.add1Unchecked(0x0F);
-								code.add1Unchecked(0x2F);
-								code.add1Unchecked(0xC1);
-
-								code.add1Unchecked(0x70 | C_AE); // jae .cvt
-								u8 *secondJumpPatch = code.add1Unchecked(0);
-								u64 secondJumpRel = code.totalSize;
-
-								code.add1Unchecked(0x48); // mov rax, 0x8000'0000'0000'0000
-								code.add1Unchecked(0xB8);
-								code.add8Unchecked(0x8000'0000'0000'0000);
-
-								*firstJumpPatch = static_cast<u8>(code.totalSize - firstJumpRel);
-								*secondJumpPatch = static_cast<u8>(code.totalSize - secondJumpRel);
-
-								// .cvt
-								code.add1Unchecked(0xF2); // cvttsd2si rcx, xmm0
-								code.add1Unchecked(0x48);
-								code.add1Unchecked(0x0F);
-								code.add1Unchecked(0x2C);
-								code.add1Unchecked(0xC8);
-
-								code.add1Unchecked(0x48); // add rax, rcx
-								code.add1Unchecked(0x01);
-								code.add1Unchecked(0xC8);
 							}
 							else {
 								if (f32ToU64ConstantSymbolIndex == -1) {
 									f32ToU64ConstantSymbolIndex = symbols.count();
 
-									rdata.allocateUnaligned(AlignPO2(rdata.totalSize, 4) - rdata.totalSize);
+									rdata->allocateUnaligned(AlignPO2(rdata->totalSize, 4) - rdata->totalSize);
 
 									Symbol f32ToU64Constant;
 									setSymbolName(&f32ToU64Constant.name, "@f32ToU64Constant");
-									f32ToU64Constant.value = static_cast<u32>(rdata.totalSize);
-									f32ToU64Constant.sectionNumber = RDATA_SECTION_NUMBER;
+									f32ToU64Constant.value = static_cast<u32>(rdata->totalSize);
+									f32ToU64Constant.sectionNumber = rdata->sectionNumber;
 									f32ToU64Constant.type = 0;
 									f32ToU64Constant.storageClass = IMAGE_SYM_CLASS_STATIC;
 									f32ToU64Constant.numberOfAuxSymbols = 0;
 
 									symbols.add(f32ToU64Constant);
 
-									rdata.add4(0x5F000000);
+									rdata->add4(0x5F000000);
+
 								}
-
-								code.add1Unchecked(0xF3); // movss xmm1, f32ToU64Constant
-								code.add1Unchecked(0x0F);
-								code.add1Unchecked(0x10);
-								code.add1Unchecked(0x0D);
-
-								codeRelocations.ensure(10);
-								codeRelocations.add4Unchecked(code.totalSize);
-								codeRelocations.add4Unchecked(static_cast<u32>(f32ToU64ConstantSymbolIndex));
-								codeRelocations.add2Unchecked(IMAGE_REL_AMD64_REL32);
-
-								code.add4Unchecked(0);
-
-								code.add1Unchecked(0x31); // xor eax, eax
-								code.add1Unchecked(0xC0);
-
-								code.add1Unchecked(0x0F); // comiss xmm0, xmm1
-								code.add1Unchecked(0x2F);
-								code.add1Unchecked(0xC1);
-
-								code.add1Unchecked(0x70 | C_B); // jb .cvt
-								u8 *firstJumpPatch = code.add1Unchecked(0);
-								u64 firstJumpRel = code.totalSize;
-
-								code.add1Unchecked(0xF3); // subss xmm0, xmm1
-								code.add1Unchecked(0x0F);
-								code.add1Unchecked(0x5C);
-								code.add1Unchecked(0xC1);
-
-								code.add1Unchecked(0x0F); // comiss xmm0, xmm1
-								code.add1Unchecked(0x2F);
-								code.add1Unchecked(0xC1);
-
-								code.add1Unchecked(0x70 | C_AE); // jae .cvt
-								u8 *secondJumpPatch = code.add1Unchecked(0);
-								u64 secondJumpRel = code.totalSize;
-
-								code.add1Unchecked(0x48); // mov rax, 0x8000'0000'0000'0000
-								code.add1Unchecked(0xB8);
-								code.add8Unchecked(0x8000'0000'0000'0000);
-
-								*firstJumpPatch = static_cast<u8>(code.totalSize - firstJumpRel);
-								*secondJumpPatch = static_cast<u8>(code.totalSize - secondJumpRel);
-
-								// .cvt
-								code.add1Unchecked(0xF3); // cvttss2si rcx, xmm0
-								code.add1Unchecked(0x48);
-								code.add1Unchecked(0x0F);
-								code.add1Unchecked(0x2C);
-								code.add1Unchecked(0xC8);
-
-								code.add1Unchecked(0x48); // add rax, rcx
-								code.add1Unchecked(0x01);
-								code.add1Unchecked(0xC8);
 							}
 
-							storeFromIntRegister(function, ir.b, ir.dest, RAX);
+							writeFloatPrefix(ir.opSize);
+							code->add1Unchecked(OPCODE_EXT);
+							code->add1Unchecked(EXT_MOVSf_REG_MEM);
+							writeModRM(MODRM_MOD_INDIRECT, 1, MODRM_RM_RIP_OFFSET_32);
+							code->addRel32Relocation(ir.opSize == 8 ? f64ToU64ConstantSymbolIndex : f32ToU64ConstantSymbolIndex);
+
+							sizedIntInstruction(4, XOR_REG_MEM_BASE);
+							writeModRM(MODRM_MOD_DIRECT, RAX, RAX);
+
+							writeFloatLegacyPrefix(ir.opSize);
+							code->add1Unchecked(OPCODE_EXT);
+							code->add1Unchecked(EXT_COMISf_REG_MEM);
+							writeModRM(MODRM_MOD_DIRECT, 0, 1);
+
+							code->add1Unchecked(JCC_DIRECT_8_BASE | C_B);
+							u8 *firstJumpPatch = code->add1Unchecked(0);
+							u64 firstJumpRel = code->totalSize;
+
+							writeFloatPrefix(ir.opSize);
+							code->add1Unchecked(OPCODE_EXT);
+							code->add1Unchecked(EXT_SUBSf_REG_MEM);
+							writeModRM(MODRM_MOD_DIRECT, 0, 1);
+
+							writeFloatLegacyPrefix(ir.opSize);
+							code->add1Unchecked(OPCODE_EXT);
+							code->add1Unchecked(EXT_COMISf_REG_MEM);
+							writeModRM(MODRM_MOD_DIRECT, 0, 1);
+
+							code->add1Unchecked(JCC_DIRECT_8_BASE | C_AE);
+							u8 *secondJumpPatch = code->add1Unchecked(0);
+							u64 secondJumpRel = code->totalSize;
+
+							loadImmediateIntoIntRegister64(RAX, 0x8000'0000'0000'0000);
+
+							*firstJumpPatch = static_cast<u8>(code->totalSize - firstJumpRel);
+							*secondJumpPatch = static_cast<u8>(code->totalSize - secondJumpRel);
+
+
+							writeFloatPrefix(ir.opSize);
+							writeIntegerPrefix(8);
+							code->add1Unchecked(OPCODE_EXT);
+							code->add1Unchecked(EXT_CVTTSf2SI_REG_MEM);
+							writeModRM(MODRM_MOD_DIRECT, RCX, 0);
+
+							writeIntegerPrefix(8);
+							code->add1Unchecked(ADD_REG_MEM_BASE);
+							writeModRM(MODRM_MOD_DIRECT, RAX, RCX);
 						}
 
 						else {
-							if (ir.opSize == 8) {
-								code.add1Unchecked(0xF2);
-							}
-							else {
-								code.add1Unchecked(0xF3);
-							}
+							writeFloatPrefix(ir.opSize);
+							writeIntegerPrefix(8);
 
-							if (ir.b == 4) {
-								code.add1Unchecked(0x48);
-							}
-
-							code.add1Unchecked(0x0F);
-							code.add1Unchecked(0x2C);
+							code->add1Unchecked(OPCODE_EXT);
+							code->add1Unchecked(EXT_CVTTSf2SI_REG_MEM);
 
 
 							writeRSPRegisterByte(function, RAX, ir.a);
-							storeFromIntRegister(function, ir.b, ir.dest, RAX);
 						}
+
+						storeFromIntRegister(function, ir.b, ir.dest, RAX);
 					}
 				} break;
 				case IrOp::INT_TO_FLOAT: {
 					if (ir.flags & IR_SIGNED_OP) {
 						if (ir.opSize >= 4) {
-							if (ir.b == 8) {
-								code.add1Unchecked(0xF2);
-							}
-							else {
-								code.add1Unchecked(0xF3);
-							}
-
-							if (ir.opSize == 8) {
-								code.add1Unchecked(0x48);
-							}
-
-							code.add1Unchecked(0x0F);
-							code.add1Unchecked(0x2A);
+							writeFloatPrefix(ir.b);
+							writeIntegerPrefix(ir.opSize);
+							code->add1Unchecked(OPCODE_EXT);
+							code->add1Unchecked(EXT_CVTSI2Sf_REG_MEM);
 							writeRSPRegisterByte(function, 0, ir.a);
+
 							storeFromFloatRegister(function, ir.b, ir.dest, 0);
 						}
 						else {
-							code.add1Unchecked(0x0F);
-							if (ir.opSize == 2) {
-								code.add1Unchecked(0xBF);
-							}
-							else {
-								code.add1Unchecked(0xBE);
-							}
+							code->add1Unchecked(OPCODE_EXT);
+							sizedIntInstruction(ir.opSize, EXT_MOVSX_REG_MEM_BASE);
 							writeRSPRegisterByte(function, RAX, ir.a);
 
-							if (ir.b == 8) {
-								code.add1Unchecked(0xF2);
-							}
-							else {
-								code.add1Unchecked(0xF3);
-							}
-
-							code.add1Unchecked(0x0F);
-							code.add1Unchecked(0x2A);
-							code.add1Unchecked(0xC0);
+							writeFloatPrefix(ir.b);
+							code->add1Unchecked(OPCODE_EXT);
+							code->add1Unchecked(EXT_CVTSI2Sf_REG_MEM);
+							writeModRM(MODRM_MOD_DIRECT, RAX, 0);
 
 							storeFromFloatRegister(function, ir.b, ir.dest, 0);
 						}
 					}
 					else {
 						if (ir.opSize == 8) {
-							loadIntoIntRegister(function, ir.opSize, RAX, ir.a);
-
-							code.add1Unchecked(0x0F); // xorps xmm0, xmm0
-							code.add1Unchecked(0x57);
-							code.add1Unchecked(0xC0);
-
-							code.add1Unchecked(0x48); // test rax, rax
-							code.add1Unchecked(0x85);
-							code.add1Unchecked(0xC0);
-
-							code.add1Unchecked(0x70 | C_S); // js .large
-
-							u8 *firstJumpPatch = code.add1Unchecked(0);
-							u32 firstJumpRel = code.totalSize;
-
-
 							if (ir.b == 8) {
-								code.add1Unchecked(0xF2);
+								if (u64ToF64ConstantSymbolIndex == -1) {
+									u64ToF64ConstantSymbolIndex = symbols.count();
+
+									rdata->allocateUnaligned(AlignPO2(rdata->totalSize, 8) - rdata->totalSize);
+
+									Symbol u64ToF64Constant;
+									setSymbolName(&u64ToF64Constant.name, "@u64ToF64Constant");
+									u64ToF64Constant.value = static_cast<u32>(rdata->totalSize);
+									u64ToF64Constant.sectionNumber = rdata->sectionNumber;
+									u64ToF64Constant.type = 0;
+									u64ToF64Constant.storageClass = IMAGE_SYM_CLASS_STATIC;
+									u64ToF64Constant.numberOfAuxSymbols = 0;
+
+									symbols.add(u64ToF64Constant);
+
+									rdata->add8(0x43F0000000000000ULL);
+								}
 							}
 							else {
-								code.add1Unchecked(0xF3);
+								if (u64ToF32ConstantSymbolIndex == -1) {
+									u64ToF32ConstantSymbolIndex = symbols.count();
+
+									rdata->allocateUnaligned(AlignPO2(rdata->totalSize, 4) - rdata->totalSize);
+
+									Symbol u64ToF32Constant;
+									setSymbolName(&u64ToF32Constant.name, "@u64ToF32Constant");
+									u64ToF32Constant.value = static_cast<u32>(rdata->totalSize);
+									u64ToF32Constant.sectionNumber = rdata->sectionNumber;
+									u64ToF32Constant.type = 0;
+									u64ToF32Constant.storageClass = IMAGE_SYM_CLASS_STATIC;
+									u64ToF32Constant.numberOfAuxSymbols = 0;
+
+									symbols.add(u64ToF32Constant);
+
+									rdata->add4(0x5F800000);
+
+								}
 							}
 
-							code.add1Unchecked(0x48);
-							code.add1Unchecked(0x0F);
-							code.add1Unchecked(0x2a);
-							code.add1Unchecked(0xC0);
+							loadIntoIntRegister(function, 8, RAX, ir.a);
 
-							code.add1Unchecked(0xEB); // jmp .done
+							writeFloatPrefix(ir.b);
+							writeIntegerPrefix(8);
+							code->add1Unchecked(OPCODE_EXT);
+							code->add1Unchecked(EXT_CVTSI2Sf_REG_MEM);
+							writeModRM(MODRM_MOD_DIRECT, 0, RAX);
 
-							u8 *secondJumpPatch = code.add1Unchecked(0);
-							u32 secondJumpRel = code.totalSize;
+							writeIntegerPrefix(8);
+							sizedIntInstruction(8, TEST_MEM_REG_BASE);
+							writeModRM(MODRM_MOD_DIRECT, RAX, RAX);
 
+							code->add1Unchecked(JCC_DIRECT_8_BASE | C_NS); // jns .done
+							u8 *jumpPatch = code->add1Unchecked(0);
+							u32 jumpRel = code->totalSize;
 
-							*firstJumpPatch = code.totalSize - firstJumpRel;
+							writeFloatPrefix(ir.b);
+							code->add1Unchecked(OPCODE_EXT);
+							code->add1Unchecked(EXT_ADDSf_REG_MEM);
+							writeModRM(MODRM_MOD_INDIRECT, 0, MODRM_RM_RIP_OFFSET_32);
+							code->addRel32Relocation(ir.b == 8 ? u64ToF64ConstantSymbolIndex : u64ToF32ConstantSymbolIndex);
 
-							// .large
-							code.add1Unchecked(0x48); // mov rcx, rax
-							code.add1Unchecked(0x89);
-							code.add1Unchecked(0xC1);
-
-							code.add1Unchecked(0x83); // and ecx, 1
-							code.add1Unchecked(0xE1);
-							code.add1Unchecked(0x01);
-
-							code.add1Unchecked(0x48); // shr rax, 1
-							code.add1Unchecked(0xD1);
-							code.add1Unchecked(0xE8);
-
-							code.add1Unchecked(0x48); // or rax, rcx
-							code.add1Unchecked(0x09);
-							code.add1Unchecked(0xC8);
-
-							if (ir.b == 8) {
-								code.add1Unchecked(0xF2);
-							}
-							else {
-								code.add1Unchecked(0xF3);
-							}
-
-							code.add1Unchecked(0x48);
-							code.add1Unchecked(0x0F);
-							code.add1Unchecked(0x2A);
-							code.add1Unchecked(0xC0);
-
-							if (ir.b == 8) {
-								code.add1Unchecked(0xF2);
-							}
-							else {
-								code.add1Unchecked(0xF3);
-							}
-
-							code.add1Unchecked(0x0F);
-							code.add1Unchecked(0x58);
-							code.add1Unchecked(0xC0);
-
-							*secondJumpPatch = code.totalSize - secondJumpRel;
+							*jumpPatch = code->totalSize - jumpRel;
 
 							// .done
 							storeFromFloatRegister(function, ir.b, ir.dest, 0);
@@ -2619,40 +2295,24 @@ void runCoffWriter() {
 						else if (ir.opSize == 4) {
 							loadIntoIntRegister(function, 4, RAX, ir.a);
 
-							if (ir.b == 8) {
-								code.add1Unchecked(0xF2);
-							}
-							else {
-								code.add1Unchecked(0xF3);
-							}
+							writeFloatPrefix(ir.b);
+							writeIntegerPrefix(8);
+							code->add1Unchecked(OPCODE_EXT);
+							code->add1Unchecked(EXT_CVTSI2Sf_REG_MEM);
+							writeModRM(MODRM_MOD_DIRECT, 0, RAX);
 
-							code.add1Unchecked(0x48);
-
-							code.add1Unchecked(0x0F);
-							code.add1Unchecked(0x2A);
-							code.add1Unchecked(0xC0);
 							storeFromFloatRegister(function, ir.b, ir.dest, 0);
 						}
 						else {
-							code.add1Unchecked(0x0F);
-							if (ir.opSize == 2) {
-								code.add1Unchecked(0xB7);
-							}
-							else {
-								code.add1Unchecked(0xB6);
-							}
+							code->add1Unchecked(OPCODE_EXT);
+							sizedIntInstruction(ir.opSize, EXT_MOVZX_REG_MEM_BASE);
 							writeRSPRegisterByte(function, RAX, ir.a);
 
-							if (ir.b == 8) {
-								code.add1Unchecked(0xF2);
-							}
-							else {
-								code.add1Unchecked(0xF3);
-							}
 
-							code.add1Unchecked(0x0F);
-							code.add1Unchecked(0x2A);
-							code.add1Unchecked(0xC0);
+							writeFloatPrefix(ir.b);
+							code->add1Unchecked(OPCODE_EXT);
+							code->add1Unchecked(EXT_CVTSI2Sf_REG_MEM);
+							writeModRM(MODRM_MOD_DIRECT, 0, RAX);
 
 							storeFromFloatRegister(function, ir.b, ir.dest, 0);
 						}
@@ -2670,12 +2330,12 @@ void runCoffWriter() {
 						}
 					}
 
-					code.add1Unchecked(0xE9);
+					code->add1Unchecked(JMP_DIRECT);
 
 					JumpPatch patch;
 					patch.opToPatch = function->state.ir.count;
-					patch.location = reinterpret_cast<s32 *>(code.add4Unchecked(0));
-					patch.rip = code.totalSize;
+					patch.location = reinterpret_cast<s32 *>(code->add4Unchecked(0));
+					patch.rip = code->totalSize;
 
 					jumpPatches.add(patch);
 				} break;
@@ -2684,7 +2344,7 @@ void runCoffWriter() {
 
 					auto arguments = static_cast<FunctionCall *>(ir.data);
 
-					code.ensure(128);
+					code->ensure(128);
 
 					for (u8 i = 0; i < my_min(4, arguments->argCount); i++) {
 						auto type = arguments->args[i].type;
@@ -2706,16 +2366,16 @@ void runCoffWriter() {
 						loadIntoIntRegister(function, arguments->args[i].type->size, RAX, arguments->args[i].number);
 						
 
-						code.add1Unchecked(0x48);
-						code.add1Unchecked(0x89);
+						writeIntegerPrefix(8);
+						sizedIntInstruction(8, MOV_MEM_REG_BASE);
 						writeRSPOffsetByte(RAX, getParameterSpaceForCallOffset(function) + i * 8);
 
-						code.ensure(128);
+						code->ensure(128);
 					}
 
 					assert(isStandardSize(arguments->returnType->size));
 
-					code.add1Unchecked(0xFF);
+					code->add1Unchecked(CALL_INDIRECT_MODRM_2);
 					writeRSPRegisterByte(function, 2, ir.a);
 
 					if (arguments->returnType != &TYPE_VOID && ir.opSize) {
@@ -2731,40 +2391,23 @@ void runCoffWriter() {
 				} break;
 				case IrOp::NEG: {
 					if (ir.flags & IR_FLOAT_OP) {
-						code.add1Unchecked(0x0F); // xorps xmm0, xmm0
-						code.add1Unchecked(0x57);
-						code.add1Unchecked(0xC0);
+						code->add1Unchecked(OPCODE_EXT);
+						code->add1Unchecked(EXT_XORPf_REG_MEM);
+						writeModRM(MODRM_MOD_DIRECT, 0, 0);
 
-						if (ir.opSize == 8) {
-							code.add1Unchecked(0xF2);
-						}
-						else {
-							code.add1Unchecked(0xF3);
-						}
-
-						code.add1Unchecked(0x0F);
-						code.add1Unchecked(0x5C);
+						writeFloatPrefix(ir.opSize);
+						code->add1Unchecked(OPCODE_EXT);
+						code->add1Unchecked(EXT_SUBSf_REG_MEM);
 						writeRSPRegisterByte(function, 0, ir.a);
 
 						storeFromFloatRegister(function, ir.opSize, ir.dest, 0);
 					}
 					else {
 						loadIntoIntRegister(function, ir.opSize, RAX, ir.a);
-						if (ir.opSize == 8) {
-							code.add1Unchecked(0x48);
-						}
-						else if (ir.opSize == 2) {
-							code.add1Unchecked(0x66);
-						}
-
-						if (ir.opSize == 1) {
-							code.add1Unchecked(0xF6);
-						}
-						else {
-							code.add1Unchecked(0xF7);
-						}
-
-						code.add1Unchecked(0xD8);
+						
+						writeIntegerPrefix(ir.opSize);
+						sizedIntInstruction(ir.opSize, UNARY_INT_OP_BASE_MODRM_X);
+						writeModRM(MODRM_MOD_DIRECT, UNARY_INT_OP_MODRM_NEG, RAX);
 
 						storeFromIntRegister(function, ir.opSize, ir.dest, RAX);
 					}
@@ -2773,39 +2416,27 @@ void runCoffWriter() {
 					// we are done
 				} break;
 				case IrOp::FUNCTION: {
-					code.add1Unchecked(0x48);
-					code.add1Unchecked(0x8D);
-					code.add1Unchecked(0x05);
-
-					codeRelocations.ensure(10);
-					codeRelocations.add4Unchecked(code.totalSize);
-					codeRelocations.add4Unchecked(createSymbolForFunction(ir.function));
-					codeRelocations.add2Unchecked(IMAGE_REL_AMD64_REL32);
-
-					code.add4Unchecked(0);
+					writeIntegerPrefix(8);
+					code->add1Unchecked(LEA);
+					writeModRM(MODRM_MOD_INDIRECT, RAX, MODRM_RM_RIP_OFFSET_32);
+					code->addRel32Relocation(createSymbolForFunction(ir.function));
 
 					storeFromIntRegister(function, 8, ir.dest, RAX);
 				} break;
 				case IrOp::STRING: {
-					code.add1Unchecked(0x48);
-					code.add1Unchecked(0x8D);
-					code.add1Unchecked(0x05);
-
-					codeRelocations.ensure(10);
-					codeRelocations.add4Unchecked(code.totalSize);
-					codeRelocations.add4Unchecked(createSymbolForString(static_cast<ExprStringLiteral *>(ir.data)));
-					codeRelocations.add2Unchecked(IMAGE_REL_AMD64_REL32);
-
-					code.add4Unchecked(0);
+					writeIntegerPrefix(8);
+					code->add1Unchecked(LEA);
+					writeModRM(MODRM_MOD_INDIRECT, RAX, MODRM_RM_RIP_OFFSET_32);
+					code->addRel32Relocation(createSymbolForString(static_cast<ExprStringLiteral *>(ir.data)));
 
 					storeFromIntRegister(function, 8, ir.dest, RAX);
 				} break;
 				case IrOp::ARRAY_LITERAL: {
 					auto array = static_cast<ExprArrayLiteral *>(ir.data);
 
-					code.add1Unchecked(0x48);
-					code.add1Unchecked(0x8D);
-					code.add1Unchecked(0x05);
+					writeIntegerPrefix(8);
+					code->add1Unchecked(LEA);
+					writeModRM(MODRM_MOD_INDIRECT, RAX, MODRM_RM_RIP_OFFSET_32);
 
 					if (!(array->flags & EXPR_HAS_STORAGE)) {
 						array->flags |= EXPR_HAS_STORAGE;
@@ -2813,36 +2444,31 @@ void runCoffWriter() {
 						array->physicalStorage = static_cast<u32>(symbols.count());
 						array->symbol = allocateSymbol();
 
-						alignAllocator(&rdata, array->type->alignment);
+						alignAllocator(rdata, array->type->alignment);
 
 						setSymbolName(&array->symbol->name, symbols.count());
 						array->symbol->storageClass = IMAGE_SYM_CLASS_STATIC;
-						array->symbol->value = static_cast<u32>(rdata.totalSize);
-						array->symbol->sectionNumber = RDATA_SECTION_NUMBER;
+						array->symbol->value = static_cast<u32>(rdata->totalSize);
+						array->symbol->sectionNumber = rdata->sectionNumber;
 						array->symbol->type = 0;
 						array->symbol->numberOfAuxSymbols = 0;
 
-						u32 offset = rdata.totalSize; // do this in a separate statement because within a c++ statement, subexpressions can execute in any order
-						                              // which meant that allocateUnaligned happened _before_ rdata.totalSize was evaluated, causing the addresses 
+						u32 offset = rdata->totalSize; // do this in a separate statement because within a c++ statement, subexpressions can execute in any order
+						                              // which meant that allocateUnaligned happened _before_ rdata->totalSize was evaluated, causing the addresses 
 						                              // for any patch applied to the literal to be wrong
-						writeValue(offset, static_cast<u8 *>(rdata.allocateUnaligned(array->type->size)), &rdata, &rdataRelocations, array);
+						writeValue(offset, static_cast<u8 *>(rdata->allocateUnaligned(array->type->size)), rdata, array);
 					}
 
-					codeRelocations.ensure(10);
-					codeRelocations.add4Unchecked(code.totalSize);
-					codeRelocations.add4Unchecked(array->physicalStorage);
-					codeRelocations.add2Unchecked(IMAGE_REL_AMD64_REL32);
-
-					code.add4Unchecked(0);
+					code->addRel32Relocation(array->physicalStorage);
 
 					storeFromIntRegister(function, 8, ir.dest, RAX);
 				} break;
 				case IrOp::STRUCT_LITERAL: {
 					auto literal = static_cast<ExprStructLiteral *>(ir.data);
 
-					code.add1Unchecked(0x48);
-					code.add1Unchecked(0x8D);
-					code.add1Unchecked(0x05);
+					writeIntegerPrefix(8);
+					code->add1Unchecked(LEA);
+					writeModRM(MODRM_MOD_INDIRECT, RAX, MODRM_RM_RIP_OFFSET_32);
 
 					if (!(literal->flags & EXPR_HAS_STORAGE)) {
 						literal->flags |= EXPR_HAS_STORAGE;
@@ -2850,59 +2476,45 @@ void runCoffWriter() {
 						literal->physicalStorage = static_cast<u32>(symbols.count());
 						literal->symbol = allocateSymbol();
 
-						rdata.allocateUnaligned(AlignPO2(rdata.totalSize, literal->type->alignment) - rdata.totalSize);
+						rdata->allocateUnaligned(AlignPO2(rdata->totalSize, literal->type->alignment) - rdata->totalSize);
 
 						setSymbolName(&literal->symbol->name, symbols.count());
 						literal->symbol->storageClass = IMAGE_SYM_CLASS_STATIC;
-						literal->symbol->value = static_cast<u32>(rdata.totalSize);
-						literal->symbol->sectionNumber = RDATA_SECTION_NUMBER;
+						literal->symbol->value = static_cast<u32>(rdata->totalSize);
+						literal->symbol->sectionNumber = rdata->sectionNumber;
 						literal->symbol->type = 0;
 						literal->symbol->numberOfAuxSymbols = 0;
 
-						u32 offset = rdata.totalSize; // do this in a separate statement because within a c++ statement, subexpressions can execute in any order
-													  // which meant that allocateUnaligned happened _before_ rdata.totalSize was evaluated, causing the addresses 
+						u32 offset = rdata->totalSize; // do this in a separate statement because within a c++ statement, subexpressions can execute in any order
+													  // which meant that allocateUnaligned happened _before_ rdata->totalSize was evaluated, causing the addresses 
 													  // for any patch applied to the literal to be wrong
-						writeValue(offset, static_cast<u8 *>(rdata.allocateUnaligned(literal->type->size)), &rdata, &rdataRelocations, literal);
+						writeValue(offset, static_cast<u8 *>(rdata->allocateUnaligned(literal->type->size)), rdata, literal);
 					}
 
-					codeRelocations.ensure(10);
-					codeRelocations.add4Unchecked(code.totalSize);
-					codeRelocations.add4Unchecked(literal->physicalStorage);
-					codeRelocations.add2Unchecked(IMAGE_REL_AMD64_REL32);
-
-					code.add4Unchecked(0);
+					code->addRel32Relocation(literal->physicalStorage);
 
 					storeFromIntRegister(function, 8, ir.dest, RAX);
 				} break;
 				case IrOp::LINE_MARKER: {
-					addLineInfo(&lineInfo, &columnInfo, code.totalSize - functionStart, ir.location.start, ir.location.end);
+					addLineInfo(&lineInfo, &columnInfo, code->totalSize - functionStart, ir.location.start, ir.location.end);
 				} break;
 				case IrOp::BLOCK: {
 					auto block = static_cast<Block *>(ir.data);
 
 					if (block) {
-						debugSymbols.ensure(23);
-						debugSymbolsRelocations.ensure(20);
+						debugSymbols->ensure(23);
 
-						debugSymbols.add2Unchecked(21);
-						debugSymbols.add2Unchecked(0x1103); // S_BLOCK32
+						debugSymbols->add2Unchecked(21);
+						debugSymbols->add2Unchecked(0x1103); // S_BLOCK32
 
-						debugSymbols.add4Unchecked(0);
-						debugSymbols.add4Unchecked(0);
+						debugSymbols->add4Unchecked(0);
+						debugSymbols->add4Unchecked(0);
 
-						blockOffsetStack.add(debugSymbols.add4(0));
-						debugSymbolsRelocations.add4Unchecked(debugSymbols.totalSize);
-						debugSymbolsRelocations.add4Unchecked(function->physicalStorage);
-						debugSymbolsRelocations.add2Unchecked(IMAGE_REL_AMD64_SECREL);
+						blockOffsetStack.add(debugSymbols->add4(0));
 
-						debugSymbols.add4Unchecked(code.totalSize - functionStart);
+						*debugSymbols->addSectionRelocations(function->physicalStorage) = code->totalSize - functionStart;
 
-						debugSymbolsRelocations.add4Unchecked(debugSymbols.totalSize);
-						debugSymbolsRelocations.add4Unchecked(function->physicalStorage);
-						debugSymbolsRelocations.add2Unchecked(IMAGE_REL_AMD64_SECTION);
-
-						debugSymbols.add2Unchecked(0);
-						debugSymbols.add1Unchecked(0);
+						debugSymbols->add1Unchecked(0);
 
 						for (auto declaration : block->declarations) {
 							if (declaration->flags & (DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_CONSTANT)) continue;
@@ -2921,20 +2533,20 @@ void runCoffWriter() {
 							variableInfo.off = offset;
 							variableInfo.typind = 0;
 
-							debugSymbols.ensure(2 + sizeof(variableInfo));
-							debugSymbols.add2Unchecked(static_cast<u16>(sizeof(variableInfo) + declaration->name.length + 1));
-							REGREL32 *patch = (REGREL32 *) debugSymbols.addUnchecked(&variableInfo, sizeof(variableInfo));
+							debugSymbols->ensure(2 + sizeof(variableInfo));
+							debugSymbols->add2Unchecked(static_cast<u16>(sizeof(variableInfo) + declaration->name.length + 1));
+							REGREL32 *patch = (REGREL32 *) debugSymbols->addUnchecked(&variableInfo, sizeof(variableInfo));
 							coffTypePatches.add({ &patch->typind, getDeclarationType(declaration) });
-							debugSymbols.addNullTerminatedString(declaration->name);
+							debugSymbols->addNullTerminatedString(declaration->name);
 						}
 					}
 					else {
 						u32 *length = blockOffsetStack.pop();
-						*length = code.totalSize - functionStart - length[1];
+						*length = code->totalSize - functionStart - length[1];
 
-						debugSymbols.ensure(4);
-						debugSymbols.add2Unchecked(2);
-						debugSymbols.add2Unchecked(6); // S_END
+						debugSymbols->ensure(4);
+						debugSymbols->add2Unchecked(2);
+						debugSymbols->add2Unchecked(6); // S_END
 					}
 				} break;
 				default: {
@@ -2943,31 +2555,31 @@ void runCoffWriter() {
 				}
 			}
 			
-			*functionPostambleStartPatch = code.totalSize - functionStart;
-			u32 functionPostambleStart = code.totalSize;
+			*functionPostambleStartPatch = code->totalSize - functionStart;
+			u32 functionPostambleStart = code->totalSize;
 
-			code.ensure(64);
+			code->ensure(64);
 
 			// add rsp, spaceToAllocate
 			if (spaceToAllocate < 0x80) {
-				code.add1Unchecked(0x48);
-				code.add1Unchecked(0x83);
-				code.add1Unchecked(0xC4);
-				code.add1Unchecked(static_cast<u8>(spaceToAllocate));
+				writeIntegerPrefix(8);
+				code->add1Unchecked(INT_OP_MEM_IMM_8_MODRM_X);
+				writeModRM(MODRM_MOD_DIRECT, INT_OP_MODRM_ADD, RSP);
+				code->add1Unchecked(static_cast<u8>(spaceToAllocate));
 			}
 			else {
-				code.add1Unchecked(0x48);
-				code.add1Unchecked(0x81);
-				code.add1Unchecked(0xC4);
-				code.add4Unchecked(static_cast<u32>(spaceToAllocate));
+				writeIntegerPrefix(8);
+				code->add1Unchecked(INT_OP_MEM_IMM_32_MODRM_X);
+				writeModRM(MODRM_MOD_DIRECT, INT_OP_MODRM_ADD, RSP);
+				code->add4Unchecked(static_cast<u32>(spaceToAllocate));
 			}
 
-			code.add1Unchecked(0x5F); // pop rdi
-			code.add1Unchecked(0x5E); // pop rsi
+			code->add1Unchecked(POP_BASE | RDI);
+			code->add1Unchecked(POP_BASE | RSI);
 
-			code.add1Unchecked(0xC3);
+			code->add1Unchecked(RET);
 
-			*functionLengthPatch = code.totalSize - functionStart;
+			*functionLengthPatch = code->totalSize - functionStart;
 
 			instructionOffsets.add(functionPostambleStart);
 
@@ -2977,89 +2589,62 @@ void runCoffWriter() {
 
 			{
 				PROFILE_ZONE("Write Function Debug Symbols");
-				debugSymbols.ensure(4);
-				debugSymbols.add2Unchecked(2); // S_PROC_ID_END
-				debugSymbols.add2Unchecked(0x114f);
+				debugSymbols->ensure(4);
+				debugSymbols->add2Unchecked(2); // S_PROC_ID_END
+				debugSymbols->add2Unchecked(0x114f);
 
-				*subsectionSizePatch = debugSymbols.totalSize - subsectionOffset;
+				*subsectionSizePatch = debugSymbols->totalSize - subsectionOffset;
 
-				alignAllocator(&debugSymbols, 4);
+				alignAllocator(debugSymbols, 4);
 
-				pdata.ensure(12);
+				pdata->ensure(12);
 
-				pdataRelocations.ensure(30);
-				pdataRelocations.add4Unchecked(pdata.totalSize);
-				pdataRelocations.add4Unchecked(function->physicalStorage);
-				pdataRelocations.add2Unchecked(IMAGE_REL_AMD64_ADDR32NB);
-
-				pdata.add4Unchecked(0);
-
-				pdataRelocations.add4Unchecked(pdata.totalSize);
-				pdataRelocations.add4Unchecked(function->physicalStorage);
-				pdataRelocations.add2Unchecked(IMAGE_REL_AMD64_ADDR32NB);
-
-				pdata.add4Unchecked(code.totalSize - functionStart);
-
-				pdataRelocations.add4Unchecked(pdata.totalSize);
-				pdataRelocations.add4Unchecked(symbols.count());
-				pdataRelocations.add2Unchecked(IMAGE_REL_AMD64_ADDR32NB);
+				pdata->addAddr32NBRelocation(function->physicalStorage);
+				*pdata->addAddr32NBRelocation(function->physicalStorage) = code->totalSize - functionStart;
+				pdata->addAddr32NBRelocation(symbols.count());
 
 				Symbol xdataSymbol;
 				setSymbolName(&xdataSymbol.name, symbols.count());
-				xdataSymbol.value = xdata.totalSize;
+				xdataSymbol.value = xdata->totalSize;
 				xdataSymbol.type = 0;
-				xdataSymbol.sectionNumber = XDATA_SECTION_NUMBER;
+				xdataSymbol.sectionNumber = xdata->sectionNumber;
 				xdataSymbol.storageClass = IMAGE_SYM_CLASS_STATIC;
 				xdataSymbol.numberOfAuxSymbols = 0;
 
 				symbols.add(xdataSymbol);
 
-				pdata.add4Unchecked(0);
+				xdata->ensure(11);
+				xdata->add1Unchecked(1);
+				xdata->add1Unchecked(functionPreambleEnd);
+				xdata->add1Unchecked(4);
+				xdata->add1Unchecked(0);
 
-				xdata.ensure(11);
-				xdata.add1Unchecked(1);
-				xdata.add1Unchecked(functionPreambleEnd);
-				xdata.add1Unchecked(4);
-				xdata.add1Unchecked(0);
-
-				xdata.add1Unchecked(subRspOffset);
-				xdata.add1Unchecked(0x01);
-				xdata.add2Unchecked(spaceToAllocate / 8);
-				xdata.add1Unchecked(pushRdiOffset);
-				xdata.add1Unchecked(0x70);
-				xdata.add1Unchecked(pushRsiOffset);
-				xdata.add1Unchecked(0x60);
+				xdata->add1Unchecked(subRspOffset);
+				xdata->add1Unchecked(0x01);
+				xdata->add2Unchecked(spaceToAllocate / 8);
+				xdata->add1Unchecked(pushRdiOffset);
+				xdata->add1Unchecked(0x70);
+				xdata->add1Unchecked(pushRsiOffset);
+				xdata->add1Unchecked(0x60);
 			}
 
 			{
 				PROFILE_ZONE("Write Function Debug Lines");
-				debugSymbols.ensure(32 + lineInfo.count * 12);
-				debugSymbolsRelocations.ensure(20);
+				debugSymbols->ensure(32 + lineInfo.count * 12);
 				
-				debugSymbols.add4Unchecked(0xF2);
-				debugSymbols.add4Unchecked(24 + lineInfo.count * 12);
+				debugSymbols->add4Unchecked(0xF2);
+				debugSymbols->add4Unchecked(24 + lineInfo.count * 12);
 
+				debugSymbols->addSectionRelocations(function->physicalStorage);
 
-				debugSymbolsRelocations.add4Unchecked(debugSymbols.totalSize);
-				debugSymbolsRelocations.add4Unchecked(function->physicalStorage);
-				debugSymbolsRelocations.add2Unchecked(IMAGE_REL_AMD64_SECREL);
+				debugSymbols->add2Unchecked(1); // fHasColumns
+				debugSymbols->add4Unchecked(code->totalSize - functionStart);
 
-				debugSymbols.add4Unchecked(0);
-
-				debugSymbolsRelocations.add4Unchecked(debugSymbols.totalSize);
-				debugSymbolsRelocations.add4Unchecked(function->physicalStorage);
-				debugSymbolsRelocations.add2Unchecked(IMAGE_REL_AMD64_SECTION);
-
-				debugSymbols.add2Unchecked(0);
-
-				debugSymbols.add2Unchecked(1); // fHasColumns
-				debugSymbols.add4Unchecked(code.totalSize - functionStart);
-
-				debugSymbols.add4Unchecked(function->start.fileUid * 8);
-				debugSymbols.add4Unchecked(lineInfo.count);
-				debugSymbols.add4Unchecked(12 + lineInfo.count * 12);
-				debugSymbols.addUnchecked(lineInfo.storage, lineInfo.count * sizeof(LineInfo));
-				debugSymbols.addUnchecked(columnInfo.storage, columnInfo.count * sizeof(ColumnInfo));
+				debugSymbols->add4Unchecked(function->start.fileUid * 8);
+				debugSymbols->add4Unchecked(lineInfo.count);
+				debugSymbols->add4Unchecked(12 + lineInfo.count * 12);
+				debugSymbols->addUnchecked(lineInfo.storage, lineInfo.count * sizeof(LineInfo));
+				debugSymbols->addUnchecked(columnInfo.storage, columnInfo.count * sizeof(ColumnInfo));
 			}
 
 		}
@@ -3072,36 +2657,25 @@ void runCoffWriter() {
 
 			createSymbolForDeclaration(declaration);
 
-			debugSymbols.ensure(22);
-			debugSymbolsRelocations.ensure(20);
+			debugSymbols->ensure(22);
 
-			debugSymbols.add4Unchecked(0xF1);
-			auto subsectionSizePatch = debugSymbols.add4Unchecked(0);
-			u32 subsectionOffset = debugSymbols.totalSize;
+			debugSymbols->add4Unchecked(0xF1);
+			auto subsectionSizePatch = debugSymbols->add4Unchecked(0);
+			u32 subsectionOffset = debugSymbols->totalSize;
 
-			debugSymbols.add2Unchecked(static_cast<u16>(sizeof(DATASYM32) + declaration->name.length - 1));
-			debugSymbols.add2Unchecked(0x110d); // S_GDATA32
+			debugSymbols->add2Unchecked(static_cast<u16>(sizeof(DATASYM32) + declaration->name.length - 1));
+			debugSymbols->add2Unchecked(0x110d); // S_GDATA32
 
-			u32 *patch = debugSymbols.add4Unchecked(0);
+			u32 *patch = debugSymbols->add4Unchecked(0);
 			coffTypePatches.add({ patch, getDeclarationType(declaration) });
+			
+			debugSymbols->addSectionRelocations(declaration->physicalStorage);
 
-			debugSymbolsRelocations.add4Unchecked(debugSymbols.totalSize);
-			debugSymbolsRelocations.add4Unchecked(declaration->physicalStorage);
-			debugSymbolsRelocations.add2Unchecked(IMAGE_REL_AMD64_SECREL);
+			debugSymbols->addNullTerminatedString(declaration->name);
 
-			debugSymbols.add4Unchecked(0);
+			*subsectionSizePatch = debugSymbols->totalSize - subsectionOffset;
 
-			debugSymbolsRelocations.add4Unchecked(debugSymbols.totalSize);
-			debugSymbolsRelocations.add4Unchecked(declaration->physicalStorage);
-			debugSymbolsRelocations.add2Unchecked(IMAGE_REL_AMD64_SECTION);
-
-			debugSymbols.add2Unchecked(0);
-
-			debugSymbols.addNullTerminatedString(declaration->name);
-
-			*subsectionSizePatch = debugSymbols.totalSize - subsectionOffset;
-
-			alignAllocator(&debugSymbols, 4);
+			alignAllocator(debugSymbols, 4);
 
 			auto symbol = declaration->symbol;
 			auto type = getDeclarationType(declaration);
@@ -3112,30 +2686,30 @@ void runCoffWriter() {
 			symbol->type = 0;
 
 			if (placeValueInBSSSection(declaration)) {
-				bssSection.sizeOfRawData = AlignPO2(bssSection.sizeOfRawData, type->alignment);
+				bss->totalSize = AlignPO2(bss->totalSize, type->alignment);
 
-				symbol->value = bssSection.sizeOfRawData;
-				symbol->sectionNumber = BSS_SECTION_NUMBER;
+				symbol->value = bss->totalSize;
+				symbol->sectionNumber = bss->sectionNumber;
 
-				bssSection.sizeOfRawData += type->size;
+				bss->totalSize += type->size;
 			}
 			else {
-				data.allocateUnaligned(AlignPO2(data.totalSize, type->alignment) - data.totalSize);
+				data->allocateUnaligned(AlignPO2(data->totalSize, type->alignment) - data->totalSize);
 
-				symbol->value = data.totalSize;
-				symbol->sectionNumber = DATA_SECTION_NUMBER;
+				symbol->value = data->totalSize;
+				symbol->sectionNumber = data->sectionNumber;
 
-				u32 dataSize = data.totalSize;
-				u8 *allocation = static_cast<u8 *>(data.allocateUnaligned(type->size));
+				u32 dataSize = data->totalSize;
+				u8 *allocation = static_cast<u8 *>(data->allocateUnaligned(type->size));
 
-				writeValue(dataSize, allocation, &data, &dataRelocations, declaration->initialValue);
+				writeValue(dataSize, allocation, data, declaration->initialValue);
 			}
 
 			symbol->numberOfAuxSymbols = 0;
 		}
 	}
 
-	if (!hadError) {
+	{
 		PROFILE_ZONE("Write types");
 
 		/*
@@ -3150,14 +2724,14 @@ void runCoffWriter() {
 		}
 		*/
 
-		debugSymbols.ensure(8);
+		debugSymbols->ensure(8);
 
-		debugSymbols.add4Unchecked(0xF1);
-		u32 *subsectionSizePatch = debugSymbols.add4(0);
+		debugSymbols->add4Unchecked(0xF1);
+		u32 *subsectionSizePatch = debugSymbols->add4(0);
 
-		u32 previousSize = debugSymbols.totalSize;
+		u32 previousSize = debugSymbols->totalSize;
 
-		exportTypeTableToDebugTSection(&debugTypes);
+		exportTypeTableToDebugTSection(debugTypes);
 
 		{
 			PROFILE_ZONE("Patch debug types");
@@ -3180,7 +2754,7 @@ void runCoffWriter() {
 
 				if (type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::ARRAY || type->flavor == TypeFlavor::ENUM) {
 					if (!(type->flags & (TYPE_ARRAY_IS_FIXED | TYPE_ENUM_IS_FLAGS)))
-						emitUDT(&debugSymbols, type);
+						emitUDT(debugSymbols, type);
 				}
 
 				if (!(type->flags & TYPE_USED_IN_OUTPUT))
@@ -3189,7 +2763,7 @@ void runCoffWriter() {
 				auto symbol = type->symbol;
 
 				u32 name = createRdataPointer();
-				rdata.addNullTerminatedString(type->name);
+				rdata->addNullTerminatedString(type->name);
 
 				assert(type->name.length);
 
@@ -3197,7 +2771,7 @@ void runCoffWriter() {
 				symbol->storageClass = IMAGE_SYM_CLASS_STATIC;
 				symbol->type = 0;
 
-				symbol->sectionNumber = RDATA_SECTION_NUMBER;
+				symbol->sectionNumber = rdata->sectionNumber;
 				symbol->numberOfAuxSymbols = 0;
 
 				Type_Info::Tag infoTag;
@@ -3259,9 +2833,9 @@ void runCoffWriter() {
 				case Type_Info::Tag::STRING: {
 					Type_Info info;
 
-					rdata.allocateUnaligned(AlignPO2(rdata.totalSize, 8) - rdata.totalSize);
+					rdata->allocateUnaligned(AlignPO2(rdata->totalSize, 8) - rdata->totalSize);
 
-					symbol->value = rdata.totalSize;
+					symbol->value = rdata->totalSize;
 
 					info.tag = infoTag;
 					info.size = type->size;
@@ -3269,18 +2843,18 @@ void runCoffWriter() {
 					info.name = { nullptr, type->name.length };
 
 					if (name)
-						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
+						rdata->addPointerRelocation(name, rdata->totalSize + offsetof(decltype(info), name));
 
-					rdata.add(&info, sizeof(info));
+					rdata->add(&info, sizeof(info));
 
 					break;
 				}
 				case Type_Info::Tag::INTEGER: {
 					Type_Info_Integer info;
 
-					rdata.allocateUnaligned(AlignPO2(rdata.totalSize, 8) - rdata.totalSize);
+					rdata->allocateUnaligned(AlignPO2(rdata->totalSize, 8) - rdata->totalSize);
 
-					symbol->value = rdata.totalSize;
+					symbol->value = rdata->totalSize;
 
 					info.tag = infoTag;
 					info.size = type->size;
@@ -3289,18 +2863,18 @@ void runCoffWriter() {
 					info.signed_ = type->flags & TYPE_INTEGER_IS_SIGNED;
 
 					if (name)
-						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
+						rdata->addPointerRelocation(name, rdata->totalSize + offsetof(decltype(info), name));
 
-					rdata.add(&info, sizeof(info));
+					rdata->add(&info, sizeof(info));
 
 					break;
 				}
 				case Type_Info::Tag::POINTER: {
 					Type_Info_Pointer info;
 
-					rdata.allocateUnaligned(AlignPO2(rdata.totalSize, 8) - rdata.totalSize);
+					rdata->allocateUnaligned(AlignPO2(rdata->totalSize, 8) - rdata->totalSize);
 
-					symbol->value = rdata.totalSize;
+					symbol->value = rdata->totalSize;
 
 					info.tag = infoTag;
 					info.size = type->size;
@@ -3309,37 +2883,34 @@ void runCoffWriter() {
 					info.value_type = nullptr;
 
 					if (name)
-						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
+						rdata->addPointerRelocation(name, rdata->totalSize + offsetof(decltype(info), name));
 
-					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), value_type),
-						static_cast<TypePointer *>(type)->pointerTo->physicalStorage);
+					rdata->addPointerRelocation(static_cast<TypePointer *>(type)->pointerTo->physicalStorage, rdata->totalSize + offsetof(decltype(info), value_type));
 
-					rdata.add(&info, sizeof(info));
+					rdata->add(&info, sizeof(info));
 
 					break;
 				}
 				case Type_Info::Tag::FUNCTION: {
 					auto function = static_cast<TypeFunction *>(type);
 
-					rdata.allocateUnaligned(AlignPO2(rdata.totalSize, 8) - rdata.totalSize);
+					rdata->allocateUnaligned(AlignPO2(rdata->totalSize, 8) - rdata->totalSize);
 
 					u32 arguments = createRdataPointer();
 
 					for (u64 i = 0; i < function->argumentCount; i++) {
-						addPointerRelocation(&rdataRelocations, rdata.totalSize, function->argumentTypes[i]->physicalStorage);
-						rdata.add8(0);
+						rdata->addPointerRelocation(function->argumentTypes[i]->physicalStorage);
 					}
 					
 					u32 returns = createRdataPointer();
 
 					for (u64 i = 0; i < function->returnCount; i++) {
-						addPointerRelocation(&rdataRelocations, rdata.totalSize, function->returnTypes[i]->physicalStorage);
-						rdata.add8(0);
+						rdata->addPointerRelocation(function->returnTypes[i]->physicalStorage);
 					}
 
 					Type_Info_Function info;
 
-					symbol->value = rdata.totalSize;
+					symbol->value = rdata->totalSize;
 
 					info.tag = infoTag;
 					info.size = type->size;
@@ -3351,21 +2922,21 @@ void runCoffWriter() {
 					info.returns.count = function->returnCount;
 
 					if (name)
-						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
+						rdata->addPointerRelocation(name, rdata->totalSize + offsetof(decltype(info), name));
 
-					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), arguments.data), arguments);
-					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), returns.data), returns);
+					rdata->addPointerRelocation(arguments, rdata->totalSize + offsetof(decltype(info), arguments.data));
+					rdata->addPointerRelocation(returns, rdata->totalSize + offsetof(decltype(info), returns.data));
 
-					rdata.add(&info, sizeof(info));
+					rdata->add(&info, sizeof(info));
 
 					break;
 				}
 				case Type_Info::Tag::ARRAY: {
 					Type_Info_Array info;
 
-					rdata.allocateUnaligned(AlignPO2(rdata.totalSize, 8) - rdata.totalSize);
+					rdata->allocateUnaligned(AlignPO2(rdata->totalSize, 8) - rdata->totalSize);
 
-					symbol->value = rdata.totalSize;
+					symbol->value = rdata->totalSize;
 
 					info.tag = infoTag;
 					info.size = type->size;
@@ -3378,12 +2949,11 @@ void runCoffWriter() {
 					info.element_type = nullptr;
 
 					if (name)
-						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
+						rdata->addPointerRelocation(name, rdata->totalSize + offsetof(decltype(info), name));
 
-					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), element_type),
-						static_cast<TypeArray *>(type)->arrayOf->physicalStorage);
+					rdata->addPointerRelocation(static_cast<TypeArray *>(type)->arrayOf->physicalStorage, rdata->totalSize + offsetof(decltype(info), element_type));
 
-					rdata.add(&info, sizeof(info));
+					rdata->add(&info, sizeof(info));
 
 					break;
 				}
@@ -3397,7 +2967,7 @@ void runCoffWriter() {
 
 
 						createRdataPointer();
-						rdata.addNullTerminatedString(member->name);
+						rdata->addNullTerminatedString(member->name);
 					}
 
 					u32 values = symbols.count();
@@ -3412,17 +2982,17 @@ void runCoffWriter() {
 						if (member->initialValue->flavor == ExprFlavor::TYPE_LITERAL && static_cast<ExprLiteral *>(member->initialValue)->typeValue->flavor == TypeFlavor::MODULE)
 							continue;
 
-						rdata.allocateUnaligned(AlignPO2(rdata.totalSize, type->alignment) - rdata.totalSize);
+						rdata->allocateUnaligned(AlignPO2(rdata->totalSize, type->alignment) - rdata->totalSize);
 
 						createRdataPointer();
 
-						u32 dataSize = rdata.totalSize;
-						u8 *allocation = static_cast<u8 *>(rdata.allocateUnaligned(type->size));
+						u32 dataSize = rdata->totalSize;
+						u8 *allocation = static_cast<u8 *>(rdata->allocateUnaligned(type->size));
 
-						writeValue(dataSize, allocation, &rdata, &rdataRelocations, member->initialValue);
+						writeValue(dataSize, allocation, rdata, member->initialValue);
 					}
 
-					rdata.allocateUnaligned(AlignPO2(rdata.totalSize, 8) - rdata.totalSize);
+					rdata->allocateUnaligned(AlignPO2(rdata->totalSize, 8) - rdata->totalSize);
 					u32 members = createRdataPointer();
 
 					u32 nameCount = 0;
@@ -3445,32 +3015,30 @@ void runCoffWriter() {
 						if (member->flags & DECLARATION_MARKED_AS_USING) data.flags |= Type_Info_Struct::Member::Flags::USING;
 
 
-						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), name.data), names + nameCount);
+						rdata->addPointerRelocation(names + nameCount, rdata->totalSize + offsetof(decltype(data), name.data));
 
 						if (member->initialValue) {
-							addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), member_type),
-								getTypeForExpr(member->initialValue)->physicalStorage);
+							rdata->addPointerRelocation(getTypeForExpr(member->initialValue)->physicalStorage, rdata->totalSize + offsetof(decltype(data), member_type));
 						}
 						else {
-							addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), member_type),
-								getDeclarationType(member)->physicalStorage);
+							rdata->addPointerRelocation(getDeclarationType(member)->physicalStorage, rdata->totalSize + offsetof(decltype(data), member_type));
 						}
 
 						if (member->initialValue) { // @Incomplete: Export info for namespaces
 							if (member->initialValue->flavor != ExprFlavor::TYPE_LITERAL || static_cast<ExprLiteral *>(member->initialValue)->typeValue->flavor != TypeFlavor::MODULE) {
-								addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), initial_value), values + valueCount);
+								rdata->addPointerRelocation(values + valueCount, rdata->totalSize + offsetof(decltype(data), initial_value));
 								++valueCount;
 							}
 						}
 
-						rdata.add(&data, sizeof(data));
+						rdata->add(&data, sizeof(data));
 
 						++nameCount;
 					}
 
 					Type_Info_Struct info;
 
-					symbol->value = rdata.totalSize;
+					symbol->value = rdata->totalSize;
 
 					info.tag = infoTag;
 					info.size = type->size;
@@ -3485,11 +3053,11 @@ void runCoffWriter() {
 					info.members.count = nameCount;
 
 					if (name)
-						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
+						rdata->addPointerRelocation(name, rdata->totalSize + offsetof(decltype(info), name));
 
-					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), members.data), members);
+					rdata->addPointerRelocation(members, rdata->totalSize + offsetof(decltype(info), members.data));
 
-					rdata.add(&info, sizeof(info));
+					rdata->add(&info, sizeof(info));
 
 					break;
 				}
@@ -3502,10 +3070,10 @@ void runCoffWriter() {
 						if (!(member->flags & DECLARATION_IS_ENUM_VALUE))
 							continue;
 						createRdataPointer();
-						rdata.addNullTerminatedString(member->name);
+						rdata->addNullTerminatedString(member->name);
 					}
 
-					rdata.allocateUnaligned(AlignPO2(rdata.totalSize, 8) - rdata.totalSize);
+					rdata->allocateUnaligned(AlignPO2(rdata->totalSize, 8) - rdata->totalSize);
 					u32 values = createRdataPointer();
 
 					for (u32 i = 0; i < enum_->members.declarations.count; i++) {
@@ -3518,14 +3086,14 @@ void runCoffWriter() {
 						data.name = { nullptr, member->name.length };
 						data.value = static_cast<ExprLiteral *>(member->initialValue)->unsignedValue;
 
-						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(data), name.data), names + i);
+						rdata->addPointerRelocation(names + i, rdata->totalSize + offsetof(decltype(data), name.data));
 
-						rdata.add(&data, sizeof(data));
+						rdata->add(&data, sizeof(data));
 					}
 
 					Type_Info_Enum info;
 
-					symbol->value = rdata.totalSize;
+					symbol->value = rdata->totalSize;
 
 					info.tag = infoTag;
 					info.size = type->size;
@@ -3538,13 +3106,12 @@ void runCoffWriter() {
 					info.values.count = enum_->members.declarations.count - ENUM_SPECIAL_MEMBER_COUNT;
 
 					if (name)
-						addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), name), name);
+						rdata->addPointerRelocation(name, rdata->totalSize + offsetof(decltype(info), name));
 
-					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), base_type), 
-						enum_->integerType->physicalStorage);
-					addPointerRelocation(&rdataRelocations, rdata.totalSize + offsetof(decltype(info), values.data), values);
+					rdata->addPointerRelocation(enum_->integerType->physicalStorage , rdata->totalSize + offsetof(decltype(info), base_type));
+					rdata->addPointerRelocation(values, rdata->totalSize + offsetof(decltype(info), values.data));
 
-					rdata.add(&info, sizeof(info));
+					rdata->add(&info, sizeof(info));
 
 					break;
 				}
@@ -3554,15 +3121,15 @@ void runCoffWriter() {
 			}
 		}
 
-		*subsectionSizePatch = debugSymbols.totalSize - previousSize;
-		alignAllocator(&debugSymbols, 4);
+		*subsectionSizePatch = debugSymbols->totalSize - previousSize;
+		alignAllocator(debugSymbols, 4);
 	}
 
 	{
 		PROFILE_ZONE("Write output");
-		debugSymbols.add4(0xF3);
+		debugSymbols->add4(0xF3);
 
-		u32 *sizePointer = debugSymbols.add4(0);
+		u32 *sizePointer = debugSymbols->add4(0);
 
 		u32 totalSize = 0;
 
@@ -3576,246 +3143,223 @@ void runCoffWriter() {
 			u32 len = static_cast<u32>(strlen(buffer));
 			totalSize += len + 1;
 
-			debugSymbols.addNullTerminatedString({ buffer, len });
+			debugSymbols->addNullTerminatedString({ buffer, len });
 		}
 
 		*sizePointer = totalSize;
 
-		alignAllocator(&debugSymbols, 4);
+		alignAllocator(debugSymbols, 4);
 
-		debugSymbols.add4(0xF4);
-		debugSymbols.add4(8 * compilerFiles.count);
+		debugSymbols->add4(0xF4);
+		debugSymbols->add4(8 * compilerFiles.count);
 
 		for (auto &file : compilerFiles) {
-			debugSymbols.add4(file->offsetInStringTable);
-			debugSymbols.add4(0);
+			debugSymbols->add4(file->offsetInStringTable);
+			debugSymbols->add4(0);
 		}
 
 
 		u32 stringTableSize = sizeof(u32) + stringTable.totalSize;
 
-		struct Section {
-			SectionHeader *header;
-			BucketedArenaAllocator *data;
-			BucketedArenaAllocator *relocations;
-		};
-
-		Array<Section> sections;
-
-
-		SectionHeader rdataSection = {};
-		setSectionName(rdataSection.name, sizeof(rdataSection.name), ".rdata");
-		rdataSection.characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_ALIGN_16BYTES;
-
-		setSectionName(bssSection.name, sizeof(bssSection.name), ".bss");
-		bssSection.characteristics = IMAGE_SCN_CNT_UNINITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE | IMAGE_SCN_ALIGN_16BYTES;
-
-		SectionHeader dataSection = {};
-		setSectionName(dataSection.name, sizeof(dataSection.name), ".data");
-		dataSection.characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE | IMAGE_SCN_ALIGN_16BYTES;
-
-		SectionHeader textSection = {};
-		setSectionName(textSection.name, sizeof(textSection.name), ".text");
-		textSection.characteristics = IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_ALIGN_16BYTES;
-
-		SectionHeader debugSymbolSection = {};
-		setSectionName(debugSymbolSection.name, sizeof(debugSymbolSection.name), ".debug$S");
-		debugSymbolSection.characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_DISCARDABLE | IMAGE_SCN_ALIGN_1BYTES;
-
-		alignDebugTypes(&debugTypes);
-
-		SectionHeader debugTypeSection = {};
-		setSectionName(debugTypeSection.name, sizeof(debugTypeSection.name), ".debug$T");
-		debugTypeSection.characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_DISCARDABLE | IMAGE_SCN_ALIGN_1BYTES;
-
-		SectionHeader pdataSection = {};
-		setSectionName(pdataSection.name, sizeof(pdataSection.name), ".pdata");
-		pdataSection.characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_ALIGN_4BYTES;
-		
-		SectionHeader xdataSection = {};
-		setSectionName(xdataSection.name, sizeof(xdataSection.name), ".xdata");
-		xdataSection.characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_ALIGN_4BYTES;
-
-		sections.add({ &rdataSection, &rdata, &rdataRelocations });
-		sections.add({ &bssSection });
-		sections.add({ &dataSection, &data, &dataRelocations });
-		sections.add({ &textSection, &code, &codeRelocations });
-
-		sections.add({ &debugSymbolSection, &debugSymbols, &debugSymbolsRelocations });
-		sections.add({ &debugTypeSection, &debugTypes });
-		sections.add({ &pdataSection, &pdata, &pdataRelocations });
-		sections.add({ &xdataSection, &xdata });
-
+		Array<SectionHeader> sectionHeaders;
 
 
 		FileHeader header = {};
 		header.machine = IMAGE_FILE_MACHINE_AMD64;
 		header.numberOfSections = sections.count;
-		header.timestamp = (DWORD) time(0);
 		header.pointerToSymbolTable = sizeof(FileHeader) + sizeof(SectionHeader) * sections.count;
 		header.numberOfSymbols = symbols.count();
-		header.sizeOfOptionalHeader = 0;
-		header.characteristics = 0;
 
 		u32 prefixSize = header.pointerToSymbolTable + sizeof(Symbol) * symbols.count() + stringTableSize;
 
 		u32 sectionPointer = AlignPO2(prefixSize, 4);
 
 		for (auto section : sections) {
-			section.header->virtualAddress = 0;
+			auto &header = sectionHeaders.add();
+			setSectionName(header.name, sizeof(header.name), section->name);
 
-			if (section.data) {
-				alignAllocator(section.data, 4);
-				section.header->sizeOfRawData = section.data->totalSize;
-				section.header->virtualSize = 0;
+			if (section->flags & SECTION_READ)
+				header.characteristics |= IMAGE_SCN_MEM_READ;
+			if (section->flags & SECTION_WRITE)
+				header.characteristics |= IMAGE_SCN_MEM_WRITE;
+			if (section->flags & SECTION_EXECUTE)
+				header.characteristics |= IMAGE_SCN_MEM_EXECUTE;
+			if (section->flags & SECTION_DISCARD)
+				header.characteristics |= IMAGE_SCN_MEM_DISCARDABLE;
+
+			switch (section->alignment) {
+			case 1:
+				header.characteristics |= IMAGE_SCN_ALIGN_1BYTES;
+				break;
+			case 2:
+				header.characteristics |= IMAGE_SCN_ALIGN_2BYTES;
+				break;
+			case 4:
+				header.characteristics |= IMAGE_SCN_ALIGN_4BYTES;
+				break;
+			case 8:
+				header.characteristics |= IMAGE_SCN_ALIGN_8BYTES;
+				break;
+			case 16:
+				header.characteristics |= IMAGE_SCN_ALIGN_16BYTES;
+				break;
+			case 32:
+				header.characteristics |= IMAGE_SCN_ALIGN_32BYTES;
+				break;
+			case 64:
+				header.characteristics |= IMAGE_SCN_ALIGN_64BYTES;
+				break;
+			case 128:
+				header.characteristics |= IMAGE_SCN_ALIGN_128BYTES;
+				break;
+			case 256:
+				header.characteristics |= IMAGE_SCN_ALIGN_256BYTES;
+				break;
+			case 512:
+				header.characteristics |= IMAGE_SCN_ALIGN_512BYTES;
+				break;
+			case 1024:
+				header.characteristics |= IMAGE_SCN_ALIGN_1024BYTES;
+				break;
+			case 2048:
+				header.characteristics |= IMAGE_SCN_ALIGN_2048BYTES;
+				break;
+			case 4096:
+				header.characteristics |= IMAGE_SCN_ALIGN_4096BYTES;
+				break;
+			case 8192:
+				header.characteristics |= IMAGE_SCN_ALIGN_8192BYTES;
+				break;
+			default:
+				assert(false);
+			}
+
+			if (section->flags & SECTION_INITIALIZED) {
+				alignAllocator(section, 4);
+				header.sizeOfRawData = section->totalSize;
+
+				if (section->flags & SECTION_EXECUTE)
+					header.characteristics |= IMAGE_SCN_CNT_CODE;
+				else
+					header.characteristics |= IMAGE_SCN_CNT_INITIALIZED_DATA;
 			}
 			else {
-				section.header->sizeOfRawData = AlignPO2(section.header->sizeOfRawData, 4);
+				header.characteristics |= IMAGE_SCN_CNT_UNINITIALIZED_DATA;
+
+				header.sizeOfRawData = AlignPO2(section->totalSize, 4);
 			}
 
-			if (section.data) {
-				section.header->pointerToRawData = sectionPointer;
+			if (section->flags & SECTION_INITIALIZED) {
+				header.pointerToRawData = sectionPointer;
 
-				sectionPointer += section.header->sizeOfRawData;
+				sectionPointer += header.sizeOfRawData;
 
-				if (section.relocations) {
-					section.header->pointerToRelocations = sectionPointer;
+				if (section->relocations.count()) {
+					header.pointerToRelocations = sectionPointer;
 
-					u32 relocationCount = section.relocations->totalSize / sizeof(Relocation);
+					u32 relocationCount = section->relocations.count();
 
 					if (relocationCount > UINT16_MAX) {
-						section.header->characteristics |= IMAGE_SCN_LNK_NRELOC_OVFL;
-						section.header->numberOfRelocations = UINT16_MAX;
+						header.characteristics |= IMAGE_SCN_LNK_NRELOC_OVFL;
+						header.numberOfRelocations = UINT16_MAX;
 					}
 					else {
-						section.header->numberOfRelocations = static_cast<u16>(relocationCount);
+						header.numberOfRelocations = static_cast<u16>(relocationCount);
 					}
 
-					alignAllocator(section.relocations, 4);
+					alignAllocator(&section->relocations.allocator, 4);
 
 					if (relocationCount > UINT16_MAX) {
 						sectionPointer += 10;
 
-						section.relocations->add2(0); // @Hack We padded to what we though was a multiple of 4 bytes, but since an extra relocation is added at the beginning, 
+						section->relocations.allocator.add2(0); // @Hack We padded to what we though was a multiple of 4 bytes, but since an extra relocation is added at the beginning, 
 						                              // we need to add 2 more bytes to ensure alignment
 					}
 
-					sectionPointer += section.relocations->totalSize;
-				}
-				else {
-					section.header->pointerToRelocations = 0;
-					section.header->numberOfRelocations = 0;
+					sectionPointer += section->relocations.allocator.totalSize;
 				}
 			}
-			else {
-				section.header->pointerToRawData = 0;
-				section.header->pointerToRelocations = 0;
-				section.header->numberOfRelocations = 0;
-			}
-
-
-			section.header->pointerToLinenumbers = 0;
-			section.header->numberOfLinenumbers = 0;
 		}
 
-		if (!hadError) {
-			HANDLE out = CreateFileW(utf8ToWString(objectFileName), GENERIC_WRITE | GENERIC_READ, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
+		HANDLE out = CreateFileW(utf8ToWString(objectFileName), GENERIC_WRITE | GENERIC_READ, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
 
+		if (out == INVALID_HANDLE_VALUE) {
+			reportError("Error: Could not open %s intermediate for writing", objectFileName);
+			return;
+		}
 
-			HANDLE mapping = CreateFileMappingA(out, 0, PAGE_READWRITE, 0, sectionPointer, 0);
+		HANDLE mapping = CreateFileMappingA(out, 0, PAGE_READWRITE, 0, sectionPointer, 0);
 
-			u8 *view = (u8 *) MapViewOfFile(mapping, FILE_MAP_WRITE, 0, 0, 0);
+		u8 *view = (u8 *) MapViewOfFile(mapping, FILE_MAP_WRITE, 0, 0, 0);
 
-			const auto syncWriteFile = [&](void *data, u32 size) {
-				DWORD written;
+		const auto mappedWriteFile = [&](void *data, u32 size) {
+			memcpy(view, data, size);
+			view += size;
+		};
 
-				WriteFile(out, data, size, &written, 0);
-			};
+		const auto doWrite = mappedWriteFile;
 
-			const auto mappedWriteFile = [&](void *data, u32 size) {
-				memcpy(view, data, size);
-				view += size;
-			};
+		const auto writeAllocator = [&](HANDLE out, BucketedArenaAllocator allocator) {
+			for (auto bucket = allocator.first; bucket; bucket = bucket->next) {
+				u32 count = (bucket->size - bucket->remaining);
 
-			const auto doWrite = mappedWriteFile;
-
-			const auto writeAllocator = [&](HANDLE out, BucketedArenaAllocator allocator) {
-				for (auto bucket = allocator.first; bucket; bucket = bucket->next) {
-					u32 count = (bucket->size - bucket->remaining);
-
-					doWrite(bucket->memory - count, count);
-				}
-			};
-
-			if (out == INVALID_HANDLE_VALUE) {
-				reportError("Error: Could not open %s intermediate for writing", objectFileName);
-				goto error;
+				doWrite(bucket->memory - count, count);
 			}
+		};
 			
-			doWrite(&header, sizeof(header));
+		doWrite(&header, sizeof(header));
 
-			for (auto section : sections) {
-				doWrite(section.header, sizeof(*section.header));
-			}
+		doWrite(sectionHeaders.storage, sectionHeaders.count * sizeof(SectionHeader));
 			
 
-			//assert(ftell(out) == header.pointerToSymbolTable);
-			writeAllocator(out, symbols.allocator);
+		//assert(ftell(out) == header.pointerToSymbolTable);
+		writeAllocator(out, symbols.allocator);
+
+		if (printDiagnostics) {
+			reportInfo("%u COFF symbols", symbols.count());
+		}
+
+		doWrite(&stringTableSize, sizeof(stringTableSize));
+		writeAllocator(out, stringTable);
+
+		doWrite(&alignmentPadding, AlignPO2(prefixSize, 4) - prefixSize);
+
+		for (u32 i = 0; i < sections.count; i++) {
+			auto section = sections[i];
 
 			if (printDiagnostics) {
-				reportInfo("%u COFF symbols", symbols.count());
+				reportInfo("%s size: %u", section->name, section->totalSize);
 			}
 
-			doWrite(&stringTableSize, sizeof(stringTableSize));
-			writeAllocator(out, stringTable);
+			if (section->flags & SECTION_INITIALIZED) {
+				writeAllocator(out, *section);
+			}
 
-			doWrite(&alignmentPadding, AlignPO2(prefixSize, 4) - prefixSize);
-
-			for (u32 i = 0; i < sections.count; i++) {
-				auto section = sections[i];
+			if (section->relocations.count()) {
+				u32 relocationCount = section->relocations.count();
 
 				if (printDiagnostics) {
-					reportInfo("%s size: %u", section.header->name, section.header->sizeOfRawData);
+					reportInfo("%s relocations: %u", section->name, relocationCount);
 				}
 
-				if (section.data) {
+				if (relocationCount > UINT16_MAX) {
+					Relocation count;
+					count.virtualAddress = relocationCount + 1;
+					count.symbolTableIndex = 0;
+					count.type = IMAGE_REL_AMD64_ABSOLUTE;
 
-					//assert(section.header->pointerToRawData == ftell(out));
-					writeAllocator(out, *section.data);
-
-
+					doWrite(&count, sizeof(count));
 				}
-
-				if (section.relocations) {
-					u32 relocationCount = section.relocations->totalSize / sizeof(Relocation);
-
-					if (printDiagnostics) {
-						reportInfo("%s relocations: %u", section.header->name, relocationCount);
-					}
-
-					if (relocationCount > UINT16_MAX) {
-						Relocation count;
-						count.virtualAddress = relocationCount + 1;
-						count.symbolTableIndex = 0;
-						count.type = IMAGE_REL_AMD64_ABSOLUTE;
-
-						doWrite(&count, sizeof(count));
-					}
-					//assert(section.header->pointerToRelocations == ftell(out));
-
-					writeAllocator(out, *section.relocations);
-				}
-			}
-
-			{
-				PROFILE_ZONE("fclose");
-
-				UnmapViewOfFile(view);
-				CloseHandle(mapping);
-				CloseHandle(out);
+				writeAllocator(out, section->relocations.allocator);
 			}
 		}
+
+		{
+			PROFILE_ZONE("fclose");
+
+			UnmapViewOfFile(view);
+			CloseHandle(mapping);
+			CloseHandle(out);
+		}
 	}
-error:
-	;
 }

@@ -532,7 +532,7 @@ static llvm::Constant *createConstant(State *state, Expr *expr) {
 				auto value = literal->initializers.values[0];
 
 				if (value->type->size == literal->type->size) {
-					return llvm::ConstantExpr::getBitCast(createConstant(state, value), llvmType);
+					return createConstant(state, value);
 
 				} 
 				else {
@@ -541,7 +541,9 @@ static llvm::Constant *createConstant(State *state, Expr *expr) {
 
 					auto tempType = llvm::StructType::get(memberType, arrayType);
 
-					return llvm::ConstantExpr::getBitCast(llvm::ConstantStruct::get(tempType, createConstant(state, value), llvm::UndefValue::get(arrayType)), llvmType);
+					// :Sadge LLVM doesn't allow bitcasts for aggregate types so to return a constant union
+					// we may not be able to return the correct type. Now everywhere that calls createConstant has to handle this :(
+					return llvm::ConstantStruct::get(tempType, createConstant(state, value), llvm::UndefValue::get(arrayType));
 				}
 
 			}
@@ -562,10 +564,17 @@ static llvm::Constant *createConstant(State *state, Expr *expr) {
 
 			u32 memberIndex = 0;
 
+			bool typesAreCorrect = true;
+
 			for (u32 i = 0; i < literal->initializers.count; i++) {
 				u32 memberIndex = getDeclarationIndex(&struct_->members, literal->initializers.declarations[i], DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING);
 
 				values[memberIndex] = createConstant(state, literal->initializers.values[i]);
+
+				// :Sadge
+				if (values[memberIndex]->getType() != getLlvmType(state->context, literal->initializers.values[i]->type)) {
+					typesAreCorrect = false;
+				}
 			}
 
 			for (u32 i = 0; i < memberCount; i++) {
@@ -573,6 +582,17 @@ static llvm::Constant *createConstant(State *state, Expr *expr) {
 					values[i] = llvm::UndefValue::get(llvmType->getStructElementType(i));
 				}
 			}
+
+			if (!typesAreCorrect) {
+				auto types = new llvm::Type * [memberCount];
+
+				for (u32 i = 0; i < memberCount; i++) {
+					types[i] = values[i]->getType();
+				}
+
+				llvmType = llvm::StructType::get(state->context, llvm::ArrayRef(types, memberCount));
+			}
+
 			return llvm::ConstantStruct::get(llvmType, llvm::ArrayRef(values, memberCount));
 		}
 	}
@@ -587,9 +607,17 @@ static llvm::Constant *createConstant(State *state, Expr *expr) {
 
 		llvm::Constant **values = new llvm::Constant * [arrayType->count];
 
+		bool typesAreCorrect = true;
+
+		auto elementType = getLlvmType(state->context, arrayType->arrayOf);
 		for (u64 i = 0; i < arrayCount; i++) {
 			auto value = createConstant(state, array->values[i]);
 			values[i] = value;
+
+			// :Sadge
+			if (value->getType() != elementType) {
+				typesAreCorrect = false;
+			}
 
 			if (i + 1 == array->count && arrayCount > array->count) {
 				for (u64 j = i + 1; j < arrayCount; j++) {
@@ -600,9 +628,24 @@ static llvm::Constant *createConstant(State *state, Expr *expr) {
 			}
 		}
 
-		auto elementType = getLlvmType(state->context, arrayType->arrayOf);
+		llvm::Constant *data;
+		
+		if (typesAreCorrect) {
+			data = llvm::ConstantArray::get(llvm::ArrayType::get(elementType, arrayCount), llvm::ArrayRef(values, arrayCount));
+		}
+		else {
+			// :Sadge
 
-		auto data = llvm::ConstantArray::get(llvm::ArrayType::get(elementType, arrayCount), llvm::ArrayRef(values, arrayCount));
+			auto types = new llvm::Type * [arrayCount];
+
+			for (u64 i = 0; i < arrayCount; i++) {
+				types[i] = values[i]->getType();
+			}
+
+			auto structType = llvm::StructType::get(state->context, llvm::ArrayRef(types, arrayCount));
+
+			data = llvm::ConstantStruct::get(structType, llvm::ArrayRef(values, arrayCount));
+		}
 
 		if (arrayType->flags & TYPE_ARRAY_IS_FIXED) {
 			return data;
@@ -611,8 +654,15 @@ static llvm::Constant *createConstant(State *state, Expr *expr) {
 			auto dataPointer = createUnnnamedConstant(state, data->getType());
 			dataPointer->setInitializer(data);
 
-			return llvm::ConstantStruct::get(static_cast<llvm::StructType *>(getLlvmType(state->context, arrayType)), 
-				llvm::ConstantExpr::getGetElementPtr(dataPointer->getValueType(), dataPointer, arrayRef<llvm::Value *>({
+			auto correctType = static_cast<llvm::StructType *>(getLlvmType(state->context, arrayType));
+
+			llvm::Constant *dataPointerCasted = dataPointer;
+			if (!typesAreCorrect) {
+				dataPointerCasted = llvm::ConstantExpr::getBitCast(dataPointer->getInitializer(), correctType->getStructElementType(0));
+			}
+
+			return llvm::ConstantStruct::get(correctType, 
+				llvm::ConstantExpr::getGetElementPtr(correctType->getStructElementType(0)->getPointerTo(), dataPointer, arrayRef<llvm::Value *>({
 						llvm::ConstantInt::get(llvm::Type::getInt32Ty(state->context), 0), 
 						llvm::ConstantInt::get(llvm::Type::getInt32Ty(state->context), 0)
 					})), 
@@ -2214,11 +2264,18 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 			return literal->llvmStorage;
 		}
 		else if (structIsLiteral(literal)) {
-			literal->llvmStorage = createUnnnamedConstant(state, getLlvmType(state->context, literal->type));
+			auto constant = createConstant(state, literal);
 
-			literal->llvmStorage->setInitializer(createConstant(state, literal));
+			literal->llvmStorage = createUnnnamedConstant(state, constant->getType());
+			literal->llvmStorage->setInitializer(constant);
+			
 
-			return literal->llvmStorage;
+			// :Sadge
+			if (literal->llvmStorage->getInitializer()->getType() != literal->type->llvmType) {
+				return state->builder.CreatePointerCast(literal->llvmStorage, llvm::PointerType::getUnqual(getLlvmType(state->context, literal->type)));
+			}
+
+			 return literal->llvmStorage;
 		}
 		else {
 
@@ -2330,9 +2387,15 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 			return array->llvmStorage;
 		}
 		else if (arrayIsLiteral(array)) {
-			array->llvmStorage = createUnnnamedConstant(state, getLlvmType(state->context, array->type));
+			auto constant = createConstant(state, array);
+			array->llvmStorage = createUnnnamedConstant(state, constant->getType());
 
-			array->llvmStorage->setInitializer(createConstant(state, array));
+			array->llvmStorage->setInitializer(constant);
+
+			// :Sadge
+			if (array->llvmStorage->getInitializer()->getType() != array->type->llvmType) {
+				return state->builder.CreatePointerCast(array->llvmStorage, llvm::PointerType::getUnqual(getLlvmType(state->context, array->type)));
+			}
 
 			return array->llvmStorage;
 		}
@@ -2896,8 +2959,9 @@ void runLlvm() {
 							llvm::Constant *initial_value;
 
 							if (member->initialValue && (member->initialValue->flavor != ExprFlavor::TYPE_LITERAL || static_cast<ExprLiteral *>(member->initialValue)->typeValue->flavor != TypeFlavor::MODULE)) { 
-								auto variable = createUnnnamedConstant(&state, getLlvmType(context, member->initialValue->type));
-								variable->setInitializer(createConstant(&state, member->initialValue));
+								auto constant = createConstant(&state, member->initialValue);
+								auto variable = createUnnnamedConstant(&state, constant->getType());
+								variable->setInitializer(constant);
 								initial_value = llvm::ConstantExpr::getBitCast(variable, llvm::Type::getInt8PtrTy(context));
 							}
 							else {
@@ -2907,7 +2971,6 @@ void runLlvm() {
 							auto memberName = createLlvmString(&state, member->name);
 							auto offset = llvm::ConstantInt::get(int64, member->physicalStorage);
 							auto member_type = TO_TYPE_INFO(getDeclarationType(member));
-
 
 							u64 flags_int = 0;
 

@@ -43,6 +43,8 @@ u32 allocateStackSpaceAndLoadAddress(IrState *state, Type *type) {
 }
 
 u32 memop(IrState *state, IrOp op, u32 dest, u32 src, u32 size, u32 offset = 0) {
+	assert(op != IrOp::COPY || offset == 0);
+
 	Ir &memop = state->ir.add();
 	memop.op = op;
 	memop.dest = dest;
@@ -54,12 +56,45 @@ u32 memop(IrState *state, IrOp op, u32 dest, u32 src, u32 size, u32 offset = 0) 
 }
 
 u32 copyOrWrite(IrState *state, u32 dest, u32 src, Type *type, u32 offset = 0) {
-	return memop(state, isStoredByPointer(type) ? IrOp::COPY : IrOp::WRITE, dest, src, type->size, offset);
+	if (isStoredByPointer(type)) {
+		if (offset) {
+			Ir &add = state->ir.add();
+			add.op = IrOp::ADD_CONSTANT;
+			add.dest = allocateRegister(state);
+			add.a = dest;
+			add.immediate = offset;
+			add.opSize = 8;
+
+			dest = add.dest;
+		}
+		
+
+		return memop(state, IrOp::COPY, dest, src, type->size);
+	}
+	else {
+		return memop(state, IrOp::WRITE, dest, src, type->size, offset);
+	}
 }
 
 
 u32 copyOrRead(IrState *state, u32 dest, u32 src, Type *type, u32 offset = 0) {
-	return memop(state, isStoredByPointer(type) ? IrOp::COPY : IrOp::READ, dest, src, type->size, offset);
+	if (isStoredByPointer(type)) {
+		if (offset) {
+			Ir &add = state->ir.add();
+			add.op = IrOp::ADD_CONSTANT;
+			add.dest = allocateRegister(state);
+			add.a = src;
+			add.immediate = offset;
+			add.opSize = 8;
+
+			src = add.dest;
+		}
+
+		return memop(state, IrOp::COPY, dest, src, type->size);
+	}
+	else {
+		return memop(state, IrOp::READ, dest, src, type->size, offset);
+	}
 }
 
 u32 set(IrState *state, u32 dest, u32 src, u32 size) {

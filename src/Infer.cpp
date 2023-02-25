@@ -2078,6 +2078,8 @@ Expr *createDefaultValue(SubJob *job, Type *type, bool *shouldYield) {
 		literal->flavor = ExprFlavor::STRUCT_LITERAL;
 		literal->type = type;
 
+		literal->typeValue = nullptr;
+
 		literal->initializers.names = nullptr;
 		literal->initializers.count = 0;
 		literal->initializers.values = INFER_NEW_ARRAY(Expr *, initializerCount);
@@ -2113,6 +2115,7 @@ Expr *createDefaultValue(SubJob *job, Type *type, bool *shouldYield) {
 		auto defaults = INFER_NEW(ExprArrayLiteral);
 		defaults->flavor = ExprFlavor::ARRAY_LITERAL;
 		defaults->type = type;
+		defaults->typeValue = nullptr;
 
 		assert(type->flags &TYPE_ARRAY_IS_FIXED);
 
@@ -2513,21 +2516,31 @@ bool inferUnaryDotStructLiteral(SubJob *job, Type *correct, Expr *&given) {
 	return true;
 }
 
+bool checkExpressionIsRuntimeValid(Expr *expr) {
+	if (!expr)
+		return true;
+
+	if (expr->type->flavor == TypeFlavor::VOID) {
+		reportError(expr, "Error: Cannot operate on a value of type void");
+		return false;
+	}
+	else if (expr->type->flavor == TypeFlavor::MODULE) {
+		reportError(expr, "Error: Cannot operate on a module");
+		return false;
+	}
+	else if (expr->flags & EXPR_FUNCTION_IS_INSTRINSIC) {
+		reportError(expr, "Error: Cannot operate on an intrinsic function");
+		return false;
+	}
+
+	return true;
+}
+
 bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yield) {
 	*yield = false;
 
-	if (given->type->flavor == TypeFlavor::VOID) {
-		reportError(given, "Error: Cannot operate on a value of type void");
+	if (!checkExpressionIsRuntimeValid(given))
 		return false;
-	}
-	else if (given->type->flavor == TypeFlavor::MODULE) {
-		reportError(given, "Error: Cannot operate on a module");
-		return false;
-	}
-	else if (given->flags & EXPR_FUNCTION_IS_INSTRINSIC) {
-		reportError(given, "Error: Cannot operate on an intrinsic function");
-		return false;
-	}
 
 	if (correct != given->type) {
 		if (correct->flavor == given->type->flavor) {
@@ -2698,7 +2711,7 @@ bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yi
 					return false;
 				}
 			}
-			else if (correct->flavor == TypeFlavor::POINTER && static_cast<TypePointer *>(correct)->pointerTo == &TYPE_U8 && given->flavor == ExprFlavor::STRING_LITERAL) {
+			else if (correct == TYPE_U8_POINTER && given->flavor == ExprFlavor::STRING_LITERAL) {
 				auto identifier = INFER_NEW(ExprIdentifier);
 				identifier->start = given->start;
 				identifier->end = given->end;
@@ -2790,7 +2803,7 @@ Conversion getIntExtendCost(Type *type) {
 	}
 }
 
-Conversion getConversionCost(SubJob *job, Expr *location, Type *correct, Expr *given, bool *yield) {
+Conversion getConversionCost(SubJob *job, Type *correct, Expr *given, bool *yield) {
 	*yield = false;
 	if (correct == given->type)
 		return ConversionCost::EXACT_MATCH;
@@ -2845,7 +2858,7 @@ Conversion getConversionCost(SubJob *job, Expr *location, Type *correct, Expr *g
 		case TypeFlavor::INTEGER: {
 			if ((correct->flags & TYPE_INTEGER_IS_SIGNED) == (given->type->flags & TYPE_INTEGER_IS_SIGNED)) {
 				if (given->type == &TYPE_UNSIGNED_INT_LITERAL || given->type == &TYPE_SIGNED_INT_LITERAL) {
-					if (!boundsCheckImplicitConversion(location, correct, static_cast<ExprLiteral *>(given)))
+					if (!boundsCheckImplicitConversion(nullptr, correct, static_cast<ExprLiteral *>(given)))
 						return ConversionCost::CANNOT_CONVERT;
 				}
 				else if (correct->size < given->type->size) {
@@ -2856,7 +2869,7 @@ Conversion getConversionCost(SubJob *job, Expr *location, Type *correct, Expr *g
 				if (given->type != &TYPE_UNSIGNED_INT_LITERAL)
 					return ConversionCost::CANNOT_CONVERT;
 
-				if (!boundsCheckImplicitConversion(location, correct, static_cast<ExprLiteral *>(given)))
+				if (!boundsCheckImplicitConversion(nullptr, correct, static_cast<ExprLiteral *>(given)))
 					return ConversionCost::CANNOT_CONVERT;
 			}
 
@@ -3285,7 +3298,7 @@ bool checkArgumentsForOverload(SubJob *job, Arguments *arguments, Block *block, 
 					break;
 				}
 
-				auto cost = getConversionCost(job, arguments->values[i], varargsType, arguments->values[i], yield);
+				auto cost = getConversionCost(job, varargsType, arguments->values[i], yield);
 
 				if (cost == ConversionCost::CANNOT_CONVERT) {
 					return false;
@@ -3301,7 +3314,7 @@ bool checkArgumentsForOverload(SubJob *job, Arguments *arguments, Block *block, 
 				return false;
 			}
 
-			auto cost = getConversionCost(job, arguments->values[i], getDeclarationType(argument), arguments->values[i], yield);
+			auto cost = getConversionCost(job, getDeclarationType(argument), arguments->values[i], yield);
 
 			if (cost == ConversionCost::CANNOT_CONVERT) {
 				return false;
@@ -3526,50 +3539,6 @@ bool functionIsVoid(TypeFunction *function) {
 	return function->returnCount == 1 && function->returnTypes[0] == &TYPE_VOID;
 }
 
-bool isBinaryMathOp(TokenT op) {
-	switch (op) {
-		case TokenT::EQUAL:
-		case TokenT::NOT_EQUAL:
-		case TokenT::GREATER_EQUAL:
-		case TokenT::LESS_EQUAL:
-		case TOKEN('>'):
-		case TOKEN('<'):
-		case TOKEN('+'):
-		case TOKEN('-'):
-		case TOKEN('&'):
-		case TOKEN('|'):
-		case TOKEN('^'):
-		case TokenT::SHIFT_LEFT:
-		case TokenT::SHIFT_RIGHT:
-		case TOKEN('*'):
-		case TOKEN('/'):
-		case TOKEN('%'):
-			return true;
-		default:
-			return false;
-	}
-}
-
-bool isBinaryAssignmentOp(TokenT op) {
-	switch (op) {
-	case TOKEN('='):
-	case TokenT::PLUS_EQUALS:
-	case TokenT::MINUS_EQUALS:
-	case TokenT::AND_EQUALS:
-	case TokenT::OR_EQUALS:
-	case TokenT::XOR_EQUALS:
-	case TokenT::SHIFT_LEFT_EQUALS:
-	case TokenT::SHIFT_RIGHT_EQUALS:
-	case TokenT::TIMES_EQUALS:
-	case TokenT::DIVIDE_EQUALS:
-	case TokenT::MOD_EQUALS:
-		return true;
-	default:
-		return false;
-	}
-}
-
-
 bool coerceToBool(SubJob *job, Expr **given, bool *yield) {
 	*yield = false;
 	auto &expr = *given;
@@ -3607,13 +3576,66 @@ bool coerceToConstantType(SubJob *job, Expr **given, const char *message, bool *
 	}
 
 	if (expr->flavor != ExprFlavor::TYPE_LITERAL) {
-		reportError(expr, "Error: % type must be a constant", message);
+		reportError(expr, "Error: %s type must be a constant", message);
 		return false;
 	}
 
 	return true;
 }
 
+const char *binaryOpName(TokenT op) {
+	switch (op) {
+	case TokenT::ARRAY_TYPE:
+		return "make an array from";
+	case TOKEN('['):
+		return "index";
+	case TokenT::CAST:
+		return "cast";
+	case TokenT::LOGIC_AND:
+	case TOKEN('&'):
+	case TokenT::AND_EQUALS:
+		return "and";
+	case TokenT::LOGIC_OR:
+	case TOKEN('|'):
+	case TokenT::OR_EQUALS:
+		return "or";
+	case TokenT::EQUAL:
+	case TokenT::NOT_EQUAL:
+	case TokenT::GREATER_EQUAL:
+	case TokenT::LESS_EQUAL:
+	case TOKEN('>'):
+	case TOKEN('<'):
+		return "compare";
+	case TOKEN('+'):
+	case TokenT::PLUS_EQUALS:
+		return "add";
+	case TOKEN('-'):
+	case TokenT::MINUS_EQUALS:
+		return "subtract";
+	case TOKEN('^'):
+	case TokenT::XOR_EQUALS:
+		return "xor";
+	case TokenT::SHIFT_LEFT:
+	case TokenT::SHIFT_RIGHT:
+	case TokenT::SHIFT_LEFT_EQUALS:
+	case TokenT::SHIFT_RIGHT_EQUALS:
+		return "shift";
+	case TOKEN('*'):
+	case TokenT::TIMES_EQUALS:
+		return "multiply";
+	case TOKEN('/'):
+	case TokenT::DIVIDE_EQUALS:
+		return "divide";
+	case TOKEN('%'):
+	case TokenT::MOD_EQUALS:
+		return "mod";
+	case TOKEN('='):
+		return "assign";
+	default:
+		assert(false);
+		return "<unknown binary operator>";
+	}
+}
 
 bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 	*yield = false;
@@ -3623,6 +3645,9 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 
 	auto &left = binary->left;
 	auto &right = binary->right;
+
+	if (!checkExpressionIsRuntimeValid(left) || !checkExpressionIsRuntimeValid(right))
+		return false;
 
 	if (binary->flags & EXPR_ASSIGN_IS_IMPLICIT_INITIALIZER) {
 		auto declaration = static_cast<ExprIdentifier *>(left)->declaration;
@@ -3640,786 +3665,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 		}
 	}
 
-	assert(binary->op == TokenT::ARRAY_TYPE || left); // This is safe since even though auto-casts can have a left of null, they shouldn't be added to the flattened array
-
-
-	assert(right);
-
-	bool mathOp = isBinaryMathOp(binary->op);
-	bool assignmentOp = isBinaryAssignmentOp(binary->op);
-	bool logicalOp = binary->op == TokenT::LOGIC_AND || binary->op == TokenT::LOGIC_OR;
-
-	if (assignmentOp && !isAddressable(left)) {
-		// @Incomplete: better error messages here
-		//  - If we were assigning to a constant
-		//  - If we were assigning to a pointer
-
-		reportError(binary, "Error: Left side of binary is not assignable");
-		return false;
-	}
-
-	if (left && right) {
-		if (left->type->flavor == TypeFlavor::AUTO_CAST && right->type->flavor == TypeFlavor::AUTO_CAST) {
-			reportError(binary, "Error: Cannot infer the type of an expression when the sides are %.*s and %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
-			return false;
-		}
-	}
-
-	if (left) {
-		if (left->type->flavor == TypeFlavor::VOID) {
-			reportError(left, "Error: Cannot operate on a value of type void");
-			return false;
-		}
-		else if (left->type->flavor == TypeFlavor::MODULE) {
-			reportError(left, "Error: Cannot operate on a module");
-			return false;
-		}
-		else if (left->flags & EXPR_FUNCTION_IS_INSTRINSIC) {
-			reportError(left, "Error: Cannot operate on an intrinsic function");
-			return false;
-		}
-		else if (left->type == &TYPE_AUTO_CAST) {
-			if (mathOp) {
-				trySolidifyNumericLiteralToDefault(right);
-
-				if (!tryAutoCast(job, &left, right->type, yield)) {
-					if (!*yield) {
-						reportError(left, "Error: Cannot convert %.*s to %.*s",
-							STRING_PRINTF(static_cast<ExprBinaryOperator *>(left)->right->type->name),
-							STRING_PRINTF(right->type->name));
-						return false;
-					}
-					else {
-						return true;
-					}
-				}
-			}
-			else if (logicalOp) {
-				if (!tryAutoCast(job, &left, &TYPE_BOOL, yield)) {
-					if (!*yield) {
-						reportError(left, "Error: Cannot convert %.*s to bool",
-							STRING_PRINTF(static_cast<ExprBinaryOperator *>(left)->right->type->name));
-						return false;
-					}
-					else {
-						return true;
-					}
-				}
-			}
-		}
-	}
-
-	if (right) {
-		if (right->type->flavor == TypeFlavor::VOID) {
-			reportError(right, "Error: Cannot operate on a value of type void");
-			return false;
-		} 
-		else if (right->type->flavor == TypeFlavor::MODULE) {
-			reportError(right, "Error: Cannot operate on a module");
-			return false;
-		}
-		else if (right->flags & EXPR_FUNCTION_IS_INSTRINSIC) {
-			reportError(right, "Error: Cannot operate on an intrinsic function");
-			return false;
-		}
-		else if (right->type == &TYPE_AUTO_CAST) {
-			if (mathOp || assignmentOp) {
-				trySolidifyNumericLiteralToDefault(left);
-
-				if (!tryAutoCast(job, &right, left->type, yield)) {
-					if (!*yield) {
-						reportError(right, "Error: Cannot convert %.*s to %.*s",
-							STRING_PRINTF(static_cast<ExprBinaryOperator *>(right)->right->type->name),
-							STRING_PRINTF(left->type->name));
-						return false;
-					}
-					else {
-						return true;
-					}
-				}
-			}
-			else if (logicalOp) {
-				if (!tryAutoCast(job, &right, &TYPE_BOOL, yield)) {
-					if (!*yield) {
-						reportError(right, "Error: Cannot convert %.*s to bool",
-							STRING_PRINTF(static_cast<ExprBinaryOperator *>(right)->right->type->name));
-						return false;
-					}
-					else {
-						return true;
-					}
-				}
-			}
-		}
-	}
-
-	if (left && right) {
-		if (left->type != right->type) {
-			if (mathOp) {
-				if (left->type == &TYPE_UNSIGNED_INT_LITERAL && right->type->flavor == TypeFlavor::FLOAT) {
-					left->flavor = ExprFlavor::FLOAT_LITERAL;
-					left->type = right->type;
-					auto literal = static_cast<ExprLiteral *>(left);
-					literal->floatValue = static_cast<double>(literal->unsignedValue);
-				}
-				else if (left->type == &TYPE_SIGNED_INT_LITERAL && right->type->flavor == TypeFlavor::FLOAT) {
-					left->flavor = ExprFlavor::FLOAT_LITERAL;
-					left->type = right->type;
-					auto literal = static_cast<ExprLiteral *>(left);
-					literal->floatValue = static_cast<double>(literal->signedValue);
-				}
-				else if (right->type == &TYPE_UNSIGNED_INT_LITERAL && left->type->flavor == TypeFlavor::FLOAT) {
-					right->flavor = ExprFlavor::FLOAT_LITERAL;
-					right->type = left->type;
-					auto literal = static_cast<ExprLiteral *>(right);
-					literal->floatValue = static_cast<double>(literal->unsignedValue);
-				}
-				else if (right->type == &TYPE_SIGNED_INT_LITERAL && left->type->flavor == TypeFlavor::FLOAT) {
-					right->flavor = ExprFlavor::FLOAT_LITERAL;
-					right->type = left->type;
-					auto literal = static_cast<ExprLiteral *>(right);
-					literal->floatValue = static_cast<double>(literal->signedValue);
-				}
-
-				if (left->type->flavor == TypeFlavor::INTEGER && right->type->flavor == TypeFlavor::INTEGER) {
-					if (left->type == &TYPE_UNSIGNED_INT_LITERAL && right->type == &TYPE_SIGNED_INT_LITERAL) {
-						if (!boundsCheckImplicitConversion(binary, &TYPE_S64, static_cast<ExprLiteral *>(left))) {
-							return false;
-						}
-
-						left->type = &TYPE_SIGNED_INT_LITERAL;
-					}
-					else if (left->type == &TYPE_SIGNED_INT_LITERAL && right->type == &TYPE_UNSIGNED_INT_LITERAL) {
-						if (!boundsCheckImplicitConversion(binary, &TYPE_S64, static_cast<ExprLiteral *>(right))) {
-							return false;
-						}
-
-						right->type = &TYPE_SIGNED_INT_LITERAL;
-					}
-					else if ((left->type->flags & TYPE_INTEGER_IS_SIGNED) == (right->type->flags & TYPE_INTEGER_IS_SIGNED)) {
-						if (left->type == &TYPE_UNSIGNED_INT_LITERAL || left->type == &TYPE_SIGNED_INT_LITERAL) {
-							if (!boundsCheckImplicitConversion(binary, right->type, static_cast<ExprLiteral *>(left))) {
-								return false;
-							}
-
-							left->type = right->type;
-						}
-						else if (right->type == &TYPE_UNSIGNED_INT_LITERAL || right->type == &TYPE_SIGNED_INT_LITERAL) {
-							if (!boundsCheckImplicitConversion(binary, left->type, static_cast<ExprLiteral *>(right))) {
-								return false;
-							}
-
-							right->type = left->type;
-						}
-						else if (left->type->size > right->type->size) {
-							insertImplicitCast(job->sizeDependencies, &right, left->type);
-						}
-						else if (right->type->size > left->type->size) {
-							insertImplicitCast(job->sizeDependencies, &left, right->type);
-						}
-					}
-					else {
-						if (left->type == &TYPE_UNSIGNED_INT_LITERAL) {
-							if (!boundsCheckImplicitConversion(binary, right->type, static_cast<ExprLiteral *>(left))) {
-								return false;
-							}
-
-							left->type = right->type;
-						}
-						else if (right->type == &TYPE_UNSIGNED_INT_LITERAL) {
-							if (!boundsCheckImplicitConversion(binary, left->type, static_cast<ExprLiteral *>(right))) {
-								return false;
-							}
-
-							right->type = left->type;
-						}
-						else {
-							reportError(binary, "Error: Signed-unsigned mismatch, cannot convert between %.*s and %.*s", STRING_PRINTF(left->type->name),
-								STRING_PRINTF(right->type->name));
-							return false;
-						}
-					}
-				}
-				else if (left->type->flavor == TypeFlavor::FLOAT && right->type->flavor == TypeFlavor::FLOAT) {
-					if (left->type == &TYPE_FLOAT_LITERAL) {
-						left->type = right->type;
-					}
-					else if (right->type == &TYPE_FLOAT_LITERAL) {
-						right->type = left->type;
-					}
-
-					if (left->type != right->type) {
-						// @Incomplete should we allow this conversion in some cases, this code was originally taken
-						// from == and != where float conversion definitely shouldn't be allowed, since that's already
-						// bad enough without the compiler converting types behind your back
-						reportError(binary, "Error: Cannot convert between %.*s and %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
-						return false;
-					}
-				}
-				else if (left->type == TYPE_VOID_POINTER && (right->type->flavor == TypeFlavor::POINTER || right->type->flavor == TypeFlavor::FUNCTION)) {
-					insertImplicitCast(job->sizeDependencies, &left, right->type);
-				}
-				else if (right->type == TYPE_VOID_POINTER && (left->type->flavor == TypeFlavor::POINTER || left->type->flavor == TypeFlavor::FUNCTION)) {
-					insertImplicitCast(job->sizeDependencies, &right, left->type);
-				}
-				else if (right->type->flavor == TypeFlavor::ENUM && left->type == &TYPE_UNARY_DOT) {
-					if (!inferUnaryDot(job, static_cast<TypeEnum *>(right->type), &left, yield)) {
-						return *yield;
-					}
-				}
-				else if (left->type->flavor == TypeFlavor::ENUM && right->type == &TYPE_UNARY_DOT) {
-					if (!inferUnaryDot(job, static_cast<TypeEnum *>(left->type), &right, yield)) {
-						return *yield;
-					}
-				}
-				else if (left->type->flavor == TypeFlavor::ENUM && (left->type->flags & TYPE_ENUM_IS_FLAGS) &&
-					right->type->flavor == TypeFlavor::INTEGER && right->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(right)->unsignedValue == 0) {
-					insertImplicitCast(job->sizeDependencies, &right, left->type);
-				}
-				else if (right->type->flavor == TypeFlavor::ENUM && (right->type->flags & TYPE_ENUM_IS_FLAGS) &&
-					left->type->flavor == TypeFlavor::INTEGER && left->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(left)->unsignedValue == 0) {
-					insertImplicitCast(job->sizeDependencies, &left, right->type);
-				}
-				else if (left->type->flavor == TypeFlavor::FUNCTION && right->type == &TYPE_OVERLOAD_SET) {
-					if (!inferOverloadSetForNonCall(job, left->type, right, yield)) {
-						return *yield;
-					}
-				}
-				else if (left->type == &TYPE_OVERLOAD_SET && right->type->flavor == TypeFlavor::FUNCTION) {
-					if (!inferOverloadSetForNonCall(job, right->type, left, yield)) {
-						return *yield;
-					}
-				}
-				else if (left->type == &TYPE_ARRAY_LITERAL && right->type->flavor == TypeFlavor::ARRAY) {
-					if (!inferUnaryDotArrayLiteral(job, right->type, left, yield)) {
-						return *yield;
-					}
-				}
-				else if (right->type == &TYPE_ARRAY_LITERAL && left->type->flavor == TypeFlavor::ARRAY) {
-					if (!inferUnaryDotArrayLiteral(job, left->type, right, yield)) {
-						return *yield;
-					}
-				}
-				else if (left->type == &TYPE_STRUCT_LITERAL && (right->type->flavor == TypeFlavor::ARRAY || right->type->flavor == TypeFlavor::STRING || right->type->flavor == TypeFlavor::STRUCT)) {
-					*yield = inferUnaryDotStructLiteral(job, right->type, left);
-					return *yield;
-				}
-				else if (right->type == &TYPE_STRUCT_LITERAL && (left->type->flavor == TypeFlavor::ARRAY || left->type->flavor == TypeFlavor::STRING || left->type->flavor == TypeFlavor::STRUCT)) {
-					*yield = inferUnaryDotStructLiteral(job, left->type, right);
-					return *yield;
-				}
-			}
-			else if (assignmentOp) {
-				if (right->type == &TYPE_UNSIGNED_INT_LITERAL && left->type->flavor == TypeFlavor::FLOAT) {
-					right->flavor = ExprFlavor::FLOAT_LITERAL;
-					right->type = left->type;
-					auto literal = static_cast<ExprLiteral *>(right);
-					literal->floatValue = static_cast<double>(literal->unsignedValue);
-				}
-				else if (right->type == &TYPE_SIGNED_INT_LITERAL && left->type->flavor == TypeFlavor::FLOAT) {
-					right->flavor = ExprFlavor::FLOAT_LITERAL;
-					right->type = left->type;
-					auto literal = static_cast<ExprLiteral *>(right);
-					literal->floatValue = static_cast<double>(literal->signedValue);
-				}
-
-				if (left->type->flavor == TypeFlavor::INTEGER && right->type->flavor == TypeFlavor::INTEGER) {
-					if ((left->type->flags & TYPE_INTEGER_IS_SIGNED) == (right->type->flags & TYPE_INTEGER_IS_SIGNED)) {
-						if (right->type == &TYPE_UNSIGNED_INT_LITERAL || right->type == &TYPE_SIGNED_INT_LITERAL) {
-							if (!boundsCheckImplicitConversion(binary, left->type, static_cast<ExprLiteral *>(right))) {
-								return false;
-							}
-
-							right->type = left->type;
-						}
-						else if (left->type->size > right->type->size) {
-							insertImplicitCast(job->sizeDependencies, &right, left->type);
-						}
-					}
-					else {
-						if (right->type == &TYPE_UNSIGNED_INT_LITERAL) {
-							if (!boundsCheckImplicitConversion(binary, left->type, static_cast<ExprLiteral *>(right))) {
-								return false;
-							}
-
-							right->type = left->type;
-						}
-						else {
-							reportError(binary, "Error: Signed-unsigned mismatch, cannot convert between %.*s and %.*s", STRING_PRINTF(left->type->name),
-								STRING_PRINTF(right->type->name));
-							return false;
-						}
-					}
-
-					if (left->type != right->type) {
-						// @Incomplete should we allow this conversion in some cases, this code was originally taken
-						// from == and != where float conversion definitely shouldn't be allowed, since that's already
-						// bad enough without the compiler converting types behind your back
-						reportError(binary, "Error: Cannot convert between %.*s and %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
-						return false;
-					}
-				}
-				else if (left->type->flavor == TypeFlavor::FLOAT && right->type->flavor == TypeFlavor::FLOAT) {
-					if (right->type == &TYPE_FLOAT_LITERAL) {
-						right->type = left->type;
-					}
-
-					if (left->type != right->type) {
-						// @Incomplete should we allow this conversion in some cases, this code was originally taken
-						// from == and != where float conversion definitely shouldn't be allowed, since that's already
-						// bad enough without the compiler converting types behind your back
-						reportError(binary, "Error: Cannot convert between %.*s and %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
-						return false;
-					}
-				}
-				else if (left->type == TYPE_VOID_POINTER && (right->type->flavor == TypeFlavor::POINTER || right->type->flavor == TypeFlavor::FUNCTION)) {
-					insertImplicitCast(job->sizeDependencies, &right, left->type);
-				}
-				else if (right->type == TYPE_VOID_POINTER && (left->type->flavor == TypeFlavor::POINTER || left->type->flavor == TypeFlavor::FUNCTION)) {
-					insertImplicitCast(job->sizeDependencies, &right, left->type);
-				}
-				else if (left->type->flavor == TypeFlavor::ENUM && right->type == &TYPE_UNARY_DOT) {
-					if (!inferUnaryDot(job, static_cast<TypeEnum *>(left->type), &right, yield)) {
-						return *yield;
-					}
-				}
-				else if (left->type->flavor == TypeFlavor::ENUM && (left->type->flags & TYPE_ENUM_IS_FLAGS) &&
-					right->type->flavor == TypeFlavor::INTEGER && right->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(right)->unsignedValue == 0) {
-					insertImplicitCast(job->sizeDependencies, &right, left->type);
-				}
-				else if (left->type->flavor == TypeFlavor::FUNCTION && right->type == &TYPE_OVERLOAD_SET) {
-					if (!inferOverloadSetForNonCall(job, left->type, right, yield)) {
-						return *yield;
-					}
-				}
-				else if (right->type == &TYPE_ARRAY_LITERAL && left->type->flavor == TypeFlavor::ARRAY) {
-					if (!inferUnaryDotArrayLiteral(job, left->type, right, yield)) {
-						return *yield;
-					}
-				}
-				else if (right->type == &TYPE_STRUCT_LITERAL && (left->type->flavor == TypeFlavor::ARRAY || left->type->flavor == TypeFlavor::STRING || left->type->flavor == TypeFlavor::STRUCT)) {
-					*yield = inferUnaryDotStructLiteral(job, left->type, right);
-					return *yield;
-				}
-			}
-		}
-	}
-
-	const char *opName = nullptr;
 	switch (binary->op) {
-	case TokenT::CAST: {
-		if (!assignOp(job, left, &TYPE_TYPE, left, yield)) {
-			return *yield;
-		}
-
-		if (left->flavor != ExprFlavor::TYPE_LITERAL) {
-			reportError(left, "Error: Cast target must be a constant");
-			return false;
-		}
-
-
-		assert(left->flavor == ExprFlavor::TYPE_LITERAL);
-
-		Type *castTo = static_cast<ExprLiteral *>(left)->typeValue;
-		trySolidifyNumericLiteralToDefault(right);
-
-		if (!(binary->flags & EXPR_CAST_IS_BITWISE) && tryUsingConversion(job, castTo, &right)) {
-			*yield = true;
-			return true;
-		}
-		else {
-			if (!isValidCast(job, castTo, right->type, binary->flags, yield)) {
-				if (*yield) return true;
-				reportError(binary, "Error: Cannot cast from %.*s to %.*s", STRING_PRINTF(right->type->name), STRING_PRINTF(castTo->name));
-				return false;
-			}
-
-			expr->type = castTo;
-
-			if ((right->type->flags & TYPE_ARRAY_IS_FIXED) && castTo->flavor == TypeFlavor::ARRAY && !(castTo->flags & TYPE_ARRAY_IS_FIXED)) {
-				markDeclarationsAsPointedTo(right);
-			}
-		}
-
-		break;
-	}
-	case TOKEN('['): {
-		trySolidifyNumericLiteralToDefault(right);
-
-		if (right->type->flavor != TypeFlavor::INTEGER) {
-			reportError(right, "Error: Array index must be an integer");
-			return false;
-		}
-
-
-		if (right->type->size != 8) {
-			insertImplicitCast(job->sizeDependencies, &right, right->type->flags & TYPE_INTEGER_IS_SIGNED ? &TYPE_S64 : &TYPE_U64);
-		}
-
-		if (left->type->flavor == TypeFlavor::POINTER) {
-			TypePointer *pointer = static_cast<TypePointer *>(left->type);
-
-			if (pointer->pointerTo == &TYPE_VOID) {
-				reportError(binary, "Error: Cannot read from a void pointer");
-				return false;
-			}
-
-			assert(!(pointer->pointerTo->flags & TYPE_IS_INTERNAL));
-
-			expr->type = pointer->pointerTo;
-		}
-		else if (left->type->flavor == TypeFlavor::STRING) {
-			trySolidifyNumericLiteralToDefault(right);
-
-			expr->type = &TYPE_U8;
-		}
-		else if (left->type->flavor == TypeFlavor::ARRAY) {
-			trySolidifyNumericLiteralToDefault(right);
-
-			addSizeDependency(job->sizeDependencies, left->type);
-
-			expr->type = static_cast<TypeArray *>(left->type)->arrayOf;
-		}
-		else {
-			reportError(binary->left, "Error: Cannot index a %.*s", STRING_PRINTF(left->type->name));
-			return false;
-		}
-
-		addSizeDependency(job->sizeDependencies, expr->type);
-
-		break;
-	}
-	case TokenT::EQUAL:
-	case TokenT::NOT_EQUAL: {
-		if (left->type->flavor == right->type->flavor) {
-			switch (left->type->flavor) {
-			case TypeFlavor::STRING:
-			case TypeFlavor::BOOL:
-			case TypeFlavor::TYPE:
-			case TypeFlavor::INTEGER:
-			case TypeFlavor::FLOAT:
-			case TypeFlavor::POINTER: {
-				break;
-			}
-			case TypeFlavor::STRUCT:
-			case TypeFlavor::ARRAY: {
-				reportError(binary, "Error: Cannot compare %ss", TYPE_FLAVOR_NAME(left->type->flavor));
-				return false;
-			}
-			case TypeFlavor::FUNCTION: {
-				if (left->type != right->type) {
-					reportError(binary, "Error: Cannot compare %.*s to %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
-					return false;
-				}
-				break;
-			}
-			case TypeFlavor::ENUM: {
-				if (left->type != right->type) {
-					reportError(binary, "Error: Cannot compare %.*s to %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
-					return false;
-				}
-
-				break;
-			}
-			default:
-				assert(false);
-			}
-		}
-		else {
-			reportError(binary, "Error: Cannot compare %.*s to %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
-			return false;
-		}
-
-		expr->type = &TYPE_BOOL;
-
-		break;
-	}
-	case TokenT::GREATER_EQUAL:
-	case TokenT::LESS_EQUAL:
-	case TOKEN('>'):
-	case TOKEN('<'): {
-		if (left->type->flavor == right->type->flavor) {
-			switch (left->type->flavor) {
-			case TypeFlavor::INTEGER:
-			case TypeFlavor::FLOAT:
-			case TypeFlavor::POINTER: {
-				break;
-			}
-			case TypeFlavor::ARRAY:
-			case TypeFlavor::BOOL:
-			case TypeFlavor::STRING:
-			case TypeFlavor::FUNCTION:
-			case TypeFlavor::TYPE:
-			case TypeFlavor::STRUCT:
-			case TypeFlavor::ENUM: {
-				reportError(binary, "Error: Cannot compare %ss", TYPE_FLAVOR_NAME(left->type->flavor));
-				return false;
-			}
-			default:
-				assert(false);
-			}
-		}
-		else {
-			reportError(binary, "Error: Cannot compare %.*s to %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
-			return false;
-		}
-
-		expr->type = &TYPE_BOOL;
-
-		break;
-	}
-	case TOKEN('+'): opName = "add";
-	case TOKEN('-'): if (!opName) opName = "subtract"; {
-		if (left->type->flavor == right->type->flavor) {
-			switch (left->type->flavor) {
-			case TypeFlavor::FLOAT:
-			case TypeFlavor::INTEGER: {
-				break;
-			}
-			case TypeFlavor::ARRAY:
-			case TypeFlavor::BOOL:
-			case TypeFlavor::STRING:
-			case TypeFlavor::FUNCTION:
-			case TypeFlavor::TYPE:
-			case TypeFlavor::STRUCT:
-			case TypeFlavor::ENUM: {
-				reportError(binary, "Error: Cannot %s %ss", opName, TYPE_FLAVOR_NAME(left->type->flavor));
-				return false;
-			}
-			case TypeFlavor::POINTER: {
-				if (binary->op == TOKEN('+')) {
-					reportError(binary, "Error: Cannot add pointers");
-					return false;
-				}
-
-				if (left->type != right->type) {
-					reportError(binary, "Error: Cannot subtract %.*s and %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
-					return false;
-				}
-
-				auto pointer = static_cast<TypePointer *>(left->type);
-
-				addSizeDependency(job->sizeDependencies, pointer->pointerTo);
-
-				break;
-			}
-			default:
-				assert(false);
-			}
-		}
-		else {
-			if (left->type->flavor == TypeFlavor::POINTER && right->type->flavor == TypeFlavor::INTEGER) {
-				trySolidifyNumericLiteralToDefault(right);
-				auto pointer = static_cast<TypePointer *>(left->type);
-
-				if (right->type->size != 8) {
-					insertImplicitCast(job->sizeDependencies, &right, right->type->flags & TYPE_INTEGER_IS_SIGNED ? &TYPE_S64 : &TYPE_U64);
-				}
-
-				addSizeDependency(job->sizeDependencies, pointer->pointerTo);
-			}
-			else {
-				reportError(binary, "Error: Cannot %s %.*s and %.*s",
-					opName, STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
-				return false;
-			}
-		}
-
-		if (right->type->flavor == TypeFlavor::POINTER) {
-			expr->type = &TYPE_S64;
-		}
-		else {
-			expr->type = left->type;
-		}
-
-		break;
-	}
-	case TOKEN('&'):
-	case TokenT::AND_EQUALS: opName = "and";
-	case TOKEN('|'):
-	case TokenT::OR_EQUALS: if (!opName) opName = "or";
-	case TOKEN('^'):
-	case TokenT::XOR_EQUALS: if (!opName) opName = "xor"; {
-
-		if (left->type->flavor == right->type->flavor) {
-			switch (left->type->flavor) {
-			case TypeFlavor::INTEGER:
-			case TypeFlavor::BOOL: {
-				break;
-			}
-			case TypeFlavor::ARRAY:
-			case TypeFlavor::STRING:
-			case TypeFlavor::FLOAT:
-			case TypeFlavor::FUNCTION:
-			case TypeFlavor::POINTER:
-			case TypeFlavor::TYPE:
-			case TypeFlavor::STRUCT: {
-				reportError(binary, "Error: Cannot %s %ss", opName, TYPE_FLAVOR_NAME(left->type->flavor));
-				return false;
-			}
-			case TypeFlavor::ENUM: {
-				if (left->type->flags & right->type->flags & TYPE_ENUM_IS_FLAGS) {
-					if (left->type != right->type) {
-						reportError(binary, "Error: Cannot %s %.*s and %.*s", opName, STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
-						return false;
-					}
-				}
-				else {
-					reportError(binary, "Error: Cannot %s enums", opName);
-					return false;
-				}
-
-				break;
-			}
-			default:
-				assert(false);
-			}
-		}
-		else {
-			reportError(binary, "Error: Cannot %s %.*s and %.*s", opName, STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
-			return false;
-		}
-
-		expr->type = left->type;
-
-		break;
-	}
-	case TokenT::SHIFT_LEFT:
-	case TokenT::SHIFT_LEFT_EQUALS:
-	case TokenT::SHIFT_RIGHT:
-	case TokenT::SHIFT_RIGHT_EQUALS: {
-		if (left->type->flavor == right->type->flavor) {
-			if (left->type->flavor != TypeFlavor::INTEGER) {
-				reportError(binary, "Error: Cannot shift %ss", TYPE_FLAVOR_NAME(left->type->flavor));
-				return false;
-			}
-		}
-		else {
-			reportError(binary, "Error: Cannot shift %.*s by %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
-			return false;
-		}
-
-		expr->type = left->type;
-
-		break;
-	}
-	case TOKEN('*'):
-	case TokenT::TIMES_EQUALS: opName = "multiply";
-	case TOKEN('/'):
-	case TokenT::DIVIDE_EQUALS: if (!opName) opName = "divide";
-	case TOKEN('%'):
-	case TokenT::MOD_EQUALS: if (!opName) opName = "mod";  {
-		if (left->type->flavor == right->type->flavor) {
-			switch (left->type->flavor) {
-			case TypeFlavor::INTEGER:
-			case TypeFlavor::FLOAT: {
-				break;
-			}
-			case TypeFlavor::ARRAY:
-			case TypeFlavor::BOOL:
-			case TypeFlavor::STRING:
-			case TypeFlavor::FUNCTION:
-			case TypeFlavor::POINTER:
-			case TypeFlavor::TYPE:
-			case TypeFlavor::STRUCT:
-			case TypeFlavor::ENUM: {
-				reportError(binary, "Error: Cannot %s %ss", opName, TYPE_FLAVOR_NAME(left->type->flavor));
-				return false;
-			}
-			default:
-				assert(false);
-			}
-		}
-		else {
-			reportError(binary, "Error: Cannot %s %.*s and %.*s", opName, STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
-			return false;
-		}
-
-		expr->type = left->type;
-
-		break;
-	}
-	case TOKEN('='): {
-		assert(right);
-
-		if (!assignOp(job, binary, left->type, binary->right, yield)) {
-			if (*yield) {
-				return true;
-			}
-			else {
-				return false;
-			}
-		}
-
-		break;
-	}
-	case TokenT::PLUS_EQUALS:
-	case TokenT::MINUS_EQUALS: {
-		if (left->type->flavor == right->type->flavor) {
-			switch (left->type->flavor) {
-			case TypeFlavor::FLOAT:
-			case TypeFlavor::INTEGER: {
-				break;
-			}
-			case TypeFlavor::ARRAY:
-			case TypeFlavor::BOOL:
-			case TypeFlavor::STRING:
-			case TypeFlavor::FUNCTION:
-			case TypeFlavor::TYPE:
-			case TypeFlavor::STRUCT:
-			case TypeFlavor::ENUM: {
-				reportError(binary, "Error: Cannot %s %ss", binary->op == TokenT::PLUS_EQUALS ? "add" : "subtract", TYPE_FLAVOR_NAME(left->type->flavor));
-				return false;
-			}
-			case TypeFlavor::POINTER: {
-				if (binary->op == TokenT::PLUS_EQUALS) {
-					reportError(binary, "Error: Cannot add pointers");
-				}
-				else {
-					reportError(binary, "Error: Cannot '-=' two pointers, the result of '-' gives s64 which cannot be assigned to %.*s", STRING_PRINTF(left->type->name));
-				}
-
-				return false;
-			}
-			default:
-				assert(false);
-			}
-		}
-		else {
-			if (left->type->flavor == TypeFlavor::POINTER && right->type->flavor == TypeFlavor::INTEGER) {
-				trySolidifyNumericLiteralToDefault(right);
-				auto pointer = static_cast<TypePointer *>(left->type);
-
-				if (right->type->size != 8) {
-					insertImplicitCast(job->sizeDependencies, &right, right->type->flags & TYPE_INTEGER_IS_SIGNED ? &TYPE_S64 : &TYPE_U64);
-				}
-
-				addSizeDependency(job->sizeDependencies, pointer->pointerTo);
-			}
-			else {
-				reportError(binary, "Error: Cannot %s %.*s to %.*s",
-					binary->op == TokenT::PLUS_EQUALS ? "add" : "subtract", STRING_PRINTF(right->type->name), STRING_PRINTF(left->type->name));
-				return false;
-			}
-		}
-
-		expr->type = left->type;
-
-		break;
-	}
-	case TokenT::LOGIC_AND:
-	case TokenT::LOGIC_OR: {
-
-		if (!coerceToBool(job, &binary->left, yield))
-			return *yield;
-
-		if (!coerceToBool(job, &binary->right, yield))
-			return *yield;
-
-		expr->type = &TYPE_BOOL;
-
-		break;
-	}
 	case TokenT::ARRAY_TYPE: {
 		if (!coerceToConstantType(job, &right, "Array element", yield))
 			return *yield;
@@ -4482,16 +3728,353 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 
 		break;
 	}
-	default:
-		assert(false);
-		return false;
-	}
+	case TOKEN('['): {
+		trySolidifyNumericLiteralToDefault(right);
 
-	if ((*exprPointer)->flavor == ExprFlavor::BINARY_OPERATOR) {
-		if (!evaluateConstantBinary(job, exprPointer, yield)) {
+		if (right->type->flavor != TypeFlavor::INTEGER) {
+			reportError(right, "Error: Array index must be an integer");
+			return false;
+		}
+
+
+		if (right->type->size != 8) {
+			insertImplicitCast(job->sizeDependencies, &right, right->type->flags & TYPE_INTEGER_IS_SIGNED ? &TYPE_S64 : &TYPE_U64);
+		}
+
+		if (left->type->flavor == TypeFlavor::POINTER) {
+			TypePointer *pointer = static_cast<TypePointer *>(left->type);
+
+			if (pointer->pointerTo == &TYPE_VOID) {
+				reportError(binary, "Error: Cannot read from a void pointer");
+				return false;
+			}
+
+			assert(!(pointer->pointerTo->flags & TYPE_IS_INTERNAL));
+
+			expr->type = pointer->pointerTo;
+		}
+		else if (left->type->flavor == TypeFlavor::STRING) {
+			trySolidifyNumericLiteralToDefault(right);
+
+			expr->type = &TYPE_U8;
+		}
+		else if (left->type->flavor == TypeFlavor::ARRAY) {
+			trySolidifyNumericLiteralToDefault(right);
+
+			addSizeDependency(job->sizeDependencies, left->type);
+
+			expr->type = static_cast<TypeArray *>(left->type)->arrayOf;
+		}
+		else {
+			reportError(binary->left, "Error: Cannot index a %.*s", STRING_PRINTF(left->type->name));
+			return false;
+		}
+
+		addSizeDependency(job->sizeDependencies, expr->type);
+
+		break;
+	}
+	case TokenT::CAST: {
+		if (!coerceToConstantType(job, &left, "Cast", yield)) {
 			return *yield;
 		}
+
+		assert(left->flavor == ExprFlavor::TYPE_LITERAL);
+
+		Type *castTo = static_cast<ExprLiteral *>(left)->typeValue;
+		trySolidifyNumericLiteralToDefault(right);
+
+		if (!(binary->flags & EXPR_CAST_IS_BITWISE) && tryUsingConversion(job, castTo, &right)) {
+			*yield = true;
+			return true;
+		}
+		else {
+			if (!isValidCast(job, castTo, right->type, binary->flags, yield)) {
+				if (*yield) return true;
+				reportError(binary, "Error: Cannot cast from %.*s to %.*s", STRING_PRINTF(right->type->name), STRING_PRINTF(castTo->name));
+				return false;
+			}
+
+			expr->type = castTo;
+
+			if ((right->type->flags & TYPE_ARRAY_IS_FIXED) && castTo->flavor == TypeFlavor::ARRAY && !(castTo->flags & TYPE_ARRAY_IS_FIXED)) {
+				markDeclarationsAsPointedTo(right);
+			}
+		}
+		break;
 	}
+	case TokenT::LOGIC_AND:
+	case TokenT::LOGIC_OR: {
+		if (!coerceToBool(job, &binary->left, yield))
+			return *yield;
+
+		if (!coerceToBool(job, &binary->right, yield))
+			return *yield;
+
+		expr->type = &TYPE_BOOL;
+
+		break;
+	}
+	case TokenT::EQUAL:
+	case TokenT::NOT_EQUAL:
+	case TokenT::GREATER_EQUAL:
+	case TokenT::LESS_EQUAL:
+	case TOKEN('>'):
+	case TOKEN('<'):
+	case TOKEN('+'):
+	case TOKEN('-'):
+	case TOKEN('&'):
+	case TOKEN('|'):
+	case TOKEN('^'):
+	case TokenT::SHIFT_LEFT:
+	case TokenT::SHIFT_RIGHT:
+	case TOKEN('*'):
+	case TOKEN('/'):
+	case TOKEN('%'): {
+		if (left->type->flavor == TypeFlavor::AUTO_CAST && right->type->flavor == TypeFlavor::AUTO_CAST) {
+			reportError(binary, "Error: Cannot infer the type of an expression when the sides are %.*s and %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
+			return false;
+		}
+
+		bool handled = left->type == right->type;
+
+		if (binary->op == TOKEN('+')) {
+			if (left->type->flavor == TypeFlavor::POINTER && right->type->flavor == TypeFlavor::POINTER) {
+				reportError(binary, "Error: Cannot add pointers %.*s and %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
+				return false;
+			}
+			else if (left->type->flavor == TypeFlavor::POINTER && right->type->flavor == TypeFlavor::INTEGER) {
+				if (right->type->size != 8) {
+					insertImplicitCast(job->sizeDependencies, &right, right->type->flags & TYPE_INTEGER_IS_SIGNED ? &TYPE_S64 : &TYPE_U64);
+				}
+
+				binary->type = left->type;
+
+				break;
+			}
+			else if (left->type->flavor == TypeFlavor::INTEGER && right->type->flavor == TypeFlavor::POINTER) {
+				if (left->type->size != 8) {
+					insertImplicitCast(job->sizeDependencies, &left, left->type->flags & TYPE_INTEGER_IS_SIGNED ? &TYPE_S64 : &TYPE_U64);
+				}
+
+				binary->type = right->type;
+
+				break;
+			}
+		}
+		else if (binary->op == TOKEN('-')) {
+			// Prevent implicit conversion from between pointer types or *void-function when doing pointer subtraction
+			if ((left->type->flavor == TypeFlavor::POINTER || left->type->flavor == TypeFlavor::FUNCTION) && (right->type->flavor == TypeFlavor::POINTER || right->type->flavor == TypeFlavor::FUNCTION)) {
+
+				if (left->type != right->type || left->type->flavor == TypeFlavor::FUNCTION) {
+					reportError(binary, "Error: Cannot subtract %.*s and %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
+					return false;
+				}
+				else {
+					binary->type = &TYPE_S64;
+					break;
+				}
+			}
+			else if (left->type->flavor == TypeFlavor::POINTER && right->type->flavor == TypeFlavor::INTEGER) {
+				if (right->type->size != 8) {
+					insertImplicitCast(job->sizeDependencies, &right, right->type->flags & TYPE_INTEGER_IS_SIGNED ? &TYPE_S64 : &TYPE_U64);
+				}
+
+				binary->type = left->type;
+
+				break;
+			}
+		}
+
+		if (left->type != right->type) {
+			if (getConversionCost(job, left->type, right, yield) == ConversionCost::CANNOT_CONVERT) {
+				if (*yield)
+					return true;
+
+				if (getConversionCost(job, right->type, left, yield) == ConversionCost::CANNOT_CONVERT) {
+					if (*yield)
+						return true;
+
+					reportError("Error: Cannot %s %.*s and %.*s", binaryOpName(binary->op), STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
+					return false;
+				}
+				else {
+					if (!assignOp(job, binary, right->type, left, yield))
+						return *yield;
+				}
+			}
+			else {
+				if (!assignOp(job, binary, left->type, right, yield))
+					return *yield;
+			}
+		}
+
+		switch (binary->op) {
+		case TokenT::EQUAL:
+		case TokenT::NOT_EQUAL: {
+			if (left->type->flavor == TypeFlavor::ARRAY || left->type->flavor == TypeFlavor::STRUCT) {
+				reportError("Error: Cannot compare %.*s's", STRING_PRINTF(left->type->name));
+				return false;
+			}
+
+			expr->type = &TYPE_BOOL;
+			break;
+		}
+		case TokenT::GREATER_EQUAL:
+		case TokenT::LESS_EQUAL:
+		case TOKEN('>'):
+		case TOKEN('<'): {
+			if (left->type->flavor != TypeFlavor::INTEGER && left->type->flavor != TypeFlavor::FLOAT) {
+				reportError("Error: Cannot compare %.*s's", STRING_PRINTF(left->type->name));
+				return false;
+			}
+
+			expr->type = &TYPE_BOOL;
+			break;
+		}
+		case TOKEN('*'):
+		case TOKEN('/'):
+		case TOKEN('%'):
+		case TOKEN('+'):
+		case TOKEN('-'): {
+			if (left->type->flavor != TypeFlavor::INTEGER && left->type->flavor != TypeFlavor::FLOAT) {
+				reportError("Error: Cannot %s %.*s's", binaryOpName(binary->op), STRING_PRINTF(left->type->name));
+				return false;
+			}
+
+			expr->type = left->type;
+			break;
+		}
+		case TOKEN('&'):
+		case TOKEN('|'):
+		case TOKEN('^'): {
+			if (left->type->flavor == TypeFlavor::BOOL || left->type->flavor == TypeFlavor::INTEGER) {
+				// Valid
+			}
+			else if (left->type->flavor == TypeFlavor::ENUM) {
+				if (!(left->type->flags & TYPE_ENUM_IS_FLAGS)) {
+					reportError(binary, "Error: Cannot %s %.*s's, they are an enum. This operation can only be performed on enum_flags", binaryOpName(binary->op), STRING_PRINTF(left->type->name));
+					return false;
+
+				}
+			}
+			else {
+				reportError(binary, "Error: Cannot %s %.*s's", binaryOpName(binary->op), STRING_PRINTF(left->type->name));
+				return false;
+			}
+
+			expr->type = left->type;
+			break;
+		}
+		case TokenT::SHIFT_LEFT:
+		case TokenT::SHIFT_RIGHT: {
+			if (left->type->flavor != TypeFlavor::INTEGER) {
+				reportError("Error: Cannot shift %.*s's", STRING_PRINTF(left->type->name));
+				return false;
+			}
+			
+			expr->type = left->type;
+			break;
+		}
+		default:
+			assert(false);
+		}
+
+
+		break;
+	}
+	case TOKEN('='):
+	case TokenT::PLUS_EQUALS:
+	case TokenT::MINUS_EQUALS:
+	case TokenT::AND_EQUALS:
+	case TokenT::OR_EQUALS:
+	case TokenT::XOR_EQUALS:
+	case TokenT::SHIFT_LEFT_EQUALS:
+	case TokenT::SHIFT_RIGHT_EQUALS:
+	case TokenT::TIMES_EQUALS:
+	case TokenT::DIVIDE_EQUALS:
+	case TokenT::MOD_EQUALS: {
+		if (!isAddressable(left)) {
+			// @Incomplete: better error messages here
+			//  - If we were assigning to a constant
+			//  - If we were assigning to an r-value pointer
+
+			reportError(binary, "Error: Left side of binary is not assignable");
+			return false;
+		}
+
+
+		if (left->type->flavor == TypeFlavor::POINTER && (binary->op == TokenT::PLUS_EQUALS || binary->op == TokenT::MINUS_EQUALS)) {
+			if (right->type->flavor == TypeFlavor::INTEGER) {
+				trySolidifyNumericLiteralToDefault(right);
+				if (right->type->size != 8) {
+					insertImplicitCast(job->sizeDependencies, &right, right->type->flags & TYPE_INTEGER_IS_SIGNED ? &TYPE_S64 : &TYPE_U64);
+				}
+			}
+			else {
+				reportError(binary, "Error: Cannot %s a *.*s and a %.*s", binaryOpName(binary->op), STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
+				return false;
+			}
+			break;
+		}
+
+
+		if (!assignOp(job, binary, left->type, right, yield)) {
+			return *yield;
+		}
+
+		switch (binary->op) {
+		case TokenT::AND_EQUALS:
+		case TokenT::OR_EQUALS:
+		case TokenT::XOR_EQUALS: {
+			if (left->type->flavor == TypeFlavor::BOOL || left->type->flavor == TypeFlavor::INTEGER) {
+				// Valid
+			}
+			else if (left->type->flavor == TypeFlavor::ENUM) {
+				if (!(left->type->flags & TYPE_ENUM_IS_FLAGS)) {
+					reportError(binary, "Error: Cannot %s %.*s's, they are an enum. This operation can only be performed on enum_flags", binaryOpName(binary->op), STRING_PRINTF(left->type->name));
+					return false;
+
+				}
+			}
+			else {
+				reportError(binary, "Error: Cannot %s %.*s's", binaryOpName(binary->op), STRING_PRINTF(left->type->name));
+				return false;
+			}
+
+			break;
+		}
+		case TokenT::SHIFT_LEFT_EQUALS:
+		case TokenT::SHIFT_RIGHT_EQUALS: {
+			if (left->type->flavor != TypeFlavor::INTEGER) {
+				reportError(binary, "Error: Cannot %s %.*s's", binaryOpName(binary->op), STRING_PRINTF(left->type->name));
+				return false;
+			}
+			break;
+		}
+		case TokenT::PLUS_EQUALS:
+		case TokenT::MINUS_EQUALS:
+		case TokenT::TIMES_EQUALS:
+		case TokenT::DIVIDE_EQUALS:
+		case TokenT::MOD_EQUALS: {
+			if (left->type->flavor != TypeFlavor::INTEGER && left->type->flavor != TypeFlavor::FLOAT) {
+				reportError(binary, "Error: Cannot %s %.*s's", binaryOpName(binary->op), STRING_PRINTF(left->type->name));
+				return false;
+			}
+			break;
+		}
+		}
+
+		break;
+	}
+	default:
+		assert(false);
+	}
+
+	
+	if ((*exprPointer)->flavor == ExprFlavor::BINARY_OPERATOR)
+		if (!evaluateConstantBinary(job, exprPointer, yield))
+			return *yield;
 
 	return true;
 }

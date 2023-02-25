@@ -58,13 +58,13 @@ template<typename T, u32 bucketSize = 1024>
 struct BucketArray {
 	BucketedArenaAllocator allocator;
 
-	BucketArray() : allocator(sizeof(T) *bucketSize) {}
+	BucketArray() : allocator(sizeof(T) * bucketSize) {}
 
 	T *add(const T &value) {
 		allocator.ensure(sizeof(value));
 
 		T *result = reinterpret_cast<T *>(allocator.current->memory);
-		allocator.add(&value, sizeof(value));
+		allocator.addUnchecked(&value, sizeof(value));
 
 		return result;
 	}

@@ -57,7 +57,7 @@
 
   <Type Name="Ir">
     <DisplayString Condition="op == IrOp::STRING">STRING {dest} &lt;- "{((ExprStringLiteral*)data)->string}"</DisplayString>
-  <DisplayString Condition="op == IrOp::CALL">CALL_{opSize*8} {dest} &lt;- {a} {&amp;((FunctionCall*)data)->args[0],[((FunctionCall*)data)->argCount]na}</DisplayString>
+    <DisplayString Condition="op == IrOp::CALL">CALL_{opSize*8} {dest} &lt;- {a} {&amp;((FunctionCall*)data)->args[0],[((FunctionCall*)data)->argCount]na}</DisplayString>
     <DisplayString Condition="op == IrOp::FUNCTION &amp;&amp; function->valueOfDeclaration">FUNCTION {dest} &lt;- {function->valueOfDeclaration->name}</DisplayString>
     <DisplayString Condition="op == IrOp::SET">SET_{opSize*8} {dest} &lt;- {a}</DisplayString>
     <DisplayString Condition="op == IrOp::IF_Z_GOTO || op == IrOp::IF_NZ_GOTO">{op,en}_{opSize*8} {a}, {b}</DisplayString>
@@ -74,6 +74,10 @@
 
   <Type Name="Declaration">
     <DisplayString>Decl{{{name}}}</DisplayString>
+  </Type>
+
+  <Type Name="CodeLocation">
+    <DisplayString>{compilerFiles.storage[fileUid]->path}:{line},{column}</DisplayString>
   </Type>
 
 </AutoVisualizer>
