@@ -2,107 +2,107 @@
 #import "Standard"
 
 initialize_sound_os :: (hwnd: HWND) -> #must bool {
-	if FAILED(DirectSoundCreate(ppDs = *direct_sound)) return false
+    if FAILED(DirectSoundCreate(ppDs = *direct_sound)) return false
 
-	if FAILED(direct_sound.SetCooperativeLevel(direct_sound, hwnd, DSSCL_PRIORITY)) return false
-	
-	primary_buffer_description: DSBUFFERDESC
-	primary_buffer_description.dwFlags = DSBCAPS_PRIMARYBUFFER
-	
-	
-	if FAILED(direct_sound.CreateSoundBuffer(direct_sound, *primary_buffer_description, *primary_buffer, null)) return false
-	
-	buffer_format: WAVEFORMATEX
-	buffer_format.nChannels = size_of(Sample) / size_of(s16)
-	buffer_format.nSamplesPerSec = SAMPLE_RATE
-	buffer_format.wBitsPerSample = size_of(s16) * 8
-	buffer_format.nBlockAlign = size_of(Sample)
-	buffer_format.nAvgBytesPerSec = buffer_format.nBlockAlign * buffer_format.nSamplesPerSec
-	
-	if FAILED(primary_buffer.SetFormat(primary_buffer, *buffer_format)) return false
-	
-	secondary_buffer_size = buffer_sample_count * buffer_format.nBlockAlign
-	secondary_buffer_description: DSBUFFERDESC
-	secondary_buffer_description.dwBufferBytes = secondary_buffer_size
-	secondary_buffer_description.lpwfxFormat = *buffer_format
-	
-	if FAILED(direct_sound.CreateSoundBuffer(direct_sound, *secondary_buffer_description, *secondary_buffer, null)) return false
-	
-	
-	if !fill_samples_os(0, size_of(Sample) * latency_sample_count) return false
-	
-	if FAILED(secondary_buffer.Play(secondary_buffer, 0, 0, DSBPLAY_LOOPING)) return false
-	
-	return true
+    if FAILED(direct_sound.SetCooperativeLevel(direct_sound, hwnd, DSSCL_PRIORITY)) return false
+    
+    primary_buffer_description: DSBUFFERDESC
+    primary_buffer_description.dwFlags = DSBCAPS_PRIMARYBUFFER
+    
+    
+    if FAILED(direct_sound.CreateSoundBuffer(direct_sound, *primary_buffer_description, *primary_buffer, null)) return false
+    
+    buffer_format: WAVEFORMATEX
+    buffer_format.nChannels = size_of(Sample) / size_of(s16)
+    buffer_format.nSamplesPerSec = SAMPLE_RATE
+    buffer_format.wBitsPerSample = size_of(s16) * 8
+    buffer_format.nBlockAlign = size_of(Sample)
+    buffer_format.nAvgBytesPerSec = buffer_format.nBlockAlign * buffer_format.nSamplesPerSec
+    
+    if FAILED(primary_buffer.SetFormat(primary_buffer, *buffer_format)) return false
+    
+    secondary_buffer_size = cast() buffer_sample_count * buffer_format.nBlockAlign
+    secondary_buffer_description: DSBUFFERDESC
+    secondary_buffer_description.dwBufferBytes = secondary_buffer_size
+    secondary_buffer_description.lpwfxFormat = *buffer_format
+    
+    if FAILED(direct_sound.CreateSoundBuffer(direct_sound, *secondary_buffer_description, *secondary_buffer, null)) return false
+    
+    
+    if !fill_samples_os(0, size_of(Sample) * latency_sample_count) return false
+    
+    if FAILED(secondary_buffer.Play(secondary_buffer, 0, 0, DSBPLAY_LOOPING)) return false
+    
+    return true
 }
 
-sample_index: u32
+sample_index: u64
 
-fill_samples_os :: (write_pointer: u32, write_bytes: u32) -> bool {
-	
-	region1: *void
-	region1_size: u32
-	region2: *void
-	region2_size: u32
+fill_samples_os :: (write_pointer: u64, write_bytes: u64) -> bool {
+    
+    region1: *void
+    region1_size: u32
+    region2: *void
+    region2_size: u32
 
-	if FAILED(secondary_buffer.Lock(secondary_buffer, write_pointer, write_bytes, *region1, *region1_size, *region2, *region2_size, 0)) return false
-	
-	sample_buffer.count = write_bytes / size_of(Sample)
-	
-	fill_samples(sample_buffer, sample_index)
-	
-	sample_index += cast(u32) sample_buffer.count
-	
-	memory_copy(region1, sample_buffer.data, region1_size)
-	memory_copy(region2, cast(*void) sample_buffer.data + region1_size, region2_size)
-	
-	if FAILED(secondary_buffer.Unlock(secondary_buffer, region1, region1_size, region2, region2_size)) return false
-	
-	return true
+    if FAILED(secondary_buffer.Lock(secondary_buffer, cast() write_pointer, cast() write_bytes, *region1, *region1_size, *region2, *region2_size, 0)) return false
+    
+    sample_buffer.count = write_bytes / size_of(Sample)
+    
+    fill_samples(sample_buffer, sample_index)
+    
+    sample_index += sample_buffer.count
+    
+    memory_copy(region1, sample_buffer.data, region1_size)
+    memory_copy(region2, cast(*void) sample_buffer.data + region1_size, region2_size)
+    
+    if FAILED(secondary_buffer.Unlock(secondary_buffer, region1, region1_size, region2, region2_size)) return false
+    
+    return true
 }
 
 
 fill_sound :: () -> bool {
-	
-	play_cursor: u32
-	
-	if FAILED(secondary_buffer.GetCurrentPosition(secondary_buffer, *play_cursor, null)) return false
+    
+    play_cursor: u32
+    
+    if FAILED(secondary_buffer.GetCurrentPosition(secondary_buffer, *play_cursor, null)) return false
 
-	write_pointer := sample_index * size_of(Sample) % secondary_buffer_size
-	write_bytes: u32
-	
-	target_cursor := (play_cursor + latency_sample_count * size_of(Sample)) % secondary_buffer_size
-	
-	if write_pointer > target_cursor {
-		write_bytes = secondary_buffer_size - write_pointer
-		write_bytes += target_cursor
-	} else {
-		write_bytes = target_cursor - write_pointer
-	}
-	
-	fill_samples_os(write_pointer, write_bytes)
-	
-	return true
+    write_pointer := sample_index * size_of(Sample) % secondary_buffer_size
+    write_bytes: u64
+    
+    target_cursor := (play_cursor + latency_sample_count * size_of(Sample)) % secondary_buffer_size
+    
+    if write_pointer > target_cursor {
+        write_bytes = secondary_buffer_size - write_pointer
+        write_bytes += target_cursor
+    } else {
+        write_bytes = target_cursor - write_pointer
+    }
+    
+    fill_samples_os(write_pointer, write_bytes)
+    
+    return true
 }
 
 // cleanup_sound doesn't need to be called unless the program continues to run after sound system is done
 // if the program is exiting, the DirectSound objects will be automatically cleaned by the OS in a much 
 // faster way
 cleanup_sound :: () {
-	if secondary_buffer {
-		secondary_buffer.Release(secondary_buffer)
-		secondary_buffer = null
-	}
-	
-	if primary_buffer {
-		primary_buffer.Release(primary_buffer)
-		primary_buffer = null
-	}
-		
-	if direct_sound {
-		direct_sound.Release(direct_sound)
-		direct_sound = null
-	}
+    if secondary_buffer {
+        secondary_buffer.Release(secondary_buffer)
+        secondary_buffer = null
+    }
+    
+    if primary_buffer {
+        primary_buffer.Release(primary_buffer)
+        primary_buffer = null
+    }
+        
+    if direct_sound {
+        direct_sound.Release(direct_sound)
+        direct_sound = null
+    }
 }
 
 // To allow use of the DirectSound API directly remove the #scope_module
@@ -114,70 +114,70 @@ secondary_buffer: *IDirectSoundBuffer
 secondary_buffer_size: u32
 
 SUCCEEDED :: (hr: s32) -> bool {
-	return hr >= 0
+    return hr >= 0
 }
 
 FAILED :: (hr: s32) -> bool {
-	return hr < 0
+    return hr < 0
 }
 
 IUnkown :: struct {
-	Vtable :: struct {
-		QueryInterface: (this: *IUnkown, pp: **void) -> s32
-		AddRef:         (this: *IUnkown) -> u32
-		Release:        (this: *IUnkown) -> u32
-	}
-	
-	using vtable: *Vtable
+    Vtable :: struct {
+        QueryInterface: (this: *IUnkown, pp: **void) -> s32
+        AddRef:         (this: *IUnkown) -> u32
+        Release:        (this: *IUnkown) -> u32
+    }
+    
+    using vtable: *Vtable
 }
 WAVEFORMATEX :: struct {
-	Tag :: enum u16 {
-		WAVE_FORMAT_PCM :: 1
-	}
-	
-	wFormatTag := Tag.WAVE_FORMAT_PCM
-	nChannels:       u16
-	nSamplesPerSec:  u32
-	nAvgBytesPerSec: u32
-	nBlockAlign:     u16
-	wBitsPerSample:  u16
-	cbSize:          u16
+    Tag :: enum u16 {
+        WAVE_FORMAT_PCM :: 1
+    }
+    
+    wFormatTag := Tag.WAVE_FORMAT_PCM
+    nChannels:       u16
+    nSamplesPerSec:  u32
+    nAvgBytesPerSec: u32
+    nBlockAlign:     u16
+    wBitsPerSample:  u16
+    cbSize:          u16
 }
 
 using WAVEFORMATEX.Tag
 
 DSBUFFERDESC :: struct {
-	dwSize:          u32 = size_of(DSBUFFERDESC)
-	dwFlags:         Flags
-	dwBufferBytes:   u32
-	dwReserved:      u32
-	lpwfxFormat:     *WAVEFORMATEX
-	guid3DAlgorithm: GUID
-	
-	Flags :: enum_flags u32 {
-		DSBCAPS_PRIMARYBUFFER       :: 0x____1
-		DSBCAPS_STATIC              :: 0x____2
-		DSBCAPS_LOCHARDWARE         :: 0x____4
-		DSBCAPS_LOCSOFTWARE         :: 0x____8
-		DSBCAPS_CTRL3D              :: 0x___10
-		DSBCAPS_CTRLFREQUENCY       :: 0x___20
-		DSBCAPS_CTRLPAN             :: 0x___40
-		DSBCAPS_CTRLVOLUME          :: 0x___80
-		DSBCAPS_CTRLPOSITIONNOTIFY  :: 0x__100
-		DSBCAPS_CTRLFX              :: 0x__200
-		DSBCAPS_STICKYFOCUS         :: 0x_4000
-		DSBCAPS_GLOBALFOCUS         :: 0x_8000
-		DSBCAPS_GETCURRENTPOSITION2 :: 0x10000
-		DSBCAPS_MUTE3DATMAXDISTANCE :: 0x20000
-		DSBCAPS_LOCDEFER            :: 0x40000
-		DSBCAPS_TRUEPLAYPOSITION    :: 0x80000
-	}
+    dwSize:          u32 = size_of(DSBUFFERDESC)
+    dwFlags:         Flags
+    dwBufferBytes:   u32
+    dwReserved:      u32
+    lpwfxFormat:     *WAVEFORMATEX
+    guid3DAlgorithm: GUID
+    
+    Flags :: enum_flags u32 {
+        DSBCAPS_PRIMARYBUFFER       :: 0x____1
+        DSBCAPS_STATIC              :: 0x____2
+        DSBCAPS_LOCHARDWARE         :: 0x____4
+        DSBCAPS_LOCSOFTWARE         :: 0x____8
+        DSBCAPS_CTRL3D              :: 0x___10
+        DSBCAPS_CTRLFREQUENCY       :: 0x___20
+        DSBCAPS_CTRLPAN             :: 0x___40
+        DSBCAPS_CTRLVOLUME          :: 0x___80
+        DSBCAPS_CTRLPOSITIONNOTIFY  :: 0x__100
+        DSBCAPS_CTRLFX              :: 0x__200
+        DSBCAPS_STICKYFOCUS         :: 0x_4000
+        DSBCAPS_GLOBALFOCUS         :: 0x_8000
+        DSBCAPS_GETCURRENTPOSITION2 :: 0x10000
+        DSBCAPS_MUTE3DATMAXDISTANCE :: 0x20000
+        DSBCAPS_LOCDEFER            :: 0x40000
+        DSBCAPS_TRUEPLAYPOSITION    :: 0x80000
+    }
 }
 
 using DSBUFFERDESC.Flags
 
 DSCAPS :: struct {
-    dwSize:                         u32 = size_of(DSCAPS)	
+    dwSize:                         u32 = size_of(DSCAPS)    
     dwFlags:                        u32
     dwMinSecondarySampleRate:       u32
     dwMaxSecondarySampleRate:       u32
@@ -201,61 +201,61 @@ DSCAPS :: struct {
     dwPlayCpuOverheadSwBuffers:     u32
     dwReserved1:                    u32
     dwReserved2:                    u32
-	
-	Flags :: enum_flags u32 {
-		DSCAPS_PRIMARYMONO     :: 0x__1
-		DSCAPS_PRIMARYSTEREO   :: 0x__2
-		DSCAPS_PRIMARY8BIT     :: 0x__4
-		DSCAPS_PRIMARY16BIT    :: 0x__8
-		DSCAPS_CONTINUOUSRATE  :: 0x_10
-		DSCAPS_EMULDRIVER      :: 0x_20
-		DSCAPS_CERTIFIED       :: 0x_40
-		DSCAPS_SECONDARYMONO   :: 0x100
-		DSCAPS_SECONDARYSTEREO :: 0x200
-		DSCAPS_SECONDARY8BIT   :: 0x400
-		DSCAPS_SECONDARY16BIT  :: 0x800
-	}
+    
+    Flags :: enum_flags u32 {
+        DSCAPS_PRIMARYMONO     :: 0x__1
+        DSCAPS_PRIMARYSTEREO   :: 0x__2
+        DSCAPS_PRIMARY8BIT     :: 0x__4
+        DSCAPS_PRIMARY16BIT    :: 0x__8
+        DSCAPS_CONTINUOUSRATE  :: 0x_10
+        DSCAPS_EMULDRIVER      :: 0x_20
+        DSCAPS_CERTIFIED       :: 0x_40
+        DSCAPS_SECONDARYMONO   :: 0x100
+        DSCAPS_SECONDARYSTEREO :: 0x200
+        DSCAPS_SECONDARY8BIT   :: 0x400
+        DSCAPS_SECONDARY16BIT  :: 0x800
+    }
 }
 
 using DSCAPS.Flags
 
 IDirectSound :: struct {
-	Vtable :: struct {
-		using iunkown_vtable: IUnkown.Vtable
-		
-		CreateSoundBuffer:    (this: *IDirectSound, pcDSBufferDesc: *DSBUFFERDESC, ppDSBuffer: **IDirectSoundBuffer, pUnkOuter: *IUnkown) -> s32 #c_call
-		GetCaps:              (this: *IDirectSound, pDSCaps: *DSCAPS)                                                                     -> s32 #c_call
-		DuplicateSoundBuffer: (this: *IDirectSound, pDSBufferOriginal: *IDirectSoundBuffer, ppDSBuffer: **IDirectSoundBuffer)             -> s32 #c_call
-		SetCooperativeLevel:  (this: *IDirectSound, hwnd: HWND, dwLevel: Cooperative_Level)                                               -> s32 #c_call
-		Compact:              (this: *IDirectSound)                                                                                       -> s32 #c_call
-		GetSpeakerConfig:     (this: *IDirectSound, pdwSpeakerConfig: *Speaker_Config)                                                    -> s32 #c_call
-		SetSpeakerConfig:     (this: *IDirectSound, dwSpeakerConfig: Speaker_Config)                                                      -> s32 #c_call
-		Initalize:            (this: *IDirectSound, pcGuidDevice: *GUID)                                                                  -> s32 #c_call
-	}
-	
-	using vtable: *Vtable
-	
-	Cooperative_Level :: enum u32 {
-		DSSCL_NORMAL       :: 0x1
-		DSSCL_PRIORITY     :: 0x2
-		DSSCL_EXCLUSIVE    :: 0x3
-		DSSCL_WRITEPRIMARY :: 0x4
-	}
-	
-	Speaker_Config :: enum u32 {
-		DSSPEAKER_DIRECTOUT        :: 0x0
-		DSSPEAKER_HEADPHONE        :: 0x1
-		DSSPEAKER_MONO             :: 0x2
-		DSSPEAKER_QUAD             :: 0x3
-		DSSPEAKER_STEREO           :: 0x4
-		DSSPEAKER_SURROUND         :: 0x5
-		DSSPEAKER_5POINT1          :: 0x6  // obsolete 5.1 setting
-		DSSPEAKER_7POINT1          :: 0x7  // obsolete 7.1 setting
-		DSSPEAKER_7POINT1_SURROUND :: 0x8  // correct 7.1 Home Theater setting
-		DSSPEAKER_5POINT1_SURROUND :: 0x9  // correct 5.1 setting
-		DSSPEAKER_7POINT1_WIDE     :: DSSPEAKER_7POINT1
-		DSSPEAKER_5POINT1_BACK     :: DSSPEAKER_5POINT1
-	}
+    Vtable :: struct {
+        using iunkown_vtable: IUnkown.Vtable
+        
+        CreateSoundBuffer:    (this: *IDirectSound, pcDSBufferDesc: *DSBUFFERDESC, ppDSBuffer: **IDirectSoundBuffer, pUnkOuter: *IUnkown) -> s32 #c_call
+        GetCaps:              (this: *IDirectSound, pDSCaps: *DSCAPS)                                                                     -> s32 #c_call
+        DuplicateSoundBuffer: (this: *IDirectSound, pDSBufferOriginal: *IDirectSoundBuffer, ppDSBuffer: **IDirectSoundBuffer)             -> s32 #c_call
+        SetCooperativeLevel:  (this: *IDirectSound, hwnd: HWND, dwLevel: Cooperative_Level)                                               -> s32 #c_call
+        Compact:              (this: *IDirectSound)                                                                                       -> s32 #c_call
+        GetSpeakerConfig:     (this: *IDirectSound, pdwSpeakerConfig: *Speaker_Config)                                                    -> s32 #c_call
+        SetSpeakerConfig:     (this: *IDirectSound, dwSpeakerConfig: Speaker_Config)                                                      -> s32 #c_call
+        Initalize:            (this: *IDirectSound, pcGuidDevice: *GUID)                                                                  -> s32 #c_call
+    }
+    
+    using vtable: *Vtable
+    
+    Cooperative_Level :: enum u32 {
+        DSSCL_NORMAL       :: 0x1
+        DSSCL_PRIORITY     :: 0x2
+        DSSCL_EXCLUSIVE    :: 0x3
+        DSSCL_WRITEPRIMARY :: 0x4
+    }
+    
+    Speaker_Config :: enum u32 {
+        DSSPEAKER_DIRECTOUT        :: 0x0
+        DSSPEAKER_HEADPHONE        :: 0x1
+        DSSPEAKER_MONO             :: 0x2
+        DSSPEAKER_QUAD             :: 0x3
+        DSSPEAKER_STEREO           :: 0x4
+        DSSPEAKER_SURROUND         :: 0x5
+        DSSPEAKER_5POINT1          :: 0x6  // obsolete 5.1 setting
+        DSSPEAKER_7POINT1          :: 0x7  // obsolete 7.1 setting
+        DSSPEAKER_7POINT1_SURROUND :: 0x8  // correct 7.1 Home Theater setting
+        DSSPEAKER_5POINT1_SURROUND :: 0x9  // correct 5.1 setting
+        DSSPEAKER_7POINT1_WIDE     :: DSSPEAKER_7POINT1
+        DSSPEAKER_5POINT1_BACK     :: DSSPEAKER_5POINT1
+    }
 }
 
 using IDirectSound.Cooperative_Level
@@ -269,54 +269,54 @@ DSBCAPS :: struct {
 }
 
 IDirectSoundBuffer :: struct {
-	Vtable :: struct {
-		using iunkown_vtable: IUnkown.Vtable
-			
-		GetCaps:            (this: *IDirectSoundBuffer, pDSBufferCaps: *DSBCAPS)                                                                      -> s32 #c_call
-		GetCurrentPosition: (this: *IDirectSoundBuffer, pdwCurrentPlayCursor: *u32, pdwCurrentWriteCursor: *u32)                                      -> s32 #c_call
-		GetFormat:          (this: *IDirectSoundBuffer, pwfxFormat: *WAVEFORMATEX, dwSizeAllocated: u32, pdwSizeWritten: *u32)                        -> s32 #c_call
-		GetVolume:          (this: *IDirectSoundBuffer, plVolume: *s32)                                                                               -> s32 #c_call
-		GetPan:             (this: *IDirectSoundBuffer, plPan: *s32)                                                                                  -> s32 #c_call
-		GetFrequency:       (this: *IDirectSoundBuffer, pdwFrequency: *u32)                                                                           -> s32 #c_call
-		GetStatus:          (this: *IDirectSoundBuffer, pdwStatus: *Status)                                                                           -> s32 #c_call
-		Initialize:         (this: *IDirectSoundBuffer, pDirectSound: *IDirectSound, pcDSBufferDesc: *DSBUFFERDESC)                                   -> s32 #c_call
-		Lock:               (this: *IDirectSoundBuffer, dwOffset: u32, dwBytes: u32, ppvAudioPtr1: **void, pdwAudioBytes1: *u32,                       
-		                                                                             ppvAudioPtr2: **void, pdwAudioBytes2: *u32, dwFlags: Lock_Flags) -> s32 #c_call
-		Play:               (this: *IDirectSoundBuffer, dwReserved1: u32, dwPriority: u32, dwFlags: Play_Flags)                                       -> s32 #c_call
-		SetCurrentPosition: (this: *IDirectSoundBuffer, dwNewPosition: u32)                                                                           -> s32 #c_call
-		SetFormat:          (this: *IDirectSoundBuffer, pcfxFormat: *WAVEFORMATEX)                                                                    -> s32 #c_call
-		SetVolume:          (this: *IDirectSoundBuffer, lVolume: s32)                                                                                 -> s32 #c_call
-		SetPan:             (this: *IDirectSoundBuffer, lPan: s32)                                                                                    -> s32 #c_call
-		SetFrequency:       (this: *IDirectSoundBuffer, dwFrequency: s32)                                                                             -> s32 #c_call
-		Stop:               (this: *IDirectSoundBuffer)                                                                                               -> s32 #c_call
-		Unlock:             (this: *IDirectSoundBuffer, pvAudioPtr1: *void, dwAudioBytes1: u32, pvAudioPtr2: *void, dwAudioBytes2: u32)               -> s32 #c_call
-		Restore:            (this: *IDirectSoundBuffer)                                                                                               -> s32 #c_call
-	}
-	
-	using vtable: *Vtable
-	
-	Status :: enum_flags u32 {
-		DSBSTATUS_PLAYING     :: 0x_1
-		DSBSTATUS_BUFFERLOST  :: 0x_2
-		DSBSTATUS_LOOPING     :: 0x_4
-		DSBSTATUS_LOCHARDWARE :: 0x_8
-		DSBSTATUS_LOCSOFTWARE :: 0x10
-		DSBSTATUS_TERMINATED  :: 0x20
-	}
-	
-	Lock_Flags :: enum_flags u32 {
-		DSBLOCK_FROMWRITECURSOR :: 0x1
-		DSBLOCK_ENTIREBUFFER    :: 0x2
-	}
-	
-	Play_Flags :: enum_flags u32 {
-		DSBPLAY_LOOPING              :: 0x_1
-		DSBPLAY_LOCHARDWARE          :: 0x_2
-		DSBPLAY_LOCSOFTWARE          :: 0x_4
-		DSBPLAY_TERMINATEBY_TIME     :: 0x_8
-		DSBPLAY_TERMINATEBY_DISTANCE :: 0x10
-		DSBPLAY_TERMINATEBY_PRIORITY :: 0x20
-	}
+    Vtable :: struct {
+        using iunkown_vtable: IUnkown.Vtable
+            
+        GetCaps:            (this: *IDirectSoundBuffer, pDSBufferCaps: *DSBCAPS)                                                                      -> s32 #c_call
+        GetCurrentPosition: (this: *IDirectSoundBuffer, pdwCurrentPlayCursor: *u32, pdwCurrentWriteCursor: *u32)                                      -> s32 #c_call
+        GetFormat:          (this: *IDirectSoundBuffer, pwfxFormat: *WAVEFORMATEX, dwSizeAllocated: u32, pdwSizeWritten: *u32)                        -> s32 #c_call
+        GetVolume:          (this: *IDirectSoundBuffer, plVolume: *s32)                                                                               -> s32 #c_call
+        GetPan:             (this: *IDirectSoundBuffer, plPan: *s32)                                                                                  -> s32 #c_call
+        GetFrequency:       (this: *IDirectSoundBuffer, pdwFrequency: *u32)                                                                           -> s32 #c_call
+        GetStatus:          (this: *IDirectSoundBuffer, pdwStatus: *Status)                                                                           -> s32 #c_call
+        Initialize:         (this: *IDirectSoundBuffer, pDirectSound: *IDirectSound, pcDSBufferDesc: *DSBUFFERDESC)                                   -> s32 #c_call
+        Lock:               (this: *IDirectSoundBuffer, dwOffset: u32, dwBytes: u32, ppvAudioPtr1: **void, pdwAudioBytes1: *u32,                       
+                                                                                     ppvAudioPtr2: **void, pdwAudioBytes2: *u32, dwFlags: Lock_Flags) -> s32 #c_call
+        Play:               (this: *IDirectSoundBuffer, dwReserved1: u32, dwPriority: u32, dwFlags: Play_Flags)                                       -> s32 #c_call
+        SetCurrentPosition: (this: *IDirectSoundBuffer, dwNewPosition: u32)                                                                           -> s32 #c_call
+        SetFormat:          (this: *IDirectSoundBuffer, pcfxFormat: *WAVEFORMATEX)                                                                    -> s32 #c_call
+        SetVolume:          (this: *IDirectSoundBuffer, lVolume: s32)                                                                                 -> s32 #c_call
+        SetPan:             (this: *IDirectSoundBuffer, lPan: s32)                                                                                    -> s32 #c_call
+        SetFrequency:       (this: *IDirectSoundBuffer, dwFrequency: s32)                                                                             -> s32 #c_call
+        Stop:               (this: *IDirectSoundBuffer)                                                                                               -> s32 #c_call
+        Unlock:             (this: *IDirectSoundBuffer, pvAudioPtr1: *void, dwAudioBytes1: u32, pvAudioPtr2: *void, dwAudioBytes2: u32)               -> s32 #c_call
+        Restore:            (this: *IDirectSoundBuffer)                                                                                               -> s32 #c_call
+    }
+    
+    using vtable: *Vtable
+    
+    Status :: enum_flags u32 {
+        DSBSTATUS_PLAYING     :: 0x_1
+        DSBSTATUS_BUFFERLOST  :: 0x_2
+        DSBSTATUS_LOOPING     :: 0x_4
+        DSBSTATUS_LOCHARDWARE :: 0x_8
+        DSBSTATUS_LOCSOFTWARE :: 0x10
+        DSBSTATUS_TERMINATED  :: 0x20
+    }
+    
+    Lock_Flags :: enum_flags u32 {
+        DSBLOCK_FROMWRITECURSOR :: 0x1
+        DSBLOCK_ENTIREBUFFER    :: 0x2
+    }
+    
+    Play_Flags :: enum_flags u32 {
+        DSBPLAY_LOOPING              :: 0x_1
+        DSBPLAY_LOCHARDWARE          :: 0x_2
+        DSBPLAY_LOCSOFTWARE          :: 0x_4
+        DSBPLAY_TERMINATEBY_TIME     :: 0x_8
+        DSBPLAY_TERMINATEBY_DISTANCE :: 0x10
+        DSBPLAY_TERMINATEBY_PRIORITY :: 0x20
+    }
 }
 
 using IDirectSoundBuffer.Status

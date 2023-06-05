@@ -1,0 +1,15 @@
+#import "Standard"
+
+main :: () {
+    x: f32 = 257
+    
+    print("u8  %\n", cast(u8)  x)
+    print("u16 %\n", cast(u16) x)
+    print("u32 %\n", cast(u32) x)
+    print("u64 %\n", cast(u64) x)
+    
+    print("s8  %\n", cast(s8)  x)
+    print("s16 %\n", cast(s16) x)
+    print("s32 %\n", cast(s32) x)
+    print("s64 %\n", cast(s64) x)
+}

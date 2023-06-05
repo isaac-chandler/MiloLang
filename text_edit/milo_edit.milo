@@ -440,7 +440,7 @@ close_tab :: (index: u64) {
     if tabs.count == 0 {
         close_window(window)
     } else if current_tab == index {
-        current_tab = tabs.count - 2
+        current_tab = tabs.count - 1
     }
     
     update_tab_bounds()
@@ -653,7 +653,7 @@ main :: () {
     if arguments.count && arguments[0] == "-release" {
         build_options.backend = .LLVM
         build_options.llvm_options = .["-O3"]
-        build_options.show_console = false
+        build_options.show_console = true
     }
     
     build_options.icon_name = "milo_edit.ico"

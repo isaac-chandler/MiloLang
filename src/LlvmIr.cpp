@@ -601,7 +601,6 @@ static llvm::Constant *createConstant(State *state, Expr *expr) {
 		auto array = static_cast<ExprArrayLiteral *>(expr);
 
 		auto arrayType = static_cast<TypeArray *>(array->type);
-		assert(arrayType->flags &TYPE_ARRAY_IS_FIXED);
 
 		u32 arrayCount = (arrayType->flags & TYPE_ARRAY_IS_FIXED) ? arrayType->count : array->count;
 
@@ -657,15 +656,12 @@ static llvm::Constant *createConstant(State *state, Expr *expr) {
 			auto correctType = static_cast<llvm::StructType *>(getLlvmType(state->context, arrayType));
 
 			llvm::Constant *dataPointerCasted = dataPointer;
-			if (!typesAreCorrect) {
-				dataPointerCasted = llvm::ConstantExpr::getBitCast(dataPointer->getInitializer(), correctType->getStructElementType(0));
+			if ((dataPointer->getInitializer()->getType() != correctType->getStructElementType(0))) {
+				dataPointerCasted = llvm::ConstantExpr::getBitCast(dataPointer, correctType->getStructElementType(0));
 			}
 
 			return llvm::ConstantStruct::get(correctType, 
-				llvm::ConstantExpr::getGetElementPtr(correctType->getStructElementType(0)->getPointerTo(), dataPointer, arrayRef<llvm::Value *>({
-						llvm::ConstantInt::get(llvm::Type::getInt32Ty(state->context), 0), 
-						llvm::ConstantInt::get(llvm::Type::getInt32Ty(state->context), 0)
-					})), 
+				dataPointerCasted, 
 				llvm::ConstantInt::get(llvm::Type::getInt64Ty(state->context), arrayCount));
 		}
 	}
@@ -675,17 +671,26 @@ static llvm::Constant *createConstant(State *state, Expr *expr) {
 	return nullptr;
 }
 
-static llvm::GlobalVariable *createLlvmGlobal(State *state, Declaration *declaration) {
+static llvm::Value *createLlvmGlobal(State *state, Declaration *declaration) {
 	if (!declaration->llvmStorage) {
 		auto llvmType = getLlvmType(state->context, getDeclarationType(declaration));
 
-		auto global = static_cast<llvm::GlobalVariable *>(state->module.getOrInsertGlobal(stringRef(declaration->name), 
-			llvmType));
-
-		declaration->llvmStorage = global;
+		if (!declaration->initialValue) {
+			auto global = static_cast<llvm::GlobalVariable *>(state->module.getOrInsertGlobal(stringRef(declaration->name),
+				llvmType));
+			global->setInitializer(llvm::UndefValue::get(llvmType));
+			declaration->llvmStorage = global;
+		}
+		else {
+			auto constant = createConstant(state, declaration->initialValue);
+			auto global = static_cast<llvm::GlobalVariable *>(state->module.getOrInsertGlobal(stringRef(declaration->name),
+				constant->getType()));
+			global->setInitializer(constant);
+			declaration->llvmStorage = llvm::ConstantExpr::getBitCast(global, llvm::PointerType::getUnqual(llvmType));
+		}
 	}
 
-	return static_cast<llvm::GlobalVariable *>(declaration->llvmStorage);
+	return declaration->llvmStorage;
 }
 
 struct Loop {
@@ -2270,7 +2275,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 			literal->llvmStorage->setInitializer(constant);
 			
 
-			// :Sadge
+			// :Sadge:Sadge
 			if (literal->llvmStorage->getInitializer()->getType() != literal->type->llvmType) {
 				return state->builder.CreatePointerCast(literal->llvmStorage, llvm::PointerType::getUnqual(getLlvmType(state->context, literal->type)));
 			}
@@ -2760,14 +2765,6 @@ void runLlvm() {
 
 				auto global = createLlvmGlobal(&state, declaration);
 
-				auto llvmType = getLlvmType(state.context, getDeclarationType(declaration));
-
-				if (!declaration->initialValue) {
-					global->setInitializer(llvm::UndefValue::get(llvmType));
-				}
-				else {
-					global->setInitializer(createConstant(&state, declaration->initialValue));
-				}
 			}
 		}
 

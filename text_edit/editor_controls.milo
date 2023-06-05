@@ -621,6 +621,8 @@ editor_key_down_event :: (using tab: *Tab, using editor: *Editor, using event: t
                 insert_text(editor, line)
                 
                 while found {
+                    print("Line = '%'\nRemaining = '%'\n", line, remaining)
+                
                     insert_char(editor, '\n')
                     
                     line, remaining, found = split_at_first(remaining, '\n')

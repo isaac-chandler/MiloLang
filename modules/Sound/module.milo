@@ -1,52 +1,40 @@
 #import "Standard"
 
 #if TARGET_WINDOWS {
-	#load "Windows.milo"
+    #load "Windows.milo"
 } else {
-	unsupported_os: u64 = "error"
+    unsupported_os: u64 = "error"
 }
 
 SAMPLE_RATE :: 48000
 
 Sample :: struct {
-	left: s16
-	right: s16
+    left: s16
+    right: s16
 }
 
-latency_sample_count: u32
+latency_sample_count: u64
 sample_buffer: []Sample
 
-initialize_sound :: (hwnd: HWND, buffer_length: f32 = 2.0, latency: f32 = 1.0 / 15) -> #must bool {
-	set_latency(latency)
-	buffer_sample_count = cast(u32) (buffer_length * SAMPLE_RATE)
-	
-	sample_buffer = new_array(Sample, buffer_sample_count)
-	
-	if !initialize_sound_os(hwnd) return false
-	
-	return true
+sample_func :: (samples: []Sample, sample_index: u64) -> void
+
+initialize_sound :: (hwnd: HWND, sample_generator: sample_func, buffer_length: f32 = 0.01, latency: f32 = 1.0 / 15) -> #must bool {
+    set_latency(latency)
+    buffer_sample_count = cast(u64) (buffer_length * SAMPLE_RATE)
+    
+    sample_buffer = new_array(Sample, buffer_sample_count)
+    
+    fill_samples = sample_generator
+    
+    if !initialize_sound_os(hwnd) return false
+    
+    return true
 }
 
 set_latency :: (latency: f32) {
-	latency_sample_count = cast(u32) (latency * SAMPLE_RATE)
-}
-
-fill_samples :: (samples: []Sample, sample_index: u32) {
-	sinf :: (val: f32) -> f32 
-		#external "c"
-		
-	HZ :: 440
-	PERIOD :: SAMPLE_RATE / HZ
-	
-	for * samples {
-		t := cast(f32) (sample_index + it_index) * (HZ*6.2831853071/SAMPLE_RATE) 
-		
-		sample_value := cast(s16) (100 * sinf(t))
-	
-		it.left = sample_value
-		it.right = sample_value
-	}	
+    latency_sample_count = cast(u64) (latency * SAMPLE_RATE)
 }
 
 #scope_module
-buffer_sample_count: u32
+buffer_sample_count: u64
+fill_samples: sample_func

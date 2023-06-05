@@ -1,771 +1,780 @@
 #if TARGET_WINDOWS {
-	#load "Windows.milo"
+    #load "Windows.milo"
 } else {
-	unsupported_os: u64 = "error"
+    unsupported_os: u64 = "error"
 }
 
 Concatenator :: struct {
-	Bucket :: struct {
-		data: [4096]u8
-		offset: u64
-		next: *Bucket
-	}
-	
-	total_count: u64
-	current_bucket: *Bucket
-	first_bucket: Bucket
+    Bucket :: struct {
+        data: [4096]u8
+        offset: u64
+        next: *Bucket
+    }
+    
+    total_count: u64
+    current_bucket: *Bucket
+    first_bucket: Bucket
 }
 
 reset :: (using c: *Concatenator) {
-	total_count = 0
-	first_bucket.offset = 0
+    total_count = 0
+    first_bucket.offset = 0
 }
 
 free_concatenator :: (using c: *Concatenator) {
-	bucket := first_bucket.next
-	
-	while bucket {
-		next := bucket.next
-		
-		free(bucket)
-		
-		bucket = next
-	}
+    bucket := first_bucket.next
+    
+    while bucket {
+        next := bucket.next
+        
+        free(bucket)
+        
+        bucket = next
+    }
 }
 
-next_bucket :: (using c: *Concatenator) {	
-	if !current_bucket
-		current_bucket = *first_bucket
-	
-	if current_bucket.offset == current_bucket.data.count {
-		if !current_bucket.next {
-			current_bucket.next = new(Bucket, initialized = false)
-		}
-		
-		current_bucket = current_bucket.next
-		current_bucket.offset = 0
-		current_bucket.next = null
-	}
+next_bucket :: (using c: *Concatenator) {    
+    if !current_bucket
+        current_bucket = *first_bucket
+    
+    if current_bucket.offset == current_bucket.data.count {
+        if !current_bucket.next {
+            current_bucket.next = new(Bucket, initialized = false)
+        }
+        
+        current_bucket = current_bucket.next
+        current_bucket.offset = 0
+        current_bucket.next = null
+    }
 }
 
 append :: (using c: *Concatenator, character: u8) {
-	using current_bucket
+    using current_bucket
 
-	next_bucket(c)
-	
-	data[offset] = character
-	offset += 1
-	total_count += 1
+    next_bucket(c)
+    
+    data[offset] = character
+    offset += 1
+    total_count += 1
 }
 
 append :: (using c: *Concatenator, s: string) {
-	using current_bucket
-	
-	remaining := s
-	total_count += s.count
-	
-	while true {
-		next_bucket(c)
-		
-		capacity := data.count - offset
-		if remaining.count > capacity {
-			memory_copy(*data[offset], remaining.data, capacity)
-			remaining = remaining[capacity..]
-			offset = data.count
-		} else {
-			memory_copy(*data[offset], remaining.data, remaining.count)
-			offset += remaining.count
-		
-			break
-		}
-	}
+    using current_bucket
+    
+    remaining := s
+    total_count += s.count
+    
+    while true {
+        next_bucket(c)
+        
+        capacity := data.count - offset
+        if remaining.count > capacity {
+            memory_copy(*data[offset], remaining.data, capacity)
+            remaining = remaining[capacity..]
+            offset = data.count
+        } else {
+            memory_copy(*data[offset], remaining.data, remaining.count)
+            offset += remaining.count
+        
+            break
+        }
+    }
 }
 
 Vector2 :: union {
-	using _xy: struct {
-		x: f32
-		y: f32
-	}
-	
-	elements: [2]f32 = --
+    using _xy: struct {
+        x: f32
+        y: f32
+    }
+    
+    elements: [2]f32 = --
 }
 
 
 Vector3 :: union {
-	using _xyz: struct {
-		x: f32
-		y: f32
-		z: f32
-	}
-	
-	elements: [3]f32 = --
-	
-	xy: Vector2 = --
+    using _xyz: struct {
+        x: f32
+        y: f32
+        z: f32
+    }
+    
+    elements: [3]f32 = --
+    
+    xy: Vector2 = --
 }
 
 Vector4 :: union {
-	using xyzw : struct {
-		x: f32
-		y: f32
-		z: f32
-		w: f32
-	}
-	
-	using rgba : struct {
-		r: f32
-		g: f32
-		b: f32
-		a: f32
-	} = --
-	
-	elements: [4]f32 = --
-	
-	xyz: Vector3 = --
-	xy: Vector2 = --
+    using xyzw : struct {
+        x: f32
+        y: f32
+        z: f32
+        w: f32
+    }
+    
+    using rgba : struct {
+        r: f32
+        g: f32
+        b: f32
+        a: f32
+    } = --
+    
+    elements: [4]f32 = --
+    
+    xyz: Vector3 = --
+    xy: Vector2 = --
 }
 
 
 min :: (a: $T, b: T) -> #must T {
-	if a < b 
-		return a
-	else 
-		return b
-}
-
-abs :: (a: $T) -> #must T {
-	if a < 0
-		return -a
-	else
-		return a
+    if a < b 
+        return a
+    else 
+        return b
 }
 
 max :: (a: $T, b: T) -> #must T {
-	if a > b 
-		return a
-	else 
-		return b
+    if a > b 
+        return a
+    else 
+        return b
+}
+
+clamp :: (value: $T, min: T, max: T) -> #must T {
+    if value > max
+        return max
+    else if value < min
+        return min
+    else
+        return value
+}
+
+abs :: (a: $T) -> #must T {
+    if a < 0
+        return -a
+    else
+        return a
 }
 
 copy_string :: (using s: string) -> #must string {
     if !s.data
         return s
 
-	result := new_string(s.count, initialized = false)
-	
-	memory_copy(result.data, s.data, s.count)
-	
-	return result
+    result := new_string(s.count, initialized = false)
+    
+    memory_copy(result.data, s.data, s.count)
+    
+    return result
 }
 
 memory_copy :: (dst: *void, src: *void, count: u64) {
-	a: *u8 = dst
-	b: *u8 = src
-	
-	for i: 0 .. count {
-		a[i] = b[i]
-	}
+    a: *u8 = dst
+    b: *u8 = src
+    
+    for i: 0 .. count {
+        a[i] = b[i]
+    }
 }
 
-array_reserve :: (using array: *[..]$T, new_capacity: u64) {	
-	data = context.allocator(.EXPAND, context.allocator_data, new_capacity * size_of(T), align_of(T), data, capacity * size_of(T))
-	capacity = new_capacity
+array_reserve :: (using array: *[..]$T, new_capacity: u64) {    
+    data = context.allocator(.EXPAND, context.allocator_data, new_capacity * size_of(T), align_of(T), data, capacity * size_of(T))
+    capacity = new_capacity
 }
 
 array_add_unchecked :: (using array: *[..]$T, value: T) {
-	count += 1;
-	(<<array)[count - 1] = value
+    count += 1;
+    (<<array)[count - 1] = value
 }
 
 array_add :: (using array: *[..]$T, value: T) {
-	if count >= capacity {
-		array_reserve(array, max(count * 2, 4))
-	}
-	
-	array_add_unchecked(array, value)
+    if count >= capacity {
+        array_reserve(array, max(count * 2, 4))
+    }
+    
+    array_add_unchecked(array, value)
 }
 
 array_push :: (using array: *[..]$T, initialized := true) -> *T {
-	if count >= capacity {
-		array_reserve(array, max(count * 2, 4))
-	}
+    if count >= capacity {
+        array_reserve(array, max(count * 2, 4))
+    }
 
-	count += 1
+    count += 1
 
-	result := *(<<array)[count - 1] 
+    result := *(<<array)[count - 1] 
 
-	if initialized {
-		value: T: ..
+    if initialized {
+        value: T: ..
 
-		<<result = value
-	}
+        <<result = value
+    }
 
-	return result
+    return result
 }
 
 memory_clear :: (dst: *void, count: u64) {
-	memory := cast(*u8) dst
-	
-	for count {
-		memory[it] = 0
-	}
+    memory := cast(*u8) dst
+    
+    for count {
+        memory[it] = 0
+    }
 }
 
 array_pop :: (using array: *[]$T) -> T {
-	value := (<<array)[count - 1]
-	count -= 1
-	
-	return value
+    value := (<<array)[count - 1]
+    count -= 1
+    
+    return value
 }
 
 backed_array :: (using array: []$T) -> [..]T {
-	return .{data = data, count = 0, capacity = count}
+    return .{data = data, count = 0, capacity = count}
 }
 
 array_reverse :: (using array: []$T) {
-	for array.count / 2
-		swap(*array[it], *array[array.count - it - 1])
+    for array.count / 2
+        swap(*array[it], *array[array.count - it - 1])
 }
 
 Allocator :: struct {
-	using Mode :: enum u8 {
-		NEW
-		EXPAND
-		FREE
-		FREE_ALL
-	}
-	
-	allocator: (mode: Mode, allocator_data: *void, size: u64, alignment: u64, pointer: *void, old_size: u64) -> *void = default_allocator
-	allocator_data: *void
+    using Mode :: enum u8 {
+        NEW
+        EXPAND
+        FREE
+        FREE_ALL
+    }
+    
+    allocator: (mode: Mode, allocator_data: *void, size: u64, alignment: u64, pointer: *void, old_size: u64) -> *void = default_allocator
+    allocator_data: *void
 }
 
 #add_context using allocator_info: Allocator
 
 allocate :: (bytes: u64, align: u64 = 8) -> *void {
-	return context.allocator(.NEW, context.allocator_data, bytes, align, null, 0)
+    return context.allocator(.NEW, context.allocator_data, bytes, align, null, 0)
 }
 
 new :: ($T: type, initialized := true) -> *T {
-	result: *T = context.allocator(.NEW, context.allocator_data, size_of(T), align_of(T), null, 0)
+    result: *T = context.allocator(.NEW, context.allocator_data, size_of(T), align_of(T), null, 0)
 
-	if initialized {
-		default: T: ..
-		<<result = default
-	}
+    if initialized {
+        default: T: ..
+        <<result = default
+    }
 
-	return result
+    return result
 }
 
 free :: (pointer: *$T) {
-	if pointer
-		context.allocator(.FREE, context.allocator_data, 0, align_of(T), pointer, size_of(T))
+    if pointer
+        context.allocator(.FREE, context.allocator_data, 0, align_of(T), pointer, size_of(T))
 }
 
 new_array :: ($T: type, count: u64, initialized := true) -> []T {
-	result: []T = --
-	result.count = count
-	result.data = context.allocator(.NEW, context.allocator_data, size_of(T) * count, align_of(T), null, 0)
+    result: []T = --
+    result.count = count
+    result.data = context.allocator(.NEW, context.allocator_data, size_of(T) * count, align_of(T), null, 0)
 
-	if initialized && count {
-		fill_array(result)
-	}
+    if initialized && count {
+        fill_array(result)
+    }
 
-	return result
+    return result
 }
 
 fill_array :: (using array: []$T, value: T = ..) {
-	for *array {
-		<<it = value
-	}
+    for *array {
+        <<it = value
+    }
 }
 
 free_array :: (using array: []$T) {
-	if count
-		context.allocator(.FREE, context.allocator_data, 0, align_of(T), data, size_of(T) * count)
+    if count
+        context.allocator(.FREE, context.allocator_data, 0, align_of(T), data, size_of(T) * count)
 }
 
 new_string :: (count: u64, initialized := true) -> string {
-	return cast() new_array(u8, count, initialized)
+    return cast() new_array(u8, count, initialized)
 }
 
 free_string :: (s: string) {
-	free_array(cast([]u8) s)
+    free_array(cast([]u8) s)
 }
 
 array_peek :: (using array: []$T) -> T {
-	return array[count - 1]
+    return array[count - 1]
 }
 
 array_copy :: (using array: []$T) -> []T {
-	result := new_array(T, count, false)
-	memory_copy(result.data, data, count * size_of(T))
+    result := new_array(T, count, false)
+    memory_copy(result.data, data, count * size_of(T))
 
-	return result
+    return result
 }
 
 array_free :: (using array: [..]$T) {
-	if capacity  
-		context.allocator(.FREE, context.allocator_data, 0, align_of(T), data, size_of(T) * capacity) 
+    if capacity  
+        context.allocator(.FREE, context.allocator_data, 0, align_of(T), data, size_of(T) * capacity) 
 }
 
 array_copy :: (using array: []$T) -> []T {
-	result := new_array(T, count, initialized = false)
-	memory_copy(result.data, data, count * size_of(T))
-	
-	return result
+    result := new_array(T, count, initialized = false)
+    memory_copy(result.data, data, count * size_of(T))
+    
+    return result
 }
 
 array_contains :: (using array: []$T, value: T) -> bool {
-	for array if it == value return true
-	return false
+    for array if it == value return true
+    return false
 }
 
 panic :: () {
-	print("Panic")
-	
-	exit(1)
+    print("Panic")
+    
+    exit(1)
 }
 
 assert :: (value: bool) {
-	if !value {
-		print("Assertion failed!")
-		exit(1)
-	}
+    if !value {
+        print("Assertion failed!")
+        exit(1)
+    }
 }
 
 array_remove_by_pointer :: (array: *[]$T, value: *T) {
-	assert(value >= array.data)
-	assert(value < array.data + array.count)
-	
-	end := array.data + array.count
-	
-	if value != end {
-		<<value = <<end
-	}	
+    assert(value >= array.data)
+    assert(value < array.data + array.count)
+    
+    end := array.data + array.count
+    
+    if value != end {
+        <<value = <<end
+    }    
 }
 
 
 DIGIT_TABLE :: "0123456789abcdefghijklmnopqrstuvwxyz"
 
 u64_to_string :: (value: u64, base: u64 = 10) -> #must string {
-	if base > 36 || base < 2 {
-		return ""
-	}
+    if base > 36 || base < 2 {
+        return ""
+    }
 
-	if value == 0 {
-		return copy_string("0")
-	}
+    if value == 0 {
+        return copy_string("0")
+    }
 
-	digit_count: u64
-	
-	remaining := value
-	
-	while remaining {
-		digit_count += 1
-		
-		remaining /= base
-	}
-	
-	result := new_string(digit_count, initialized = false)
-	
-	index := result.count
-	remaining = value
-	
-	while remaining {
-		index -= 1;
-		
-		result[index] = DIGIT_TABLE[remaining % base]
-		remaining /= base
-	}
-	
-	return result
+    digit_count: u64
+    
+    remaining := value
+    
+    while remaining {
+        digit_count += 1
+        
+        remaining /= base
+    }
+    
+    result := new_string(digit_count, initialized = false)
+    
+    index := result.count
+    remaining = value
+    
+    while remaining {
+        index -= 1;
+        
+        result[index] = DIGIT_TABLE[remaining % base]
+        remaining /= base
+    }
+    
+    return result
 }
 
 u64_to_string :: (value: u64, buffer: string, base: u64 = 10) -> string {
-	if base > 36 || base < 2 {
-		return ""
-	}
+    if base > 36 || base < 2 {
+        return ""
+    }
 
-	if value == 0 {
-		if buffer.count {
-			buffer[0] = '0'
-			return string.{buffer.data, 1}
-		} else {
-			return ""
-		}
-	}
+    if value == 0 {
+        if buffer.count {
+            buffer[0] = '0'
+            return string.{buffer.data, 1}
+        } else {
+            return ""
+        }
+    }
 
-	result: string
-	remaining := value
-	
-	while remaining {
-		result.count += 1
-		
-		remaining /= base
-	}
-	
-	if buffer.count < result.count {
-		return ""
-	}
+    result: string
+    remaining := value
+    
+    while remaining {
+        result.count += 1
+        
+        remaining /= base
+    }
+    
+    if buffer.count < result.count {
+        return ""
+    }
 
-	result.data = buffer.data
-	index := result.count
-	remaining = value
-	
-	while remaining {
-		index -= 1;
-		
-		result[index] = DIGIT_TABLE[remaining % base]
-		remaining /= base
-	}
-	
-	return result
+    result.data = buffer.data
+    index := result.count
+    remaining = value
+    
+    while remaining {
+        index -= 1;
+        
+        result[index] = DIGIT_TABLE[remaining % base]
+        remaining /= base
+    }
+    
+    return result
 }
 
 print_u64 :: (c: *Concatenator, value: u64, base: u64 = 10) {
-	if base > 36 || base < 2
-		return;
+    if base > 36 || base < 2
+        return;
 
-	if value == 0 {
-		append(c, '0')
-		return
-	}
-	
-	result: [64]u8
-	count: u64
-	
-	remaining := value
-	
-	while remaining {
-		result[count] = DIGIT_TABLE[remaining % base]
-		remaining /= base
-		
-		count += 1
-	}
-	
-	while count {
-		count -= 1
-		
-		append(c, result[count])
-	}
+    if value == 0 {
+        append(c, '0')
+        return
+    }
+    
+    result: [64]u8
+    count: u64
+    
+    remaining := value
+    
+    while remaining {
+        result[count] = DIGIT_TABLE[remaining % base]
+        remaining /= base
+        
+        count += 1
+    }
+    
+    while count {
+        count -= 1
+        
+        append(c, result[count])
+    }
 }
 
 
 
 read_integer :: (value: any) -> u64 {
-	mask: u64
-	number: u64
+    mask: u64
+    number: u64
 
-	if value.value_type.size == {
-		case 1
-			number = cast(u8) value
-			mask = 1 << 7
-		case 2
-			number = cast(u16) value
-			mask = 1 << 15
-		case 4
-			number = cast(u32) value
-			mask = 1 << 31
-		case 8
-			number = cast(u64) value
-			mask = 1 << 63
-	}
-	
-	if (cast(*Type_Info_Integer) value.value_type).signed && (number & mask)
-		number |= ~(mask | (mask - 1))
-	
-	return number
+    if value.value_type.size == {
+        case 1
+            number = cast(u8) value
+            mask = 1 << 7
+        case 2
+            number = cast(u16) value
+            mask = 1 << 15
+        case 4
+            number = cast(u32) value
+            mask = 1 << 31
+        case 8
+            number = cast(u64) value
+            mask = 1 << 63
+    }
+    
+    if (cast(*Type_Info_Integer) value.value_type).signed && (number & mask)
+        number |= ~(mask | (mask - 1))
+    
+    return number
 }
 
 
 is_infinite :: (x: f64) -> bool {
-	bits := cast,bit(u64) x
-	
-	return (bits & 0x7FF0_0000_0000_0000) == 0x7FF0_0000_0000_0000 && (bits & 0x000F_FFFF_FFFF_FFFF) == 0
+    bits := cast,bit(u64) x
+    
+    return (bits & 0x7FF0_0000_0000_0000) == 0x7FF0_0000_0000_0000 && (bits & 0x000F_FFFF_FFFF_FFFF) == 0
 }
 
 is_nan :: (x: f64) -> bool {
-	bits := cast,bit(u64) x
-	
-	return (bits & 0x7FF0_0000_0000_0000) == 0x7FF0_0000_0000_0000 && (bits & 0x000F_FFFF_FFFF_FFFF)
+    bits := cast,bit(u64) x
+    
+    return (bits & 0x7FF0_0000_0000_0000) == 0x7FF0_0000_0000_0000 && (bits & 0x000F_FFFF_FFFF_FFFF)
 }
 
 
 // This function is terrible
 print_f64 :: (c: *Concatenator, num: f64, decimal_places: u64 = 6, base: u64 = 10) {
-	value := num
+    value := num
 
-	if is_nan(value) {
-		append(c, "NaN")
-		return
-	}
+    if is_nan(value) {
+        append(c, "NaN")
+        return
+    }
 
-	if (value < 0) {
-		append(c, '-')
-		value = -value
-	}
-	
-	if is_infinite(value) {
-		append(c, "infinity")
-		return
-	}
-	
-	if num >= 1p64 {
-		append(c, "unhandled case in print_f64")
-		return
-	}
-	
-	integer_part := cast(u64) value
-	
-	print_u64(c, integer_part, base)
-	
-	append(c, '.')
-	
-	for decimal_places {
-		value *= cast(f64) base
-		
-		integer := cast(u64) value
-		
-		append(c, DIGIT_TABLE[integer % base])
-	}
+    if (value < 0) {
+        append(c, '-')
+        value = -value
+    }
+    
+    if is_infinite(value) {
+        append(c, "infinity")
+        return
+    }
+    
+    if num >= 1p64 {
+        append(c, "unhandled case in print_f64")
+        return
+    }
+    
+    integer_part := cast(u64) value
+    
+    print_u64(c, integer_part, base)
+    
+    append(c, '.')
+    
+    for decimal_places {
+        value *= cast(f64) base
+        
+        integer := cast(u64) value
+        
+        append(c, DIGIT_TABLE[integer % base])
+    }
 }
 
 std_out_concatenator: Concatenator
 
 print :: (format: string, vals: any..) {
-	reset(*std_out_concatenator)
+    reset(*std_out_concatenator)
 
-	print_to_buffer(*std_out_concatenator, format, ..vals)
-	
-	print_buffer(*std_out_concatenator)
+    print_to_buffer(*std_out_concatenator, format, ..vals)
+    
+    print_buffer(*std_out_concatenator)
 }
 
 sprint :: (format: string, vals: any..) -> string {
-	reset(*std_out_concatenator)
-	
-	print_to_buffer(*std_out_concatenator, format, ..vals)
-	
-	result := new_string(std_out_concatenator.total_count, initialized = false)
-	
-	offset: u64 = 0
-	
-	bucket := *std_out_concatenator.first_bucket
-	
-	while offset < result.count {
-		memory_copy(*result[offset], bucket.data.data, bucket.offset)
-		offset += bucket.offset
-		
-		bucket = bucket.next
-	}
-	
-	return result
+    reset(*std_out_concatenator)
+    
+    print_to_buffer(*std_out_concatenator, format, ..vals)
+    
+    result := new_string(std_out_concatenator.total_count, initialized = false)
+    
+    offset: u64 = 0
+    
+    bucket := *std_out_concatenator.first_bucket
+    
+    while offset < result.count {
+        memory_copy(*result[offset], bucket.data.data, bucket.offset)
+        offset += bucket.offset
+        
+        bucket = bucket.next
+    }
+    
+    return result
 }
 
 print_to_buffer :: (c: *Concatenator, format: string, vals: any..) {
-	index: u64
-	
-	for format {
-		if it == '%' {
-			if index >= vals.count
-				return;
-			print_any(c, vals[index])
-			index += 1
-		} else {
-			append(c, it)
-		}
-	}
+    index: u64
+    
+    for format {
+        if it == '%' {
+            if index >= vals.count
+                return;
+            print_any(c, vals[index])
+            index += 1
+        } else {
+            append(c, it)
+        }
+    }
 }
 
 
 print_any :: (c: *Concatenator, using val: any) {
-	if !value_type
-		append(c, "<Error no type info in print>")
-	else if value_type == type_info(void) 
-		append(c, "void")
-	else if value_type == type_info(type) {
-	
-		append(c, type_info(cast() val).name)
-		
-	} else if value_type == type_info(bool) {
-		value := cast(bool) val
-	
-		if value
-			append(c, "true")
-		else
-			append(c, "false")
-		
-	} else if value_type == type_info(string) {
-	
-		append(c, cast(string) val)
-		
-	} else if value_type.tag == .INTEGER {		
-		value := read_integer(val)
-		
-		if (cast(*Type_Info_Integer) value_type).signed && (value & (1 << 63)) {
-			append(c, '-')
-			value = -value
-		}
-		
-		print_u64(c, value)
-	} else if value_type.tag == .ENUM {
-		info := cast(*Type_Info_Enum) value_type
-		
-		integer_value := val
-		integer_value.value_type = info.base_type
-		
-		value := read_integer(integer_value)
+    if !value_type
+        append(c, "<Error no type info in print>")
+    else if value_type == type_info(void) 
+        append(c, "void")
+    else if value_type == type_info(type) {
+    
+        append(c, type_info(cast() val).name)
+        
+    } else if value_type == type_info(bool) {
+        value := cast(bool) val
+    
+        if value
+            append(c, "true")
+        else
+            append(c, "false")
+        
+    } else if value_type == type_info(string) {
+    
+        append(c, cast(string) val)
+        
+    } else if value_type.tag == .INTEGER {        
+        value := read_integer(val)
+        
+        if (cast(*Type_Info_Integer) value_type).signed && (value & (1 << 63)) {
+            append(c, '-')
+            value = -value
+        }
+        
+        print_u64(c, value)
+    } else if value_type.tag == .ENUM {
+        info := cast(*Type_Info_Enum) value_type
+        
+        integer_value := val
+        integer_value.value_type = info.base_type
+        
+        value := read_integer(integer_value)
 
-		if info.is_flags {
-			first := true
-			
-			for info.values {
-				if value & it.value {
-					value &= ~it.value
-				
-					if !first append(c, " | ")
-					
-					if info.name {
-						if first
-							append(c, info.name)
-							
-						append(c, '.')
-					}
-					
-					first = false
-					
-					append(c, it.name)
-				}
-			}
-			
-			print_invalid :: (c: *Concatenator, value: u64) {
-				append(c, "(INVALID enum_flags ")
-				print_u64(c, value, 16)
-				append(c, '.')
-			}
-			
-			if first {
-				if value {
-					if info.name {
-						append(c, info.name)
-						append(c, '.')
-					}
-					
-					print_invalid(c, value)
-				} else
-					append(c, '0')
-			} else if value {
-				append(c, " | ")
-				
-				if info.name
-					append(c, '.')
-				
-				print_invalid(c, value)
-			}
-		} else {
-			for info.values {
-				if value == it.value {
-					if info.name {
-						append(c, info.name)
-						append(c, '.')
-					}
-				
-					append(c, it.name)
-					break
-				}
-			} or {
-				num: any = --
-				num.value_pointer = value_pointer
-				num.value_type = info.base_type
-				
-				append(c, "(INVALID enum ")
-				print_u64(c, read_integer(num))
-				append(c, ')')
-			}
-		}
-		
-		
-	} else if value_type.tag == .POINTER || value_type.tag == .FUNCTION {
-	
-		print_u64(c, cast(u64) val, 16)
-		
-	} else if value_type.tag == .ARRAY {
-	
-		info := cast(*Type_Info_Array) value_type
-		
-		count: u64 = --
-		
-		if info.flavor == .FIXED {
-			count = info.count
-		} else {
-			count = (cast([]u8) val).count
-		}
-		
-		append(c, '[')
-		print_u64(c, count)
-		append(c, ']')
-		append(c, info.element_type.name)
-		
-	} else if value_type.tag == .STRUCT {	
-		info := cast(*Type_Info_Struct) value_type
-		
-		append(c, "{ ")
-	
-		for info.members {
-			if !(it.flags & .CONSTANT) {
-				val: any = --
-				val.value_pointer = value_pointer + it.offset
-				val.value_type = it.member_type
-				
-				append(c, it.name)
-				append(c, " = ")
-				print_any(c, val)
-				append(c, ' ')
-			}
-		}
-		
-		append(c, '}')
-	} else if value_type == type_info(f64) {
-	
-		print_f64(c, cast(f64) val)
-		
-	} else if value_type == type_info(f32) {
-	
-		print_f64(c, cast() cast(f32) val)
-		
-	} else {
-	
-		append(c, "Cannot print ")
-		append(c, value_type.name)		
-	}
+        if info.is_flags {
+            first := true
+            
+            for info.values {
+                if value & it.value {
+                    value &= ~it.value
+                
+                    if !first append(c, " | ")
+                    
+                    if info.name {
+                        if first
+                            append(c, info.name)
+                            
+                        append(c, '.')
+                    }
+                    
+                    first = false
+                    
+                    append(c, it.name)
+                }
+            }
+            
+            print_invalid :: (c: *Concatenator, value: u64) {
+                append(c, "(INVALID enum_flags ")
+                print_u64(c, value, 16)
+                append(c, '.')
+            }
+            
+            if first {
+                if value {
+                    if info.name {
+                        append(c, info.name)
+                        append(c, '.')
+                    }
+                    
+                    print_invalid(c, value)
+                } else
+                    append(c, '0')
+            } else if value {
+                append(c, " | ")
+                
+                if info.name
+                    append(c, '.')
+                
+                print_invalid(c, value)
+            }
+        } else {
+            for info.values {
+                if value == it.value {
+                    if info.name {
+                        append(c, info.name)
+                        append(c, '.')
+                    }
+                
+                    append(c, it.name)
+                    break
+                }
+            } or {
+                num: any = --
+                num.value_pointer = value_pointer
+                num.value_type = info.base_type
+                
+                append(c, "(INVALID enum ")
+                print_u64(c, read_integer(num))
+                append(c, ')')
+            }
+        }
+        
+        
+    } else if value_type.tag == .POINTER || value_type.tag == .FUNCTION {
+    
+        print_u64(c, cast(u64) val, 16)
+        
+    } else if value_type.tag == .ARRAY {
+    
+        info := cast(*Type_Info_Array) value_type
+        
+        count: u64 = --
+        
+        if info.flavor == .FIXED {
+            count = info.count
+        } else {
+            count = (cast([]u8) val).count
+        }
+        
+        append(c, '[')
+        print_u64(c, count)
+        append(c, ']')
+        append(c, info.element_type.name)
+        
+    } else if value_type.tag == .STRUCT {    
+        info := cast(*Type_Info_Struct) value_type
+        
+        append(c, "{ ")
+    
+        for info.members {
+            if !(it.flags & .CONSTANT) {
+                val: any = --
+                val.value_pointer = value_pointer + it.offset
+                val.value_type = it.member_type
+                
+                append(c, it.name)
+                append(c, " = ")
+                print_any(c, val)
+                append(c, ' ')
+            }
+        }
+        
+        append(c, '}')
+    } else if value_type == type_info(f64) {
+    
+        print_f64(c, cast(f64) val)
+        
+    } else if value_type == type_info(f32) {
+    
+        print_f64(c, cast() cast(f32) val)
+        
+    } else {
+    
+        append(c, "Cannot print ")
+        append(c, value_type.name)        
+    }
 }
 
 from_c_string :: (c_string: *u8) -> string {
-	if !c_string || !<<c_string return .{}
+    if !c_string || !<<c_string return .{}
 
-	result := string.{ data = c_string }
-	
-	while c_string[result.count]
-		result.count += 1
-		
-	return result
+    result := string.{ data = c_string }
+    
+    while c_string[result.count]
+        result.count += 1
+        
+    return result
 }
 
 swap :: (a: *$T, b: *T) {
-	temp := <<a;
-	<<a = <<b;
-	<<b = temp
+    temp := <<a;
+    <<a = <<b;
+    <<b = temp
 }
 
 insertion_sort :: (array: []$T, less := (a: T, b: T) -> bool { return a < b }) {
-	for 1 .. array.count {
-		i := it
+    for 1 .. array.count {
+        i := it
 
-		while i > 0 {
-			if less(array[i], array[i - 1]) {
-				swap(*array[i], *array[i - 1])
-			} else
-				break;
+        while i > 0 {
+            if less(array[i], array[i - 1]) {
+                swap(*array[i], *array[i - 1])
+            } else
+                break;
 
-			i -= 1
-		}
-	}
+            i -= 1
+        }
+    }
 }

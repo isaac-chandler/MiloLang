@@ -738,7 +738,7 @@ u32 generateCast(IrState *state, ExprBinaryOperator *binary) {
 			conversion.b = castTo->size;
 			conversion.opSize = right->type->size;
 
-			if (right->type->flags & TYPE_INTEGER_IS_SIGNED) {
+			if (castTo->flags & TYPE_INTEGER_IS_SIGNED) {
 				conversion.flags |= IR_SIGNED_OP;
 			}
 

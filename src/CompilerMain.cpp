@@ -535,10 +535,10 @@ int main(int argc, char *argv[]) {
 			runCoffWriter();
 
 			backendEnd = high_resolution_clock::now();
-		}
 
-		reportInfo("x64 Time: %.1fms", duration_cast<microseconds>(duration<double>(
-			backendEnd - backendStart)).count() / 1000.0);
+			reportInfo("x64 Time: %.1fms", duration_cast<microseconds>(duration<double>(
+				backendEnd - backendStart)).count() / 1000.0);
+		}
 
 
 		reportInfo("Compiler Time: %.1fms", duration_cast<microseconds>(duration<double>(

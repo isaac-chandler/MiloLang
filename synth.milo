@@ -1,0 +1,234 @@
+#import "Window"
+#import "GL"
+#import "Standard"
+#import "Math"
+#import "Sound"
+#import "Random"
+
+rng: Random_State
+
+should_quit: bool
+
+window: *Window
+gl_context: GL_Context
+
+TAU:        f32: 6.2831853
+INV_SQRT_2: f32: 0.70710678
+
+SAMPLE_PERIOD: f32: 1.0 / SAMPLE_RATE 
+
+current_sample_index: u64
+
+sinf :: (val: f32) -> f32 #external "c"
+fmodf :: (a: f32, b: f32) -> f32 #external "c"
+
+sine :: (sample_index: u64, f: f32) -> f32 {
+    t := cast() sample_index * f * TAU * SAMPLE_PERIOD
+    return sinf(t)
+}
+
+square :: (sample_index: u64, f: f32) -> f32 {
+    t := cast() sample_index * f * SAMPLE_PERIOD
+    
+    fractional := fmodf(t, 1)
+    if fractional < 0.5
+        return -1
+    else
+        return 1
+}
+
+sawtooth :: (sample_index: u64, f: f32) -> f32 {
+    t := cast() sample_index * f * SAMPLE_PERIOD
+    
+    fractional := fmodf(t, 1)
+    return fractional * 2 - 1
+}
+
+triangle :: (sample_index: u64, f: f32) -> f32 {
+    t := cast() sample_index * f * SAMPLE_PERIOD
+    
+    fractional := fmodf(t, 1)
+    
+    if fractional < 0.5
+        return fractional * 4 - 1
+    else
+        return fractional * -4 + 3
+}
+
+modulate :: (sample: f32, modulate_by: f32, modulation_strength: f32 = 1.0) -> f32 {
+    modulate_factor := modulate_by * 0.5 + 0.5
+    modulate_factor *= modulation_strength
+    modulate_factor += (1 - modulation_strength)
+
+    return sample * modulate_factor
+}
+
+random :: () -> f32 {
+    return random_bilateral(*rng)
+}
+
+//                           C4     C#4      D4     D#4      E4      F4     F#4      G4     G#4      A4                   A#4                     B4
+NOTE_KEYS        :: Key.[    .Q,     .W,     .E,     .R,     .T,     .Y,     .U,     .I,     .O,     .P, .LEFT_SQUARE_BRACKET, .RIGHT_SQUARE_BRACKET]
+NOTE_FREQUENCIES :: f32.[261.63, 277.18, 293.66, 311.33, 329.63, 349.23, 369.99, 392.00, 415.30, 440.00,               466.16,                493.88]
+
+current_notes: [12]Adsr_Data
+
+quantize :: (sample: f32) -> s16 { 
+    return cast() (clamp(sample, -1, 1) * 32767)
+}
+
+Adsr_Data :: struct {
+    attack_rate:      f32 = 120
+    decay_rate:       f32 = 80
+    release_rate:     f32 = 30
+    attack_amplitude: f32 = 4
+    was_pressed: bool
+    value: f32
+    attacking: bool
+}
+
+advance_adsr :: (using data: *Adsr_Data, pressed: bool) -> f32 {
+    if pressed {
+        if !was_pressed
+            attacking = true
+            
+        if attacking {
+            value += attack_rate * SAMPLE_PERIOD
+            
+            if value >= attack_amplitude {
+                value = attack_amplitude
+                attacking = false
+            }
+        } else {
+            value -= decay_rate * SAMPLE_PERIOD
+            value = max(value, 1)
+        }
+    } else {
+        attacking = false
+        value -= release_rate * SAMPLE_PERIOD
+        value = max(value, 0)
+    }
+    
+    was_pressed = pressed
+    return value
+}
+
+delay_buffer: [SAMPLE_RATE]f32
+
+get_delay_buffer :: (sample_index: u64) -> *f32 {
+    index := sample_index
+    
+    if index < 0 index += delay_buffer.count
+    
+    index %= delay_buffer.count
+    
+    return *delay_buffer[index]
+}
+
+
+fill_samples :: (samples: []Sample, sample_index: u64) {
+    current_sample_index := sample_index
+
+    for * samples {
+        i := sample_index + it_index
+        
+        sample_value: f32 = 0.0
+        
+        for NOTE_KEYS
+            sample_value += 0.01 * advance_adsr(*current_notes[it_index], window.keys[cast(u8) it]) 
+                * sawtooth(i, NOTE_FREQUENCIES[it_index]);
+        
+        sample_value += <<get_delay_buffer(i - 1021) * 0.5;
+        
+
+        <<get_delay_buffer(i) = sample_value
+        
+        it.left  = quantize(sample_value)
+        it.right = quantize(sample_value)
+    }
+}    
+
+
+main :: () {
+    rng = create_random(1, 1)
+
+    window = create_window("Synth", 1600, 900)
+    
+    if !window {
+        print("Failed to create window\n")
+        return
+    }
+    
+    success: bool
+    success, gl_context = create_gl(window, depth_bits = 0)
+    
+    if !success {
+        print("Failed to create gl context\n")
+        return
+    }
+    
+    
+    make_context_current(gl_context)
+    
+    load_gl_extensions()
+    
+    if !success {
+        print("Failed to load gl extensions\n")
+        return
+    }
+    
+    if !initialize_sound(window.handle, fill_samples, 2, 0.01) {
+        print("Failed to initialize sound\n")
+        return
+    }
+    
+    last_time := get_performance_timer()
+    
+    show_window(window)
+    
+    
+    set_swap_interval(0)
+    
+    while poll_events(window) {
+        current_time := get_performance_timer()
+        delta := cast(f32) (current_time - last_time)
+        last_time = current_time
+        
+        for get_window_events(window) {
+            if it.kind == .CLOSE {
+            }
+        }
+    
+        glViewport(0, 0, window.width, window.height)
+        glClearColor(0, 0.1, 0.2, 0)
+        glClear(GL_COLOR_BUFFER_BIT)
+        
+        glMatrixMode(GL_PROJECTION)
+        glLoadIdentity()
+        glOrtho(0, cast() window.width, 0, cast() window.height, -5, 5)
+    
+        if delta >= 0.005 {
+            print("%\n", delta)
+        }
+    
+        fill_sound()
+        
+        swap_buffers(gl_context)
+    }
+}
+
+#import "Compiler"
+
+setup_build :: () {
+    arguments := get_build_arguments()
+    
+    if arguments {
+        options := get_build_options()
+        options.backend = .LLVM
+        options.llvm_options = arguments
+        
+        set_build_options(options)
+    }
+}
+
+#run setup_build()

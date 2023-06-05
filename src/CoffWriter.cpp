@@ -344,6 +344,8 @@ u32 getRegisterOffset(ExprFunction *function, u32 regNo) {
 
 #define MOV_REG_IMM_WORD_BASE 0xB8
 
+#define SHIFT_IMM8_BASE_MODRM_X 0xC0
+
 #define RET 0xC3
 
 #define MOV_MEM_IMM_BASE_MODRM_0 0xC6
@@ -2086,6 +2088,9 @@ void runCoffWriter() {
 				case IrOp::FLOAT_TO_INT: {
 					if (ir.flags & IR_SIGNED_OP) {
 						writeFloatPrefix(ir.opSize);
+						if (ir.b == 8) {
+							writeIntegerPrefix(8);
+						}
 						code->add1Unchecked(OPCODE_EXT);
 						code->add1Unchecked(EXT_CVTTSf2SI_REG_MEM);
 						writeRSPRegisterByte(function, RAX, ir.a);
@@ -2095,6 +2100,16 @@ void runCoffWriter() {
 					else {
 						if (ir.b == 8) { // Aww sheet
 							loadIntoFloatRegister(function, ir.opSize, 0, ir.a);
+
+							writeFloatPrefix(ir.opSize);
+							writeIntegerPrefix(8);
+							code->add1Unchecked(OPCODE_EXT);
+							code->add1Unchecked(EXT_CVTTSf2SI_REG_MEM);
+							writeModRM(MODRM_MOD_DIRECT, RCX, 0);
+
+							sizedIntInstruction(8, MOV_REG_MEM_BASE);
+							writeModRM(MODRM_MOD_DIRECT, RDX, RCX);
+
 
 							if (ir.opSize == 8) {
 								if (f64ToU64ConstantSymbolIndex == -1) {
@@ -2138,56 +2153,32 @@ void runCoffWriter() {
 
 							writeFloatPrefix(ir.opSize);
 							code->add1Unchecked(OPCODE_EXT);
-							code->add1Unchecked(EXT_MOVSf_REG_MEM);
-							writeModRM(MODRM_MOD_INDIRECT, 1, MODRM_RM_RIP_OFFSET_32);
-							code->addRel32Relocation(ir.opSize == 8 ? f64ToU64ConstantSymbolIndex : f32ToU64ConstantSymbolIndex);
-
-							sizedIntInstruction(4, XOR_REG_MEM_BASE);
-							writeModRM(MODRM_MOD_DIRECT, RAX, RAX);
-
-							writeFloatLegacyPrefix(ir.opSize);
-							code->add1Unchecked(OPCODE_EXT);
-							code->add1Unchecked(EXT_COMISf_REG_MEM);
-							writeModRM(MODRM_MOD_DIRECT, 0, 1);
-
-							code->add1Unchecked(JCC_DIRECT_8_BASE | C_B);
-							u8 *firstJumpPatch = code->add1Unchecked(0);
-							u64 firstJumpRel = code->totalSize;
-
-							writeFloatPrefix(ir.opSize);
-							code->add1Unchecked(OPCODE_EXT);
 							code->add1Unchecked(EXT_SUBSf_REG_MEM);
-							writeModRM(MODRM_MOD_DIRECT, 0, 1);
-
-							writeFloatLegacyPrefix(ir.opSize);
-							code->add1Unchecked(OPCODE_EXT);
-							code->add1Unchecked(EXT_COMISf_REG_MEM);
-							writeModRM(MODRM_MOD_DIRECT, 0, 1);
-
-							code->add1Unchecked(JCC_DIRECT_8_BASE | C_AE);
-							u8 *secondJumpPatch = code->add1Unchecked(0);
-							u64 secondJumpRel = code->totalSize;
-
-							loadImmediateIntoIntRegister64(RAX, 0x8000'0000'0000'0000);
-
-							*firstJumpPatch = static_cast<u8>(code->totalSize - firstJumpRel);
-							*secondJumpPatch = static_cast<u8>(code->totalSize - secondJumpRel);
-
+							writeModRM(MODRM_MOD_INDIRECT, 0, MODRM_RM_RIP_OFFSET_32);
+							code->addRel32Relocation(ir.opSize == 8 ? f64ToU64ConstantSymbolIndex : f32ToU64ConstantSymbolIndex);
 
 							writeFloatPrefix(ir.opSize);
 							writeIntegerPrefix(8);
 							code->add1Unchecked(OPCODE_EXT);
 							code->add1Unchecked(EXT_CVTTSf2SI_REG_MEM);
-							writeModRM(MODRM_MOD_DIRECT, RCX, 0);
+							writeModRM(MODRM_MOD_DIRECT, RAX, 0);
 
-							writeIntegerPrefix(8);
-							code->add1Unchecked(ADD_REG_MEM_BASE);
+							sizedIntInstruction(8, SHIFT_IMM8_BASE_MODRM_X);
+							writeModRM(MODRM_MOD_DIRECT, RDX, SHIFT_MODRM_SAR);
+							code->add1Unchecked(63);
+
+							sizedIntInstruction(8, AND_REG_MEM_BASE);
+							writeModRM(MODRM_MOD_DIRECT, RAX, RDX);
+
+							sizedIntInstruction(8, OR_REG_MEM_BASE);
 							writeModRM(MODRM_MOD_DIRECT, RAX, RCX);
 						}
 
 						else {
 							writeFloatPrefix(ir.opSize);
-							writeIntegerPrefix(8);
+							if (ir.opSize >= 4) {
+								writeIntegerPrefix(8);
+							}
 
 							code->add1Unchecked(OPCODE_EXT);
 							code->add1Unchecked(EXT_CVTTSf2SI_REG_MEM);
