@@ -3512,14 +3512,14 @@ bool matchPolymorphArgument(Expr *polymorphExpression, Type *type, Expr *locatio
 
 		if (type->flags & TYPE_IS_POLYMORPHIC) {
 			if (!silent) {
-				reportError(location, "Error: Could not match polymorph pattern, given argument is still polymorphic", STRING_PRINTF(type->name));
+				reportError(location, "Error: Could not match polymorph pattern, given argument %.*s is a polymorphic struct", STRING_PRINTF(type->name));
 				reportError(polymorphExpression, "   ..: Here is is the polymorph argument");
 			}
 			return false;
 		}
 		if (type->flavor != TypeFlavor::STRUCT) {
 			if (!silent) {
-				reportError(location, "Error: Could not match polymorph pattern, wanted a polymorphic struct but given a ", STRING_PRINTF(type->name));
+				reportError(location, "Error: Could not match polymorph pattern, wanted a polymorphic struct but given a %.*s", STRING_PRINTF(type->name));
 				reportError(polymorphExpression, "   ..: Here is is the polymorph argument");
 			}
 			return false;
