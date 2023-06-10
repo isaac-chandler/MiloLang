@@ -4305,11 +4305,8 @@ bool inferFlattened(SubJob *job) {
 								return true;
 							}
 
-							auto member = findDeclarationNoYield(&struct_->constants, identifier->name);
+							reportError(identifier, "Error: %.*s does not have member %.*s", STRING_PRINTF(struct_->name), STRING_PRINTF(identifier->name));
 
-							if (!member) {
-								reportError(identifier, "Error: %.*s does not have member %.*s", STRING_PRINTF(struct_->name), STRING_PRINTF(identifier->name));
-							}
 							return false;
 						}
 						else if (onlyConstants & !(member->flags & DECLARATION_IS_CONSTANT)) {
