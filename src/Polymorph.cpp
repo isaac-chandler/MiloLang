@@ -102,6 +102,26 @@ void copyBlockInfo(Block *dest, Block *src) {
 
 void copyBlock(Block *dest, Block *src);
 
+TypeStruct *copyStruct(TypeStruct *srcType) {
+	auto destType = POLYMORPH_NEW(TypeStruct);
+
+	destType->size = srcType->size;
+	destType->alignment = srcType->alignment;
+	destType->name = srcType->name;
+	destType->hash = 0;
+	destType->flags = srcType->flags;
+	destType->flavor = srcType->flavor;
+
+	copyingBlocks.add({ &destType->constants, &srcType->constants });
+	copyBlock(&destType->constants, &srcType->constants);
+	copyingBlocks.add({ &destType->members, &srcType->members });
+	copyBlock(&destType->members, &srcType->members);
+	copyingBlocks.pop();
+	copyingBlocks.pop();
+
+	return destType;
+}
+
 Expr *copyExpr(Expr *srcExpr) {
 
 #define c(type)\
@@ -396,20 +416,7 @@ Expr *copyExpr(Expr *srcExpr) {
 		auto type = src->typeValue;
 
 		if (type->flavor == TypeFlavor::STRUCT) {
-			auto srcType = static_cast<TypeStruct *>(type);
-			auto destType = POLYMORPH_NEW(TypeStruct);
-
-			destType->size = srcType->size;
-			destType->alignment = srcType->alignment;
-			destType->name = srcType->name;
-			destType->hash = 0;
-			destType->flags = srcType->flags;
-			destType->flavor = srcType->flavor;
-			copyingBlocks.add({ &destType->members, &srcType->members });
-			copyBlock(&destType->members, &srcType->members);
-			copyingBlocks.pop();
-
-			dest->typeValue = destType;
+			dest->typeValue = copyStruct(static_cast<TypeStruct *>(type));
 		}
 		else {
 			copy(typeValue);
@@ -517,7 +524,7 @@ void copyBlock(Block *dest, Block *src) {
 	}
 }
 
-ExprFunction *polymorph(ExprFunction *src) {
+ExprFunction *polymorphFunction(ExprFunction *src) {
 	assert(!copyingBlocks.count);
 	assert(src->flavor == ExprFlavor::FUNCTION);
 
@@ -546,6 +553,24 @@ ExprFunction *polymorph(ExprFunction *src) {
 
 	dest->flags &= ~EXPR_FUNCTION_IS_POLYMORPHIC;
 	dest->type = nullptr;
+
+	return dest;
+}
+
+TypeStruct *polymorphStruct(TypeStruct *struct_, Arguments *arguments) {
+	assert(!copyingBlocks.count);
+	assert(arguments->count == struct_->constants.declarations.count);
+
+	TypeStruct *dest = copyStruct(struct_);
+
+	for (u32 i = 0; i < dest->constants.declarations.count; i++) {
+		dest->constants.declarations[i]->initialValue = arguments->values[i];
+		dest->constants.declarations[i]->flags |= DECLARATION_VALUE_IS_READY | DECLARATION_TYPE_IS_READY;
+
+		addDeclarationToBlockUnchecked(&dest->members, dest->constants.declarations[i], nullptr, dest->constants.declarations[i]->serial);
+	}
+
+	dest->flags &= ~TYPE_IS_POLYMORPHIC;
 
 	return dest;
 }

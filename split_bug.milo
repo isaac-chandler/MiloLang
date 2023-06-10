@@ -1,0 +1,16 @@
+#import "Standard"
+#import "String"
+
+main :: () {
+    x, y, z := split_at_first("Hello there", '\n')
+    
+    print("%,%,%\n", x, y, z)
+}
+
+#import "Compiler"
+#run {
+    opt := get_build_options()
+    opt.backend = .LLVM
+    opt.llvm_options = .["-O3"]
+    set_build_options(opt)
+}

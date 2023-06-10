@@ -1,3 +1,5 @@
 #include "Ast.h"
 
-ExprFunction *polymorph(ExprFunction *source);
+ExprFunction *polymorphFunction(ExprFunction *source);
+
+TypeStruct *polymorphStruct(TypeStruct *source, Arguments *arguments);

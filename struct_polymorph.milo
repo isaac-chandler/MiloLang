@@ -1,0 +1,20 @@
+#import "Standard"
+#import "Table"
+
+main :: () {
+    javascript: Table(string, string)
+    
+    table_insert(*javascript, "number", "NaN")
+    table_insert(*javascript, "struct", "[object Object]")
+    table_insert(*javascript, "banana", "('b' + 'a' + + 'a' + 'a').toLowerCase()")
+    table_insert(*javascript, "goodness", "any amount")
+    table_remove(*javascript, "goodness")
+    table_remove(*javascript, "performance")
+    
+    print("%\n", <<table_find(javascript, "number"))
+    print("%\n", table_find(javascript, "types"))
+    
+    for javascript.slots {
+        print("table.slots[%] = %\n", it_index, it)
+    }
+}

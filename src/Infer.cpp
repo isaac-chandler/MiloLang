@@ -361,12 +361,9 @@ void addSizeJobIfNeeded(Type *type) {
 
 void addTypeBlock(Type *type, Declaration *valueOfDeclaration) {
 	if (type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::ENUM) {
-		if (!type->sizeJob) {
-			auto struct_ = static_cast<TypeStruct *>(type);
+		auto struct_ = static_cast<TypeStruct *>(type);
 
-			addSizeJobIfNeeded(type);
-			addBlock(&struct_->members);
-
+		if (!struct_->constants.queued) {
 			if (valueOfDeclaration && (valueOfDeclaration->flags & DECLARATION_IS_CONSTANT)) {
 				type->name = valueOfDeclaration->name;
 				struct_->enclosingScope = valueOfDeclaration->enclosingScope;
@@ -379,7 +376,17 @@ void addTypeBlock(Type *type, Declaration *valueOfDeclaration) {
 				struct_->enclosingScope = &runtimeModule->members;
 				type->flags |= TYPE_IS_ANONYMOUS;
 			}
-			addStruct(struct_);
+			
+
+			if (struct_->flags & TYPE_IS_POLYMORPHIC) {
+				addBlock(&struct_->constants);
+			} 
+			else {
+				addSizeJobIfNeeded(type);
+				addBlock(&struct_->members);
+
+				addStruct(struct_);
+			}
 		}
 	}
 	else if (type->flavor == TypeFlavor::MODULE) {
@@ -568,6 +575,9 @@ void flatten(Array<Expr **> &flattenTo, Expr **expr) {
 
 		if (literal->typeValue != &TYPE_CONTEXT)
 			addTypeBlock(literal->typeValue, literal->valueOfDeclaration);
+		
+		if (literal->typeValue->flags & TYPE_IS_POLYMORPHIC)
+			flattenTo.add(expr);
 
 		break;
 	}
@@ -1238,6 +1248,12 @@ TypeStruct *getExpressionNamespace(Expr *expr, bool *onlyConstants, Expr *locati
 
 		auto type = static_cast<ExprLiteral *>(expr)->typeValue;
 
+		if (type->flags & TYPE_IS_POLYMORPHIC) {
+			if (location)
+				reportError(location, "Error: Cannot access the fields of a polymorphic struct");
+			return nullptr;
+		}
+
 		if (type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::ARRAY || type->flavor == TypeFlavor::MODULE || type->flavor == TypeFlavor::ENUM) {
 			*onlyConstants = true;
 			return static_cast<TypeStruct *>(type);
@@ -1640,6 +1656,9 @@ bool evaluateConstantBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 		else if (left->flavor == ExprFlavor::STRING_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(stringLeft->start, stringRight->end, &TYPE_BOOL, stringLeft->string != stringRight->string);
 		}
+		else if (left->flavor == ExprFlavor::TYPE_LITERAL) {
+			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->typeValue != right->typeValue);
+		}
 		break;
 	}
 	case TokenT::EQUAL: {
@@ -1654,6 +1673,9 @@ bool evaluateConstantBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 		}
 		else if (left->flavor == ExprFlavor::STRING_LITERAL) {
 			*exprPointer = createInBoundsIntLiteral(stringLeft->start, stringRight->end, &TYPE_BOOL, stringLeft->string == stringRight->string);
+		}
+		else if (left->flavor == ExprFlavor::TYPE_LITERAL) {
+			*exprPointer = createInBoundsIntLiteral(left->start, right->end, &TYPE_BOOL, left->typeValue == right->typeValue);
 		}
 		break;
 	}
@@ -2281,6 +2303,11 @@ bool declarationIsOverloadSet(SubJob *job, Declaration *declaration, bool *yield
 	if (!(declaration->flags & DECLARATION_IS_CONSTANT))
 		return false;
 
+	// Struct polymorph parameters are marked as both constant and argument
+	// They cannot be overloaded
+	if (declaration->flags & DECLARATION_IS_ARGUMENT)
+		return false;
+
 	if (declaration->nextOverload)
 		return true;
 
@@ -2520,7 +2547,7 @@ bool checkExpressionIsRuntimeValid(Expr *expr) {
 	if (!expr)
 		return true;
 
-	if (expr->type->flavor == TypeFlavor::VOID) {
+	if (expr->type == &TYPE_VOID) {
 		reportError(expr, "Error: Cannot operate on a value of type void");
 		return false;
 	}
@@ -2530,6 +2557,10 @@ bool checkExpressionIsRuntimeValid(Expr *expr) {
 	}
 	else if (expr->flags & EXPR_FUNCTION_IS_INSTRINSIC) {
 		reportError(expr, "Error: Cannot operate on an intrinsic function");
+		return false;
+	}
+	else if (expr->type->flags & TYPE_IS_POLYMORPHIC) {
+		reportError(expr, "Error: Cannot operate on a polymorphic type");
 		return false;
 	}
 
@@ -3476,6 +3507,73 @@ bool matchPolymorphArgument(Expr *polymorphExpression, Type *type, Expr *locatio
 
 		return true;
 	}
+	else if (polymorphExpression->flavor == ExprFlavor::FUNCTION_CALL) {
+		auto call = static_cast<ExprFunctionCall *>(polymorphExpression);
+
+		if (type->flags & TYPE_IS_POLYMORPHIC) {
+			if (!silent) {
+				reportError(location, "Error: Could not match polymorph pattern, given argument is still polymorphic", STRING_PRINTF(type->name));
+				reportError(polymorphExpression, "   ..: Here is is the polymorph argument");
+			}
+			return false;
+		}
+		if (type->flavor != TypeFlavor::STRUCT) {
+			if (!silent) {
+				reportError(location, "Error: Could not match polymorph pattern, wanted a polymorphic struct but given a ", STRING_PRINTF(type->name));
+				reportError(polymorphExpression, "   ..: Here is is the polymorph argument");
+			}
+			return false;
+		}
+
+		auto struct_ = static_cast<TypeStruct *>(type);
+
+		if (call->arguments.count > struct_->constants.declarations.count) {
+			if (!silent) {
+				reportError(location, "Error: Could not match polymorph pattern, pattern has %" PRIu64 " arguments and given struct has %" PRIu64, call->arguments.count, 
+					struct_->constants.declarations.count);
+				reportError(polymorphExpression, "   ..: Here is is the polymorph argument");
+			}
+			return false;
+		}
+
+		for (u32 i = 0; i < call->arguments.count; i++) {
+			auto declaration = struct_->constants.declarations[i];
+
+			if (call->arguments.names && call->arguments.names[i]) {
+				declaration = findDeclarationNoYield(&struct_->constants, call->arguments.names[i]);
+
+				if (!declaration) {
+					if (!silent) {
+						reportError(location, "Error: Could not match polymorph pattern, expected a struct argument called %.*s but given struct %.*s does not have it",
+							STRING_PRINTF(call->arguments.names[i]), STRING_PRINTF(struct_->name));
+						reportError(polymorphExpression, "   ..: Here is the polymorph argument");
+					}
+					return false;
+				}
+			}
+
+			assert(declaration->flags & DECLARATION_VALUE_IS_READY);
+			assert(declaration->initialValue);
+
+			if (declaration->initialValue->flavor != ExprFlavor::TYPE_LITERAL) {
+				// @Incomplete pattern matching for polymorphic structs (requires handling non-type values) i.e. Static_List(u8, 16)
+				//                                                                                                               ^
+				if (!silent) {
+					reportError(location, "Error: Could not match polymorph pattern, polymorph variables can currently only be a constant type but got a %.*s instead",
+						STRING_PRINTF(declaration->initialValue->type->name));
+					reportError(polymorphExpression, "   ..: Here is the polymorph argument");
+					reportError(polymorphExpression, "   ..: Consider making the argument a wildcard polymorph instead");
+				}
+				return false;
+			}
+
+			if (!matchPolymorphArgument(call->arguments.values[i], static_cast<ExprLiteral *>(declaration->initialValue)->typeValue, location, yield, silent)) {
+				return false;
+			}
+		}
+
+		return true;
+	}
 
 	if (!silent)
 		reportError(polymorphExpression, "Error: Could not match polymorphic argument pattern");
@@ -3528,6 +3626,18 @@ bool constantsBlockMatches(Block *original, Block *polymorph) {
 		assert(originalDeclaration->name == polymorphDeclaration->name);
 		
 		if (!switchCasesAreSame(originalDeclaration->initialValue, polymorphDeclaration->initialValue)) {
+			return false;
+		}
+	}
+
+	return true;
+}
+
+bool constantsBlockMatches(Block *original, Arguments *polymorph) {
+	assert(original->declarations.count == polymorph->count);
+
+	for (u64 i = 0; i < original->declarations.count; i++) {
+		if (!switchCasesAreSame(original->declarations[i]->initialValue, polymorph->values[i])) {
 			return false;
 		}
 	}
@@ -3836,6 +3946,12 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 			return false;
 		}
 
+		if (left->type->flavor == TypeFlavor::AUTO_CAST && getTypeForExpr(right) != right->type) {
+			insertImplicitCast(job->sizeDependencies, &right, getTypeForExpr(right));
+		} else if (right->type->flavor == TypeFlavor::AUTO_CAST && getTypeForExpr(left) != left->type) {
+			insertImplicitCast(job->sizeDependencies, &left, getTypeForExpr(left));
+		}
+
 		bool handled = left->type == right->type;
 
 		if (binary->op == TOKEN('+')) {
@@ -3895,7 +4011,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 					if (*yield)
 						return true;
 
-					reportError("Error: Cannot %s %.*s and %.*s", binaryOpName(binary->op), STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
+					reportError(binary, "Error: Cannot %s %.*s and %.*s", binaryOpName(binary->op), STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
 					return false;
 				}
 				else {
@@ -3913,7 +4029,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 		case TokenT::EQUAL:
 		case TokenT::NOT_EQUAL: {
 			if (left->type->flavor == TypeFlavor::ARRAY || left->type->flavor == TypeFlavor::STRUCT) {
-				reportError("Error: Cannot compare %.*s's", STRING_PRINTF(left->type->name));
+				reportError(binary, "Error: Cannot compare %.*s's", STRING_PRINTF(left->type->name));
 				return false;
 			}
 
@@ -3925,7 +4041,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 		case TOKEN('>'):
 		case TOKEN('<'): {
 			if (left->type->flavor != TypeFlavor::INTEGER && left->type->flavor != TypeFlavor::FLOAT) {
-				reportError("Error: Cannot compare %.*s's", STRING_PRINTF(left->type->name));
+				reportError(binary, "Error: Cannot compare %.*s's", STRING_PRINTF(left->type->name));
 				return false;
 			}
 
@@ -3938,7 +4054,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 		case TOKEN('+'):
 		case TOKEN('-'): {
 			if (left->type->flavor != TypeFlavor::INTEGER && left->type->flavor != TypeFlavor::FLOAT) {
-				reportError("Error: Cannot %s %.*s's", binaryOpName(binary->op), STRING_PRINTF(left->type->name));
+				reportError(binary, "Error: Cannot %s %.*s's", binaryOpName(binary->op), STRING_PRINTF(left->type->name));
 				return false;
 			}
 
@@ -3969,7 +4085,7 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 		case TokenT::SHIFT_LEFT:
 		case TokenT::SHIFT_RIGHT: {
 			if (left->type->flavor != TypeFlavor::INTEGER) {
-				reportError("Error: Cannot shift %.*s's", STRING_PRINTF(left->type->name));
+				reportError(binary, "Error: Cannot shift %.*s's", STRING_PRINTF(left->type->name));
 				return false;
 			}
 			
@@ -4189,7 +4305,11 @@ bool inferFlattened(SubJob *job) {
 								return true;
 							}
 
-							reportError(identifier, "Error: %.*s does not have member %.*s", STRING_PRINTF(struct_->name), STRING_PRINTF(identifier->name));
+							auto member = findDeclarationNoYield(&struct_->constants, identifier->name);
+
+							if (!member) {
+								reportError(identifier, "Error: %.*s does not have member %.*s", STRING_PRINTF(struct_->name), STRING_PRINTF(identifier->name));
+							}
 							return false;
 						}
 						else if (onlyConstants & !(member->flags & DECLARATION_IS_CONSTANT)) {
@@ -4790,7 +4910,28 @@ bool inferFlattened(SubJob *job) {
 
 			break;
 		}
-		case ExprFlavor::TYPE_LITERAL:
+		case ExprFlavor::TYPE_LITERAL: {
+			auto type = static_cast<ExprLiteral *>(expr)->typeValue;
+
+			if (type->flavor == TypeFlavor::STRUCT) {
+				auto struct_ = static_cast<TypeStruct *>(type);
+
+				bool sleep = false;
+
+				for (auto declaration : struct_->constants.declarations) {
+					if (!(declaration->flags & DECLARATION_TYPE_IS_READY)) {
+						goToSleep(job, &declaration->sleepingOnMyType, "Polymorphic struct argument type not ready");
+
+						sleep = true;
+					}
+				}
+
+				if (sleep)
+					return true;
+			}
+
+			break;
+		}
 		case ExprFlavor::STRING_LITERAL:
 		case ExprFlavor::FLOAT_LITERAL:
 		case ExprFlavor::INT_LITERAL: {
@@ -4872,7 +5013,7 @@ bool inferFlattened(SubJob *job) {
 				}
 
 				if (!isAddressable(continue_->refersTo->forBegin)) {
-					reportError("Error: Cannot remove from a temporary value");
+					reportError(continue_->refersTo->forBegin, "Error: Cannot remove from a temporary value");
 
 					return false;
 				}
@@ -5115,7 +5256,7 @@ bool inferFlattened(SubJob *job) {
 				assert(loop->forBegin);
 
 				if (loop->forBegin->type == loop->forEnd->type && loop->forBegin->type == &TYPE_AUTO_CAST) {
-					reportError("Error: Cannot infer types of loop range when both are auto casted");
+					reportError(loop, "Error: Cannot infer types of loop range when both are auto casted");
 					return false;
 				}
 
@@ -5478,17 +5619,37 @@ bool inferFlattened(SubJob *job) {
 
 			String functionName = call->function->valueOfDeclaration ? call->function->valueOfDeclaration->name : "function";
 
-			ExprFunction *functionForArgumentNames = nullptr;
+			Block *argumentNames = nullptr;
+			Block *returnNames = nullptr;
 
 			if (call->function->flavor == ExprFlavor::FUNCTION) {
-				functionForArgumentNames = static_cast<ExprFunction *>(call->function);
+				argumentNames = &static_cast<ExprFunction *>(call->function)->arguments;
+				returnNames = &static_cast<ExprFunction *>(call->function)->returns;
+			}
+			else if (call->function->type == &TYPE_TYPE) {
+				if (call->function->flavor != ExprFlavor::TYPE_LITERAL) {
+					reportError(call, "Error: Cannot create a polymorph of a non-constant type");
+					return false;
+				}
+				auto type = static_cast<ExprLiteral *>(call->function)->typeValue;
 
+				if (type->flavor != TypeFlavor::STRUCT) {
+					reportError(call, "Error: Can only create a polymorph of a struct type");
+					return false;
+				}
+
+				if (!(type->flags & TYPE_IS_POLYMORPHIC)) {
+					reportError(call, "Error: Cannot polymorph a non-polymorphic struct");
+					return false;
+				}
+
+				argumentNames = &static_cast<TypeStruct *>(type)->constants;
 			}
 
 			if (call->progress.phase == InferProgress::Phase::NONE) {
-				if (functionForArgumentNames) {
-					if (call->flags & EXPR_FUNCTION_CALL_IS_STATEMENT_LEVEL) {
-						for (auto declaration : functionForArgumentNames->returns.declarations) {
+				if (call->flags & EXPR_FUNCTION_CALL_IS_STATEMENT_LEVEL) {
+					if (returnNames) {
+						for (auto declaration : returnNames->declarations) {
 							if (declaration->flags & DECLARATION_IS_MUST) {
 								reportError(call, "Error: Cannot ignore the return value of the function call, it was marked as #must");
 								reportError(declaration, "   ..: Here is the function");
@@ -5496,31 +5657,44 @@ bool inferFlattened(SubJob *job) {
 							}
 						}
 					}
-					else if (!(call->flags & EXPR_FUNCTION_CALL_IS_IN_COMMA_ASSIGNMENT)) {
-						for (u32 i = 1; i < functionForArgumentNames->returns.declarations.count; i++) {
-							auto declaration = functionForArgumentNames->returns.declarations[i];
 
-							if (declaration->flags & DECLARATION_IS_MUST) {
-								reportError(call, "Error: Cannot ignore the return value of the function call, it was marked as #must");
-								reportError(declaration, "   ..: Here is the function");
-								return false;
-							}
-						}
-					}
-				} else {
-					if (call->arguments.names) {
-						reportError(call, "Error: Cannot use named arguments with a non-constant function"); // @Improvement better message
+					if (call->function->type == &TYPE_TYPE) {
+						reportError(call, "Error: Cannot have a naked struct polymorph at statement level");
 						return false;
 					}
 				}
+				else if (call->flags & EXPR_FUNCTION_CALL_IS_IN_COMMA_ASSIGNMENT) {
+					if (call->function->type == &TYPE_TYPE) {
+						reportError(call, "Error: Cannot assign a struct polymorph to multiple values");
+						return false;
+					}
+				}
+				else {
+					if (returnNames) {
+						for (u32 i = 1; i < returnNames->declarations.count; i++) {
+							auto declaration = returnNames->declarations[i];
 
-				if (!(call->function->type->flags & TYPE_FUNCTION_IS_C_CALL) && !(call->flags & EXPR_CONTEXT_AVAILABLE)) {
+							if (declaration->flags & DECLARATION_IS_MUST) {
+								reportError(call, "Error: Cannot ignore the return value of the function call, it was marked as #must");
+								reportError(declaration, "   ..: Here is the function");
+								return false;
+							}
+						}
+					}
+				}
+
+				if (!argumentNames && call->arguments.names) {
+					reportError(call, "Error: Cannot use named arguments with a non-constant function"); // @Improvement better message
+					return false;
+				}
+
+				if (call->function->type->flavor == TypeFlavor::FUNCTION && !(call->function->type->flags & TYPE_FUNCTION_IS_C_CALL) && !(call->flags & EXPR_CONTEXT_AVAILABLE)) {
 					reportError(call, "Error: Can only call #c_call functions without an active context. Use push_context to add a context");
 					return false;
 				}
 
-				if (functionForArgumentNames) {
-					if (!sortArguments(job, &call->arguments, &functionForArgumentNames->arguments, "argument", call, functionForArgumentNames)) {
+				if (argumentNames) {
+					if (!sortArguments(job, &call->arguments, argumentNames, "argument", call, call->function)) {
 						return false;
 					}
 				}
@@ -5561,7 +5735,7 @@ bool inferFlattened(SubJob *job) {
 				}
 
 				if (!existingPolymorph) {
-					auto newFunction = polymorph(function);
+					auto newFunction = polymorphFunction(function);
 					function->polymorphs.add(newFunction);
 
 					addFunction(newFunction);
@@ -5577,25 +5751,50 @@ bool inferFlattened(SubJob *job) {
 				continue;
 			}
 
-			if (call->function->type->flavor != TypeFlavor::FUNCTION) {
+			if (call->function->type->flavor != TypeFlavor::FUNCTION && call->function->type != &TYPE_TYPE) {
 				reportError(call->function, "Error: Cannot call a %.*s", STRING_PRINTF(call->function->type->name));
 				return false;
 			}
 
-			auto function = static_cast<TypeFunction *>(call->function->type);
 
-			expr->type = function->returnTypes[0];
-
-			addSizeDependency(job->sizeDependencies, expr->type);
-
-			if (functionForArgumentNames) {
+			if (argumentNames) {
 				bool yield;
 
-				if (!inferArguments(job, &call->arguments, &functionForArgumentNames->arguments, &yield)) {
+				if (!inferArguments(job, &call->arguments, argumentNames, &yield)) {
 					return yield;
+				}
+
+				if (call->function->type == &TYPE_TYPE) {
+					auto struct_ = static_cast<TypeStruct *>(static_cast<ExprLiteral *>(call->function)->typeValue);
+
+					TypeStruct *existingPolymorph = nullptr;
+
+					for (auto polymorph : struct_->polymorphs) {
+						if (constantsBlockMatches(&polymorph->constants, &call->arguments)) {
+							existingPolymorph = polymorph;
+							break;
+						}
+					}
+
+					if (!existingPolymorph) {
+						existingPolymorph = polymorphStruct(struct_, &call->arguments);
+						struct_->polymorphs.add(existingPolymorph);
+						// @Incomplete for now polymorphed structs will have the name of the struct they were polymorphed from
+						addTypeBlock(existingPolymorph, call->function->valueOfDeclaration);
+					}
+
+
+					*exprPointer = inferMakeTypeLiteral(call->start, call->end, existingPolymorph);
+				}
+				else {
+					auto function = static_cast<TypeFunction *>(call->function->type);
+					expr->type = function->returnTypes[0];
+					addSizeDependency(job->sizeDependencies, expr->type);
 				}
 			}
 			else {
+				assert(call->function->type->flavor == TypeFlavor::FUNCTION);
+				auto function = static_cast<TypeFunction *>(call->function->type);
 				if (call->arguments.count != function->argumentCount || function->isVarargs) {
 
 					if (function->isVarargs) {
@@ -5674,6 +5873,9 @@ bool inferFlattened(SubJob *job) {
 						return yield;
 					}
 				}
+
+				expr->type = function->returnTypes[0];
+				addSizeDependency(job->sizeDependencies, expr->type);
 			}
 
 			break;
@@ -5917,6 +6119,16 @@ bool inferFlattened(SubJob *job) {
 					return false;
 				}
 
+				if (type->typeValue->flavor == TypeFlavor::MODULE) {
+					reportError(value, "Error: Cannot take the size of a module");
+					return false;
+				}
+
+				if (type->typeValue->flags & TYPE_IS_POLYMORPHIC) {
+					reportError(value, "Error: Cannot take the size of a polymorphic type");
+					return false;
+				}
+
 				if (!type->typeValue->size) {
 					goToSleep(job, &type->typeValue->sleepingOnMe, "Sizeof size not ready");
 
@@ -5941,6 +6153,16 @@ bool inferFlattened(SubJob *job) {
 
 				if (type->typeValue == &TYPE_VOID) {
 					reportError(value, "Error: Cannot get the alignment of void");
+					return false;
+				}
+
+				if (type->typeValue->flavor == TypeFlavor::MODULE) {
+					reportError(value, "Error: Cannot take the align of a module");
+					return false;
+				}
+
+				if (type->typeValue->flags & TYPE_IS_POLYMORPHIC) {
+					reportError(value, "Error: Cannot take the align of a polymorphic type");
 					return false;
 				}
 
@@ -6033,6 +6255,10 @@ bool inferFlattened(SubJob *job) {
 						typeInfoType = TYPE_TYPE_INFO_ARRAY;
 						break;
 					case TypeFlavor::STRUCT:
+						if (type->flags & TYPE_IS_POLYMORPHIC) {
+							reportError(unary, "Error: Cannot get type_info for a polymorphic struct");
+							return false;
+						}
 						typeInfoType = TYPE_TYPE_INFO_STRUCT;
 						break;
 					case TypeFlavor::ENUM:
@@ -6096,6 +6322,10 @@ bool inferFlattened(SubJob *job) {
 
 					if (literal->typeValue->flavor == TypeFlavor::MODULE) {
 						reportError(unary, "Error: Cannot take a pointer to a module");
+						return false;
+					}
+					if (literal->typeValue->flags & TYPE_IS_POLYMORPHIC) {
+						reportError(unary, "Error: Cannot take a pointer to a polymorphic struct");
 						return false;
 					}
 
@@ -6478,7 +6708,7 @@ void forceAddDeclaration(Declaration *declaration) {
 
 	// Fast path for declarations that are trivial to infer
 	if (declaration->flags & DECLARATION_IS_CONSTANT) {
-		if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::INT_LITERAL) {
+		if (!declaration->type && declaration->initialValue && declaration->initialValue->type == &TYPE_UNSIGNED_INT_LITERAL) {
 			declaration->type = inferMakeTypeLiteral(declaration->start, declaration->end, &TYPE_UNSIGNED_INT_LITERAL);
 			declaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
 			wakeUpSleepers(&declaration->sleepingOnMyType);
@@ -6505,6 +6735,7 @@ void forceAddDeclaration(Declaration *declaration) {
 			declaration->sleepingOnMyValue.free();
 			return;
 		}
+		/* TODO This fast path doesn't check struct polymorphism
 		else if (declaration->type && declaration->type->flavor == ExprFlavor::TYPE_LITERAL && !declaration->initialValue && (declaration->flags & (DECLARATION_IS_ARGUMENT | DECLARATION_IS_UNINITIALIZED | DECLARATION_IS_RETURN))) {
 			declaration->flags |= DECLARATION_TYPE_IS_READY;
 
@@ -6516,7 +6747,7 @@ void forceAddDeclaration(Declaration *declaration) {
 			wakeUpSleepers(&declaration->sleepingOnMyType);
 			declaration->sleepingOnMyType.free();
 			return;
-		}
+		}*/
 		else if (!declaration->type && declaration->initialValue && declaration->initialValue->flavor == ExprFlavor::FUNCTION) {
 			addFunction(static_cast<ExprFunction *>(declaration->initialValue));
 
@@ -6966,6 +7197,11 @@ bool inferDeclarationType(SubJob *subJob) {
 			return false;
 		}
 
+		if (type->flags & TYPE_IS_POLYMORPHIC) {
+			reportError(declaration->type, "Error: Declaration type cannot be polymorphic");
+			return false;
+		}
+
 		wakeUpSleepers(&declaration->sleepingOnMyType);
 		declaration->sleepingOnMyType.free();
 	}
@@ -7104,7 +7340,11 @@ bool inferDeclarationValue(SubJob *subJob) {
 				return false;
 			}
 			else if (!(declaration->flags & DECLARATION_IS_CONSTANT) && declaration->initialValue->type->flavor == TypeFlavor::MODULE) {
-				reportError(declaration, "Error: Declaration type cannot be a module");
+				reportError(declaration, "Error: Modules may not be assigned to a non-constant declaration");
+				return false;
+			}
+			else if (!(declaration->flags & DECLARATION_IS_CONSTANT) && (declaration->initialValue->type->flags & TYPE_IS_POLYMORPHIC)) {
+				reportError(declaration, "Error: Polymorphic types may not be assigned to a non-constant declaration");
 				return false;
 			}
 

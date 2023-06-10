@@ -326,7 +326,7 @@ get_offset :: (using editor: *Editor, row: u64, col: u64) -> u64 {
     lines := get_lines(editor)
 
     row_ := min(row, lines.count - 1)
-    col_ := min(col, lines[row].count)
+    col_ := min(col, lines[row_].count)
 
     return cast() (*lines[row_][col_] - text.data)
     
@@ -342,16 +342,16 @@ location_pos :: (using editor: *Editor, location: u64) -> (u64, u64) {
     low: u64 = 0
     high := lines.count
     
-    while low != high {
+    while low <= high {
         mid := (low + high) / 2
         
         line := lines[mid]
         line_start := cast(u64) (line.data - text.data)
         
         if location < line_start {
-            high = mid
+            high = mid - 1
         } else if location > line_start + line.count {
-            low = mid
+            low = mid + 1
         } else {
             return mid, location - line_start
         }

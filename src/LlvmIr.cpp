@@ -1200,7 +1200,8 @@ static llvm::Value *generateLlvmCall(State *state, ExprFunctionCall *call, ExprC
 
 		if (!isStandardSize(argument->size)) {
 			assert(isStoredByPointer(argument));
-			arguments[i + paramOffset] = generateLlvmIr(state, call->arguments.values[i]);
+			arguments[i + paramOffset] = allocateType(state, call->arguments.values[i]->type);
+			state->builder.CreateStore(state->builder.CreateLoad(generateLlvmIr(state, call->arguments.values[i])), arguments[i + paramOffset]);
 
 		}
 		else if (argument->flavor == TypeFlavor::STRUCT || argument->flavor == TypeFlavor::ARRAY) {

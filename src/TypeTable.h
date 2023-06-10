@@ -65,6 +65,7 @@ static_assert(sizeof(TYPE_FLAVOR_NAMES) / sizeof(const char *) == static_cast<u8
 #define TYPE_FUNCTION_IS_C_CALL 0x80
 #define TYPE_USED_IN_OUTPUT 0x100
 #define TYPE_IS_ANONYMOUS 0x200
+#define TYPE_IS_POLYMORPHIC 0x400
 
 struct Type {
 	u32 size;
@@ -95,7 +96,9 @@ struct TypePointer : Type {
 
 struct TypeStruct : Type {
 	struct Block *enclosingScope; // This field is only used for debug info for struct, union, enum, enum_flags	
+	Block constants;
 	Block members;
+	Array<TypeStruct *> polymorphs;
 };
 
 struct TypeEnum : TypeStruct {
@@ -161,8 +164,8 @@ inline Type TYPE_AUTO_CAST            = { 0, 0, "<auto cast>",            67, TY
 inline Type TYPE_UNARY_DOT            = { 0, 0, "<unary dot>",            71, TYPE_IS_INTERNAL, TypeFlavor::AUTO_CAST };
 inline Type TYPE_ARRAY_LITERAL        = { 0, 0, "<array literal>",        73, TYPE_IS_INTERNAL, TypeFlavor::AUTO_CAST };
 inline Type TYPE_STRUCT_LITERAL       = { 0, 0, "<struct literal>" ,      79, TYPE_IS_INTERNAL, TypeFlavor::AUTO_CAST };
-inline Type TYPE_OVERLOAD_SET         = { 0, 0, "<overload set>",         83, TYPE_IS_INTERNAL, TypeFlavor::AUTO_CAST };
-inline Type TYPE_POLYMORPHIC_FUNCTION = { 0, 0, "<polymorhpic function>", 89, TYPE_IS_INTERNAL, TypeFlavor::AUTO_CAST };
+inline Type TYPE_OVERLOAD_SET         = { 8, 8, "<overload set>",         83, TYPE_IS_INTERNAL, TypeFlavor::AUTO_CAST };
+inline Type TYPE_POLYMORPHIC_FUNCTION = { 8, 8, "<polymorhpic function>", 89, TYPE_IS_INTERNAL, TypeFlavor::AUTO_CAST };
 inline TypeStruct TYPE_CONTEXT        = { 0, 0, "context",                0, 0, TypeFlavor::STRUCT };
 
 

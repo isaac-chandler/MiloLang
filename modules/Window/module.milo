@@ -1,89 +1,89 @@
 #if TARGET_WINDOWS {
-	#load "Windows.milo"
+    #load "Windows.milo"
 } else {
-	unsupported_os: u64 = "error"
+    unsupported_os: u64 = "error"
 }
 
 Window :: struct {
-	handle: Os_Window
-	should_quit: bool
+    handle: Os_Window
+    should_quit: bool
     destroy_on_close := true
-	events: [..]Event
-	width: s32
-	height: s32
-	keys: [256]bool
-	mouse_x: s16
-	mouse_y: s16
-	
-	draw: () -> void
+    events: [..]Event
+    width: s32
+    height: s32
+    keys: [256]bool
+    mouse_x: s16
+    mouse_y: s16
+    
+    draw: () -> void
 }
 
 get_window_events :: (window: *Window) -> []Event {
-	result: []Event = window.events
-	
-	window.events.count = 0
-	
-	return result
+    result: []Event = window.events
+    
+    window.events.count = 0
+    
+    return result
 }
 
 Event :: struct {
-	kind: enum u8 {
-		NONE
-		KEY
-		MOUSE
-		SCROLL
-		CHAR
-		MOUSE_MOVE
-		RESIZE
+    kind: enum u8 {
+        NONE
+        KEY
+        MOUSE
+        SCROLL
+        CHAR
+        MOUSE_MOVE
+        RESIZE
         CLOSE
-	}
+    }
 
-	using data: union {
-		key: struct {
-			key: Key
-			modifiers: Modifiers
-			down: bool
-		} = --
+    using data: union {
+        key: struct {
+            key: Key
+            modifiers: Modifiers
+            down: bool
+        } = --
 
-		mouse: struct {
-			button: Key
-			x: s16
-			y: s16
-			modifiers: Modifiers
-			down: bool
-			double_click: bool
-		} = --
-		
-		mouse_move: struct {
-			x: s16
-			y: s16
-			modifiers: Modifiers
-		}
+        mouse: struct {
+            button: Key
+            x: s16
+            y: s16
+            modifiers: Modifiers
+            down: bool
+            double_click: bool
+        } = --
+        
+        mouse_move: struct {
+            x: s16
+            y: s16
+            modifiers: Modifiers
+        }
 
-		scroll: struct {
-			scroll_x: s16
-			scroll_y: s16
-			mouse_x: s16
-			mouse_y: s16
-			modifiers: Modifiers
-		} = --
+        scroll: struct {
+            scroll_x: s16
+            scroll_y: s16
+            mouse_x: s16
+            mouse_y: s16
+            modifiers: Modifiers
+        } = --
 
-		char: struct {
-			char: u32
-			modififers: Modifiers
-		} = --
+        char: struct {
+            char: u32
+            modififers: Modifiers
+        } = --
 
-		resize: struct {
-			width: s32
-			height: s32
-		} = --
-	}
+        resize: struct {
+            width: s32
+            height: s32
+        } = --
+    }
 }
 
 Modifiers :: enum_flags u8 {
-	SHIFT
-	CONTROL
-	ALT
+    SHIFT
+    CONTROL
+    ALT
 }
 
 // Currently a 1:1 correspondence with windows VK codes
@@ -93,114 +93,114 @@ Modifiers :: enum_flags u8 {
 //     messages that isn't currently handled)
 //  - This is also not a complete list of VK codes
 Key :: enum u8 {
-	LEFT_MOUSE :: 0x01
-	RIGHT_MOUSE :: 0x02
-	MIDDLE_MOUSE :: 0x04
-	MOUSE_4 :: 0x05
-	MOUSE_5 :: 0x06
-	BACKSPACE :: '\b'
-	TAB :: '\t'
-	ENTER :: '\r'
-	SHIFT :: 0x10
-	CONTROL :: 0x11
-	ALT :: 0x12
-	PAUSE :: 0x13
-	CAPS_LOCK :: 0x14
-	ESCAPE :: '\e'
-	SPACE :: ' '
-	PAGE_UP	:: 0x21
-	PAGE_DOWN :: 0x22
-	END :: 0x23
-	HOME ::	0x24
-	LEFT :: 0x25
-	UP :: 0x26
-	RIGHT :: 0x27
-	DOWN :: 0x28
-	PRINT_SCREEN :: 0x2C
-	INSERT :: 0x2D
-	DELETE :: 0x2E
-	_0 :: '0'
-	_1 :: '1'
-	_2 :: '2'
-	_3 :: '3'
-	_4 :: '4'
-	_5 :: '5'
-	_6 :: '6'
-	_7 :: '7'
-	_8 :: '8'
-	_9 :: '9'
-	A :: 'A'
-	B :: 'B'
-	C :: 'C'
-	D :: 'D'
-	E :: 'E'
-	F :: 'F'
-	G :: 'G'
-	H :: 'H'
-	I :: 'I'
-	J :: 'J'
-	K :: 'K'
-	L :: 'L'
-	M :: 'M'
-	N :: 'N'
-	O :: 'O'
-	P :: 'P'
-	Q :: 'Q'
-	R :: 'R'
-	S :: 'S'
-	T :: 'T'
-	U :: 'U'
-	V :: 'V'
-	W :: 'W'
-	X :: 'X'
-	Y :: 'Y'
-	Z :: 'Z'
-	LEFT_FWINDOWS :: 0x5B
-	RIGHT_WINDOWS :: 0x5C
-	NUMPAD0 :: 0x60
-	NUMPAD1 :: 0x61
-	NUMPAD2 :: 0x62
-	NUMPAD3 :: 0x63
-	NUMPAD4 :: 0x64
-	NUMPAD5 :: 0x65
-	NUMPAD6 :: 0x66
-	NUMPAD7 :: 0x67
-	NUMPAD8 :: 0x68
-	NUMPAD9 :: 0x69
-	NUMPAD_MULTIPLY :: 0x6A
-	NUMPAD_ADD :: 0x6B
-	NUMPAD_SUBTRACT :: 0x6D
-	NUMPAD_DECIMAL :: 0x6E
-	NUMPAD_DIVIDE :: 0x6F
-	F1 :: 0x70
-	F2 :: 0x71
-	F3 :: 0x72
-	F4 :: 0x73
-	F5 :: 0x74
-	F6 :: 0x75
-	F7 :: 0x76
-	F8 :: 0x77
-	F9 :: 0x78
-	F10 :: 0x79
-	F11 :: 0x7A
-	F12 :: 0x7B
-	NUM_LOCK :: 0x90
-	SCROLL_LOCK :: 0x91
-	LEFT_SHIFT :: 0xA0
-	RIGHT_SHIFT :: 0xA1
-	LEFT_CONTROL :: 0xA2
-	RIGHT_CONTROL :: 0xA3
-	LEFT_MENU :: 0xA4
-	RIGHT_MENU :: 0xA5
-	SEMICOLON :: 0xBA // US Keyboard specific
-	PLUS :: 0xBB
-	COMMA :: 0xBC
-	MINUS :: 0xBD
-	PERIOD :: 0xBE
-	SLASH :: 0xBF  // US Keyboard specific
-	BACKTICK :: 0xC0  // US Keyboard specific
-	LEFT_SQUARE_BRACKET :: 0xDB // US Keyboard specific
-	BACKSLASH :: 0xDC // US Keyboard specific
-	RIGHT_SQUARE_BRACKET :: 0xDD // US Keyboard specific
-	QUOTE :: 0xDE // US Keyboard specific
+    LEFT_MOUSE :: 0x01
+    RIGHT_MOUSE :: 0x02
+    MIDDLE_MOUSE :: 0x04
+    MOUSE_4 :: 0x05
+    MOUSE_5 :: 0x06
+    BACKSPACE :: '\b'
+    TAB :: '\t'
+    ENTER :: '\r'
+    SHIFT :: 0x10
+    CONTROL :: 0x11
+    ALT :: 0x12
+    PAUSE :: 0x13
+    CAPS_LOCK :: 0x14
+    ESCAPE :: '\e'
+    SPACE :: ' '
+    PAGE_UP    :: 0x21
+    PAGE_DOWN :: 0x22
+    END :: 0x23
+    HOME ::    0x24
+    LEFT :: 0x25
+    UP :: 0x26
+    RIGHT :: 0x27
+    DOWN :: 0x28
+    PRINT_SCREEN :: 0x2C
+    INSERT :: 0x2D
+    DELETE :: 0x2E
+    _0 :: '0'
+    _1 :: '1'
+    _2 :: '2'
+    _3 :: '3'
+    _4 :: '4'
+    _5 :: '5'
+    _6 :: '6'
+    _7 :: '7'
+    _8 :: '8'
+    _9 :: '9'
+    A :: 'A'
+    B :: 'B'
+    C :: 'C'
+    D :: 'D'
+    E :: 'E'
+    F :: 'F'
+    G :: 'G'
+    H :: 'H'
+    I :: 'I'
+    J :: 'J'
+    K :: 'K'
+    L :: 'L'
+    M :: 'M'
+    N :: 'N'
+    O :: 'O'
+    P :: 'P'
+    Q :: 'Q'
+    R :: 'R'
+    S :: 'S'
+    T :: 'T'
+    U :: 'U'
+    V :: 'V'
+    W :: 'W'
+    X :: 'X'
+    Y :: 'Y'
+    Z :: 'Z'
+    LEFT_WINDOWS  :: 0x5B
+    RIGHT_WINDOWS :: 0x5C
+    NUMPAD0 :: 0x60
+    NUMPAD1 :: 0x61
+    NUMPAD2 :: 0x62
+    NUMPAD3 :: 0x63
+    NUMPAD4 :: 0x64
+    NUMPAD5 :: 0x65
+    NUMPAD6 :: 0x66
+    NUMPAD7 :: 0x67
+    NUMPAD8 :: 0x68
+    NUMPAD9 :: 0x69
+    NUMPAD_MULTIPLY :: 0x6A
+    NUMPAD_ADD :: 0x6B
+    NUMPAD_SUBTRACT :: 0x6D
+    NUMPAD_DECIMAL :: 0x6E
+    NUMPAD_DIVIDE :: 0x6F
+    F1 :: 0x70
+    F2 :: 0x71
+    F3 :: 0x72
+    F4 :: 0x73
+    F5 :: 0x74
+    F6 :: 0x75
+    F7 :: 0x76
+    F8 :: 0x77
+    F9 :: 0x78
+    F10 :: 0x79
+    F11 :: 0x7A
+    F12 :: 0x7B
+    NUM_LOCK :: 0x90
+    SCROLL_LOCK :: 0x91
+    LEFT_SHIFT :: 0xA0
+    RIGHT_SHIFT :: 0xA1
+    LEFT_CONTROL :: 0xA2
+    RIGHT_CONTROL :: 0xA3
+    LEFT_MENU :: 0xA4
+    RIGHT_MENU :: 0xA5
+    SEMICOLON :: 0xBA // US Keyboard specific
+    PLUS :: 0xBB
+    COMMA :: 0xBC
+    MINUS :: 0xBD
+    PERIOD :: 0xBE
+    SLASH :: 0xBF  // US Keyboard specific
+    BACKTICK :: 0xC0  // US Keyboard specific
+    LEFT_SQUARE_BRACKET :: 0xDB // US Keyboard specific
+    BACKSLASH :: 0xDC // US Keyboard specific
+    RIGHT_SQUARE_BRACKET :: 0xDD // US Keyboard specific
+    QUOTE :: 0xDE // US Keyboard specific
 }

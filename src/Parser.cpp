@@ -252,7 +252,7 @@ ExprIf *parseStaticIf(LexerFile *lexer) {
 				popBlock(lexer, &block->declarations);
 			}
 			else {
-				reportError("Error: Expected block or if after else");
+				reportError(&lexer->token, "Error: Expected block or if after else");
 				return nullptr;
 			}
 		}
@@ -1259,7 +1259,7 @@ u32 getPolymorphCount(LexerFile *lexer) {
 	return lexer->currentFunctionHeader ? lexer->currentFunctionHeader->constants.declarations.count : 0;
 }
 
-Declaration *parseSingleArgument(LexerFile *lexer, ExprFunction *function, bool arguments, bool named) {
+Declaration *parseSingleArgument(LexerFile *lexer, Expr *argumentHolder, bool arguments, bool named) {
 	auto token = lexer->token;
 
 	bool must = expectAndConsume(lexer, TokenT::MUST);
@@ -1336,7 +1336,7 @@ Declaration *parseSingleArgument(LexerFile *lexer, ExprFunction *function, bool 
 		declaration->type = arrayType;
 
 		declaration->flags |= DECLARATION_IS_VARARGS;
-		function->flags |= EXPR_FUNCTION_HAS_VARARGS;
+		argumentHolder->flags |= EXPR_FUNCTION_HAS_VARARGS;
 	}
 
 	if (!addDeclarationToBlock(lexer->currentBlock, declaration, lexer->currentBlock->declarations.count)) {
@@ -1346,11 +1346,12 @@ Declaration *parseSingleArgument(LexerFile *lexer, ExprFunction *function, bool 
 	return declaration;
 }
 
-bool parseArgumentList(LexerFile *lexer, ExprFunction *function, bool arguments, ExprBlock **usingBlock) {
+bool parseArgumentList(LexerFile *lexer, Expr *argumentHolder, bool arguments) {
 	if (expectAndConsume(lexer, ')')) {
-		if (!arguments)
-			addVoidReturn(lexer, lexer->token.start, lexer->token.end, function);
-
+		if (!arguments) {
+			assert(argumentHolder->flavor == ExprFlavor::FUNCTION);
+			addVoidReturn(lexer, lexer->token.start, lexer->token.end, static_cast<ExprFunction *>(argumentHolder));
+		}
 		return true;
 	}
 
@@ -1359,19 +1360,10 @@ bool parseArgumentList(LexerFile *lexer, ExprFunction *function, bool arguments,
 	Declaration *hadVarargs = nullptr;
 
 	do {
-		auto declaration = parseSingleArgument(lexer, function, arguments, named);
+		auto declaration = parseSingleArgument(lexer, argumentHolder, arguments, named);
 
 		if (!declaration)
 			return false;
-
-		if (declaration->flags & DECLARATION_MARKED_AS_USING) {
-			if (!*usingBlock) {
-				*usingBlock = PARSER_NEW(ExprBlock);
-				(*usingBlock)->declarations.flavor = BlockFlavor::IMPERATIVE;
-			}
-
-			addImporterToBlock(&(*usingBlock)->declarations, createImporterForUsing(lexer, declaration), lexer->identifierSerial++);
-		}
 
 		if (declaration->flags & DECLARATION_IS_VARARGS) {
 			hadVarargs = declaration;
@@ -1396,15 +1388,13 @@ ExprFunction *parseFunctionOrFunctionType(LexerFile *lexer, CodeLocation start, 
 	function->returns.flavor = BlockFlavor::RETURNS;
 	function->start = start;
 
-	ExprBlock *usingBlock = nullptr;
-
 	pushBlock(lexer, &function->constants);
 	pushBlock(lexer, &function->arguments);
 
 	auto previousFunction = lexer->currentFunctionHeader;
 	lexer->currentFunctionHeader = function;
 
-	if (!parseArgumentList(lexer, function, true, &usingBlock))
+	if (!parseArgumentList(lexer, function, true))
 		return nullptr;
 
 	lexer->currentFunctionHeader = previousFunction;
@@ -1428,7 +1418,7 @@ ExprFunction *parseFunctionOrFunctionType(LexerFile *lexer, CodeLocation start, 
 				addDeclarationToBlock(lexer->currentBlock, declaration, lexer->currentBlock->declarations.count);
 			}
 			else {
-				if (!parseArgumentList(lexer, function, false, nullptr))
+				if (!parseArgumentList(lexer, function, false))
 					return nullptr;
 			}
 		}
@@ -1474,6 +1464,19 @@ ExprFunction *parseFunctionOrFunctionType(LexerFile *lexer, CodeLocation start, 
 		bool oldContext = lexer->contextAvailable;
 		lexer->contextAvailable = function->flags & EXPR_FUNCTION_IS_C_CALL ? false : true;
 
+		ExprBlock *usingBlock = nullptr;
+
+		for (auto declaration : function->arguments.declarations) {
+			if (declaration->flags & DECLARATION_MARKED_AS_USING) {
+				if (!usingBlock) {
+					usingBlock = PARSER_NEW(ExprBlock);
+					usingBlock->declarations.flavor = BlockFlavor::IMPERATIVE;
+				}
+
+				addImporterToBlock(&usingBlock->declarations, createImporterForUsing(lexer, declaration), lexer->identifierSerial++);
+			}
+		}
+
 		function->body = parseBlock(lexer, false, usingBlock);
 		lexer->contextAvailable = oldContext;
 		lexer->inDefer = oldInDefer;
@@ -1496,10 +1499,13 @@ ExprFunction *parseFunctionOrFunctionType(LexerFile *lexer, CodeLocation start, 
 			return nullptr;
 		}
 
-		if (usingBlock) {
-			reportError(function, "Error: Intrinsic functions cannot 'using' their parameters");
-			return nullptr;
+		for (auto declaration : function->arguments.declarations) {
+			if (declaration->flags & DECLARATION_MARKED_AS_USING) {
+				reportError(declaration, "Error: Intrinsic functions cannot 'using' their parameters");
+				return nullptr;
+			}
 		}
+
 		lexer->advance();
 
 		function->flags |= EXPR_FUNCTION_IS_INSTRINSIC;
@@ -1523,11 +1529,12 @@ ExprFunction *parseFunctionOrFunctionType(LexerFile *lexer, CodeLocation start, 
 			return nullptr;
 		}
 
-		if (usingBlock) {
-			reportError(function, "Error: External functions cannot 'using' their parameters");
-			return nullptr;
+		for (auto declaration : function->arguments.declarations) {
+			if (declaration->flags & DECLARATION_MARKED_AS_USING) {
+				reportError(function, "Error: External functions cannot 'using' their parameters");
+				return nullptr;
+			}
 		}
-
 
 		function->body = parseExpr(lexer);
 
@@ -1583,9 +1590,11 @@ ExprFunction *parseFunctionOrFunctionType(LexerFile *lexer, CodeLocation start, 
 			}
 		}
 
-		if (usingBlock) {
-			reportError(function, "Error: Function prototypes cannot 'using' their parameters");
-			return nullptr;
+		for (auto declaration : function->arguments.declarations) {
+			if (declaration->flags & DECLARATION_MARKED_AS_USING) {
+				reportError(function, "Error: Function prototypes cannot 'using' their parameters");
+				return nullptr;
+			}
 		}
 
 		for (auto declaration : function->arguments.declarations) {
@@ -1871,7 +1880,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		declaration->initialValue = parserMakeTypeLiteral(lexer, start, lexer->token.end, nullptr);
 
 		if (!lexer->currentFunctionHeader) {
-			reportError(declaration, "Error: Cannot have a polymorph variable declartion outside a function header");
+			reportError(declaration, "Error: Cannot have a polymorph variable declaration outside a function header");
 			return nullptr;
 		}
 
@@ -2080,10 +2089,28 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 		auto type = PARSER_NEW(TypeStruct);
 		type->flavor = TypeFlavor::STRUCT;
+		type->constants.flavor = BlockFlavor::CONSTANTS;
 		type->members.flavor = BlockFlavor::STRUCT;
 
 		if (tokenType == TokenT::UNION) {
 			type->flags |= TYPE_STRUCT_IS_UNION;
+		}
+
+		pushBlock(lexer, &type->constants);
+
+		if (expectAndConsume(lexer, '(')) {
+			parseArgumentList(lexer, expr, true);
+
+			for (auto declaration : type->constants.declarations) {
+				declaration->flags |= DECLARATION_IS_CONSTANT;
+
+				if (declaration->flags & DECLARATION_MARKED_AS_USING) {
+					addImporterToBlock(&type->members, createImporterForUsing(lexer, declaration), lexer->identifierSerial++);
+				}
+			}
+
+			type->flags |= TYPE_IS_POLYMORPHIC;
+
 		}
 
 		pushBlock(lexer, &type->members);
@@ -2109,6 +2136,14 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 				if (!declaration)
 					return nullptr;
+
+				auto constant = findDeclarationNoYield(&type->constants, declaration->name);
+
+				if (constant) {
+					reportError(declaration, "Error: Cannot redeclare struct argument %.*s as a struct member", STRING_PRINTF(declaration->name));
+					reportError(constant, "   ..: Here is the argument declaration");
+					return nullptr;
+				}
 
 				if (!addDeclarationToBlock(lexer->currentBlock, declaration, lexer->identifierSerial++)) {
 					return nullptr;
@@ -2149,6 +2184,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		}
 
 		popBlock(lexer, &type->members);
+		popBlock(lexer, &type->constants);
 		expr = parserMakeTypeLiteral(lexer, start, lexer->previousTokenEnd, type);
 	}
 	else if (lexer->token.type == TokenT::IMPORT) {

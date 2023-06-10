@@ -693,8 +693,10 @@ print_any :: (c: *Concatenator, using val: any) {
         
         
     } else if value_type.tag == .POINTER || value_type.tag == .FUNCTION {
-    
-        print_u64(c, cast(u64) val, 16)
+        if cast(u64) val == 0
+            append(c, "null")
+        else
+            print_u64(c, cast(u64) val, 16)
         
     } else if value_type.tag == .ARRAY {
     

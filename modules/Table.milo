@@ -1,0 +1,134 @@
+#import "Standard"
+
+// TODO compiler improvement so hash and equality funcs can be strongly typed
+// this requires their type to be based on the value of a previous argument which
+// currently isn't supported
+Table :: struct(Key: type, Value: type, load_factor := 0.7, hash_func := null, equality_func := null) {
+    Slot :: struct {
+        key:   Key
+        value: Value
+        hash:  u64
+    }
+    
+    // Must be a power of 2 size (slot is determined by bit-masking the hash)
+    slots:      []Slot
+    count:      u64
+    // Does not decrease when removing items until a rehash occurs
+    used_slots: u64    
+}
+
+// TODO hash better
+hash :: (key: $T) -> u64 {
+    #if T == type {
+        return cast() type_info(T)  
+    } else if #run use_u64_hash(T) {
+        return cast(u64) cast(*void) key
+    } else {
+        // Actually hash strings, floats, arrays (probably not structs?)
+        return 0
+    }
+}
+
+table_insert :: (using table: *Table($K, $V), key: K, value: V) -> bool {
+    maybe_rehash(table)
+    
+    slot, match, hashed := find_slot(table.slots, key)
+    
+    if !match {
+        slot.hash = hashed
+        slot.key = key
+        used_slots += 1
+        count += 1
+    }
+    
+    slot.value = value
+    return match
+}
+
+table_find :: (table: Table($K, $V), key: K) -> *V {
+    slot, match := find_slot(table.slots, key)
+    
+    if match
+        return *slot.value
+    else
+        return null
+}
+
+table_remove :: (using table: *Table($K, $V), key: K) -> bool {
+    slot, match := find_slot(table.slots, key)
+    
+    if match {
+        count -= 1
+        slot.hash = REMOVED_HASH
+        return true
+    } else
+        return false
+}
+
+free_table :: (table: Table($K, $V)) {
+    free_array(table.slots)
+}
+
+#scope_module
+
+EMPTY_HASH :: 0
+REMOVED_HASH :: 1
+MIN_VALID_HASH :: 2
+
+find_empty_slot :: (slots: []$T, hash: u64) -> *T {
+    slot := hash & (slots.count - 1)
+    
+    while slots[slot].hash < MIN_VALID_HASH {
+        slot += 1
+        slot &= slots.count - 1
+    }
+    
+    return *slots[slot]
+}
+
+find_slot :: (slots: []$T, key: $K) -> (slot: *T, match: bool, hashed: u64) {
+    hashed := hash(key)
+    if hashed < MIN_VALID_HASH  hashed += MIN_VALID_HASH
+    slot := hashed & (slots.count - 1)
+    
+    while slots[slot].hash != EMPTY_HASH {
+        if slots[slot].hash == hashed && slots[slot].key == key {
+            return *slots[slot], true, hashed
+        }
+    
+        slot += 1
+        slot &= slots.count - 1
+    }
+    
+    return *slots[slot], false, hashed
+}
+
+maybe_rehash :: (using table: *Table($K, $V)) {
+    if !slots {
+        slots = new_array(Slot, 8)
+        return
+    }
+    
+    if cast() used_slots >= load_factor * cast() slots.count {
+        new_slots := new_array(Slot, slots.count * 2)
+        
+        for slots {
+            if it.hash >= MIN_VALID_HASH {
+                <<find_empty_slot(new_slots, it.hash) = it
+            } 
+        }
+        
+        table.used_slots = count
+        free_array(table.slots)
+        table.slots = new_slots
+    }
+}
+
+use_u64_hash :: (T: type) -> bool {
+    if type_info(T).tag == {
+        case .INTEGER #through
+        case .POINTER #through
+        case .FUNCTION return true
+        else return false
+    }
+}
