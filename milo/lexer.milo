@@ -1,1146 +1,524 @@
-Lexer :: struct {
-	data: string
-	line: u32 = 1
-	column: u32 = 1
-	file_index: u32
-	string_buffer: [..]u8
-	float_parsing_buffer: [..]u8
-}
-
-lex_string :: (lexer: *Lexer, data: string, file_index: u32, l0: u32 = 1) -> (#must [..]Token, #must bool) {
-	lexer.data = data
-	lexer.line = l0
-	lexer.column = 1
-	lexer.file_index = file_index
-
-	tokens: [..]Token
-
-
-	while true {
-		token, success := advance_token(lexer)
-
-		if !success {
-			array_free(tokens)
-			return .{}, false
-		}
-
-		if token.kind == .END_OF_FILE
-			break;
-
-		array_add(*tokens, token)
-	}
-
-	return tokens, true
-}
-
-// Indicates failure by returning cast(u32) -1
-read_unicode :: (using lexer: *Lexer) -> u32 {
-	utf32, remaining := read_character(data)
-	
-	if utf32 == cast() -1 {
-		report_error(.{file_index, line, column, line, column}, "Error: Invalid UTF-8 data in file")
-		return utf32
-	}
-	
-	column += 1
-	data = remaining
-	
-	return utf32
-}
-
-advance_character :: (using lexer: *Lexer) -> u8 {
-	c := data[0]
-	data = data[1..]
-	column += 1
-	
-	return c
-}
-
-eat_character_if_present :: (using lexer: *Lexer, c: u8) -> bool {
-	if data && data[0] == c {
-		advance_character(lexer)
-		return true
-	} else {
-		return false
-	}
-}
-
-eat_character_if_present :: (using lexer: *Lexer, c: u8, offset: u32) -> bool {
-	if data.count > offset && data[offset] == c {
-		data = data[offset + 1..]
-		column += offset + 1
-		return true
-	} else {
-		return false
-	}
-}
-
-advance_newline :: (using lexer: *Lexer) {
-	assert(cast() data)
-	
-	c := advance_character(lexer)
-	
-	if c == '\r'
-		eat_character_if_present(lexer, '\n')
-	else
-		assert(c == '\n')
-		
-	line += 1
-	column = 1
-}
-
-eat_block_comment :: (using lexer: *Lexer) -> #must bool {
-	while data {
-		c := data[0]
-		
-		if c == {
-		case '/'
-			if eat_character_if_present(lexer, '*', offset = 1)
-				if !eat_block_comment(lexer)
-					return false
-			else
-				advance_character(lexer)
-		case '*'
-			if eat_character_if_present(lexer, '/', offset = 1)
-				break
-			else
-				advance_character(lexer)
-				
-		case '\r' #through
-		case '\n'
-			advance_newline(lexer)
-		else if read_unicode(lexer) == cast() -1
-				return false
-		}
-	}
-	
-	return true
-}
-
-eat_whitespace_and_comments :: (using lexer: *Lexer) -> #must bool {
-	while data {
-		c := data[0]
-		
-		if c == {
-		case ' '  #through
-		case '\t'
-			advance_character(lexer)
-		case '\n' #through
-		case '\r' 
-			advance_newline(lexer)
-		case '/'
-			if eat_character_if_present(lexer, '/', offset = 1) {
-				while data {
-					c := data[0]
-					
-					if c == {
-					case '\r' #through
-					case '\n'
-						advance_newline(lexer)
-						break
-					else 
-						if read_unicode(lexer) == cast() -1
-							return false
-					}
-				}
-			} else if eat_character_if_present(lexer, '*', offset = 1) {
-				if !eat_block_comment(lexer)
-					return false
-			} else {
-				break
-			}
-		else
-			break
-		}
-	}
-	
-	return true
-}
-
-is_identifier_character :: (c: u8) -> bool {
-	return ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9') || c == '_' || c >= 128
-}
-
-// Indicates failure by returning the empty string
-read_identifier :: (using lexer: *Lexer) -> #must string {
-	identifier := data
-	identifier.count = 0
-	
-	while data {
-		c := data[0]
-		
-		if is_identifier_character(c) {
-			utf32 := read_unicode(lexer)
-			
-			if utf32 == cast() -1
-				return ""
-				
-			identifier.count = cast() (data.data - identifier.data)
-		} else
-			break
-	}
-	
-	return identifier
-}
-
-multiply_add_with_overflow_checking :: (value: *u64, multiply: u64, add: u64) -> bool {
-	U64_MAX :: cast(u64) -1
-
-	if <<value > U64_MAX / multiply {
-		return true
-	}
-	
-	<<value *= multiply
-	
-	if <<value > U64_MAX - add {
-		return true
-	}
-	
-	<<value += add
-	
-	return false
-}
-
-read_number :: (using lexer: *Lexer, token: *Token, base: u64) -> #must bool {
-	value: u64
-	had_digit := false
-	had_decimal := false
-	overflowed := false
-	
-	while data {
-		c := data[0]
-		
-		if c == '_' {
-			advance_character(lexer)
-		} else if c == '0' || c == '1' {
-			advance_character(lexer)
-			had_digit = true
-			
-			overflowed |= multiply_add_with_overflow_checking(*value, base, c - '0')
-		} else if '2' <= c && c <= '9' {
-			advance_character(lexer)
-			had_digit = true
-			
-			overflowed |= multiply_add_with_overflow_checking(*value, base, c - '0')
-			
-			if base < 10 {
-				token.l1 = line
-				token.c1 = column
-				report_error(token, "Error: Cannot use a decimal digit in a binary number")
-				return false
-			}
-		} else if c == 'e' || c == 'E' && base == 10 {
-			advance_character(lexer)
-		
-			return read_float(lexer, token)
-		}  else if 'a' <= c && c <= 'f' {
-			advance_character(lexer)
-			had_digit = true
-			
-			overflowed |= multiply_add_with_overflow_checking(*value, base, c - 'a')
-			
-			
-			if base < 16 {
-				token.l1 = line
-				token.c1 = column
-				if      base == 2  report_error(token, "Error: Cannot use a hexadecimal digit in a binary number")
-				else if base == 10 report_error(token, "Error: Cannot use a hexadecimal digit in a decimal number")
-				return false
-			}
-		} else if 'A' <= c && c <= 'F' {
-			advance_character(lexer)
-			had_digit = true
-			
-			overflowed |= multiply_add_with_overflow_checking(*value, base, c - 'A')
-			
-			if base < 16 {
-				token.l1 = line
-				token.c1 = column
-				if      base == 2  report_error(token, "Error: Cannot use a hexadecimal digit in a binary number")
-				else if base == 10 report_error(token, "Error: Cannot use a hexadecimal digit in a decimal number")
-				return false
-			}
-		} else if c == '.' && base != 2 {
-			if data.count >= 2 && data[1] == '.' // Lex 1..5 as <1> <..> <5> instead of <1.> <.5>
-				break;
-			
-			advance_character(lexer)
-		
-			if had_decimal {
-				token.l1 = line
-				token.c1 = column
-				report_error(token, "Error: Number cannot have multiple decimal points")
-				return false
-			}
-		
-			had_decimal = true
-		}else if c == 'p' || c == 'P' && base == 16 {
-			advance_character(lexer)
-		
-			return read_float(lexer, token)
-		} else {
-			break
-		}
-	}
-	
-	token.l1 = line
-	token.c1 = column
-	
-	if !had_digit {
-		report_error(token, "Error: Expected digit in number literal")
-		return false
-	}
-	
-	if had_decimal {
-		parse_float(lexer, token)
-	} else {
-		if overflowed {
-			// For now we display hex maximum for binary literals so we don't spam the user with 64 1's which isn't very helpful anyway
-			// 0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111
-			max_value := "0xFFFF_FFFF_FFFF_FFFF"
-			
-			if base == 10 {
-				max_value := "18_446_744_073_709_551_615"
-			}
-		
-			report_error(token, "Error: Integer literal too large, the maximum value is %", max_value)
-			return false
-		} else {
-			token.kind = .INT_LITERAL
-			token.integer = value
-		}
-	}
-	
-	return true
-}
-
-read_float :: (using lexer: *Lexer, token: *Token) -> #must bool {
-	if eat_character_if_present(lexer, '+') {
-	
-	} else {
-		eat_character_if_present(lexer, '-')
-	}
-	
-	had_digit := false
-	had_decimal := false
-	overflowed := false
-	
-	while data {
-		c := data[0]
-		
-		if c == '_' {
-			advance_character(lexer)
-		} else if '0' <= c && c <= '9' {
-			advance_character(lexer)
-			had_digit = true
-		} else {
-			break
-		}
-	}
-	
-	token.l1 = line
-	token.c1 = column
-	
-	if !had_digit {
-		report_error(token, "Error: Expected digit in float literal exponent")
-		return false
-	}
-	
-	parse_float(lexer, token)
-	
-	return true
-}
-
-parse_float :: (using lexer: *Lexer, token: *Token) {
-	token.text.count = cast() (data.data - token.text.data)
-	
-	float_parsing_buffer.count = 0
-	
-	for token.text {
-		if it != '_'
-			array_add(*float_parsing_buffer, it)
-	}
-	
-	array_add(*float_parsing_buffer, 0)
-	
-	strtod :: (str: *u8, str_end: **u8 = null) -> f64 #external "c"
-	
-	token.kind = .FLOAT_LITERAL
-	token.float = strtod(float_parsing_buffer.data)
-}
-
-read_escape :: (using lexer: *Lexer, message: string) -> u32 {
-	if !data {
-		report_error(.{file_index, line, column, line, column}, "Error: % literal was never closed", message)
-		return cast() -1
-	}
-	
-	start_line := line
-	start_column := column - 1
-	
-	c := advance_character(lexer)
-	
-	if c == {
-	case 'a'
-		return '\a'
-	case 'b'
-		return '\b'
-	case 'e'
-		return '\e'
-	case 'f'
-		return '\f'
-	case 'n'
-		return '\n'
-	case 'r'
-		return '\r'
-	case 't'
-		return '\t'
-	case 'v'
-		return '\v'
-	case '\\'
-		return '\\'
-	case '\''
-		return '\''
-	case '"'
-		return '"'
-	case 'x'
-		value: u32 = 0
-		had_digit := false
-	
-		while data {
-			c := advance_character(lexer)
-			
-			if '0' <= c && c <= '9' {
-				value *= 16
-				value += c - '0'
-				had_digit = true
-			} else if 'a' <= c  && c <= 'f' {
-				value *= 16
-				value += c - 'a' + 10
-				had_digit = true
-			} else if 'A' <= c && c <= 'F' {
-				value *= 16
-				value += c - 'A' + 10
-				had_digit = true
-			}
-			else
-				break
-			
-			if c > 255 {
-				report_error(.{file_index, start_line, start_column, line, column}, "Error: Hex escape value is too large the maximum is \\xFF (did you mean to use a unicode escape?)")
-				return cast() -1
-			}
-		}
-		
-		if !had_digit {
-			report_error(.{file_index, start_line, start_column, line, column}, "Error: Expected digits in hex escape")
-			return cast() -1	
-		}
-		
-		eat_character_if_present(lexer, ';')
-		
-		return value
-	case 'u'
-		value: u32 = 0
-		had_digit := false
-	
-		while data {
-			c := advance_character(lexer)
-			
-			if '0' <= c && c <= '9' {
-				value *= 16
-				value += c - '0'
-				had_digit = true
-			} else if 'a' <= c  && c <= 'f' {
-				value *= 16
-				value += c - 'a' + 10
-				had_digit = true
-			} else if 'A' <= c && c <= 'F' {
-				value *= 16
-				value += c - 'A' + 10
-				had_digit = true
-			}
-			else
-				break
-			
-			if value >= 1 << 21 {
-				report_error(.{file_index, start_line, start_column, line, column}, "Error: Unicode escape value is too large the maximum is \\u1FFFFF")
-				return cast() -1
-			}
-		}
-		
-		if !had_digit {
-			report_error(.{file_index, start_line, start_column, line, column}, "Error: Expected digits in unicode escape")
-			return cast() -1	
-		}
-		
-		eat_character_if_present(lexer, ';')
-		
-		return value
-	case '0' #through
-	case '1' #through
-	case '2' #through
-	case '3' #through
-	case '4' #through
-	case '5' #through
-	case '6' #through
-	case '7' #through
-	case '8' #through
-	case '9'
-		value: u32 = 0
-		had_digit := false
-	
-		while data {
-			c := advance_character(lexer)
-			
-			if '0' <= c && c <= '9' {
-				value *= 10
-				value += c - '0'
-				had_digit = true
-			}
-			else
-				break
-			
-			if c > 255 {
-				report_error(.{file_index, start_line, start_column, line, column}, "Error: Decimal escape value is too large the maximum is \\255 (did you mean to use a unicode escape?)")
-				return cast() -1
-			}
-		}
-		
-		if !had_digit {
-			report_error(.{file_index, start_line, start_column, line, column}, "Error: Expected digits in decimal escape")
-			return cast() -1	
-		}
-		
-		eat_character_if_present(lexer, ';')
-		
-		return value
-	case '\r' #through
-	case '\n'
-		report_error(.{file_index, line, column - 1, line + 1, 1}, "Error: % literal cannot go across multiple lines", message)
-		return cast() -1
-	else
-		if c < ' ' || c == 127 {
-			report_error(.{file_index, start_line, start_column, line, column}, "Error: % literals cannot contain ASCII control characters", message)
-			return cast() -1			
-		} else {
-			report_error(.{file_index, start_line, start_column, line, column}, "Error: Unknown escape character '%'", string.{*c, 1})
-			return cast() -1
-		}
-	}
-}
-
-advance_token :: (using lexer: *Lexer) -> (token: Token, #must success := true) {
-	
-	if !eat_whitespace_and_comments(lexer)
-		return .{}, false
-	
-	token := Token.{loc = .{file_index, line, column, --}, --}
-	
-	if !data {
-		token.l1 = line
-		token.c1 = column
-		token.kind = .END_OF_FILE
-		return token
-	}
-	
-	c := data[0]
-	
-	if c == {
-	case '='
-		advance_character(lexer)
-		
-		if eat_character_if_present(lexer, '=')
-			token.kind = .EQUAL
-		else
-			token.kind = cast() c
-		
-		token.l1 = line
-		token.c1 = column
-		
-		return token
-	case '!'
-		advance_character(lexer)
-		
-		if eat_character_if_present(lexer, '=')
-			token.kind = .NOT_EQUAL
-		else
-			token.kind = cast() c
-		
-		token.l1 = line
-		token.c1 = column
-		
-		return token
-	case '+'
-		advance_character(lexer)
-		
-		if eat_character_if_present(lexer, '=')
-			token.kind = .PLUS_EQUALS
-		else
-			token.kind = cast() c
-		
-		token.l1 = line
-		token.c1 = column
-		
-		return token
-	case '*'
-		advance_character(lexer)
-		
-		if eat_character_if_present(lexer, '=')
-			token.kind = .TIMES_EQUALS
-		else
-			token.kind = cast() c
-		
-		token.l1 = line
-		token.c1 = column
-		
-		return token
-	case '/'
-		advance_character(lexer)
-		
-		if eat_character_if_present(lexer, '=') 
-			token.kind = .DIVIDE_EQUALS
-		else // other cases are comments which are handled by eat_whitespace_and_comments
-			token.kind = cast() c
-		
-		token.l1 = line
-		token.c1 = column
-		
-		return token
-	case '%'
-		advance_character(lexer)
-		
-		if eat_character_if_present(lexer, '=')
-			token.kind = .MOD_EQUALS
-		else
-			token.kind = cast() c
-		
-		token.l1 = line
-		token.c1 = column
-		
-		return token
-	case '^'
-		advance_character(lexer)
-		
-		if eat_character_if_present(lexer, '=')
-			token.kind = .XOR_EQUALS
-		else
-			token.kind = cast() c
-		
-		token.l1 = line
-		token.c1 = column
-		
-		return token
-	case '&'
-		advance_character(lexer)
-		
-		if eat_character_if_present(lexer, '=')
-			token.kind = .AND_EQUALS
-		else
-		if eat_character_if_present(lexer, '&')
-			token.kind = .LOGIC_AND
-		else
-			token.kind = cast() c
-		
-		token.l1 = line
-		token.c1 = column
-		
-		return token
-	case '|'
-		advance_character(lexer)
-		
-		if eat_character_if_present(lexer, '=')
-			token.kind = .OR_EQUALS
-		else if eat_character_if_present(lexer, '|')
-			token.kind = .LOGIC_OR
-		else
-			token.kind = cast() c
-		
-		token.l1 = line
-		token.c1 = column
-		
-		return token
-	case '-'
-		advance_character(lexer)
-		
-		if eat_character_if_present(lexer, '=')
-			token.kind = .MINUS_EQUALS
-		else if eat_character_if_present(lexer, '-')
-			token.kind = .DOUBLE_DASH
-		else if eat_character_if_present(lexer, '>')
-			token.kind = .ARROW
-		else
-			token.kind = cast() c
-		
-		token.l1 = line
-		token.c1 = column
-		
-		return token
-	case '>'
-		advance_character(lexer)
-		
-		if eat_character_if_present(lexer, '=')
-			token.kind = .GREATER_EQUAL
-		else if eat_character_if_present(lexer, '>') {
-			if eat_character_if_present(lexer, '=')
-				token.kind = .SHIFT_RIGHT_EQUALS
-			else
-				token.kind = .SHIFT_RIGHT
-		} else
-			token.kind = cast() c
-		
-		token.l1 = line
-		token.c1 = column
-		
-		return token
-	case '<'
-		advance_character(lexer)
-		
-		if eat_character_if_present(lexer, '=')
-			token.kind = .LESS_EQUAL
-		else if eat_character_if_present(lexer, '<') {
-			if eat_character_if_present(lexer, '=')
-				token.kind = .SHIFT_LEFT_EQUALS
-			else
-				token.kind = .SHIFT_LEFT
-		} else
-			token.kind = cast() c
-		
-		token.l1 = line
-		token.c1 = column
-		
-		return token
-	case '"'
-		advance_character(lexer)
-		
-		while data {
-			if eat_character_if_present(lexer, '"')
-				break
-			else if eat_character_if_present(lexer, '\\' ) {
-				utf32 := read_escape(lexer, "String")
-				
-				if utf32 == cast() -1
-					return token, false
-				
-				append(*string_buffer, utf32)
-			} else {
-				c := data[0]
-			
-				if c >= ' ' && c < 127 {
-					advance_character(lexer)
-				
-					array_add(*string_buffer, c)
-				} else if c > 128 {
-					utf32 := read_unicode(lexer)
-					
-					if utf32 == cast() -1 {
-						return token, false
-					}
-					
-					append(*string_buffer, utf32)
-				} else if c == '\r' || c == '\n' {
-					token.l1 = line
-					token.c1 = column
-					
-					report_error(token, "Error: String literal cannot go across multiple lines")
-					return token, false
-				} else  {
-					report_error(.{file_index, line, column, line, column}, "Error: String literals cannot contain ASCII control characters")
-					return token, false
-				}
-			}
-			
-			
-		} or {
-			token.l1 = line
-			token.c1 = column
-			
-			report_error(token, "Error: String literal was never closed")
-			return token, false
-		}
-		
-		
-		token.l1 = line
-		token.c1 = column
-		
-		token.kind = .STRING_LITERAL
-		token.text = .{string_buffer.data, string_buffer.count}
-		
-		string_buffer = .{}
-		
-		return token
-	case '\''
-		advance_character(lexer)
-		
-		if !data {
-			token.l1 = line
-			token.c1 = column
-			
-			report_error(token, "Error: Character literal was never closed")
-			return token, false				
-		}
-		
-		c := advance_character(lexer)
-		
-		if c == '\\' {
-			if data && data[0] == '\'' && (data.count < 1 || data[1] != '\'') {
-				token.integer = '\\'
-			} else {
-				utf32 := read_escape(lexer, "Character")
-				
-				if utf32 == cast() -1
-					return token, false
-				
-				token.integer = utf32
-			}
-		} else if c == '\r' || c == '\n' {
-			token.l1 = line
-			token.c1 = column
-			
-			report_error(token, "Error: Character literal cannot go across multiple lines")
-			return token, false
-		} else 	if c >= ' ' && c < 127 {
-			token.integer = c
-		} else if c > 128 {
-			utf32 := read_unicode(lexer)
-			
-			if utf32 == cast() -1 {
-				return token, false
-			}
-			
-			token.integer = utf32
-		} else  {
-			report_error(.{file_index, line, column, line, column}, "Error: Character literals cannot contain ASCII control characters")
-			return token, false
-		}
-		
-		if !eat_character_if_present(lexer, '\'') {
-			token.l1 = line
-			token.c1 = column
-			report_error(token, "Error: Character literal was never closed")
-			return token, false
-		}
-		
-		
-		token.l1 = line
-		token.c1 = column
-		token.kind = .INT_LITERAL
-		
-		return token
-	case ':' #through
-	case '$' #through
-	case ';' #through
-	case '(' #through
-	case ')' #through
-	case '{' #through
-	case '}' #through
-	case '[' #through
-	case ']' #through
-	case '~' #through
-	case ','
-		token.l1 = line
-		token.c1 = column
-		token.kind = cast() c
-		
-		advance_character(lexer)
-		return token
-	case '.'
-		token.text.data = data.data
-		
-		advance_character(lexer)
-		
-		if eat_character_if_present(lexer, '.')
-			token.kind = .DOUBLE_DOT
-		else if data.count && '0' <= data[0] && data[0] <= '9' {
-			if !read_number(lexer, *token, 10)
-				return token, false
-			
-			return token
-		} else
-			token.kind = cast() c
-		
-		
-		token.l1 = line
-		token.c1 = column
-		
-		return token
-	case '0'
-		token.text.data = data.data
-		
-		base: u64 = 10
-	
-		if eat_character_if_present(lexer, 'x', 1) || eat_character_if_present(lexer, 'X', 1)
-			base = 16
-		else if eat_character_if_present(lexer, 'b', 1) || eat_character_if_present(lexer, 'B', 1)
-			base = 2
-		
-		
-		if !read_number(lexer, *token, base)
-			return token, false
-		
-		return token
-	case '1' #through
-	case '2' #through
-	case '3' #through
-	case '4' #through
-	case '5' #through
-	case '6' #through
-	case '7' #through
-	case '8' #through
-	case '9'
-		token.text.data = data.data
-	
-		if !read_number(lexer, *token, 10)
-			return token, false
-		
-		return token
-	case '#'
-		advance_character(lexer)
-		
-		if !data.count || !is_identifier_character(data[0]) {
-			token.l1 = line
-			token.c1 = column
-			
-			report_error(token, "Error: Expected directive name after #")
-			return token, false
-		}
-		
-		token.text = read_identifier(lexer)
-		token.l1 = line
-		token.c1 = column
-		
-		if !token.text
-			return token, false
-		
-		for directives {
-			if token.text == it.text {
-				token.kind = it.token
-				break
-			}
-		} or {
-			report_error(token, "Error: Unknown directive")
-			return token, false
-		}
-		
-		return token
-	else
-		if is_identifier_character(c) {
-			token.text = read_identifier(lexer)
-			
-			if !token.text
-				return token, false
-			
-			token.l1 = line
-			token.c1 = column
-			
-			for keywords {
-				if token.text == it.text {
-					token.kind = it.token
-					break
-				}
-			} or {
-				token.kind = .IDENTIFIER
-			}
-			
-			return token
-		} else {
-			token.l1 = line
-			token.c1 = column
-			report_error(token, "Error: Invalid character %", string.{*c, 1})
-			return token, false
-		}
-	}
-}
-
 Token :: struct {
-	using loc: Location
-	
-	using data: union {
-		integer: u64
-		float:   f64    = --
-		text:    string = --
-	}
-	
-	kind: Kind
-	
-	Kind :: enum u8 {
-		// Single character tokens are given their ASCII values
-		
-		END_OF_FILE :: 128
-		
-		IDENTIFIER
-		
-		INT_LITERAL
-		STRING_LITERAL
-		FLOAT_LITERAL
-		
-		S8
-		S16
-		S32
-		S64
-		U8
-		U16
-		U32
-		U64
-		
-		F32
-		F64
-		
-		STRING
-		BOOL
-		MEMORY
-		TYPE
-		
-		STRUCT
-		UNION
-		ENUM
-		ENUM_FLAGS
-		
-		TRUE
-		FALSE
-		
-		NULL
-		
-		SIZE_OF
-		ALIGN_OF
-		IS_CONSTANT
-		TYPE_OF
-		TYPE_INFO
-		
-		FOR
-		WHILE
-		OR
-		BREAK
-		CONTINUE
-		REMOVE
-		IF
-		ELSE
-		RETURN
-		DEFER
-		CASE
-		
-		CAST
-		
-		EQUAL
-		NOT_EQUAL
-		GREATER_EQUAL
-		LESS_EQUAL
-		
-		LOGIC_AND
-		LOGIC_OR
-		
-		SHIFT_LEFT
-		SHIFT_RIGHT
-		
-		PLUS_EQUALS
-		MINUS_EQUALS
-		TIMES_EQUALS
-		DIVIDE_EQUALS
-		MOD_EQUALS
-		
-		AND_EQUALS
-		OR_EQUALS
-		XOR_EQUALS
-		
-		SHIFT_LEFT_EQUALS
-		SHIFT_RIGHT_EQUALS
-		
-		DOUBLE_DASH
-		DOUBLE_DOT
-		ARROW
-		
-		
-		USING
-		
-		EXTERNAL
-		LOAD
-		PACK
-		MUST
-		THROUGH
-		COMPLETE
-		STATIC_IF
-		RUN
-		C_CALL
-		IMPORT
-		SCOPE_MODULE
-		SCOPE_EXPORT
-		SCOPE_FILE
-		INTRINSIC
-
-		ADD_CONTEXT
-		PUSH_CONTEXT
-		CONTEXT_TYPE
-		CONTEXT
-
-		ENTRY_POINT
-	}
+    using location: Source_Location
+    tag: Tag
+    
+    using data: union {
+        string_value:  string
+        integer_value: u64
+        float_value:   f64
+    }
+    
+    Tag :: enum u16 {
+        // Single ASCII characters represent their own tokens
+        END_OF_FILE :: 128
+        
+        IDENTIFIER
+        
+        DECIMAL_LITERAL
+        HEX_LITERAL
+        BINARY_LITERAL
+        FLOAT_LITERAL
+        STRING_LITERAL
+        
+        NOT_EQUAL
+        MOD_EQUAL
+        TIMES_EQUAL
+    }
 }
 
-Keyword :: struct {
-	token: Token.Kind
-	text:  string
+Lexer :: struct {
+    text:      string
+    remaining: string
 }
 
-keywords :: Keyword.[
-	.{.S8,           "s8"          }, 
-	.{.S16,          "s16"         }, 
-	.{.S32,          "s32"         }, 
-	.{.S64,          "s64"         }, 
-	.{.U8,           "u8"          }, 
-	.{.U16,          "u16"         }, 
-	.{.U32,          "u32"         }, 
-	.{.U64,          "u64"         }, 
-	.{.F32,          "f32"         }, 
-	.{.F64,          "f64"         }, 
-	.{.STRING,       "string"      }, 
-	.{.BOOL,         "bool"        }, 
-	.{.MEMORY,       "memory"      }, 
-	.{.TYPE,         "type"        }, 
-	.{.STRUCT,       "struct"      }, 
-	.{.UNION,        "union"       }, 
-	.{.ENUM ,        "enum"        }, 
-	.{.ENUM_FLAGS,   "enum_flags"  }, 
-	.{.TRUE,         "true"        }, 
-	.{.FALSE,        "false"       }, 
-	.{.NULL,         "null"        }, 
-	.{.SIZE_OF,      "size_of"     }, 
-	.{.ALIGN_OF,     "align_of"    }, 
-	.{.IS_CONSTANT,  "is_constant" }, 
-	.{.TYPE_OF,      "type_of"     }, 
-	.{.TYPE_INFO,    "type_info"   }, 
-	.{.FOR,          "for"         },
-	.{.WHILE,        "while"       }, 
-	.{.OR,           "or"          }, 
-	.{.BREAK,        "break"       }, 
-	.{.CONTINUE,     "continue"    }, 
-	.{.REMOVE,       "or"          }, 
-	.{.IF,           "if"          }, 
-	.{.ELSE,         "else"        }, 
-	.{.RETURN,       "return"      }, 
-	.{.DEFER,        "defer"       }, 
-	.{.CASE,         "case"        }, 
-	.{.CAST,         "cast"        }, 
-	.{.USING,        "using"       }, 
-	.{.CONTEXT,      "context"     }, 
-	.{.CONTEXT_TYPE, "Context"     },
-	.{.PUSH_CONTEXT, "push_context"} 
-]
+lex_string :: (file_uid: s32, s: string) -> (#must sucess: bool, #must tokens: [..]Token) {
+    using lexer := Lexer.{file_uid = file_uid, text = s, remaining = s}
+    
+    tokens: [..]Token
+    
+    remaining = remove_hashbang(s)
+    
+    while true {
+        success: bool
+        token: Token
+        
+        success, token = lex_single_token(*lexer)
+        
+        if !sucess {
+            array_free(result)
+            return false, .{}
+        }
+        
+        array_add(*tokens, token)
+        
+        if token == .END_OF_FILE
+            break
+    }
+    
+    return true, tokens
+}
 
-directives :: Keyword.[
-	.{.EXTERNAL,     "external"    }, 
-	.{.LOAD,         "load"        }, 
-	.{.PACK,         "pack"        }, 
-	.{.MUST,         "must"        }, 
-	.{.THROUGH,      "through"     },
-	.{.COMPLETE,     "complete"    }, 
-	.{.STATIC_IF,    "if"          }, 
-	.{.RUN,          "run"         }, 
-	.{.C_CALL,       "c_call"      }, 
-	.{.IMPORT,       "import"      }, 
-	.{.SCOPE_MODULE, "scope_module"}, 
-	.{.SCOPE_EXPORT, "scope_export"}, 
-	.{.SCOPE_FILE,   "scope_file"  }, 
-	.{.INTRINSIC,    "intrinsic"   }, 
-	.{.ADD_CONTEXT,  "add_context" }, 
-	.{.ENTRY_POINT,  "entry_point" }
-]
+lexer_string_buffer: [..]u8
+
+get_digit :: (character: u8, $base: u64) -> (u64, bool) {
+    #if base == 10 || base == 16 {
+        if '0' <= character && character <= '9' {
+            return character - '0', true
+        }
+    }
+    
+    #if base == 16 {
+        character_ := character & ~0x20
+        
+        if 'A' <= character && character <= 'F' {
+            return character - 'A' + 10, true
+        }
+            
+    }
+    
+    #if base == 2 {
+        if character == '0' || character == '1' {
+            return true, character - '0'
+        }
+    }
+
+    return 0, false
+}
+
+
+lex_single_token :: (using lexer: *Lexer) -> (#must success: bool, #must token: Token) {
+    
+    remaining = remove_whitespace_and_comments(remaining)
+    
+    token: Token
+    token.file_uid = file_uid
+    token.start_offset = get_offset(<<lexer)
+    
+    if !remaining {
+        token.end_offset = token.start_offset
+        token.tag = .END_OF_FILE
+        return true, token
+    }
+    
+    maybe_equals_token :: (using lexer: *Lexer, no_equals: Token.Tag, equals: Token.Tag) -> Token.Tag {
+        remaining = remaining[1..]
+        if remaining && remaining[0] == '=' {
+            remaining = remaining[1..]
+            return equals
+        } else {
+            return no_equals
+        }
+    }
+    
+    maybe_equals_double_token :: (using lexer: *Lexer, no_equals: Token.Tag, equals: Token.Tag, double: Token.Tag, double_equals: Token.Tag) -> Token.Tag {
+        if remaining.count >= 2 && remaining[1] == remaining[0] {
+            remaining = remaining[1..]
+            return maybe_equals_token(lexer, double, double_equals)
+        } else {
+            return maybe_equals_token(lexer, no_equals, equals)
+        }
+    }
+    
+    escape_sequence :: (using lexer: *Lexer, literal_start_offset: s32) -> (value: u32, unicode: bool, success: bool) {
+        if !remaining {
+            location := Source_Location.{file_uid = file_uid, start_offset = literal_start_offset, end_offset = get_offset(<<lexer)}
+            report_error(location, "Found the end of file in the middle of an escape sequence")
+            return 0, false, false
+        }
+        
+        if remaining[0] == {
+            case 'r'
+                remaining = remaining[1..]
+                return '\r', unicode = false, success = true
+            case 'n'
+                remaining = remaining[1..]
+                return '\n', unicode = false, success = true
+            case 't'
+                remaining = remaining[1..]
+                return '\t', unicode = false, success = true
+            case 'e'
+                remaining = remaining[1..]
+                return '\e', unicode = false, success = true
+            case '\\'
+                remaining = remaining[1..]
+                return '\\', unicode = false, success = true
+            case '\''
+                remaining = remaining[1..]
+                return '\'', unicode = false, success = true
+            case '"'
+                remaining = remaining[1..]
+                return '"', unicode = false, success = true
+            case '0'
+                remaining = remaining[1..]
+                return 0, unicode = false, success = true
+            case 'u'
+                remaining = remaining[1..]
+                
+                if remaining.count < 6 {
+                    location := Source_Location.{file_uid = file_uid, start_offset = literal_start_offset, end_offset = cast() text.count}
+                    report_error(location, "Expected 6 hex digits in \\u escape")
+                    return 0, false, false
+                }
+            
+                result := 0
+                        
+                for 6 {
+                    digit, success := get_digit(remaining[0], 16)
+                    result *= 16
+                    result += digit
+                
+                    if !success {
+                        location := Source_Location.{file_uid = file_uid, start_offset = get_offset(<<lexer)}
+                        location.end_offset = location.start_offset + 1
+                        report_error(location, "Expected 6 hex digits in \\u escape")
+                        return 0, false, false
+                    }
+                
+                    remaining = remaining[1..]
+                }
+                                
+                return result, unicode = true, success = true 
+            case 'x'
+                remaining = remaining[1..]
+                
+                if remaining.count < 2 {
+                    location := Source_Location.{file_uid = file_uid, start_offset = literal_start_offset, end_offset = cast() text.count}
+                    report_error(location, "Expected 2 hex digits in \\x escape")
+                    return 0, false, false
+                }
+            
+                result := 0
+                        
+                for 2 {
+                    digit, success := get_digit(remaining[0], 16)
+                    result *= 16
+                    result += digit
+                
+                    if !success {
+                        location := Source_Location.{file_uid = file_uid, start_offset = get_offset(<<lexer)}
+                        location.end_offset = location.start_offset + 1
+                        report_error(location, "Expected 2 hex digits in \\x escape")
+                        return 0, false, false
+                    }
+                
+                    remaining = remaining[1..]
+                }
+                                
+                return result, unicode = false, success = true
+            else
+                location := Source_Location.{file_uid = file_uid, start_offset = get_offset(<<lexer)}
+                location.end_offset = location.start_offset + 1
+                report_error(location, "Invalid escape character")
+                return 0, false, false
+        }
+    }
+    
+    if remaining[0] == {
+        case '$' #through
+        case '(' #through
+        case ')' #through
+        case ',' #through
+        case ':' #through
+        case ';' #through
+        case '[' #through
+        case ']' #through
+        case '{' #through
+        case '}' #through
+        case '~'
+            token.tag = cast() remaining[0]
+            remaining = remaining[1..]
+        case '!'
+            token.tag = maybe_equals_token(lexer, cast() '!', .NOT_EQUAL)
+        case '%'
+            token.tag = maybe_equals_token(lexer, cast() '%', .MOD_EQUAL)
+        case '*'
+            token.tag = maybe_eqauls_token(lexer, cast() '*', .TIMES_EQUAL)
+        case '+'
+            token.tag = maybe_equals_token(lexer, cast() '+', .PLUS_EQUAL)
+        case '/'
+            token.tag = maybe_equals_token(lexer, cast() '/', .DIVIDE_EQUAL)
+        case '='
+            token.tag = maybe_equals_token(lexer, cast() '=', .EQUAL)
+        case '^'
+            token.tag = maybe_equals_token(lexer, cast() '^', .XOR_EQUAL)
+        case '&'
+            token.tag = maybe_equals_double_token(lexer, cast() '&', .BIT_AND_EQUALS, .LOGIC_AND,   .LOGIC_AND_EQUALS)
+        case '|'
+            token.tag = maybe_equals_double_token(lexer, cast() '|', .BIT_OR_EQUALS,  .LOGIC_OR,    .LOGIC_OR_EQUALS)
+        case '<'
+            token.tag = maybe_equals_double_token(lexer, cast() '<', .LESS_EQUAL,     .SHIFT_LEFT,  .SHIFT_LEFT_EQUALS)
+        case '>'
+            token.tag = maybe_equals_double_token(lexer, cast() '>', .GREATER_EQUAL,  .SHIFT_RIGHT, .SHIFT_RIGHT_EQUALS)
+        case '-'
+            remaining = remaining[1..]
+            if remaining {
+                if remaining[0] == {
+                    case '-'
+                        remaining = remaining[1..]
+                        token.tag = .UNINITIALIZED
+                    case '>'
+                        remaining = remaining[1..]
+                        token.tag = .ARROW
+                    case '='
+                        remaining = remaining[1..]
+                        token.tag = .MINUS_EQUALS
+                    else
+                        token.tag = cast() '-'
+                }
+            } else {
+                token.tag = cast() '-'
+            }
+        case '"'
+            remaining = remaining[1..]
+            
+            lexer_string_buffer.count = 0
+            
+            while remaining {
+                if remaining[0] == {
+                    case '\r' #through
+                    case '\n'
+                        token.end_offset = get_offset(<<lexer)
+                        report_error(token, "Found newline in the middle of a string literal")
+                        return false, .{}
+                    case '\\'
+                        remaining = remaining[1..]
+                        
+                        if !remaining {
+                            token.end_offset = get_offset(<<lexer)
+                            report_error(token, "Found newline in the middle of a string literal")
+                            return false, .{}
+                        }
+                        
+                        value, unicode, success := escape_sequence(lexer)
+                        
+                        if !success
+                            return false, .{}
+                            
+                        if unicode {
+                            append(*lexer_string_buffer, value)
+                        } else {
+                            array_add(*lexer_string_buffer, cast() value)
+                        }
+                    case '"'
+                        remaining = remaining[1..]
+                        // @Improvement allow direct cast of [..]u8 to string
+                        token.string_data = copy_string(cast() cast([]u8) lexer_string_buffer)
+                        token.tag = .STRING_LITERAL
+                        break
+                    else
+                        array_add(*lexer_string_buffer, remaining[0])
+                        remaining = remaining[1..]
+                        
+                }
+            } or {
+                report_error("File ended in the middle of a string literal")
+                return false, .{}
+            }
+        case '\''
+            remaining = remaining[1..]
+            
+            if !remaining {
+                
+            }
+            while remaining {
+                if remaining[0] == {
+                    case '\r' #through
+                    case '\n'
+                        token.end_offset = get_offset(<<lexer)
+                        report_error(token, "Found newline in the middle of a string literal")
+                        return false, .{}
+                    case '\\'
+                        remaining = remaining[1..]
+                        
+                        if !remaining {
+                            token.end_offset = get_offset(<<lexer)
+                            report_error(token, "Found newline in the middle of a string literal")
+                            return false, .{}
+                        }
+                        
+                        value, unicode, success := escape_sequence(lexer)
+                        
+                        if !success
+                            return false, .{}
+                            
+                        if unicode {
+                            append(*lexer_string_buffer, value)
+                        } else {
+                            array_add(*lexer_string_buffer, cast() value)
+                        }
+                    case '"'
+                        remaining = remaining[1..]
+                        // @Improvement allow direct cast of [..]u8 to string
+                        token.string_data = copy_string(cast() cast([]u8) lexer_string_buffer)
+                        token.tag = .STRING_LITERAL
+                        break
+                    else
+                        array_add(*lexer_string_buffer, remaining[0])
+                        remaining = remaining[1..]
+                        
+                }
+            } or {
+                report_error("File ended in the middle of a string literal")
+                return false, .{}
+            }
+        case '0'
+            
+        case '1' #through
+        case '2' #through
+        case '3' #through
+        case '4' #through
+        case '5' #through
+        case '6' #through
+        case '7' #through
+        case '8' #through
+        case '9'
+            
+        case '#'
+        case 'A' #through 
+        case 'B' #through
+        case 'C' #through
+        case 'D' #through
+        case 'E' #through
+        case 'F' #through
+        case 'G' #through
+        case 'H' #through
+        case 'I' #through
+        case 'J' #through
+        case 'K' #through
+        case 'L' #through
+        case 'M' #through
+        case 'N' #through
+        case 'O' #through
+        case 'P' #through
+        case 'Q' #through
+        case 'R' #through
+        case 'S' #through
+        case 'T' #through
+        case 'U' #through
+        case 'V' #through
+        case 'W' #through
+        case 'X' #through
+        case 'Y' #through
+        case 'Z' #through
+        case '_' #through
+        case 'a' #through
+        case 'b' #through
+        case 'c' #through
+        case 'd' #through
+        case 'e' #through
+        case 'f' #through
+        case 'g' #through
+        case 'h' #through
+        case 'i' #through
+        case 'j' #through
+        case 'k' #through
+        case 'l' #through
+        case 'm' #through
+        case 'n' #through
+        case 'o' #through
+        case 'p' #through
+        case 'q' #through
+        case 'r' #through
+        case 's' #through
+        case 't' #through
+        case 'u' #through
+        case 'v' #through
+        case 'w' #through
+        case 'x' #through
+        case 'y' #through
+        case 'z'
+            
+    }
+    
+    token.end = get_offset(<<lexer)
+    
+    return true, token
+}
+
+get_offset :: (using lexer: Lexer) {
+    if remaining {
+        return cast() (remaining.data - text.data)
+    } else {
+        return cast() text.count
+    }
+}
+
+remove_hashbang :: (s: string) -> string {
+    if s.count < 2 || s[0..2] != "#!" {
+        return s
+    }
+    
+    remaining := s[2..]
+    
+    
+    
+    return remaining
+}
+
+remove_whitespace_and_comments :: (s: string) -> string {
+    remaining := s
+    
+    while remaining {
+        if remaining[0] == {
+            case '\t' #through
+            case '\r' #through
+            case '\n' #through
+            case ' ' 
+                remaining = remaining[1..]
+            case '/'
+                if remaining.count < 2
+                    break
+                    
+                if remaining[1] == '/' {
+                    remaining = remove_line(remaining[2..])
+                } else if remaining[1] == '*' {
+                    remaining = remaining
+                    
+                    block_comment_count := 1
+                    
+                    while remaining {
+                        if remaining.count < 2 {
+                            remaining = ""
+                            break
+                        }
+                        
+                        if remaining[0..1] == "/*" {
+                            block_comment_count += 1
+                            remaining = remaining[2..]
+                        } else if remaining[0..1] == "*/" {
+                            block_comment_count -= 1
+                            remaining = remaining[2..]
+                            if !block_comment_count
+                                break
+                        } else {
+                            remaining = remaining[1..]
+                        }
+                    }
+                } else {
+                    break
+                }
+            else 
+                break
+        }
+    }
+    
+    return remaining
+}
+
+remove_line :: (s: string) -> string {
+    remaining := s
+    
+    while remaining {
+        if remaining[0] == '\r' {
+            remaining = remaining[1..]
+            if remaining && remaining[0] == '\n'
+                remaining = remaining[1..]
+            break
+        } else if remaining[0] == '\n' {
+            remaining = remaining[1..]
+            break
+        }
+    }
+    
+    return remaining
+}
