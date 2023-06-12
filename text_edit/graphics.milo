@@ -335,7 +335,13 @@ font: *Font
 precompute_font :: (filename: string, size: f32) {
     result: Font = --
 
-    file_data := read_entire_file(filename)
+    file_data, success := read_entire_file(filename)
+    defer free_array(file_data)
+    
+    if !success {
+        print("Warning: Could not load font file '%' for font generation, using existing font.bin\n", filename)
+        return
+    }
     
     single_channel_bitmap := new_array(u8, Font.ATLAS_SIZE * Font.ATLAS_SIZE, initialized = false)
     defer free_array(single_channel_bitmap)

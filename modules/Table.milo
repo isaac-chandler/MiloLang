@@ -78,7 +78,7 @@ MIN_VALID_HASH :: 2
 find_empty_slot :: (slots: []$T, hash: u64) -> *T {
     slot := hash & (slots.count - 1)
     
-    while slots[slot].hash < MIN_VALID_HASH {
+    while slots[slot].hash >= MIN_VALID_HASH {
         slot += 1
         slot &= slots.count - 1
     }

@@ -848,31 +848,36 @@ if (op.flags & IR_FLOAT_OP) {\
 Expr *getReturnValueFromBytes(CodeLocation start, EndLocation end, Type *type, void *bytes) {
 	switch (type->flavor) {
 	case TypeFlavor::ARRAY: {
+		assert(!(type->flags & TYPE_ARRAY_IS_DYNAMIC));
+		auto arrayType = static_cast<TypeArray *>(type);
+
+		auto array = new ExprArrayLiteral;
+		array->flavor = ExprFlavor::ARRAY_LITERAL;
+		array->start = start;
+		array->end = end;
+		array->type = type;
+		
+		u8 *storage = static_cast<u8 *>(bytes);
+
 		if (type->flags & TYPE_ARRAY_IS_FIXED) {
-			auto arrayType = static_cast<TypeArray *>(type);
-
-			auto array = new ExprArrayLiteral;
-			array->flavor = ExprFlavor::ARRAY_LITERAL;
-			array->start = start;
-			array->end = end;
-			array->values = new Expr * [arrayType->count];
 			array->count = arrayType->count;
-			array->type = type;
-
-			u8 *storage = static_cast<u8 *>(bytes);
-
-			for (u64 i = 0; i < arrayType->count; i++) {
-				array->values[i] = getReturnValueFromBytes(start, end, arrayType->arrayOf, storage);
-
-				storage += arrayType->arrayOf->size;
-			}
-
-			return array;
 		}
 		else {
-			assert(false); // @Incomplete
-			return nullptr;
+			auto arrayData = static_cast<MiloArray<u8> *>(bytes);
+
+			storage = arrayData->data;
+			array->count = arrayData->count;
 		}
+
+		array->values = new Expr * [array->count];
+
+		for (u64 i = 0; i < array->count; i++) {
+			array->values[i] = getReturnValueFromBytes(start, end, arrayType->arrayOf, storage);
+
+			storage += arrayType->arrayOf->size;
+		}
+
+		return array;
 	}
 	case TypeFlavor::BOOL: {
 		auto value = *static_cast<u8 *>(bytes);

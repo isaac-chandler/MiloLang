@@ -8258,10 +8258,6 @@ bool returnTypeIsLegalForRun(Expr *run, Type *type) {
 		reportError(run, "Error: #run statements cannot return a dynamic array");
 		return false;
 	}
-	else if (type->flavor == TypeFlavor::ARRAY && !(type->flags & TYPE_ARRAY_IS_FIXED)) {
-		reportError(run, "Error: #run statements cannot return an array view @Incomplete");
-		return false;
-	}
 	else if (type->flags & TYPE_STRUCT_IS_UNION) {
 		reportError(run, "Error: #run statements cannot return a union");
 		return false;

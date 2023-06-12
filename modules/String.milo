@@ -158,17 +158,13 @@ read_character :: (s: string) -> (character: u32, remaining: string) {
 get_digit :: (c: u8, base: u64 = 10) -> (u64, bool) {
     numeral_min :: '0'
     numeral_max := '0' - 1 + min(base, 10)
-    lower_min :: 'a'
-    lower_max := 'a' + base - 11
-    upper_min :: 'A'
-    upper_max := 'A' + base - 11
+    alpha_min :: 'A'
+    alpha_max := 'A' + base - 11
     
     if numeral_min <= c && c <= numeral_max
         return c - '0', true
-    else if lower_min   <= c && c <= lower_max
+    else if alpha_min  <= (c & cast() ~0x20) && (c & cast() ~0x20) <= alpha_max
         return c - 'a', true
-    else if upper_min   <= c && c <= upper_max
-        return c - 'A', true
     
     return 0, false
 }
