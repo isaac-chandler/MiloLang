@@ -4,6 +4,8 @@
 #import "Table"
 
 #load "lexer.milo"
+#load "ast.milo"
+#load "parser.milo"
 
 Location :: struct {
     file_id:      s32

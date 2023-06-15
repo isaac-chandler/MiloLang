@@ -1,0 +1,54 @@
+Node :: struct {
+    using location: Source_Location
+    flags: Flags
+    tag: Tag
+        
+    type_: *Node_Type
+    
+    substitution: *Node
+    
+    Tag :: enum u8 {
+        LOAD_OR_IMPORT
+        DECLARATION
+        TYPE
+    }
+}
+
+Node_Declaration :: struct {
+    using node: Node
+    
+    name: string
+    
+    value: *Node
+}
+
+Node_Load_Or_Import :: struct {
+    using node: Node
+    
+    name: string
+}
+
+Node_Type :: struct {
+    using node: Node
+    
+    size: s64
+    
+    
+}
+
+type_type: *Node_Type
+type_bool: *Node_Type
+type_string: *Node_Type
+
+type_context: *Node_Type
+
+type_u8:  *Node_Type
+type_u16: *Node_Type
+type_u32: *Node_Type
+type_u64: *Node_Type
+type_s8:  *Node_Type
+type_s16: *Node_Type
+type_s32: *Node_Type
+type_s64: *Node_Type
+type_f32: *Node_Type
+type_f64: *Node_Type

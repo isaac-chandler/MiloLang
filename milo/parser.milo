@@ -1,0 +1,20 @@
+Parser :: struct {
+    tokens: []Token
+}
+
+parse :: (tokens_: []Token) -> bool {
+    using parser := Parser.{tokens = tokens_}
+
+    while tokens {
+        statement := parse_top_level(*parser)
+        
+        if !statement
+            return false
+            
+        
+    }
+}
+
+parse_top_level :: (using parser: *Parser) -> *Node {
+    
+}
