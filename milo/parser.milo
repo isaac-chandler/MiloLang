@@ -38,8 +38,10 @@ parse :: (tokens_: []Token) -> bool {
 looks_like_declaration :: (tokens: [..]Token) -> bool {
     if tokens.count < 2 
         return false
-        
-    if tokens[0].tag == .USING && tokens.count >= 3
+    
+    if tokens[0].tag == .MUST
+        return true
+    else if tokens[0].tag == .USING && tokens.count >= 3
         return tokens[1].tag == .IDENTIFIER && tokens[2].tag == cast() ':'
     else
         return tokens[0].tag == .IDENTIFIER && tokens[1].tag == cast() ':'
@@ -274,7 +276,7 @@ parse_prefix_expression :: (using parser: *Parser) -> *Node {
     if check_and_consume(parser, '[') {
         if check_and_consume(parser, .DOUBLE_DOT) {
             if !check_and_consume(parser, ']') {
-                report_error("Expected ']' after '..' in dynamic array type")
+                report_error(tokens[0], "Expected ']' after '..' in dynamic array type")
                 return null
             }
             
@@ -306,7 +308,7 @@ parse_prefix_expression :: (using parser: *Parser) -> *Node {
             if !binary.left return null
             
             if !check_and_consume(parser, ']') {
-                report_error("Expected ']' after static array count")
+                report_error(tokens[0], "Expected ']' after static array count")
                 return null
             }
             
@@ -324,16 +326,158 @@ parse_prefix_expression :: (using parser: *Parser) -> *Node {
 // TODO binary expressions
 parse_expression :: parse_prefix_expression
 
-parse_function_or_function_type :: (using parser: *Parser) -> *Node {
+parse_named_argument_declarations :: (using parser: *Parser, block: *Block) -> bool {
+    while tokens[0].tag != cast() ')' {
+        must := check_and_consume(parser, .MUST)
+        
+        if must && block.tag != .RETURNS {
+            report_error(tokens[0], "Only return values can be marked as #must")
+            return false
+        }
+        
+        declaration := parse_declaration(parser)
+        if !declaration return false
+        
+        if declaration.flags & .DECLARATION_USING && block.tag == .RETURNS {
+            report_error(tokens[0], "Return values cannot be marked as using")
+            return false
+        }
+        
+        if delcaration.flags & .DECLARATION_CONSTANT {
+            report_error(tokens[0], "Arguments or returns cannot be constant values")
+            return false
+        }
+        
+        if declaration.flags & .DECLARATION_UNINITIALIZED {
+            report_error(tokens[0], "Arguments or returns cannot be uninitialized")
+            return false
+        }
+        
+        array_add(*block.statements, declaration)
+        
+        if tokens[0].tag == cast() ')' 
+            return true
+        else if !check_and_consume(parser, ',') {
+            report_error(tokens[0], "Expected ',' or ')' in argument or return list")
+            return false
+        }
+    }
+    
+    return true
+}
+
+
+parse_unnamed_argument_declarations :: (using parser: *Parser, block: *Block) -> bool {
+    while tokens[0].tag != cast() ')' {
+        expression := parse_expression(parser)
+        if !expression return false
+        
+        array_add(*block.statements, create_unnamed_argument_declaration(parser, expression))
+        
+        if tokens[0].tag == cast() ')' 
+            return true
+        else if !check_and_consume(parser, ',') {
+            report_error(tokens[0], "Expected ',' or ')' in argument or return list")
+            return false
+        }
+    }
+    
+    return true
+}
+
+create_unnamed_argument_declaration :: (using parser: *Parser, type_: *Node) -> *Node_Declaration {
+    declaration := new_node(parser, Node_Declaration, .DECLARATION)
+    declaration.location = type_.location
+    declartion.type_expr = type_
+    
+    return declaration
+}
+
+parse_function :: (using parser: *Parser) -> *Node {
     start := tokens[0].location
+    end   := tokens[0].location
     
     tokens = tokens[1..]
     
-    if looks_like_declaration(parser) {
+    function: *Node_Function
+    expression: *Node
+    
+    named_arguments := looks_like_declaration(parser) || tokens[0].tag == cast() ')'
+    if named_arguments {    
+        function = new_node(parser, Node_Function, .FUNCTION)
         
+        if !parse_named_argument_declarations(parser, *function.arguments) return null
+        
+        end = tokens[0]
+        tokens = tokens[1..] // closing ')' is not consumed
+    } else {
+        expression = parse_expression(parser)
+        if !expression return null
+        
+        end = tokens[0]
+        
+        if check_and_consume(parser, ',') {
+            function = new_node(parser, Node_Function, .FUNCTION)
+            
+            declaration := create_unnamed_declaration(parser, expression)
+            
+            array_add(*function.arguments.statements, declaration)
+            
+            if !parse_unnamed_argument_declarations(parser, *function.arguments) return null
+            
+            end = tokens[0]
+            tokens = tokens[1..] // closing ')' is not consumed
+        } else if !check_and_consume(parser, ')') {
+            report_error(parser, "Expected ')'")
+            return null
+        }
     }
     
-    return null
+    explicit_returns := check_and_consume(parser, .ARROW)
+    if explicit_returns {
+        if !function {
+            function = new_node(parser, Node_Function, .FUNCTION)
+            array_add(*function.arguments.statements, declaration)
+        }
+        
+        if check_and_consume(parser, '(') {
+            if looks_like_declaration(parser) || tokens[0].tag == cast() ')'
+                if !parse_named_argument_declarations(parser, *function.returns) return null
+            else
+                if !parse_unnamed_argument_declarations(parser, *function.arguments) return null
+            
+            end = tokens[0]
+            tokens = tokens[1..] // closing ')' is not consumed
+        } else {
+            return_type := parse_expression(parser)
+            if !return_type return null
+            
+            array_add(*function.returns.statements, create_unnamed_argument_declaration(parser, return_type))
+        }
+    }
+    
+    if !function
+        return expression
+    
+    set_start(function, start)
+    set_end(function, end)
+    
+    if token.tag == '{' {
+        if !named_arguments {
+            report_error(*function, "Functions cannot have unnamed arguments")r
+            return null
+        }
+        
+        function.body = parse_block(parser, imperative = true)
+        if !function.body return null
+    } else {
+        if !explicit_returns {
+            report_error(*function, "Function types must explicitly specify an empty return list '-> ()' if they have no returns")
+            return null
+        }
+    }
+    
+    return function
 }
 
 parse_primary_expression :: (using parser: *Parser) -> *Node {
@@ -342,6 +486,7 @@ parse_primary_expression :: (using parser: *Parser) -> *Node {
         case .UNION
             struct_ := new_node(parser, Node_Type, .TYPE)
             struct_.type_tag = .STRUCT
+            struct_.members.tag = .STRUCT
             
             if tokens[0].tag == .UNION
                 struct_.type_flags |= .UNION
@@ -373,7 +518,7 @@ parse_primary_expression :: (using parser: *Parser) -> *Node {
                 
                 if !statement return null
                 
-                array_add(*struct_.block.statements, statement)
+                array_add(*struct_.members.statements, statement)
             }
             
             set_end(struct_, tokens[0])
@@ -414,14 +559,14 @@ parse_primary_expression :: (using parser: *Parser) -> *Node {
         case .INT_LITERAL
             return parse_int_literal(parser, tokens[0].integer_value, null)
         case cast() '('
-            return parse_function_or_function_type(parser)
+            return parse_function(parser)
         else
             report_error(tokens[0], "Expected an expression")
             return null
     }
 }
 
-parse_block :: (using parser: *Parser, use_braces := true) -> *Node {
+parse_block :: (using parser: *Parser, imperative: bool, use_braces := true) -> *Node {
     report_error(tokens[0], "Block parsing is not implemented")
     return null
 }
@@ -527,7 +672,7 @@ parse_statement :: (using parser: *Parser, imperative: bool, allow_single_declar
             return null
         }
         
-        return parse_block(parser)
+        return parse_block(parser, imperative = imperative)
     } else {
         if struct_body {
             report_error(tokens[0], "Expected a struct member")

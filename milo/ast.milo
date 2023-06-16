@@ -24,6 +24,7 @@ Node :: struct {
         DECLARATION_CONSTANT
         DECLARATION_EXPLICIT_DEFAULT
         LITERAL_NEGATIVE
+        FUNCTION
     }
 }
 
@@ -63,6 +64,22 @@ Node_Load_Or_Import :: struct {
     name: string
 }
 
+Node_Function :: struct {
+    using node: Node
+    
+    constants := Block.{tag = .CONSTANTS}
+    arguments := Block.{tag = .ARGUMENTS}
+    returns   := Block.{tag = .RETURNS}
+    
+    body: *Node_Block
+}
+
+Node_Block :: struct {
+    using node: Node
+    
+    using block: Block
+}
+
 Node_Type :: struct {
     using node: Node
     
@@ -71,7 +88,7 @@ Node_Type :: struct {
     size := -1
     align := -1
     array_count := -1
-    block: Block
+    members: Block
     
     Type_Tag :: enum u8 {
         POINTER
