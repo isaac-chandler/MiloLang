@@ -1,5 +1,5 @@
 Node :: struct {
-    using location: Source_Location
+    using location: Location
     flags: Flags
     tag: Tag
         
@@ -8,9 +8,22 @@ Node :: struct {
     substitution: *Node
     
     Tag :: enum u8 {
-        LOAD_OR_IMPORT
+        NODE
+        LOAD
+        IMPORT
         DECLARATION
         TYPE
+        UNARY
+        BINARY
+        INT_LITERAL
+    }
+    
+    Flags :: enum_flags u8 {
+        DECLARATION_USING
+        DECLARATION_UNINITIALIZED
+        DECLARATION_CONSTANT
+        DECLARATION_EXPLICIT_DEFAULT
+        LITERAL_NEGATIVE
     }
 }
 
@@ -20,6 +33,28 @@ Node_Declaration :: struct {
     name: string
     
     value: *Node
+    type_expr: *Node
+}
+
+Node_Unary :: struct {
+    using node: Node
+    
+    value: *Node
+    op: Token.Tag
+}
+
+Node_Binary :: struct {
+    using node: Node
+    
+    left: *Node
+    right: *Node
+    op: Token.Tag
+}
+
+Node_Int_Literal :: struct {
+    using node: Node
+    
+    value: u64
 }
 
 Node_Load_Or_Import :: struct {
@@ -31,24 +66,80 @@ Node_Load_Or_Import :: struct {
 Node_Type :: struct {
     using node: Node
     
-    size: s64
+    type_tag: Type_Tag
+    type_flags: Type_Flags
+    size := -1
+    align := -1
+    array_count := -1
+    block: Block
     
+    Type_Tag :: enum u8 {
+        POINTER
+        ARRAY
+        ENUM
+        ENUM_FLAGS
+        STRUCT
+        INTEGER
+        FLOAT
+        BOOL
+        TYPE
+        STRING
+    }
     
+    Type_Flags :: enum_flags u8 {
+        UNION
+        DYNAMIC_ARRAY
+        PACKED
+        SIGNED
+    }
 }
 
-type_type: *Node_Type
-type_bool: *Node_Type
-type_string: *Node_Type
+Block :: struct {
+    statements: [..]*Node
+    
+    Tag :: enum u8 {
+        GLOBAL
+        ARGUMENTS
+        RETURNS
+        CONSTANTS
+        IMPERATIVE
+        ENUM
+    }
+}
 
-type_context: *Node_Type
+type_type   := Node_Type.{.{tag = .TYPE}, type_tag = .TYPE,   size = 8,  align = 8}
+type_bool   := Node_Type.{.{tag = .TYPE}, type_tag = .BOOL,   size = 1,  align = 1}
+type_string := Node_Type.{.{tag = .TYPE}, type_tag = .STRING, size = 16, align = 8}
 
-type_u8:  *Node_Type
-type_u16: *Node_Type
-type_u32: *Node_Type
-type_u64: *Node_Type
-type_s8:  *Node_Type
-type_s16: *Node_Type
-type_s32: *Node_Type
-type_s64: *Node_Type
-type_f32: *Node_Type
-type_f64: *Node_Type
+type_context := Node_Type.{.{tag = .TYPE}, type_tag = .STRUCT}
+
+type_u8  := Node_Type.{.{tag = .TYPE}, type_tag = .INTEGER, size = 1, align = 1}
+type_u16 := Node_Type.{.{tag = .TYPE}, type_tag = .INTEGER, size = 2, align = 2}
+type_u32 := Node_Type.{.{tag = .TYPE}, type_tag = .INTEGER, size = 4, align = 4}
+type_u64 := Node_Type.{.{tag = .TYPE}, type_tag = .INTEGER, size = 8, align = 8}
+type_s8  := Node_Type.{.{tag = .TYPE}, type_tag = .INTEGER, size = 1, align = 1, type_flags = .SIGNED}
+type_s16 := Node_Type.{.{tag = .TYPE}, type_tag = .INTEGER, size = 2, align = 2, type_flags = .SIGNED}
+type_s32 := Node_Type.{.{tag = .TYPE}, type_tag = .INTEGER, size = 4, align = 4, type_flags = .SIGNED}
+type_s64 := Node_Type.{.{tag = .TYPE}, type_tag = .INTEGER, size = 8, align = 8, type_flags = .SIGNED}
+type_f32 := Node_Type.{.{tag = .TYPE}, type_tag = .FLOAT,   size = 4, align = 4}
+type_f64 := Node_Type.{.{tag = .TYPE}, type_tag = .FLOAT,   size = 8, align = 8}
+
+create_builtin_types :: () {
+    type_type   = Node_Type.{.{tag = .TYPE, type_ = *type_type}, type_tag = .TYPE,   size = 8,  align = 8}
+    type_bool   = Node_Type.{.{tag = .TYPE, type_ = *type_type}, type_tag = .BOOL,   size = 1,  align = 1}
+    type_string = Node_Type.{.{tag = .TYPE, type_ = *type_type}, type_tag = .STRING, size = 16, align = 8}
+    
+    type_context = Node_Type.{.{tag = .TYPE, type_ = *type_type}, type_tag = .STRUCT}
+    
+    type_u8  = Node_Type.{.{tag = .TYPE, type_ = *type_type}, type_tag = .INTEGER, size = 1, align = 1}
+    type_u16 = Node_Type.{.{tag = .TYPE, type_ = *type_type}, type_tag = .INTEGER, size = 2, align = 2}
+    type_u32 = Node_Type.{.{tag = .TYPE, type_ = *type_type}, type_tag = .INTEGER, size = 4, align = 4}
+    type_u64 = Node_Type.{.{tag = .TYPE, type_ = *type_type}, type_tag = .INTEGER, size = 8, align = 8}
+    type_s8  = Node_Type.{.{tag = .TYPE, type_ = *type_type}, type_tag = .INTEGER, size = 1, align = 1, type_flags = .SIGNED}
+    type_s16 = Node_Type.{.{tag = .TYPE, type_ = *type_type}, type_tag = .INTEGER, size = 2, align = 2, type_flags = .SIGNED}
+    type_s32 = Node_Type.{.{tag = .TYPE, type_ = *type_type}, type_tag = .INTEGER, size = 4, align = 4, type_flags = .SIGNED}
+    type_s64 = Node_Type.{.{tag = .TYPE, type_ = *type_type}, type_tag = .INTEGER, size = 8, align = 8, type_flags = .SIGNED}
+    type_f32 = Node_Type.{.{tag = .TYPE, type_ = *type_type}, type_tag = .FLOAT,   size = 4, align = 4}
+    type_f64 = Node_Type.{.{tag = .TYPE, type_ = *type_type}, type_tag = .FLOAT,   size = 8, align = 8}
+    
+}

@@ -1006,6 +1006,7 @@ void addSizeDependency(Array<Type *> *sizeDependencies, Type *type) {
 
 void copyLiteral(Expr **exprPointer, Expr *expr) {
 	switch (expr->flavor) {
+	case ExprFlavor::OVERLOAD_SET:
 	case ExprFlavor::FUNCTION: // Functions are unique
 	case ExprFlavor::IMPORT: // No reason to duplicate imports
 	case ExprFlavor::STRING_LITERAL: // Don't duplicate string literals this will bloat the binary

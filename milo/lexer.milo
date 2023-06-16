@@ -9,7 +9,6 @@ Token :: struct {
     }
     
     Tag :: enum u16 {
-        INVALID
         // Single ASCII characters represent their own tokens
         END_OF_FILE :: 128
         
@@ -105,6 +104,11 @@ Token :: struct {
         COMPLETE
         SCOPE_MODULE
         SCOPE_EXPORT
+        STATIC_IF
+        
+        ARRAY_OF
+        DYNAMIC_ARRAY_OF
+        INDEX
     }
 }
 
@@ -181,7 +185,8 @@ keyword_table := #run create_keyword_table(.[
     .{"#pack", .PACK}, 
     .{"#complete", .COMPLETE}, 
     .{"#scope_module", .SCOPE_MODULE}, 
-    .{"#scope_export", .SCOPE_EXPORT}
+    .{"#scope_export", .SCOPE_EXPORT}, 
+    .{"#if", .STATIC_IF}
 ])
 
 lex_string :: (file_id_: s32, s: string) -> (#must success: bool, #must tokens: [..]Token) {
@@ -202,10 +207,11 @@ lex_string :: (file_id_: s32, s: string) -> (#must success: bool, #must tokens: 
             return false, .{}
         }
         
+        array_add(*tokens, token)
+        
         if token.tag == .END_OF_FILE
             break;
      
-        array_add(*tokens, token)
     }
     
     return true, tokens

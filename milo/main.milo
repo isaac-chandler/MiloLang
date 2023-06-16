@@ -19,6 +19,20 @@ build_files: [..]string
 // @Workspaces
 had_error := false
 
+set_start :: (location: *Location, start: Location) {
+    location.file_id = start.file_id
+    location.start_offset = start.start_offset
+}
+
+set_end :: (location: *Location, end: Location) {
+    location.end_offset = end.end_offset
+}
+
+set_location :: (location: *Location, start: Location, end: Location) {
+    set_start(location, start)
+    set_end(location, end)
+}
+
 report_error :: (location: Location, message: string, format: any..) {
     filename := build_files[location.file_id]
     file_content, success := read_entire_file(filename)
@@ -77,7 +91,10 @@ report_error :: (location: Location, message: string, format: any..) {
         }
         
         // @Incomplete color precise location
-        print("%\n", cast(string) file_content[start_offset..end_offset])
+        print("%\e[91m%\e[0m%\n", 
+            cast(string) file_content[start_offset..location.start_offset], 
+            cast(string) file_content[location.start_offset..location.end_offset], 
+            cast(string) file_content[location.end_offset .. end_offset])
     }
 }
 
@@ -117,26 +134,7 @@ main :: () {
     success, tokens = lex_string(0, cast() content)
     defer array_free(tokens)
     
-    for tokens {
-        if cast() it.tag < 128 {
-            c := cast(u8) it.tag
-            
-            c_array: []u8 = .[c]
-            
-            print("%\n", cast(string) c_array)
-        } else if it.tag == {
-            case .INT_LITERAL
-                print("%\n", it.integer_value)
-            case .FLOAT_LITERAL
-                print("%\n", it.float_value)
-            case .STRING_LITERAL
-                print("\"%\"\n", it.string_value)
-            case .IDENTIFIER
-                print("%\n", it.string_value)
-            else
-                print("%\n", it.tag)
-        }
-    }
+    print("%\n", parse(tokens))
 }
 
 #import "Compiler"
