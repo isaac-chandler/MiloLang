@@ -2,180 +2,180 @@
 #import "String"
 
 default_allocator :: (mode: Allocator.Mode, allocator_data: *void, size: u64, alignment: u64, pointer: *void, old_size: u64) -> *void {
-	init_process_heap()
+    init_process_heap()
 
-	if mode == #complete {
-		case .NEW
-			return HeapAlloc(process_heap, 0, size)
-		case .EXPAND
-			if !pointer
-				return HeapAlloc(process_heap, 0, size)
-			else
-				return HeapReAlloc(process_heap, 0, pointer, size)
-		case .FREE
-			HeapFree(process_heap, 0, pointer)
-			return null
-		case .FREE_ALL #through
-		else
-			assert(false)
-			return null
-	}
+    if mode == #complete {
+        case .NEW
+            return HeapAlloc(process_heap, 0, size)
+        case .EXPAND
+            if !pointer
+                return HeapAlloc(process_heap, 0, size)
+            else
+                return HeapReAlloc(process_heap, 0, pointer, size)
+        case .FREE
+            HeapFree(process_heap, 0, pointer)
+            return null
+        case .FREE_ALL #through
+        else
+            assert(false)
+            return null
+    }
 }
 
 exit :: (code: u32 = 0) {
-	ExitProcess(code)
+    ExitProcess(code)
 }
 
 // @Unicode
 print_buffer :: (buffer: []u8) {
-	init_std_out()
-	bytes_written: u32
-	WriteFile(std_out, buffer.data, cast() buffer.count, *bytes_written)
+    init_std_out()
+    bytes_written: u32
+    WriteFile(std_out, buffer.data, cast() buffer.count, *bytes_written)
 }
 
 print_buffer :: (c: *Concatenator) {
-	init_std_out()
-	bucket := c.current_bucket
-	
-	while bucket {
-		bytes_written: u32
-		WriteFile(std_out, bucket.data.data, cast() bucket.offset, *bytes_written)
-		
-		bucket = bucket.next
-	}
+    init_std_out()
+    bucket := c.current_bucket
+    
+    while bucket {
+        bytes_written: u32
+        WriteFile(std_out, bucket.data.data, cast() bucket.offset, *bytes_written)
+        
+        bucket = bucket.next
+    }
 }
 
 get_command_line_arguments :: () -> []string {
-	count: s32
+    count: s32
 
-	windows_args := CommandLineToArgvW(GetCommandLineW(), *count)
-	
-	if !windows_args {
-		return .{}
-	}
-	
-	args := new_array(string, cast() count, initialized = false)
-	
-	for * args {
-		<<it = from_windows_string(windows_args[it_index])
-	}
+    windows_args := CommandLineToArgvW(GetCommandLineW(), *count)
+    
+    if !windows_args {
+        return .{}
+    }
+    
+    args := new_array(string, cast() count, initialized = false)
+    
+    for * args {
+        <<it = from_windows_string(windows_args[it_index])
+    }
 
-	return args
+    return args
 }
 
 run_command_async :: (command: string) -> bool {
-	startup: STARTUPINFOW
-	
-	info: PROCESS_INFORMATION = --
-	
-	windows_command := to_windows_string(command)
-	defer free_array(windows_command)
-	
-	if !CreateProcessW(lpCommandLine = windows_command.data, lpStartupInfo = *startup, lpProcessInformation = *info)
-		return false
-	
-	CloseHandle(info.hThread)
-	CloseHandle(info.hProcess)
-	
-	return true
+    startup: STARTUPINFOW
+    
+    info: PROCESS_INFORMATION = --
+    
+    windows_command := to_windows_string(command)
+    defer free_array(windows_command)
+    
+    if !CreateProcessW(lpCommandLine = windows_command.data, lpStartupInfo = *startup, lpProcessInformation = *info)
+        return false
+    
+    CloseHandle(info.hThread)
+    CloseHandle(info.hProcess)
+    
+    return true
 }
 
 run_command :: (command: string) -> u32 {
-	startup: STARTUPINFOW
-	
-	info: PROCESS_INFORMATION = --
-	
-	windows_command := to_windows_string(command)
-	defer free_array(windows_command)
-	
-	if !CreateProcessW(lpCommandLine = windows_command.data, lpStartupInfo = *startup, lpProcessInformation = *info, bInheritHandles = 1)
-		return cast() -1
-	
-	CloseHandle(info.hThread)
-	
-	WaitForSingleObject(info.hProcess)
-	
-	exit_code: u32 = --
-	
-	if !GetExitCodeProcess(info.hProcess, *exit_code)
-		return cast() -2
-	
-	CloseHandle(info.hProcess)
-	
-	return exit_code
+    startup: STARTUPINFOW
+    
+    info: PROCESS_INFORMATION = --
+    
+    windows_command := to_windows_string(command)
+    defer free_array(windows_command)
+    
+    if !CreateProcessW(lpCommandLine = windows_command.data, lpStartupInfo = *startup, lpProcessInformation = *info, bInheritHandles = 1)
+        return cast() -1
+    
+    CloseHandle(info.hThread)
+    
+    WaitForSingleObject(info.hProcess)
+    
+    exit_code: u32 = --
+    
+    if !GetExitCodeProcess(info.hProcess, *exit_code)
+        return cast() -2
+    
+    CloseHandle(info.hProcess)
+    
+    return exit_code
 }
 
 enable_console_colors :: () -> bool {
-	init_std_out()
-	
-	if (std_out != INVALID_HANDLE_VALUE) {
-		mode: Console_Mode
+    init_std_out()
+    
+    if (std_out != INVALID_HANDLE_VALUE) {
+        mode: Console_Mode
 
-		if GetConsoleMode(std_out, *mode) {
-			if SetConsoleMode(std_out, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING) {
-				return true
-			}
-		}
-	}
-	
-	return false
+        if GetConsoleMode(std_out, *mode) {
+            if SetConsoleMode(std_out, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING) {
+                return true
+            }
+        }
+    }
+    
+    return false
 }
 
  // @Incomplete: This is probably the slowest read_line function ever written, what is the correct way to do this in win32?
 read_line :: () -> (string, bool) {
-	init_std_in()
-	input_buffer.count = 0
+    init_std_in()
+    input_buffer.count = 0
 
 
-	while true {
-		c: u8
-		bytes_read: u32
+    while true {
+        c: u8
+        bytes_read: u32
 
-		if !ReadFile(std_in, *c, 1, *bytes_read, null) || bytes_read == 0
-			break
+        if !ReadFile(std_in, *c, 1, *bytes_read, null) || bytes_read == 0
+            break
 
-		if c == '\n' {
-			if had_carriage_return {
-				had_carriage_return = false
-				continue
-			}
-		}
+        if c == '\n' {
+            if had_carriage_return {
+                had_carriage_return = false
+                continue
+            }
+        }
 
-		had_carriage_return = c == '\r'
+        had_carriage_return = c == '\r'
 
 
-		if c == '\n' || c == '\r' {
-			s := new_string(input_buffer.count, initialized = false)
-			memory_copy(s.data, input_buffer.data, input_buffer.count)
+        if c == '\n' || c == '\r' {
+            s := new_string(input_buffer.count, initialized = false)
+            memory_copy(s.data, input_buffer.data, input_buffer.count)
 
-			return s, true
-		}
+            return s, true
+        }
 
-		array_add(*input_buffer, c)
-	}
+        array_add(*input_buffer, c)
+    }
 
-	return "", false
+    return "", false
 }
 
 get_performance_timer :: () -> f64 {
 
-	return cast(f64) get_performance_ticks() / cast(f64) get_performance_tickrate()
+    return cast(f64) get_performance_ticks() / cast(f64) get_performance_tickrate()
 }
 
 get_performance_ticks :: () -> s64 {
-	time: s64 = --
-	QueryPerformanceCounter(*time)
-	return time
+    time: s64 = --
+    QueryPerformanceCounter(*time)
+    return time
 }
 
 get_performance_tickrate :: () -> s64 {
-	pcf: s64 = --
-	QueryPerformanceFrequency(*pcf)
-	return pcf
+    pcf: s64 = --
+    QueryPerformanceFrequency(*pcf)
+    return pcf
 }
 
 get_system_timer :: () -> f64 {
-	return cast(f64) GetTickCount() * 0.001
+    return cast(f64) GetTickCount() * 0.001
 }
 
 #scope_module
@@ -189,19 +189,19 @@ std_out: HANDLE
 process_heap: HANDLE
 
 init_std_out :: () {
-	if !std_out {
-		std_out = GetStdHandle(STD_OUTPUT_HANDLE)
-		SetConsoleOutputCP(CP_UTF8)
-	}
+    if !std_out {
+        std_out = GetStdHandle(STD_OUTPUT_HANDLE)
+        SetConsoleOutputCP(CP_UTF8)
+    }
 }
 
 init_std_in :: () {
-	if !std_in {
-		std_in = GetStdHandle(STD_INPUT_HANDLE)
-		SetConsoleOutputCP(CP_UTF8)
-	}
+    if !std_in {
+        std_in = GetStdHandle(STD_INPUT_HANDLE)
+        SetConsoleOutputCP(CP_UTF8)
+    }
 }
 
 init_process_heap :: () {
-	if !process_heap  process_heap = GetProcessHeap()
+    if !process_heap  process_heap = GetProcessHeap()
 }

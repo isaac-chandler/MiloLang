@@ -16,6 +16,19 @@ Node :: struct {
         UNARY
         BINARY
         INT_LITERAL
+        FUNCTION
+        IDENTIFIER
+        BLOCK
+        RETURN
+        BREAK
+        CONTINUE
+        STRUCT_ACCESS
+        FUNCTION_CALL
+        SLICE
+        COMMA_ASSIGNMENT
+        DEFER
+        IF
+        STRING_LITERAL
     }
     
     Flags :: enum_flags u8 {
@@ -23,9 +36,30 @@ Node :: struct {
         DECLARATION_UNINITIALIZED
         DECLARATION_CONSTANT
         DECLARATION_EXPLICIT_DEFAULT
+        DECLARATION_VARARGS
+        DECLARATION_COMMA_ASSIGNMENT
         LITERAL_NEGATIVE
-        FUNCTION
     }
+}
+
+Node_Defer :: struct {
+    using node: Node
+    
+    statement: *Node
+}
+
+Node_String_Literal :: struct {
+    using node: Node
+    
+    text: string
+}
+
+Node_If :: struct {
+    using node: Node
+    
+    condition: *Node
+    if_body:   *Node
+    else_body: *Node
 }
 
 Node_Declaration :: struct {
@@ -35,6 +69,21 @@ Node_Declaration :: struct {
     
     value: *Node
     type_expr: *Node
+}
+
+Node_Slice :: struct {
+    using node: Node
+    
+    array: *Node
+    begin: *Node
+    end:   *Node
+}
+
+Node_Struct_Access :: struct {
+    using node: Node
+    
+    value: *Node
+    name: string
 }
 
 Node_Unary :: struct {
@@ -67,17 +116,45 @@ Node_Load_Or_Import :: struct {
 Node_Function :: struct {
     using node: Node
     
-    constants := Block.{tag = .CONSTANTS}
-    arguments := Block.{tag = .ARGUMENTS}
-    returns   := Block.{tag = .RETURNS}
+    constants := Block.{block_tag = .CONSTANTS}
+    arguments := Block.{block_tag = .ARGUMENTS}
+    returns   := Block.{block_tag = .RETURNS}
     
     body: *Node_Block
+}
+
+Node_Function_Call :: struct {
+    using node: Node
+    
+    function: *Node
+    arguments: []Named_Argument
+}
+
+Node_Comma_Assignment :: struct {
+    using node: Node
+    
+    assign_to: []*Node
+    function_call: *Node_Function_Call
+    
+}
+
+Node_Identifier :: struct {
+    using node: Node
+    
+    name: string
 }
 
 Node_Block :: struct {
     using node: Node
     
     using block: Block
+}
+
+Named_Argument :: struct {
+    value: *Node
+    name: string
+    declaration: *Node_Declaration
+    spread: bool
 }
 
 Node_Type :: struct {
@@ -112,15 +189,17 @@ Node_Type :: struct {
 }
 
 Block :: struct {
+    block_tag: Block_Tag
     statements: [..]*Node
     
-    Tag :: enum u8 {
+    Block_Tag :: enum u8 {
         GLOBAL
         ARGUMENTS
         RETURNS
         CONSTANTS
         IMPERATIVE
         ENUM
+        STRUCT
     }
 }
 

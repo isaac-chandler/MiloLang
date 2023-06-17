@@ -18,6 +18,7 @@ build_files: [..]string
 
 // @Workspaces
 had_error := false
+console_colors := false
 
 set_start :: (location: *Location, start: Location) {
     location.file_id = start.file_id
@@ -90,11 +91,14 @@ report_error :: (location: Location, message: string, format: any..) {
             end_offset += 1
         }
         
-        // @Incomplete color precise location
-        print("%\e[91m%\e[0m%\n", 
-            cast(string) file_content[start_offset..location.start_offset], 
-            cast(string) file_content[location.start_offset..location.end_offset], 
-            cast(string) file_content[location.end_offset .. end_offset])
+        if console_colors {
+            print("%\e[91m%\e[0m%\n", 
+                cast(string) file_content[start_offset..location.start_offset], 
+                cast(string) file_content[location.start_offset..location.end_offset], 
+                cast(string) file_content[location.end_offset .. end_offset])
+        } else {
+            print("%\n", cast(string) file_content[start_offset..end_offset])
+        }
     }
 }
 
@@ -107,6 +111,8 @@ report_error :: (message: string, format: any..) {
 }
 
 main :: () {
+    console_colors = enable_console_colors()
+
     arguments := get_command_line_arguments()
     defer free_array(arguments)
     

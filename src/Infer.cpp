@@ -5128,7 +5128,7 @@ bool inferFlattened(SubJob *job) {
 			case TypeFlavor::MODULE:
 			case TypeFlavor::AUTO_CAST:
 			case TypeFlavor::VOID:
-				reportError(switch_->condition, "Error: Cannot switch on %ss", STRING_PRINTF(switch_->condition->type->name));
+				reportError(switch_->condition, "Error: Cannot switch on %.*ss", STRING_PRINTF(switch_->condition->type->name));
 				return false;
 			default:
 				assert(false);

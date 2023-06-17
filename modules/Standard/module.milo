@@ -305,6 +305,8 @@ array_peek :: (using array: []$T) -> T {
 }
 
 array_copy :: (using array: []$T) -> []T {
+    if !array return .{}
+
     result := new_array(T, count, false)
     memory_copy(result.data, data, count * size_of(T))
 
@@ -314,13 +316,6 @@ array_copy :: (using array: []$T) -> []T {
 array_free :: (using array: [..]$T) {
     if capacity  
         context.allocator(.FREE, context.allocator_data, 0, align_of(T), data, size_of(T) * capacity) 
-}
-
-array_copy :: (using array: []$T) -> []T {
-    result := new_array(T, count, initialized = false)
-    memory_copy(result.data, data, count * size_of(T))
-    
-    return result
 }
 
 array_contains :: (using array: []$T, value: T) -> bool {

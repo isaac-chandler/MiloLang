@@ -46,6 +46,7 @@ Token :: struct {
         
         ARROW
         
+        // @BreakingChange No void!!
         S8
         S16
         S32
