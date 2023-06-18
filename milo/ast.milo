@@ -4,6 +4,7 @@ Node :: struct {
     tag: Tag
         
     type_: *Node_Type
+    enclosing_function: *Node
     
     substitution: *Node
     
@@ -22,6 +23,7 @@ Node :: struct {
         RETURN
         BREAK
         CONTINUE
+        REMOVE
         STRUCT_ACCESS
         FUNCTION_CALL
         SLICE
@@ -29,9 +31,13 @@ Node :: struct {
         DEFER
         IF
         STRING_LITERAL
+        FOR
+        WHILE
+        SWITCH
+        RUN
     }
     
-    Flags :: enum_flags u8 {
+    Flags :: enum_flags u16 {
         DECLARATION_USING
         DECLARATION_UNINITIALIZED
         DECLARATION_CONSTANT
@@ -39,6 +45,9 @@ Node :: struct {
         DECLARATION_VARARGS
         DECLARATION_COMMA_ASSIGNMENT
         LITERAL_NEGATIVE
+        FOR_REVERSE
+        FOR_POINTER
+        SWITCH_COMPLETE
     }
 }
 
@@ -46,6 +55,19 @@ Node_Defer :: struct {
     using node: Node
     
     statement: *Node
+}
+
+Node_Switch :: struct {
+    using node: Node
+    
+    value: *Node
+    cases: []Case
+    
+    Case :: struct {
+        condition: *Node
+        using block: Block
+        through: bool
+    }
 }
 
 Node_String_Literal :: struct {
@@ -60,6 +82,12 @@ Node_If :: struct {
     condition: *Node
     if_body:   *Node
     else_body: *Node
+}
+
+Node_Loop_Control :: struct {
+    using node: Node
+    
+    label: string
 }
 
 Node_Declaration :: struct {
@@ -120,7 +148,7 @@ Node_Function :: struct {
     arguments := Block.{block_tag = .ARGUMENTS}
     returns   := Block.{block_tag = .RETURNS}
     
-    body: *Node_Block
+    body: *Node
 }
 
 Node_Function_Call :: struct {
@@ -155,6 +183,27 @@ Named_Argument :: struct {
     name: string
     declaration: *Node_Declaration
     spread: bool
+}
+
+Node_For :: struct {
+    using node: Node
+    
+    iterator_block: Block
+    
+    begin: *Node
+    end:   *Node
+    
+    body: *Node
+}
+
+Node_While :: struct {
+    using node: Node
+    
+    label: string
+    
+    condition: *Node
+    
+    body: *Node
 }
 
 Node_Type :: struct {

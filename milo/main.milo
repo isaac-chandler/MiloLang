@@ -140,7 +140,11 @@ main :: () {
     success, tokens = lex_string(0, cast() content)
     defer array_free(tokens)
     
-    print("%\n", parse(tokens))
+    success = parse(tokens)
+    
+    if !success && !had_error {
+        report_error("Compilation failed but no error was reported")
+    }
 }
 
 #import "Compiler"

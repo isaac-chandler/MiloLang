@@ -1,10 +1,8 @@
 Parser :: struct {
     tokens: []Token
+    loop_stack: [..]*Node
+    current_function: *Node_Function
 }
-
-// @Multithreading @Workspaces
-parser_arguments_buffer: [..]Named_Argument 
-parser_expression_buffer: [..]*Node
 
 new_node :: (using paser: *Parser, $T: type, tag: Node.Tag) -> *T {
     node := new(T)
@@ -17,6 +15,7 @@ new_node :: (using paser: *Parser, $T: type, tag: Node.Tag) -> *T {
 
 parse :: (tokens_: []Token) -> bool {
     using parser := Parser.{tokens = tokens_}
+    defer array_free(parser.loop_stack)
 
     while tokens {
         if check_and_consume(*parser, ';') {
@@ -230,41 +229,204 @@ parse_using :: (using parser: *Parser) -> *Node {
 }
 
 parse_for :: (using parser: *Parser) -> *Node {
-    report_error(tokens[0], "For parsing is not implemented")
-    return null
+    for_ := new_node(parser, Node_For, .FOR)
+    
+    tokens = tokens[1..]
+    
+    if check_and_consume(parser, '<') {
+        for_.flags |= .FOR_REVERSE
+        
+        if check_and_consume(parser, '*')
+            for_.flags |= .FOR_POINTER
+    } else if check_and_consume(parser, '*') {
+        for_.flags |= .FOR_POINTER
+        
+        if check_and_consume(parser, '<')
+            for_.flags |= .FOR_REVERSE       
+    }
+    
+    if tokens.count >= 2 && tokens[0].tag == .IDENTIFIER && tokens[1].tag == cast() ':' {
+        it := new_node(parser, Node_Declaration, .DECLARATION)
+        it.name = tokens[0].string_value
+        
+        array_add(*for_.iterator_block.statements, it)
+        
+        tokens = tokens[2..]
+    } else if tokens.count >= 2 && tokens[0].tag == .IDENTIFIER && tokens[1].tag == cast() ',' {
+        it := new_node(parser, Node_Declaration, .DECLARATION)
+        it.name = tokens[0].string_value
+        
+        array_add(*for_.iterator_block.statements, it)
+        
+        tokens = tokens[2..]
+        
+        it_index := new_node(parser, Node_Declaration, .DECLARATION)
+        it_index.name = tokens[0].string_value
+        
+        array_add(*for_.iterator_block.statements, it_index)
+    
+        tokens = tokens[2..]
+    } else {
+        it := new_node(parser, Node_Declaration, .DECLARATION)
+        it.location = for_
+        it.name = tokens[0].string_value
+        
+        array_add(*for_.iterator_block.statements, it)
+    }
+    
+    for_.begin = parse_expression(parser)
+    if !for_.begin return null
+    
+    if check_and_consume(parser, .DOUBLE_DOT) {
+        for_.end = parse_expression(parser)
+        if !for_.end return null
+        
+        set_end(for_, for_.end)
+    } else {
+        set_end(for_, for_.begin)
+    }
+    
+    for_.body = parse_statement(parser, imperative = true, allow_single_declaration = false)
+    if !for_.body return null
+    
+    return for_
 }
 
 
 parse_while :: (using parser: *Parser) -> *Node {
-    report_error(tokens[0], "While parsing is not implemented")
-    return null
-}
-
-parse_loop_control :: (using parser: *Parser) -> *Node {
-    report_error(tokens[0], "Loop control parsing is not implemented")
-    return null
-}
-
-parse_if :: (using parser: *Parser) -> *Node {
-    if_ := new_node(parser, Node_If, .IF)
+    while_ := new_node(parser, Node_While, .WHILE)
     
     tokens = tokens[1..]
     
-    if_.condition = parse_expression(parser)
-    if !if_.condition return null
-    // @Incomplete switch statements
-    set_end(if_, if_.condition)
+    if tokens.count >= 2 && tokens[0].tag == .IDENTIFIER && tokens[1].tag == cast() ':' {
+        while_.label = tokens[0].string_value
+        tokens = tokens[2..]
+    }
     
-    if_.if_body = parse_statement(parser, imperative = true, allow_single_declaration = false)
-    if !if_.if_body return null
+    while_.condition = parse_expression(parser)
+    if !while_.condition return null
     
-    if !check_and_consume(parser, .ELSE)
-        return if_
+    set_end(while_, while_.condition)
+    
+    while_.body = parse_statement(parser, imperative = true, allow_single_declaration = false)
+    if !while_.body return null
+    
+    return while_
+}
+
+parse_loop_control :: (using parser: *Parser) -> *Node {
+    kind: Node.Tag
+    
+    if tokens[0].tag == {
+        case .BREAK     kind = .BREAK
+        case .CONTINUE  kind = .CONTINUE
+        case .REMOVE    kind = .REMOVE
+        else assert(false)
+    }
+    
+    loop_control := new_node(parser, Node_Loop_Control, kind)
+    tokens = tokens[1..]
+    
+    if tokens[0].tag == .IDENTIFIER && !looks_like_declaration(parser.tokens) {
+        loop_control.label = tokens[0].string_value
+        set_end(loop_control, tokens[0])
         
-    if_.else_body = parse_statement(parser, imperative = true, allow_single_declaration = false)
-    if !if_.else_body return null
+        tokens = tokens[1..]
+    }
     
-    return if_
+    return loop_control
+}
+
+parse_if :: (using parser: *Parser) -> *Node {
+    start := tokens[0].location
+    
+    tokens = tokens[1..]
+    
+    condition := parse_expression(parser)
+    if !condition return null
+    
+    if check_and_consume(parser, .EQUAL) {
+        switch := new_node(parser, Node_Switch, .SWITCH)
+        switch.value = condition
+        set_start(switch, start)
+        
+        if check_and_consume(parser, .COMPLETE)
+            switch.flags |= .SWITCH_COMPLETE
+        
+        set_end(switch, tokens[-1])
+        
+        if !check_and_consume(parser, '{') {
+            report_error(tokens[0], "Expected '{' to start if-case block")
+            return null
+        }
+        
+        cases: [..]Node_Switch.Case
+        defer array_free(cases)
+        
+        had_else := false
+        
+        while true {
+            case_: Node_Switch.Case
+            
+            if check_and_consume(parser, '}')
+                break
+            else if check_and_consume(parser, .CASE) {
+                case_.condition = parse_expression(parser)
+                if !case_.condition return null
+            } else if check_and_consume(parser, .ELSE) {
+                if had_else {
+                    report_error(tokens[-1], "Cannot have multiple else blocks in an if-case")
+                    return null
+                }
+                
+                had_else = true
+            } else {
+                report_error(tokens[0], "Expected case or else block in if-case statement")
+                return null
+            }
+                        
+            while true {
+                if check_and_consume(parser, .THROUGH) {
+                    case_.through = true
+                    break
+                }
+                
+                if tokens[0].tag == .CASE || tokens[0].tag == .ELSE || tokens[0].tag == cast() '}'
+                    break;
+                    
+                if check_and_consume(parser, ';')
+                    continue;
+                
+                statement := parse_statement(parser, imperative = true, allow_single_declaration = true)
+                if !statement return null
+                
+                array_add(*case_.statements, statement)
+            }
+            
+            
+            array_add(*cases, case_)
+        }
+        
+        switch.cases = array_copy(cases)
+        
+        return switch
+    } else {
+        if_ := new_node(parser, Node_If, .IF)
+        if_.condition = condition
+        set_start(if_, start)
+        set_end(if_, if_.condition)
+        
+        if_.if_body = parse_statement(parser, imperative = true, allow_single_declaration = false)
+        if !if_.if_body return null
+        
+        if !check_and_consume(parser, .ELSE)
+            return if_
+            
+        if_.else_body = parse_statement(parser, imperative = true, allow_single_declaration = false)
+        if !if_.else_body return null
+        
+        return if_
+    }
 }
 
 parse_defer :: (using parser: *Parser) -> *Node {
@@ -298,7 +460,8 @@ parse_int_literal :: (using parser: *Parser, value: u64, type_: *Node_Type) -> *
 
 parse_named_arguments :: (using parser: *Parser, allow_uninitialized := false) -> 
                          (#must arguments: []Named_Argument, #must success: bool, uninitialized: bool) {
-    parser_arguments_buffer.count = 0
+    arguments_buffer: [..]Named_Argument
+    defer array_free(arguments_buffer)
     
     uninitialized := false
     
@@ -330,7 +493,7 @@ parse_named_arguments :: (using parser: *Parser, allow_uninitialized := false) -
             argument.value = parse_expression(parser)
             if !argument.value return .{}, false, false
             
-            array_add(*parser_arguments_buffer, argument)
+            array_add(*arguments_buffer, argument)
         }
         
         if !check_and_consume(parser, ',')
@@ -338,7 +501,7 @@ parse_named_arguments :: (using parser: *Parser, allow_uninitialized := false) -
         
     }
     
-    return array_copy(parser_arguments_buffer), true, uninitialized
+    return array_copy(arguments_buffer), true, uninitialized
 }
 
 parse_postfix_expression :: (using parser: *Parser) -> *Node {
@@ -513,13 +676,215 @@ parse_prefix_expression :: (using parser: *Parser) -> *Node {
         unary.value = parse_prefix_expression(parser)
         if !unary.value return null
         return unary
-    }  else {
+    } else if check_and_consume(parser, .CAST) {
+        if !check_and_consume(parser, '(') {
+            report_error(tokens[0], "Expected '(' after 'cast'")
+        }
+        
+            
+        if check_and_consume(parser, ')') {
+            unary := new_node(parser, Node_Unary, .UNARY)
+            set_start(unary, start)
+            unary.op = .CAST
+            unary.value = parse_prefix_expression(parser)
+            if !unary.value return null
+            set_end(unary, unary.value)
+            
+            return unary
+        }
+        
+        binary := new_node(parser, Node_Binary, .BINARY)
+        set_start(binary, start)
+        binary.op = .CAST
+        binary.left = parse_expression(parser)
+        
+        if !check_and_consume(parser, ')') {
+            report_error(tokens[0], "Expected ')' after cast type")
+            return null
+        }
+        
+        binary.right = parse_prefix_expression(parser)
+        if !binary.right return null
+        set_end(binary, binary.right)
+        
+        return binary
+    } else {
         return parse_postfix_expression(parser)
     }
 }
 
-// TODO binary expressions
-parse_expression :: parse_prefix_expression
+parse_multiply_expression :: (using parser: *Parser) -> *Node {
+    expression := parse_prefix_expression(parser)
+    if !expression return null
+    
+    while true {
+        if tokens[0].tag == {
+            case cast() '*' #through
+            case cast() '/' #through
+            case cast() '%'
+                binary := new_node(parser, Node_Binary, .BINARY)
+                binary.op = tokens[0].tag
+                binary.left = expression
+                set_start(binary, binary.left)
+                
+                tokens = tokens[1..]
+                
+                binary.right = parse_prefix_expression(parser)
+                if !binary.right return null
+                
+                expression = binary
+            else
+                break
+        }
+    }
+    
+    return expression
+}
+
+parse_add_expression :: (using parser: *Parser) -> *Node {
+    expression := parse_multiply_expression(parser)
+    if !expression return null
+    
+    while true {
+        if tokens[0].tag == {
+            case cast() '+' #through
+            case cast() '-'
+                binary := new_node(parser, Node_Binary, .BINARY)
+                binary.op = tokens[0].tag
+                binary.left = expression
+                set_start(binary, binary.left)
+                
+                tokens = tokens[1..]
+                
+                binary.right = parse_multiply_expression(parser)
+                if !binary.right return null
+                
+                expression = binary
+            else
+                break
+        }
+    }
+    
+    return expression
+}
+
+parse_bitwise_expression :: (using parser: *Parser) -> *Node {
+    expression := parse_add_expression(parser)
+    if !expression return null
+    
+    while true {
+        if tokens[0].tag == {
+            case cast() '&' #through
+            case cast() '|' #through
+            case cast() '^'
+                binary := new_node(parser, Node_Binary, .BINARY)
+                binary.op = tokens[0].tag
+                binary.left = expression
+                set_start(binary, binary.left)
+                
+                tokens = tokens[1..]
+                
+                binary.right = parse_add_expression(parser)
+                if !binary.right return null
+                
+                expression = binary
+            else
+                break
+        }
+    }
+    
+    return expression
+}
+
+parse_shift_expression :: (using parser: *Parser) -> *Node {
+    expression := parse_bitwise_expression(parser)
+    if !expression return null
+    
+    while true {
+        if tokens[0].tag == {
+            case .SHIFT_LEFT #through
+            case .SHIFT_RIGHT
+                binary := new_node(parser, Node_Binary, .BINARY)
+                binary.op = tokens[0].tag
+                binary.left = expression
+                set_start(binary, binary.left)
+                
+                tokens = tokens[1..]
+                
+                binary.right = parse_bitwise_expression(parser)
+                if !binary.right return null
+                
+                expression = binary
+            else
+                break
+        }
+    }
+    
+    return expression
+}
+
+parse_compare_expression :: (using parser: *Parser) -> *Node {
+    expression := parse_shift_expression(parser)
+    if !expression return null
+    
+    while true {
+        if tokens[0].tag == {
+            case .EQUAL
+                if tokens.count >= 2 && (tokens[1].tag == cast() '{' || tokens[1].tag == .COMPLETE)
+                    break
+                #through
+            case .NOT_EQUAL     #through
+            case .LESS_EQUAL    #through
+            case .GREATER_EQUAL #through
+            case cast() '<'     #through
+            case cast() '>'
+                binary := new_node(parser, Node_Binary, .BINARY)
+                binary.op = tokens[0].tag
+                binary.left = expression
+                set_start(binary, binary.left)
+                
+                tokens = tokens[1..]
+                
+                binary.right = parse_shift_expression(parser)
+                if !binary.right return null
+                
+                expression = binary
+            else
+                break
+        }
+    }
+    
+    return expression
+}
+
+parse_short_circuit_expression :: (using parser: *Parser) -> *Node {
+    expression := parse_compare_expression(parser)
+    if !expression return null
+    
+    while true {
+        if tokens[0].tag == {
+            case .LOGIC_AND #through
+            case .LOGIC_OR
+                binary := new_node(parser, Node_Binary, .BINARY)
+                binary.op = tokens[0].tag
+                binary.left = expression
+                set_start(binary, binary.left)
+                
+                tokens = tokens[1..]
+                
+                binary.right = parse_compare_expression(parser)
+                if !binary.right return null
+                
+                expression = binary
+            else
+                break
+        }
+    }
+    
+    return expression
+}
+
+parse_expression :: parse_short_circuit_expression
 
 parse_named_argument_declarations :: (using parser: *Parser, block: *Block) -> bool {
     while tokens[0].tag != cast() ')' {
@@ -680,6 +1045,10 @@ parse_function :: (using parser: *Parser) -> *Node {
             return null
         }
         
+        old_function := currernt_function
+        defer current_function = old_function
+        
+        current_function = function
         function.body = parse_block(parser, imperative = true)
         if !function.body return null
     } else {
@@ -784,6 +1153,23 @@ parse_primary_expression :: (using parser: *Parser) -> *Node {
             
             tokens = tokens[1..]
             return literal
+        case .RUN
+            run := new_node(parser, Node_Function, .RUN)
+            tokens = tokens[1..]
+            
+            old_function := current_function
+            defer current_function = old_function
+            
+            current_function = run
+            
+            if tokens[0].tag == cast() '{'
+                run.body = parse_block(parser, imperative = true)
+            else
+                run.body = parse_expression(parser)
+    
+            if !run.body return null
+            
+            return run
         else
             report_error(tokens[0], "Expected an expression")
             return null
@@ -996,9 +1382,10 @@ parse_statement :: (using parser: *Parser, imperative: bool, allow_single_declar
                 comma_assignment := new_node(parser, Node_Comma_Assignment, .COMMA_ASSIGNMENT)
                 set_start(comma_assignment, expression)
                 
-                parser_expression_buffer.count = 0
+                expressions: [..]*Node
+                defer array_free(expressions)
                 
-                array_add(*parser_expression_buffer, expression)
+                array_add(*expressions, expression)
                 
                 tokens = tokens[1..]
             
@@ -1006,7 +1393,7 @@ parse_statement :: (using parser: *Parser, imperative: bool, allow_single_declar
                     assign_to := parse_expression(parser)
                     if !assign_to return null
                     
-                    array_add(*parser_expression_buffer, expression)
+                    array_add(*expressions, expression)
                     
                     if check_and_consume(parser, ',')
                         continue
@@ -1014,7 +1401,7 @@ parse_statement :: (using parser: *Parser, imperative: bool, allow_single_declar
                     if check_and_consume(parser, ':') {
                         comma_assignment.flags |= .DECLARATION_COMMA_ASSIGNMENT
                         
-                        for parser_expression_buffer {
+                        for expressions {
                             if it.tag != .IDENTIFIER {
                                 report_error(it, "Comma declaration names must be an identifier")
                                 return null
@@ -1029,7 +1416,7 @@ parse_statement :: (using parser: *Parser, imperative: bool, allow_single_declar
                     break
                 }
                 
-                comma_assignment.assign_to = array_copy(parser_expression_buffer)
+                comma_assignment.assign_to = array_copy(expressions)
                 
                 function_call := parse_expression(parser)
                 if !function_call return null
