@@ -1,0 +1,168 @@
+// The definitions in this file are required for all the compiler features to work correctly, modify with care!
+// Changes in function signatures or struct formats will likely result in corrupted output and crashes
+
+// These are the struct definitions for the values returned by type_info
+Type_Info :: struct {
+    Tag :: enum u64 {
+        VOID     :: 0
+        INTEGER  :: 1
+        FLOAT    :: 2
+        POINTER  :: 3
+        BOOL     :: 4
+        FUNCTION :: 5
+        TYPE     :: 6
+        STRING   :: 7
+        ARRAY    :: 8
+        STRUCT   :: 9
+        ENUM     :: 10
+    }
+
+    tag: Tag
+    size: u64
+    alignment: u64
+    name: string
+}
+
+Type_Info_Integer :: struct {
+    using base: Type_Info
+    signed: bool
+}
+
+Type_Info_Pointer :: struct {
+    using base: Type_Info
+    value_type: *Type_Info
+}
+
+Type_Info_Function :: struct {
+    using base: Type_Info
+    
+    arguments: []*Type_Info
+    returns: []*Type_Info
+    
+    c_call: bool
+    varargs: bool
+}
+
+Type_Info_Array :: struct {
+    using base: Type_Info
+    
+    Flavor :: enum u64 {
+        FIXED   :: 0
+        NORMAL  :: 1
+        DYNAMIC :: 2
+    }
+    
+    flavor: Flavor
+    element_type: *Type_Info
+    count: u64
+}
+
+Type_Info_Struct :: struct {
+    using base: Type_Info
+    
+    
+    Flags :: enum_flags u64 {
+        UNION  :: 0x1
+        PACKED :: 0x2
+    }
+    
+    Member :: struct {
+        Flags :: enum_flags u64 {
+            UNINITIALIZED :: 0x1
+            CONSTANT      :: 0x2
+            USING         :: 0x4
+        }
+
+        name: string
+        offset: u64
+        member_type: *Type_Info
+        initial_value: *void
+        flags: Flags
+    }
+    
+    flags: Flags
+    members: []Member
+}
+
+Type_Info_Enum :: struct {
+    using base: Type_Info
+    
+    Value :: struct {
+        name: string
+        value: u64
+    }
+    
+    
+    base_type: *Type_Info_Integer
+    is_flags: bool
+    values: []Value
+}
+
+
+// This is the declaration of the any type, all values can implicitly cast to any
+any :: struct {
+    value_pointer: *void
+    value_type: *Type_Info
+}
+
+// The function called to remove an item from an array when a remove statement is encountered
+// The __remove function is marked #c_call so the remove keyword can be used from #c_call functions without
+// requiring a push_context
+__remove :: (array: *[]u8, value: *u8, size: u64) -> *u8 #c_call {
+    array.count -= 1
+    
+    end := array.data + array.count * size
+    
+    if value != end
+        for i: 0 .. size
+            value[i] = end[i]
+            
+    return value - size
+}
+
+// The function called when the == operator is used on two string types
+// The __strings_equal function is marked #c_call so string == can be used from #c_call functions without
+// requiring a push_context
+__strings_equal :: (a: string, b: string) -> bool #c_call {
+    if a.count != b.count return false
+    
+
+    for a if it != b[it_index] return false
+
+    return true
+}
+
+Source_Location :: struct {
+    filename: string
+    line: u64
+}
+
+Stack_Trace :: struct {
+    caller: *Stack_Trace
+    using info: *struct {
+        function_name: string
+        call_site: Source_Location
+    }
+}
+
+// The code within __program_start _should_ be safe to modify
+__program_start :: () -> s32 #c_call {
+    new_context: Context
+    
+    push_context new_context {
+        #if #entry_point {
+            #entry_point()    
+        }
+    }
+    
+    return 0 // Return the exit code, C-style
+}
+
+
+Context_Base :: struct {
+    stack_trace: *Stack_Trace
+    
+    assertion_failed_handler: (location: Source_Location) -> void
+}
+
+#add_context using base: Context_Base

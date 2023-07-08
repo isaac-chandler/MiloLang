@@ -525,6 +525,7 @@ void copyBlock(Block *dest, Block *src) {
 }
 
 ExprFunction *polymorphFunction(ExprFunction *src) {
+	PROFILE_FUNC();
 	assert(!copyingBlocks.count);
 	assert(src->flavor == ExprFlavor::FUNCTION);
 
@@ -558,6 +559,7 @@ ExprFunction *polymorphFunction(ExprFunction *src) {
 }
 
 TypeStruct *polymorphStruct(TypeStruct *struct_, Arguments *arguments) {
+	PROFILE_FUNC();
 	assert(!copyingBlocks.count);
 	assert(arguments->count == struct_->constants.declarations.count);
 

@@ -90,7 +90,7 @@ get_files_in_directory :: (file: string, include_folders := false) -> [..]string
         }
     }
 
-    pattern := concatenate(file, "*", delimiter = "\\")
+    pattern := join_paths(file, "*")
     defer free_string(pattern)
 
     files: [..]string
@@ -115,6 +115,32 @@ get_files_in_directory :: (file: string, include_folders := false) -> [..]string
     return files
 }
 
+set_working_directory :: (directory: string) -> bool {
+    windows_directory := to_windows_string(directory)
+    defer free_array(windows_directory)
+    
+    return cast() SetCurrentDirectoryW(windows_directory.data)
+}
+
+path_exists :: (path: string) -> bool {
+    windows_path := to_windows_string(path)
+    defer free_array(windows_path)
+    return GetFileAttributesW(windows_path.data) != .INVALID_FILE_ATTRIBUTES
+}
+
+path_is_file :: (path: string) -> bool {
+    windows_path := to_windows_string(path)
+    defer free_array(windows_path)
+    return !(GetFileAttributesW(windows_path.data) & .FILE_ATTRIBUTE_DIRECTORY)
+}
+
+path_is_directory :: (path: string) -> bool {
+    windows_path := to_windows_string(path)
+    defer free_array(windows_path)
+    attributes := GetFileAttributesW(windows_path.data) 
+    return attributes != .INVALID_FILE_ATTRIBUTES && attributes & .FILE_ATTRIBUTE_DIRECTORY
+}
+
 get_executable_path :: () -> string {
     filename_windows := new_array(u16, 32768, initialized = false)
     defer free_array(filename_windows)
@@ -122,26 +148,6 @@ get_executable_path :: () -> string {
     GetModuleFileNameW(null, filename_windows.data, cast() filename_windows.count)
     
     return from_windows_string(filename_windows.data)
-}
-
-get_path_relative_to_executable :: (path: string) -> string {
-    executable_path := get_executable_path()
-    defer free_string(executable_path)
-    
-    last_backslash := find_last(executable_path, "\\")
-    
-    return concatenate(executable_path[..last_backslash], path, delimiter = "\\")
-}
-
-get_final_path_name :: (path: string) -> string {
-    last_backslash, found := find_last(path, "\\")
-    
-    if !found
-        return path
-    else if last_backslash + 1 == path.count
-        return get_final_path_name(path[..path.count - 1])
-    
-    return path[last_backslash + 1..]
 }
 
 get_full_path :: (path: string) -> string {

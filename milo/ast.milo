@@ -5,6 +5,7 @@ Node :: struct {
         
     type_: *Node_Type
     enclosing_function: *Node
+    enclosing_block:    *Block
     
     substitution: *Node
     
@@ -35,20 +36,84 @@ Node :: struct {
         WHILE
         SWITCH
         RUN
+        STRUCT_LITERAL
+        ARRAY_LITERAL
+        UNARY_DOT
+        STATIC_IF
+        FLOAT_LITERAL
+        CONTEXT
+        ADD_CONTEXT
+        PUSH_CONTEXT
+        USING
+        SCOPE_MODULE
+        SCOPE_EXPORT
+        ENTRY_POINT
     }
     
-    Flags :: enum_flags u16 {
+    Flags :: enum_flags u32 {
         DECLARATION_USING
-        DECLARATION_UNINITIALIZED
         DECLARATION_CONSTANT
         DECLARATION_EXPLICIT_DEFAULT
         DECLARATION_VARARGS
         DECLARATION_COMMA_ASSIGNMENT
+        DECLARATION_BAKE
+        DECLARATION_MUST
+        DECLARATION_SCOPE_MODULE
+        UNINITIALIZED
         LITERAL_NEGATIVE
+        LITERAL_NULL
         FOR_REVERSE
         FOR_POINTER
         SWITCH_COMPLETE
+        FUNCTION_C_CALL
+        FUNCTION_COMPILER
+        CAST_BIT
+        CONTEXT_AVAILABLE
     }
+}
+
+Node_Block_Entry :: struct {
+    using node: *Node
+    lexical_index: s64
+}
+
+Node_Push_Context :: struct {
+    using node: Node
+    
+    new_context: *Node
+    body:        *Node
+}
+
+Node_Add_Context :: struct {
+    using node: Node
+    
+    member: *Node_Declaration
+}
+
+Node_Struct_Literal :: struct {
+    using node: Node
+    
+    type_expression: *Node
+    initializers: []Named_Argument
+}
+
+Node_Using :: struct {
+    using entry: Node_Block_Entry
+    
+    value: *Node
+}
+
+Node_Array_Literal :: struct {
+    using node: Node
+    
+    type_expression: *Node
+    initializers: []*Node
+}
+
+Node_Float_Literal :: struct {
+    using node: Node
+    
+    float_value: f64
 }
 
 Node_Defer :: struct {
@@ -84,19 +149,28 @@ Node_If :: struct {
     else_body: *Node
 }
 
+Node_Static_If :: struct {
+    using entry: Node_Block_Entry
+    
+    condition: *Node
+    if_body:   *Node
+    else_body: *Node
+}
+
 Node_Loop_Control :: struct {
     using node: Node
     
+    loop:  *Node
     label: string
 }
 
 Node_Declaration :: struct {
-    using node: Node
+    using entry: Node_Block_Entry
     
     name: string
     
     value: *Node
-    type_expr: *Node
+    type_expression: *Node
 }
 
 Node_Slice :: struct {
@@ -139,6 +213,7 @@ Node_Load_Or_Import :: struct {
     using node: Node
     
     name: string
+    enclosing_module: *Module
 }
 
 Node_Function :: struct {
@@ -149,6 +224,10 @@ Node_Function :: struct {
     returns   := Block.{block_tag = .RETURNS}
     
     body: *Node
+    
+    name:         string
+    library:      string
+    linkage_name: string
 }
 
 Node_Function_Call :: struct {
@@ -158,16 +237,22 @@ Node_Function_Call :: struct {
     arguments: []Named_Argument
 }
 
+Node_Return :: struct {
+    using node: Node
+    
+    returns: []Named_Argument
+}
+
 Node_Comma_Assignment :: struct {
     using node: Node
     
-    assign_to: []*Node
+    assign_to:   []*Node
     function_call: *Node_Function_Call
     
 }
 
 Node_Identifier :: struct {
-    using node: Node
+    using entry: Node_Block_Entry
     
     name: string
 }
@@ -188,12 +273,13 @@ Named_Argument :: struct {
 Node_For :: struct {
     using node: Node
     
-    iterator_block: Block
+    iterator_block := Block.{block_tag = .IMPERATIVE}
     
     begin: *Node
     end:   *Node
     
-    body: *Node
+    body:    *Node
+    or_body: *Node
 }
 
 Node_While :: struct {
@@ -203,18 +289,22 @@ Node_While :: struct {
     
     condition: *Node
     
-    body: *Node
+    body:    *Node
+    or_body: *Node
 }
 
 Node_Type :: struct {
     using node: Node
     
-    type_tag: Type_Tag
+    type_tag:   Type_Tag
     type_flags: Type_Flags
-    size := -1
-    align := -1
+    name: string
+    size        := -1
+    align       := -1
     array_count := -1
-    members: Block
+    underlying_type: *Node
+    members:     Block
+    arguments := Block.{block_tag = .ARGUMENTS}
     
     Type_Tag :: enum u8 {
         POINTER
@@ -227,6 +317,8 @@ Node_Type :: struct {
         BOOL
         TYPE
         STRING
+        FUNCTION
+        POLYMORPH_VARIABLE
     }
     
     Type_Flags :: enum_flags u8 {
@@ -239,7 +331,10 @@ Node_Type :: struct {
 
 Block :: struct {
     block_tag: Block_Tag
-    statements: [..]*Node
+    pending_importer_count: s32
+    statements:   [..]*Node
+    declarations: [..]*Node_Declaration
+    parent:           *Block
     
     Block_Tag :: enum u8 {
         GLOBAL
@@ -252,39 +347,267 @@ Block :: struct {
     }
 }
 
-type_type   := Node_Type.{.{tag = .TYPE}, type_tag = .TYPE,   size = 8,  align = 8}
-type_bool   := Node_Type.{.{tag = .TYPE}, type_tag = .BOOL,   size = 1,  align = 1}
-type_string := Node_Type.{.{tag = .TYPE}, type_tag = .STRING, size = 16, align = 8}
+type_type   := Node_Type.{.{tag = .TYPE}, type_tag = .TYPE,   name = "type",   size = 8,  align = 8}
+type_bool   := Node_Type.{.{tag = .TYPE}, type_tag = .BOOL,   name = "bool",   size = 1,  align = 1}
+type_string := Node_Type.{.{tag = .TYPE}, type_tag = .STRING, name = "string", size = 16, align = 8}
 
-type_context := Node_Type.{.{tag = .TYPE}, type_tag = .STRUCT}
+type_context := Node_Type.{.{tag = .TYPE}, name = "context", type_tag = .STRUCT}
 
-type_u8  := Node_Type.{.{tag = .TYPE}, type_tag = .INTEGER, size = 1, align = 1}
-type_u16 := Node_Type.{.{tag = .TYPE}, type_tag = .INTEGER, size = 2, align = 2}
-type_u32 := Node_Type.{.{tag = .TYPE}, type_tag = .INTEGER, size = 4, align = 4}
-type_u64 := Node_Type.{.{tag = .TYPE}, type_tag = .INTEGER, size = 8, align = 8}
-type_s8  := Node_Type.{.{tag = .TYPE}, type_tag = .INTEGER, size = 1, align = 1, type_flags = .SIGNED}
-type_s16 := Node_Type.{.{tag = .TYPE}, type_tag = .INTEGER, size = 2, align = 2, type_flags = .SIGNED}
-type_s32 := Node_Type.{.{tag = .TYPE}, type_tag = .INTEGER, size = 4, align = 4, type_flags = .SIGNED}
-type_s64 := Node_Type.{.{tag = .TYPE}, type_tag = .INTEGER, size = 8, align = 8, type_flags = .SIGNED}
-type_f32 := Node_Type.{.{tag = .TYPE}, type_tag = .FLOAT,   size = 4, align = 4}
-type_f64 := Node_Type.{.{tag = .TYPE}, type_tag = .FLOAT,   size = 8, align = 8}
+type_u8  := Node_Type.{.{tag = .TYPE}, type_tag = .INTEGER, name = "u8",  size = 1, align = 1}
+type_u16 := Node_Type.{.{tag = .TYPE}, type_tag = .INTEGER, name = "u16", size = 2, align = 2}
+type_u32 := Node_Type.{.{tag = .TYPE}, type_tag = .INTEGER, name = "u32", size = 4, align = 4}
+type_u64 := Node_Type.{.{tag = .TYPE}, type_tag = .INTEGER, name = "u64", size = 8, align = 8}
+type_s8  := Node_Type.{.{tag = .TYPE}, type_tag = .INTEGER, name = "s8",  size = 1, align = 1, type_flags = .SIGNED}
+type_s16 := Node_Type.{.{tag = .TYPE}, type_tag = .INTEGER, name = "s16", size = 2, align = 2, type_flags = .SIGNED}
+type_s32 := Node_Type.{.{tag = .TYPE}, type_tag = .INTEGER, name = "s32", size = 4, align = 4, type_flags = .SIGNED}
+type_s64 := Node_Type.{.{tag = .TYPE}, type_tag = .INTEGER, name = "s64", size = 8, align = 8, type_flags = .SIGNED}
+type_f32 := Node_Type.{.{tag = .TYPE}, type_tag = .FLOAT,   name = "f32", size = 4, align = 4}
+type_f64 := Node_Type.{.{tag = .TYPE}, type_tag = .FLOAT,   name = "f64", size = 8, align = 8}
 
-create_builtin_types :: () {
-    type_type   = Node_Type.{.{tag = .TYPE, type_ = *type_type}, type_tag = .TYPE,   size = 8,  align = 8}
-    type_bool   = Node_Type.{.{tag = .TYPE, type_ = *type_type}, type_tag = .BOOL,   size = 1,  align = 1}
-    type_string = Node_Type.{.{tag = .TYPE, type_ = *type_type}, type_tag = .STRING, size = 16, align = 8}
+add_declaration_to_block :: (using block: *Block, declaration: *Node_Declaration, lexical_index: s64) -> bool {
+    for declarations {
+        if it.name == declaration.name {
+            report_error(declaration, "Redeclaration of '%'", declaration)
+            report_error(it, "It was previously declared here")
+            return false
+        }
+    }
     
-    type_context = Node_Type.{.{tag = .TYPE, type_ = *type_type}, type_tag = .STRUCT}
+    array_add(*declarations, declaration)
+    declaration.enclosing_block = block
+    declaration.lexical_index   = lexical_index
+    return true
+}
+
+add_importer_to_block :: (using block: *Block, node: *Node_Block_Entry, lexical_index: s64) {
+    pending_importer_count += 1
+    node.enclosing_block    = block
+    node.lexical_index      = lexical_index
+}
+
+print_ast :: (node_: *Node, indent := 0, label := "") {
+    print_indented :: (indent: s64, format: string, args: any..) {
+        for indent
+            print("  ")
+        
+        print(format, ..args)
+    }
     
-    type_u8  = Node_Type.{.{tag = .TYPE, type_ = *type_type}, type_tag = .INTEGER, size = 1, align = 1}
-    type_u16 = Node_Type.{.{tag = .TYPE, type_ = *type_type}, type_tag = .INTEGER, size = 2, align = 2}
-    type_u32 = Node_Type.{.{tag = .TYPE, type_ = *type_type}, type_tag = .INTEGER, size = 4, align = 4}
-    type_u64 = Node_Type.{.{tag = .TYPE, type_ = *type_type}, type_tag = .INTEGER, size = 8, align = 8}
-    type_s8  = Node_Type.{.{tag = .TYPE, type_ = *type_type}, type_tag = .INTEGER, size = 1, align = 1, type_flags = .SIGNED}
-    type_s16 = Node_Type.{.{tag = .TYPE, type_ = *type_type}, type_tag = .INTEGER, size = 2, align = 2, type_flags = .SIGNED}
-    type_s32 = Node_Type.{.{tag = .TYPE, type_ = *type_type}, type_tag = .INTEGER, size = 4, align = 4, type_flags = .SIGNED}
-    type_s64 = Node_Type.{.{tag = .TYPE, type_ = *type_type}, type_tag = .INTEGER, size = 8, align = 8, type_flags = .SIGNED}
-    type_f32 = Node_Type.{.{tag = .TYPE, type_ = *type_type}, type_tag = .FLOAT,   size = 4, align = 4}
-    type_f64 = Node_Type.{.{tag = .TYPE, type_ = *type_type}, type_tag = .FLOAT,   size = 8, align = 8}
+    print_token :: (token: Token.Tag) {
+        if cast(u16) token < 128 {
+            token_ := cast(u8) token
+            s := string.{data = *token_, count = 1}
+            print(s)
+        } else {
+            print("%", token)
+        }
+    }
+        
+    if label
+        print_indented(indent, "% = ", label)
+    else
+        print_indented(indent, "")
     
+    if !node_ {
+        print("null\n")
+        return;
+    }
+    
+    using node := node_
+    while node.substitution
+        node = node.substitution
+    
+    
+    print("% % ", tag)
+    
+    if flags
+        print("% ", flags)
+    
+    if tag == #complete {
+        case .SCOPE_MODULE #through
+        case .SCOPE_EXPORT #through
+        case .CONTEXT      #through
+        case .ENTRY_POINT  #through
+        case .NODE
+            print("\n")
+        case .LOAD #through
+        case .IMPORT
+            import := cast(*Node_Load_Or_Import) node
+            print("%\n", import.name)
+        case .ADD_CONTEXT
+            add_context := cast(*Node_Add_Context) node
+            print_ast(add_context.member, indent + 1, "member")
+        case .PUSH_CONTEXT
+            push_context_ := cast(*Node_Push_Context) node
+            print_ast(push_context_.new_context, indent + 1, "new_context")
+            print_ast(push_context_.body,        indent + 1, "body")
+        case .USING
+            using_ := cast(*Node_Using) node
+            print_ast(using_.value, indent + 1, "value")
+        case .DECLARATION
+            declaration := cast(*Node_Declaration) node
+            print("%\n", declaration.name)
+            
+            print_ast(declaration.type_expression, indent + 1, "type")
+            print_ast(declaration.value, indent + 1, "value")
+        case .TYPE
+            type_ := cast(*Node_Type) node
+            print("% %\n", type_.name, type_.type_tag)
+            
+            if type_.type_tag == {
+                case .STRUCT #through
+                case .ENUM   #through
+                case .ENUM_FLAGS
+                
+                for type_.members.statements
+                    print_ast(it, indent + 1)
+            }
+        case .UNARY
+            unary := cast(*Node_Unary) node
+            
+            print_token(unary.op)
+            print("\n")
+            print_ast(unary.value, indent + 1)
+        case .INT_LITERAL
+            literal := cast(*Node_Int_Literal) node
+            
+            if node.type_
+                print("% ", node.type_.name)
+            print("%\n", literal.value)
+        case .FLOAT_LITERAL
+            literal := cast(*Node_Float_Literal) node
+            
+            print("%\n", literal.float_value)
+        case .STRING_LITERAL
+            literal := cast(*Node_String_Literal) node
+            
+            print("\"%\"\n", literal.text)
+        case .RUN #through
+        case .FUNCTION
+            function := cast(*Node_Function) node
+            
+            print("F% % % %\n", function.start_offset, function.name, function.linkage_name, function.library)
+            
+            for function.constants.statements
+                print_ast(it, indent + 1, "constant")
+                
+            for function.arguments.statements
+                print_ast(it, indent + 1, "argument")
+                
+            for function.returns.statements
+                print_ast(it, indent + 1, "return")
+                
+            print_ast(function.body, indent + 1, "body")
+        case .BLOCK
+            block := cast(*Node_Block) node
+            
+            print("%\n", block.block_tag)
+            for block.statements {
+                print_ast(it, indent + 1)
+            }
+        case .UNARY_DOT #through
+        case .IDENTIFIER
+            identifier := cast(*Node_Identifier) node
+            
+            print("%\n", identifier.name)
+        case .BINARY
+            binary := cast(*Node_Binary) node
+        
+            print_token(binary.op)
+            print("\n")
+            
+            print_ast(binary.left,  indent + 1, "left")
+            print_ast(binary.right, indent + 1, "right")
+        case .STRUCT_ACCESS
+            struct_access := cast(*Node_Struct_Access) node
+            
+            print("%\n", struct_access.name)
+            print_ast(struct_access.value, indent + 1)
+        case .FUNCTION_CALL
+            call := cast(*Node_Function_Call) node
+            
+            print("\n")
+            print_ast(call.function, indent + 1, "function")            
+            for call.arguments
+                print_ast(it.value, indent + 1, it.name)
+        case .COMMA_ASSIGNMENT
+            comma_assignment := cast(*Node_Comma_Assignment) node
+            
+            print("\n")
+            for comma_assignment.assign_to
+                print_ast(it, indent + 1, "assign to")
+            print_ast(comma_assignment.function_call, indent + 1, "call")
+        case .DEFER
+            defer_ := cast(*Node_Defer) node
+            
+            print("\n")
+            print_ast(defer_.statement, indent + 1)
+        case .IF #through
+        case .STATIC_IF
+            if_ := cast(*Node_If) node
+            print("\n")
+            print_ast(if_.condition, indent + 1, "condition")
+            print_ast(if_.if_body,   indent + 1, "if")
+            print_ast(if_.else_body, indent + 1, "else")
+        case .FOR
+            for_ := cast(*Node_For) node
+            print("L% \n", for_.start_offset)
+            for for_.iterator_block.statements
+                print_ast(it, indent + 1, "iterator")
+            print_ast(for_.begin,   indent + 1, "begin")
+            print_ast(for_.end,     indent + 1, "end")
+            print_ast(for_.body,    indent + 1, "body")
+            print_ast(for_.or_body, indent + 1, "or")
+        case .WHILE
+              while_ := cast(*Node_While) node
+              print("L% %\n", while_.start_offset, while_.label)
+              print_ast(while_.condition, indent + 1, "condition")
+              print_ast(while_.body,      indent + 1, "body")
+              print_ast(while_.or_body,   indent + 1, "or")  
+        case .SLICE
+            slice := cast(*Node_Slice) node
+            print("\n")
+            
+            print_ast(slice.array, indent + 1, "array")
+            print_ast(slice.begin, indent + 1, "begin")
+            print_ast(slice.end,   indent + 1, "end")
+        case .SWITCH
+            switch := cast(*Node_Switch) node
+            print("\n")
+            
+            print_ast(switch.value, indent + 1, "value")
+            for switch.cases {
+                print_ast(it.condition, indent + 1, "case")
+                for it.block.statements
+                    print_ast(it, indent + 1, "body")
+                
+                if it.through
+                    print_indented(indent + 1, "through\n")
+            }
+        case .BREAK    #through
+        case .CONTINUE #through
+        case .REMOVE
+            loop_control := cast(*Node_Loop_Control) node
+            print("% L%\n", loop_control.label, loop_control.loop.start_offset)
+        case .STRUCT_LITERAL
+            literal := cast(*Node_Struct_Literal) node
+            print("\n")
+            print_ast(literal.type_expression, indent + 1, "type")
+            for literal.initializers
+                print_ast(it.value, indent + 1, it.name)
+        case .ARRAY_LITERAL
+            literal := cast(*Node_Array_Literal) node
+            print("\n")
+            print_ast(literal.type_expression, indent + 1, "type")
+            for literal.initializers
+                print_ast(it, indent + 1)
+        case .RETURN
+            return_ := cast(*Node_Return) node
+            print("F%\n", return_.enclosing_function.start_offset)
+            for return_.returns
+                print_ast(it.value, indent + 1, it.name)
+        else
+            print("Unhandled\n")
+            assert(false)
+    }
 }

@@ -1,7 +1,11 @@
 #import "Standard"
 
 main :: () {
-	defer {
-		return;
-	}
+    for 10 {
+        print("%\n", it)
+        
+        inner :: () {
+            break
+        }
+    }
 }

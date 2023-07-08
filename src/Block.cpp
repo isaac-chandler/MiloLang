@@ -144,6 +144,7 @@ void initTable(Block *block) {
 
 
 void addImplicitImport(Block *block, ExprIdentifier *identifier) {
+	PROFILE_FUNC();
 	for (auto import : block->implicitImports) {
 		if (import->declaration->name == identifier->declaration->name) {
 			return;

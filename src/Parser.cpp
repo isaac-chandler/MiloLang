@@ -1887,7 +1887,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		assert(lexer->currentBlock);
 
 		if (lexer->currentBlock->flavor != BlockFlavor::ARGUMENTS && lexer->currentBlock->flavor != BlockFlavor::RETURNS) {
-			reportError(declaration, "Error: Cannot have a polymorph variable declartion outside a function header");
+			reportError(declaration, "Error: Cannot have a polymorph variable declaration outside a function header");
 			return nullptr;
 		}
 

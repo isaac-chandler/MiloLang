@@ -46,6 +46,7 @@ table_insert :: (using table: *Table($K, $V), key: K, value: V) -> bool {
 }
 
 table_find :: (table: Table($K, $V), key: K) -> *V {
+    if !table.count return null    
     slot, match := find_slot(table, key)
     
     if match
@@ -55,6 +56,7 @@ table_find :: (table: Table($K, $V), key: K) -> *V {
 }
 
 table_remove :: (using table: *Table($K, $V), key: K) -> bool {
+    if !table.count return false  
     slot, match := find_slot(<<table, key)
     
     if match {

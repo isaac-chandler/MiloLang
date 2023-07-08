@@ -2,43 +2,92 @@
 
 
 #if TARGET_WINDOWS {
-	#load "Windows.milo"
+    #load "Windows.milo"
+    PATH_SEPARATOR :: "\\"
 } else {
-	unsupported_os: u64 = "error"
+    PATH_SEPARATOR :: "/"
+    unsupported_os: u64 = "error"
+}
+
+find_last_slash :: (path: string) -> s64 {
+    i := path.count    
+    while i > 0 {
+        i -= 1
+        
+        if path[i] == '/' || path[i] == '\\'
+            return cast() i
+    }
+    
+    return -1
+}
+
+remove_trailing_slashes :: (path: string) -> string {
+    result := path
+    
+    while result && (result[path.count - 1] == '/' || result[result.count - 1] == '\\')
+        result.count -= 1
+    
+    return result
+}
+
+join_paths :: (paths: string..) -> string {
+    return concatenate(..paths, delimiter = PATH_SEPARATOR)
 }
 
 remove_extension :: (path: string) -> string {
-	last_slash := -1
-	last_dot := -1
-	
-	for path {
-		if it == '.'
-			last_dot = cast() it_index
-		else if it == '/' || it == '\\'
-			last_slash = cast() it_index
-	}
-	
-	if last_dot > last_slash {
-		return path[..last_dot]
-	} else {	
-		return path
-	}
+    i := path.count
+    
+    while i > 0 {
+        i -= 1
+        
+        if path[i] == '/' || path[i] == '\\'
+            return path
+        else if path[i] == '.'
+            return path[..i]
+    }
+    
+    return path
 }
 
 get_extension :: (path: string) -> string {
-	last_slash := -1
-	last_dot := -1
-	
-	for path {
-		if it == '.'
-			last_dot = cast() it_index
-		else if it == '/' || it == '\\'
-			last_slash = cast() it_index
-	}
-	
-	if last_dot > last_slash {
-		return path[last_dot + 1..]
-	} else {	
-		return ""
-	}
+    i := path.count
+    
+    while i > 0 {
+        i -= 1
+        
+        if path[i] == '/' || path[i] == '\\'
+            return ""
+        else if path[i] == '.'
+            return path[i + 1..]
+    }
+    
+    return ""
+}
+
+get_path_relative_to_executable :: (path: string) -> string {
+    executable_path := get_executable_path()
+    defer free_string(executable_path)
+    
+    last_backslash := find_last(executable_path, PATH_SEPARATOR)
+    
+    return concatenate(executable_path[..last_backslash], path, delimiter = PATH_SEPARATOR)
+}
+
+get_final_path_name :: (path: string) -> string {
+    last_slash := find_last_slash(remove_trailing_slashes(path))
+    
+    if last_slash == -1
+        return path
+    
+    return path[last_slash + 1..]
+}
+
+remove_final_path_name :: (path: string) -> string {
+    last_slash := find_last_slash(remove_trailing_slashes(path))
+    
+    if last_slash == -1
+        return path // This means we will treat the root directory as its own parent for absolute paths 
+                    // and the working directory as its own parent for relative paths
+    
+    return path[..last_slash]
 }

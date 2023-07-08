@@ -1,0 +1,228 @@
+statements_to_typecheck: [..]*Node
+
+Typecheck_Job :: struct {
+    statement: *Node
+    
+    Flattened :: struct {
+        flat_nodes: [..]*Node
+        node_index: u64
+        parent_flattened: *Flattened
+    }
+    
+    using flattened: *Flattened
+}
+
+flatten :: (flattened: *[..]*Node, node: *Node) {
+    if !node
+        return;
+    
+    if node.tag == #complete {
+        case .NODE           #through
+        case .INT_LITERAL    #through
+        case .BREAK          #through
+        case .CONTINUE       #through
+        case .STRING_LITERAL #through
+        case .UNARY_DOT      #through
+        case .FLOAT_LITERAL  #through
+        case .CONTEXT        #through
+        case .TYPE
+            // Do nothing
+        case .IDENTIFIER  #through
+        case .ENTRY_POINT #through
+        case .REMOVE
+            array_add(flattened, node)
+        case .LOAD           #through
+        case .IMPORT         #through
+        case .SCOPE_MODULE   #through
+        case .SCOPE_EXPORT
+            print("Should not flatten a %\n", node.tag)
+            assert(false)
+        case .DECLARATION
+            declaration := cast(*Node_Declaration) node
+            
+            flatten(flattened, declaration.type_expression)
+            flatten(flattened, declaration.value)
+            array_add(flattened, declaration)
+        case .UNARY
+            unary := cast(*Node_Unary) node
+            
+            flatten(flattened, unary.value)
+            if unary.op != .CAST
+                array_add(flattened, unary)
+        case .BINARY
+            binary := cast(*Node_Binary) node
+            
+            flatten(flattened, binary.left)
+            flatten(flattened, binary.right)
+            array_add(flattened, binary)
+        case .FUNCTION
+            function := cast(*Node_Function) node
+            
+            for function.arguments.statements
+                flatten(flattened, it)
+                
+            for function.returns.statements
+                flatten(flattened, it)
+                
+            array_add(flattened, function)
+        case .BLOCK
+            block := cast(*Node_Block) node
+            
+            for block.statements
+                flatten(flattened, it)
+        case .RETURN
+            return_ := cast(*Node_Return) node
+            
+            for return_.returns
+                flatten(flattened, it.value)
+            
+            array_add(flattened, return_)
+        case .STRUCT_ACCESS
+            struct_access := cast(*Node_Struct_Access) node
+            
+            flatten(flattened, struct_access.value)
+            array_add(flattened, struct_access)
+        case .FUNCTION_CALL
+            function_call := cast(*Node_Function_Call) node
+            
+            flatten(flattened, function_call.function)
+            for function_call.arguments
+                flatten(flattened, it.value)
+            
+            array_add(flattened, function_call)
+        case .SLICE
+            slice := cast(*Node_Slice) node
+            
+            flatten(flattened, slice.array)
+            flatten(flattened, slice.begin)
+            flatten(flattened, slice.end)
+        case .COMMA_ASSIGNMENT
+            comma_assignment := cast(*Node_Comma_Assignment) node
+            
+            if !(comma_assignment.flags & .DECLARATION_COMMA_ASSIGNMENT)
+                for comma_assignment.assign_to
+                    flatten(flattened, it)
+            
+            flatten(flattened, comma_assignment.function_call)
+            array_add(flattened, comma_assignment)
+        case .DEFER
+            defer_ := cast(*Node_Defer) node
+            
+            flatten(flattened, defer_.statement)
+        case .IF
+            if_ := cast(*Node_If) node
+            
+            flatten(flattened, if_.condition)
+            array_add(flattened, if_)
+            flatten(flattened, if_.if_body)
+            flatten(flattened, if_.else_body)
+        case .FOR
+            for_ := cast(*Node_For) node
+            
+            flatten(flattened, for_.begin)
+            flatten(flattened, for_.end)
+            array_add(flattened, for_)
+            flatten(flattened, for_.body)
+            flatten(flattened, for_.or_body)
+        case .WHILE
+            while_ := cast(*Node_While) node
+            
+            flatten(flattened, while_.condition)
+            array_add(flattened, while_)
+            flatten(flattened, while_.body)
+            flatten(flattened, while_.or_body)
+        case .SWITCH
+            switch := cast(*Node_Switch) node
+            
+            flatten(flattened, switch.value)
+            
+            for switch.cases
+                flatten(flattened, it.condition)
+            
+            array_add(flattened, switch)
+            
+            for switch.cases
+                for it.statements
+                    flatten(flattened, it)
+        case .RUN
+            run := cast(*Node_Function) node
+            
+            flatten(flattened, run.body)
+            array_add(flattened, run)
+        case .STRUCT_LITERAL
+            struct_literal := cast(*Node_Struct_Literal) node
+            
+            if !struct_literal.type_expression return;
+            
+            flatten(flattened, struct_literal.type_expression)
+            for struct_literal.initializers
+                flatten(flattened, it.value)
+            array_add(flattened, struct_literal)
+            
+        case .ARRAY_LITERAL
+            array_literal := cast(*Node_Array_Literal) node
+            
+            if !array_literal.type_expression return;
+            
+            flatten(flattened, array_literal.type_expression)
+            for array_literal.initializers
+                flatten(flattened, it)
+            array_add(flattened, array_literal)
+        case .STATIC_IF
+            static_if := cast(*Node_If) node
+            
+            flatten(flattened, static_if.condition)
+            array_add(flattened, static_if)
+        case .ADD_CONTEXT
+            add_context := cast(*Node_Add_Context) node
+            
+            flatten(flattened, add_context.member)
+        case .PUSH_CONTEXT
+            push_context_ := cast(*Node_Push_Context) node
+            
+            flatten(flattened, push_context_.new_context)
+            array_add(flattened, push_context_)
+            flatten(flattened, push_context_.body)
+        case .USING
+            using_ := cast(*Node_Using) node
+            
+            flatten(flattened, using_.value)
+            array_add(flattened, using_)
+        else
+            print("Unknown node tag: %\n", node.tag)
+            assert(false)
+    }
+}
+
+queue_for_typechecking :: (node: *Node) {
+    using job := Typecheck_Job.{statement = node}
+    
+    if node.tag == {
+        case .DECLARATION  #through
+        case .USING        #through
+        case .STATIC_IF    #through
+        case .FUNCTION     #through
+        case .ADD_CONTEXT  #through
+        case .IMPORT       #through
+        
+            
+        case .LOAD
+            load := cast(*Node_Load_Or_Import) node
+            
+            add_build_file(load.enclosing_module, load.name, load)
+        case .SCOPE_MODULE #through
+        case .SCOPE_EXPORT
+            return; // No work needed
+        else
+            print("Unhandled typechecking job type %\n", node.tag)
+            assert(false)
+    }
+}
+
+run_typechecking :: () {
+    while statements_to_typecheck {
+        statement := array_pop(*statements_to_typecheck)
+        
+        queue_for_typechecking(statement)        
+    }
+}

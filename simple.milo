@@ -3,164 +3,164 @@
 #import "Math"
 
 ListNode :: struct {
-	value: string
-	next: *ListNode
+    value: string
+    next: *ListNode
 }
 
 recursive_factorial :: (n: u64) -> #must u64 {
-	if n <= 1
-		return n
-		
-	return n * recursive_factorial(n - 1)
+    if n <= 1
+        return n
+        
+    return n * recursive_factorial(n - 1)
 }
 
 factorial :: (n: u64) -> #must u64 {
-	total: u64 = 1
-	
-	for 2 .. n + 1 {
-		total *= it
-	}
-	
-	return total
+    total: u64 = 1
+    
+    for 2 .. n + 1 {
+        total *= it
+    }
+    
+    return total
 }
 
 
 Job_Status :: enum_flags {
-	EMPLOYED
-	HOLIDAY
-	SUSPENDED
+    EMPLOYED
+    HOLIDAY
+    SUSPENDED
 }
 
 Job :: struct {
-	title: string
-	experience: u64
+    title: string
+    experience: u64
 }
 
 Person :: struct {
-	first_name: string
-	last_name: string
-	age: u64
-	
-	job_status : Job_Status
-	using job: *Job
+    first_name: string
+    last_name: string
+    age: u64
+    
+    job_status : Job_Status
+    using job: *Job
 }
 
 print_job :: (job: *Job) {
-	print("%, % years experience", job.title, job.experience)
+    print("%, % years experience", job.title, job.experience)
 }
 
 using_test :: () {
-	using Job_Status
+    using Job_Status
 
-	jim := Person.{ "Jim", "Halpert", 30 }
-	
-	job: Job
-	
-	job.title = "Co-regional Manager"
-	job.experience = 4
-	
-	print("%", Job_Status.SUSPENDED)
-	
-	jim.job = *job
-	jim.job_status |= EMPLOYED
-	
-	print_job(jim)
+    jim := Person.{ "Jim", "Halpert", 30 }
+    
+    job: Job
+    
+    job.title = "Co-regional Manager"
+    job.experience = 4
+    
+    print("%", Job_Status.SUSPENDED)
+    
+    jim.job = *job
+    jim.job_status |= EMPLOYED
+    
+    print_job(jim)
 }
 
 random_test :: () {
-	rng := create_random(546, 6306)
-	
-	for 10 {
-		rand := random_u32(*rng)
-		
-		print_u64(rand)
-		
-		print_string(" ")
-		
-		print_u64(cast() (cast(f32) rand * 0x1p-32 * 1000))
-		
-		print_string("\n")
-	}
+    rng := create_random(546, 6306)
+    
+    for 10 {
+        rand := random_u32(*rng)
+        
+        print_u64(rand)
+        
+        print_string(" ")
+        
+        print_u64(cast() (cast(f32) rand * (cast(f32) 1.0 / (1 << 32)) * 1000))
+        
+        print_string("\n")
+    }
 }
 
 array_cast_test :: () {
-	func_taking_array :: (array: *[]s64) {}
-	
-	dynamic_array: [..]s64
-	
-	func_taking_array(*dynamic_array)
+    func_taking_array :: (array: *[]s64) {}
+    
+    dynamic_array: [..]s64
+    
+    func_taking_array(*dynamic_array)
 }
 
 print_u64_array :: (array: []u64) {
-	for array {
-		print_string("\n[")
-		print_u64(it_index)
-		print_string("] = ")
-		print_u64(it)
-	}
+    for array {
+        print_string("\n[")
+        print_u64(it_index)
+        print_string("] = ")
+        print_u64(it)
+    }
 }
 
 remove_test :: () {
-	storage: [10]u64
-	
-	array: []u64 = storage
-	
-	for * array {
-		<< it = it_index * it_index
-	}
-	
-	print_u64_array(array)
-	
-	for array {
-		if it == 9
-			remove
-	}
-	
-	print_u64_array(array)
+    storage: [10]u64
+    
+    array: []u64 = storage
+    
+    for * array {
+        << it = it_index * it_index
+    }
+    
+    print_u64_array(array)
+    
+    for array {
+        if it == 9
+            remove
+    }
+    
+    print_u64_array(array)
 
 }
 
 
 
 get_strings :: () -> #must []string {
-	a: [..] string
+    a: [..] string
 
-	array_add(*a, "Test1")
-	array_add(*a, "Test2")
+    array_add(*a, "Test1")
+    array_add(*a, "Test2")
 
-	return a
+    return a
 }
 
 get_linked_strings :: () -> #must ListNode {
-	a := ListNode.{ value = "LinkedTest1", next = allocate(size_of(ListNode)) }
-	
-	b := a.next
-	b.value = "LinkedTest2"
-	b.next = null
-	
-	return a
+    a := ListNode.{ value = "LinkedTest1", next = allocate(size_of(ListNode)) }
+    
+    b := a.next
+    b.value = "LinkedTest2"
+    b.next = null
+    
+    return a
 }
 
 find_string :: (array: []string, s: string) {
-	for array {
-		if it == s {
-			index := u64_to_string(it_index)
-			
-			print_string(index)
-			print_string(": found ")
-			print_string(s)
-			print_string("\n")
-			
-			deallocate(index.data)
-			
-			break
-		}
-	} or {
-		print_string("Couldn't find ")
-		print_string(s)
-		print_string("\n")
-	}
-	
+    for array {
+        if it == s {
+            index := u64_to_string(it_index)
+            
+            print_string(index)
+            print_string(": found ")
+            print_string(s)
+            print_string("\n")
+            
+            deallocate(index.data)
+            
+            break
+        }
+    } or {
+        print_string("Couldn't find ")
+        print_string(s)
+        print_string("\n")
+    }
+    
 }
 
 main :: () {

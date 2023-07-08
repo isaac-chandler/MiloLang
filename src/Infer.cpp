@@ -66,22 +66,16 @@ ExprLiteral *createIntLiteral(CodeLocation start, EndLocation end, Type *type, u
 }
 
 ExprLiteral *createInBoundsIntLiteral(CodeLocation start, EndLocation end, Type *type, u64 value) {
-	if (value != 0) { // @Hack so we don't crash when doing an implicit cast from a 0 to enum_flags that hasn't had its underlying type inferred
-		auto underlying = type;
-
-		if (type->flavor == TypeFlavor::ENUM) {
-			underlying = static_cast<TypeEnum *>(type)->integerType;
-		}
-
-		if (underlying == &TYPE_BOOL) {
+	if (value != 0) { // Special case 0 is always in bounds
+		if (type == &TYPE_BOOL) {
 			value = value != 0;
 		}
-		else if (underlying->flavor == TypeFlavor::INTEGER && (underlying->flags & TYPE_INTEGER_IS_SIGNED)) {
-			u64 sign = 1ULL << (underlying->size * 8 - 1);
+		else if (type->flavor == TypeFlavor::INTEGER && (type->flags & TYPE_INTEGER_IS_SIGNED)) {
+			u64 sign = 1ULL << (type->size * 8 - 1);
 			u64 mask = (sign - 1) | sign;
 			value &= mask;
 
-			if ((underlying->flags & TYPE_INTEGER_IS_SIGNED) && (value & sign)) {
+			if ((type->flags & TYPE_INTEGER_IS_SIGNED) && (value & sign)) {
 				value |= ~mask;
 			}
 		}
@@ -142,6 +136,16 @@ void goToSleep(SubJob *job, Array<SubJob *> *sleepingOnMe, const char *reason) {
 #ifdef BUILD_DEBUG
 	job->sleepReason = reason;
 #endif
+}
+
+ExprLiteral *createInBoundsEnumLiteral(SubJob *job, CodeLocation start, EndLocation end, TypeEnum *type, u64 value) {
+	// Special case 0 is always in bounds
+	if (value != 0 && !type->integerType) {
+		goToSleep(job, &type->sleepingOnMe, "Cast waiting on enum underlying type");
+		return nullptr;
+	}
+
+	return createInBoundsIntLiteral(start, end, type, value);
 }
 
 template<typename T>
@@ -363,7 +367,8 @@ void addTypeBlock(Type *type, Declaration *valueOfDeclaration) {
 	if (type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::ENUM) {
 		auto struct_ = static_cast<TypeStruct *>(type);
 
-		if (!struct_->constants.queued) {
+		bool already_added = (struct_->flags & TYPE_IS_POLYMORPHIC) ? struct_->constants.queued : struct_->members.queued;
+		if (!already_added) {
 			if (valueOfDeclaration && (valueOfDeclaration->flags & DECLARATION_IS_CONSTANT)) {
 				type->name = valueOfDeclaration->name;
 				struct_->enclosingScope = valueOfDeclaration->enclosingScope;
@@ -1083,7 +1088,7 @@ void copyLiteral(Expr **exprPointer, Expr *expr) {
 	}
 }
 
-void doConstantCast(Expr **cast) {
+bool doConstantCast(SubJob *job, Expr **cast) {
 	auto binary = static_cast<ExprBinaryOperator *>(*cast);
 	auto castTo = static_cast<ExprLiteral *>(binary->left)->typeValue;
 	auto expr = binary->right;
@@ -1093,14 +1098,21 @@ void doConstantCast(Expr **cast) {
 	}
 
 	if (binary->flags & EXPR_CAST_IS_BITWISE) {
-		return; // @Incomplete
+		return true; // @Incomplete
 	}
 
 	if (expr->flavor == ExprFlavor::INT_LITERAL) {
 		auto old = static_cast<ExprLiteral *>(expr);
 
-		if (castTo->flavor == TypeFlavor::INTEGER || castTo->flavor == TypeFlavor::ENUM || castTo == &TYPE_BOOL) {
+		if (castTo->flavor == TypeFlavor::INTEGER || castTo == &TYPE_BOOL) {
 			*cast = createInBoundsIntLiteral(binary->start, expr->end, castTo, old->unsignedValue);
+		}
+		else if (castTo->flavor == TypeFlavor::ENUM) {
+			auto literal = createInBoundsEnumLiteral(job, binary->start, expr->end, static_cast<TypeEnum *>(castTo), old->unsignedValue);
+
+			if (!literal)
+				return false;
+			*cast = literal;
 		}
 		else if (castTo->flavor == TypeFlavor::FLOAT) {
 			*cast = createFloatLiteral(binary->start, expr->end, castTo,
@@ -1153,6 +1165,8 @@ void doConstantCast(Expr **cast) {
 			*cast = createIntLiteral(binary->start, expr->end, castTo, 1);
 		}
 	}
+
+	return true;
 }
 
 void markDeclarationsAsPointedTo(Expr *expr) {
@@ -1191,7 +1205,7 @@ void markDeclarationsAsPointedTo(Expr *expr) {
 	}
 }
 
-void insertImplicitCast(Array<Type *> *sizeDependencies, Expr **castFrom, Type *castTo) {
+bool insertImplicitCast(SubJob *job, Expr **castFrom, Type *castTo) {
 	ExprBinaryOperator *cast = INFER_NEW(ExprBinaryOperator);
 	cast->flavor = ExprFlavor::BINARY_OPERATOR;
 	cast->op = TokenT::CAST;
@@ -1213,12 +1227,12 @@ void insertImplicitCast(Array<Type *> *sizeDependencies, Expr **castFrom, Type *
 
 	*castFrom = cast;
 
-	addSizeDependency(sizeDependencies, castTo);
+	addSizeDependency(job->sizeDependencies, castTo);
 
 
 
 	assert(isValidCast(castTo, cast->right->type));
-	doConstantCast(castFrom);
+	return doConstantCast(job, castFrom);
 }
 
 // Passing null for location means that an error shouldn't be reported, and null should be returned if the expression doesn't have a namespace
@@ -1424,7 +1438,7 @@ bool usingConversionIsValid(SubJob *job, Type *correct, Expr *given, bool *yield
 
 			auto import = member;
 
-			if (import->flags & DECLARATION_IMPORTED_BY_USING) {
+			while (import->flags & DECLARATION_IMPORTED_BY_USING) {
 				import = import->import;
 			}
 
@@ -1465,7 +1479,7 @@ bool tryUsingConversion(SubJob *job, Type *correct, Expr **exprPointer) {
 
 			auto import = member;
 
-			if (import->flags & DECLARATION_IMPORTED_BY_USING) {
+			while (import->flags & DECLARATION_IMPORTED_BY_USING) {
 				import = import->import;
 			}
 
@@ -1570,7 +1584,10 @@ bool tryAutoCast(SubJob *job, Expr **cast, Type *castTo, bool *yield) {
 		}
 
 		addSizeDependency(job->sizeDependencies, castTo);
-		doConstantCast(cast);
+		if (!doConstantCast(job, cast)) {
+			*yield = true;
+			return false;
+		}
 	}
 
 	return true;
@@ -1586,7 +1603,10 @@ bool evaluateConstantBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 
 	switch (binary->op) {
 	case TokenT::CAST: {
-		doConstantCast(exprPointer);
+		if (!doConstantCast(job, exprPointer)) {
+			*yield = true;
+			return false;
+		}
 		break;
 	}
 	case TOKEN('['): {
@@ -2587,7 +2607,10 @@ bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yi
 					if (given->type->flags & (TYPE_ARRAY_IS_DYNAMIC | TYPE_ARRAY_IS_FIXED)) {
 						if (!(correct->flags & (TYPE_ARRAY_IS_DYNAMIC | TYPE_ARRAY_IS_FIXED))) { // We are converting from [N]T or [..]T to []T
 							if (static_cast<TypeArray *>(given->type)->arrayOf == static_cast<TypeArray *>(correct)->arrayOf) {
-								insertImplicitCast(job->sizeDependencies, &given, correct);
+								if (!insertImplicitCast(job, &given, correct)) {
+									*yield = true;
+									return false;
+								}
 							}
 							else {
 								reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
@@ -2635,7 +2658,10 @@ bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yi
 						given->type = correct;
 					}
 					else if (correct->size > given->type->size) {
-						insertImplicitCast(job->sizeDependencies, &given, correct);
+						if (!insertImplicitCast(job, &given, correct)) {
+							*yield = true;
+								return false;
+						}
 					}
 					else if (correct->size < given->type->size) {
 						reportError(location, "Error: Cannot convert from %.*s to %.*s, precision will be lost", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
@@ -2664,15 +2690,24 @@ bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yi
 					auto correctPointer = static_cast<TypePointer *>(correct)->pointerTo;
 
 					if (correct == TYPE_VOID_POINTER) {
-						insertImplicitCast(job->sizeDependencies, &given, correct);
+						if (!insertImplicitCast(job, &given, correct)) {
+							*yield = true;
+							return false;
+						}
 					}
 					else if (given->type == TYPE_VOID_POINTER) {
-						insertImplicitCast(job->sizeDependencies, &given, correct);
+						if (!insertImplicitCast(job, &given, correct)) {
+							*yield = true;
+							return false;
+						}
 					}
 					else if (givenPointer->flavor == TypeFlavor::ARRAY && correctPointer->flavor == TypeFlavor::ARRAY &&
 						(givenPointer->flags & TYPE_ARRAY_IS_DYNAMIC) && !(correctPointer->flags & (TYPE_ARRAY_IS_FIXED | TYPE_ARRAY_IS_DYNAMIC))) {
 						if (static_cast<TypeArray *>(givenPointer)->arrayOf == static_cast<TypeArray *>(correctPointer)->arrayOf) {
-							insertImplicitCast(job->sizeDependencies, &given, correct);
+							if (!insertImplicitCast(job, &given, correct)) {
+								*yield = true;
+								return false;
+							}
 						}
 					}
 					else {
@@ -2696,7 +2731,10 @@ bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yi
 				}
 				else {
 					if (correct == TYPE_ANY && given->type != TYPE_ANY) {
-						insertImplicitCast(job->sizeDependencies, &given, TYPE_ANY);
+						if (!insertImplicitCast(job, &given, correct)) {
+							*yield = true;
+							return false;
+						}
 						return true;
 					}
 
@@ -2736,7 +2774,10 @@ bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yi
 			}
 			else if (correct->flavor == TypeFlavor::ENUM && (correct->flags & TYPE_ENUM_IS_FLAGS) &&
 				given->type->flavor == TypeFlavor::INTEGER && given->flavor == ExprFlavor::INT_LITERAL && static_cast<ExprLiteral *>(given)->unsignedValue == 0) {
-				insertImplicitCast(job->sizeDependencies, &given, correct);
+				if (!insertImplicitCast(job, &given, correct)) {
+					*yield = true;
+					return false;
+				}
 			}
 			else if (correct->flavor == TypeFlavor::FUNCTION && given->type == &TYPE_OVERLOAD_SET) {
 				if (!inferOverloadSetForNonCall(job, correct, given, yield)) {
@@ -2766,10 +2807,16 @@ bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yi
 				literal->type = correct;
 			}
 			else if (correct == TYPE_VOID_POINTER && given->type->flavor == TypeFlavor::FUNCTION) {
-				insertImplicitCast(job->sizeDependencies, &given, correct);
+				if (!insertImplicitCast(job, &given, correct)) {
+					*yield = true;
+					return false;
+				}
 			}
 			else if (given->type == TYPE_VOID_POINTER && correct->flavor == TypeFlavor::FUNCTION) {
-				insertImplicitCast(job->sizeDependencies, &given, correct);
+				if (!insertImplicitCast(job, &given, correct)) {
+					*yield = true;
+					return false;
+				}
 			}
 			else if (correct->flavor == TypeFlavor::ENUM && given->type == &TYPE_UNARY_DOT) {
 				if (!inferUnaryDot(job, static_cast<TypeEnum *>(correct), &given, yield)) {
@@ -2792,7 +2839,10 @@ bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yi
 				} else {
 					if (correct == TYPE_ANY && given->type != TYPE_ANY && given->type->flavor != TypeFlavor::AUTO_CAST) {
 						trySolidifyNumericLiteralToDefault(given);
-						insertImplicitCast(job->sizeDependencies, &given, TYPE_ANY);
+						if (!insertImplicitCast(job, &given, correct)) {
+							*yield = true;
+							return false;
+						}
 						return true;
 					}
 
@@ -3662,7 +3712,10 @@ bool coerceToBool(SubJob *job, Expr **given, bool *yield) {
 			return false;
 	}
 	else if (isValidCast(&TYPE_BOOL, expr->type)) {
-		insertImplicitCast(job->sizeDependencies, given, &TYPE_BOOL);
+		if (!insertImplicitCast(job, given, &TYPE_BOOL)) {
+			*yield = true;
+			return false;
+		}
 	}
 	else {
 		reportError(expr, "Error: Cannot convert %.*s to bool", STRING_PRINTF(expr->type->name));
@@ -3849,7 +3902,10 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 
 
 		if (right->type->size != 8) {
-			insertImplicitCast(job->sizeDependencies, &right, right->type->flags & TYPE_INTEGER_IS_SIGNED ? &TYPE_S64 : &TYPE_U64);
+			if (!insertImplicitCast(job, &right, right->type->flags & TYPE_INTEGER_IS_SIGNED ? &TYPE_S64 : &TYPE_U64)) {
+				*yield = true;
+				return true;
+			}
 		}
 
 		if (left->type->flavor == TypeFlavor::POINTER) {
@@ -3948,9 +4004,15 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 		}
 
 		if (left->type->flavor == TypeFlavor::AUTO_CAST && getTypeForExpr(right) != right->type) {
-			insertImplicitCast(job->sizeDependencies, &right, getTypeForExpr(right));
+			if (!insertImplicitCast(job, &right, getTypeForExpr(right))) {
+				*yield = true;
+				return true;
+			}
 		} else if (right->type->flavor == TypeFlavor::AUTO_CAST && getTypeForExpr(left) != left->type) {
-			insertImplicitCast(job->sizeDependencies, &left, getTypeForExpr(left));
+			if (!insertImplicitCast(job, &left, getTypeForExpr(left))) {
+				*yield = true;
+				return true;
+			}
 		}
 
 		bool handled = left->type == right->type;
@@ -3962,7 +4024,10 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 			}
 			else if (left->type->flavor == TypeFlavor::POINTER && right->type->flavor == TypeFlavor::INTEGER) {
 				if (right->type->size != 8) {
-					insertImplicitCast(job->sizeDependencies, &right, right->type->flags & TYPE_INTEGER_IS_SIGNED ? &TYPE_S64 : &TYPE_U64);
+					if (!insertImplicitCast(job, &right, right->type->flags & TYPE_INTEGER_IS_SIGNED ? &TYPE_S64 : &TYPE_U64)) {
+						*yield = true;
+						return true;
+					}
 				}
 
 				binary->type = left->type;
@@ -3971,7 +4036,10 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 			}
 			else if (left->type->flavor == TypeFlavor::INTEGER && right->type->flavor == TypeFlavor::POINTER) {
 				if (left->type->size != 8) {
-					insertImplicitCast(job->sizeDependencies, &left, left->type->flags & TYPE_INTEGER_IS_SIGNED ? &TYPE_S64 : &TYPE_U64);
+					if (!insertImplicitCast(job, &left, left->type->flags & TYPE_INTEGER_IS_SIGNED ? &TYPE_S64 : &TYPE_U64)) {
+						*yield = true;
+						return true;
+					}
 				}
 
 				binary->type = right->type;
@@ -3994,7 +4062,10 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 			}
 			else if (left->type->flavor == TypeFlavor::POINTER && right->type->flavor == TypeFlavor::INTEGER) {
 				if (right->type->size != 8) {
-					insertImplicitCast(job->sizeDependencies, &right, right->type->flags & TYPE_INTEGER_IS_SIGNED ? &TYPE_S64 : &TYPE_U64);
+					if (!insertImplicitCast(job, &right, right->type->flags & TYPE_INTEGER_IS_SIGNED ? &TYPE_S64 : &TYPE_U64)) {
+						*yield = true;
+						return true;
+					}
 				}
 
 				binary->type = left->type;
@@ -4125,7 +4196,10 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 			if (right->type->flavor == TypeFlavor::INTEGER) {
 				trySolidifyNumericLiteralToDefault(right);
 				if (right->type->size != 8) {
-					insertImplicitCast(job->sizeDependencies, &right, right->type->flags & TYPE_INTEGER_IS_SIGNED ? &TYPE_S64 : &TYPE_U64);
+					if (!insertImplicitCast(job, &right, right->type->flags & TYPE_INTEGER_IS_SIGNED ? &TYPE_S64 : &TYPE_U64)) {
+						*yield = true;
+						return true;
+					}
 				}
 			}
 			else {
@@ -4508,8 +4582,9 @@ bool inferFlattened(SubJob *job) {
 					address->type = getPointer(identifier->structAccess->type);
 
 					*exprPointer = address;
-
-					insertImplicitCast(job->sizeDependencies, exprPointer, identifier->type);
+					if (!insertImplicitCast(job, exprPointer, identifier->type)) {
+						return true;
+					}
 				}
 				else if (identifier->structAccess->type->flavor == TypeFlavor::POINTER &&
 					(static_cast<TypePointer *>(identifier->structAccess->type)->pointerTo->flags & TYPE_ARRAY_IS_FIXED)) {
@@ -5031,7 +5106,9 @@ bool inferFlattened(SubJob *job) {
 				}
 
 				if (slice->sliceStart->type->size != 8) {
-					insertImplicitCast(job->sizeDependencies, &slice->sliceStart, slice->sliceStart->type->flags & TYPE_INTEGER_IS_SIGNED ? &TYPE_S64 : &TYPE_U64);
+					if (!insertImplicitCast(job, &slice->sliceStart, slice->sliceStart->type->flags & TYPE_INTEGER_IS_SIGNED ? &TYPE_S64 : &TYPE_U64)) {
+						return true;
+					}
 				}
 			}
 
@@ -5045,7 +5122,9 @@ bool inferFlattened(SubJob *job) {
 				}
 
 				if (slice->sliceEnd->type->size != 8) {
-					insertImplicitCast(job->sizeDependencies, &slice->sliceEnd, slice->sliceEnd->type->flags & TYPE_INTEGER_IS_SIGNED ? &TYPE_S64 : &TYPE_U64);
+					if (!insertImplicitCast(job, &slice->sliceEnd, slice->sliceEnd->type->flags & TYPE_INTEGER_IS_SIGNED ? &TYPE_S64 : &TYPE_U64)) {
+						return true;
+					}
 				}
 			}
 
@@ -5302,10 +5381,14 @@ bool inferFlattened(SubJob *job) {
 						}
 
 						if (loop->forBegin->type->size > loop->forEnd->type->size) {
-							insertImplicitCast(job->sizeDependencies, &loop->forEnd, loop->forBegin->type);
+							if (!insertImplicitCast(job, &loop->forEnd, loop->forBegin->type)) {
+								return true;
+							}
 						}
 						else if (loop->forBegin->type->size < loop->forEnd->type->size) {
-							insertImplicitCast(job->sizeDependencies, &loop->forBegin, loop->forEnd->type);
+							if (!insertImplicitCast(job, &loop->forBegin, loop->forEnd->type)) {
+								return true;
+							}
 						}
 
 						assert(loop->forBegin->type == loop->forEnd->type);
@@ -5724,11 +5807,14 @@ bool inferFlattened(SubJob *job) {
 #endif
 
 				ExprFunction *existingPolymorph = nullptr;
+				{
+					PROFILE_ZONE("Function constants block matches");
 
-				for (auto polymorph : function->polymorphs) {
-					if (constantsBlockMatches(&function->constants, &polymorph->constants)) {
-						existingPolymorph = polymorph;
-						break;
+					for (auto polymorph : function->polymorphs) {
+						if (constantsBlockMatches(&function->constants, &polymorph->constants)) {
+							existingPolymorph = polymorph;
+							break;
+						}
 					}
 				}
 
@@ -5767,10 +5853,13 @@ bool inferFlattened(SubJob *job) {
 
 					TypeStruct *existingPolymorph = nullptr;
 
-					for (auto polymorph : struct_->polymorphs) {
-						if (constantsBlockMatches(&polymorph->constants, &call->arguments)) {
-							existingPolymorph = polymorph;
-							break;
+					{
+						PROFILE_ZONE("Struct constants block matches");
+						for (auto polymorph : struct_->polymorphs) {
+							if (constantsBlockMatches(&polymorph->constants, &call->arguments)) {
+								existingPolymorph = polymorph;
+								break;
+							}
 						}
 					}
 

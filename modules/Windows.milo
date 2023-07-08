@@ -799,8 +799,11 @@ CreateFileW :: (lpFileName: *u16, dwDesiredAccess: Access_Flags, dwShareMode: Fi
                 dwCreationDisposition: File_Create_Option, dwFlagsAndAttributes: File_Flag, hTemplateFile: HANDLE = null) -> HANDLE #external "kernel32"
 CreateFileA :: (lpFileName: *u8, dwDesiredAccess: Access_Flags, dwShareMode: File_Share_Flag, lpSecurityAttributes: *SECURITY_ATTRIBUTES = null, 
                 dwCreationDisposition: File_Create_Option, dwFlagsAndAttributes: File_Flag, hTemplateFile: HANDLE = null) -> HANDLE #external "kernel32"
-               
+     
+     
 GetFileSizeEx :: (hFile: HANDLE, lpFileSize: *s64) -> s32 #external "kernel32"
+
+GetFileAttributesW :: (lpFileName: *u16) -> File_Flag #external "kernel32"
 
 ReadFile :: (hFile: HANDLE, lpBuffer: *void, nNumberOfBytesToRead: u32, lpNumberOfBytesRead: *u32, lpOverlapped: *OVERLAPPED = null) -> s32 #external "kernel32"
 WriteFile :: (hFile: HANDLE, lpBuffer: *void, nNumberOfBytesToWrite: u32, lpNumberOfBytesWritten: *u32, lpOverlapped: *OVERLAPPED = null) -> s32 #external "kernel32"
@@ -811,6 +814,8 @@ FindClose :: (lpFindFile: HANDLE) -> s32 #external "kernel32"
 
 GetFullPathNameW :: (lpFileName: *u16, nBufferLength: u32, lpBuffer: *u16, lpFilePart: **u16) -> u32 #external "kernel32"
 GetLongPathNameW :: (lpszShortPath: *u16, lpszLongPath: *u16, cchBuffer: u32) -> u32 #external "kernel32"
+
+SetCurrentDirectoryW :: (lpPathName: *u16) -> s32 #external "kernel32"
 
 FILETIME :: struct {
     dwLowDateTime:  u32
@@ -892,6 +897,8 @@ using File_Flag :: enum_flags u32 {
     FILE_FLAG_NO_BUFFERING               :: 0x2000_0000
     FILE_FLAG_OVERLAPPED                 :: 0x4000_0000
     FILE_FLAG_WRITETHROUGH               :: 0x8000_0000
+    
+    INVALID_FILE_ATTRIBUTES :: 0xFFFF_FFFF
 }
 
 AttachConsole :: (dwProcessId: u32) -> s32 #external "kernel32"

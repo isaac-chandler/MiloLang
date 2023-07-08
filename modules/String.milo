@@ -25,31 +25,31 @@ begins_with :: (s: string, prefix: string) -> bool {
 
 is_whitespace :: (c: u32) -> bool {
     if c == {
-        case ' '  #through
-        case '\n' #through
-        case '\t' #through
-        case '\r' #through
-        case '\f' #through
-        case '\v' #through
-        case '\u85' #through
-        case '\uA0' #through
-        case '\u1680' #through // not actually blank but still considered whitespace by unicode
-        case '\u2000' #through
-        case '\u2001' #through
-        case '\u2002' #through
-        case '\u2003' #through
-        case '\u2004' #through
-        case '\u2005' #through
-        case '\u2006' #through
-        case '\u2007' #through
-        case '\u2008' #through
-        case '\u2009' #through
-        case '\u200A' #through
-        case '\u2028' #through
-        case '\u2029' #through
-        case '\u202F' #through
-        case '\u205F' #through
-        case '\u3000'
+        case ' '    #through
+        case '\n'   #through
+        case '\t'   #through
+        case '\r'   #through
+        case 0xC    #through
+        case 0xB    #through
+        case 0x85   #through
+        case 0xA0   #through
+        case 0x1680 #through // not actually blank but still considered whitespace by unicode
+        case 0x2000 #through
+        case 0x2001 #through
+        case 0x2002 #through
+        case 0x2003 #through
+        case 0x2004 #through
+        case 0x2005 #through
+        case 0x2006 #through
+        case 0x2007 #through
+        case 0x2008 #through
+        case 0x2009 #through
+        case 0x200A #through
+        case 0x2028 #through
+        case 0x2029 #through
+        case 0x202F #through
+        case 0x205F #through
+        case 0x3000
             return true
         else
             return false
@@ -307,7 +307,7 @@ split :: (s: string, split_at: string) -> []string {
     remaining := s
 
     while true {
-        found, index := find_first(remaining, split_at)
+        index, found := find_first(remaining, split_at)
 
         if !found
             break;
@@ -397,7 +397,8 @@ concatenate :: (s: string.., delimiter: string = "") -> string {
 }
 
 lower :: (c: u8) -> u8 {
-    if 'A' <= c && c <= 'Z' {
-        return c - 'A' + 'a'
-    }
+    if 'A' <= c && c <= 'Z'
+        return c + ('a' - 'A')
+    else
+        return c
 }

@@ -1,10 +1,10 @@
 #import "Standard"
 
-map :: (apply_to: []$T, func: (T) -> $V) -> []$V {
-	result := new_array(V, apply_to.count)
+map :: (apply_to: []$T, func: (T) -> $V) -> []V {
+    result := new_array(V, apply_to.count)
 
-	for apply_to
-		result[it_index] = func(it)
+    for apply_to
+        result[it_index] = func(it)
 
-	return result
+    return result
 }

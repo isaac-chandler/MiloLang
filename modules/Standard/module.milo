@@ -193,6 +193,21 @@ array_add :: (using array: *[..]$T, value: T) {
     array_add_unchecked(array, value)
 }
 
+array_add_all :: (using array: *[..]$T, add: []T) {
+    if count + add.count > capacity {
+        new_capacity := max(count * 2, 4)
+        
+        while new_capacity < count + add.count {
+            new_capacity *= 2
+        }
+        
+        array_reserve(array, new_capacity)
+    }
+    
+    memory_copy(*(<<array)[count], add.data, add.count * size_of(T))
+    count += add.count
+}
+
 array_push :: (using array: *[..]$T, initialized := true) -> *T {
     if count >= capacity {
         array_reserve(array, max(count * 2, 4))
@@ -513,7 +528,7 @@ print_f64 :: (c: *Concatenator, num: f64, decimal_places: u64 = 6, base: u64 = 1
         return
     }
     
-    if num >= 1p64 {
+    if num > cast() 0xFFFF_FFFF_FFFF_FFFF {
         append(c, "unhandled case in print_f64")
         return
     }

@@ -106,6 +106,7 @@ Token :: struct {
         SCOPE_MODULE
         SCOPE_EXPORT
         STATIC_IF
+        ENTRY_POINT
         
         ARRAY_OF
         DYNAMIC_ARRAY_OF
@@ -129,65 +130,66 @@ create_keyword_table :: (keywords: []struct {keyword: string token: Token.Tag}) 
 }
 
 keyword_table := #run create_keyword_table(.[
-    .{"s8",  .S8}, 
-    .{"s16", .S16}, 
-    .{"s32", .S32}, 
-    .{"s64", .S64}, 
-    .{"u8",  .U8}, 
-    .{"u16", .U16}, 
-    .{"u32", .U32}, 
-    .{"u64", .U64},
-    .{"f32", .F32}, 
-    .{"f64", .F64},
-    .{"bool", .BOOL}, 
-    .{"string", .STRING}, 
-    .{"type", .TYPE}, 
-    .{"struct", .STRUCT}, 
-    .{"union", .UNION}, 
-    .{"enum", .ENUM}, 
+    .{"s8",         .S8}, 
+    .{"s16",        .S16}, 
+    .{"s32",        .S32}, 
+    .{"s64",        .S64}, 
+    .{"u8",         .U8}, 
+    .{"u16",        .U16}, 
+    .{"u32",        .U32}, 
+    .{"u64",        .U64},
+    .{"f32",        .F32}, 
+    .{"f64",        .F64},
+    .{"bool",       .BOOL}, 
+    .{"string",     .STRING}, 
+    .{"type",       .TYPE}, 
+    .{"struct",     .STRUCT}, 
+    .{"union",      .UNION}, 
+    .{"enum",       .ENUM}, 
     .{"enum_flags", .ENUM_FLAGS}, 
-    .{"Context", .CONTEXT_TYPE}, 
+    .{"Context",    .CONTEXT_TYPE}, 
     
-    .{"defer", .DEFER}, 
-    .{"if", .IF}, 
-    .{"else", .ELSE}, 
-    .{"case", .CASE}, 
-    .{"for", .FOR}, 
-    .{"while", .WHILE}, 
-    .{"or", .OR}, 
-    .{"break", .BREAK}, 
-    .{"continue", .CONTINUE}, 
-    .{"remove", .REMOVE}, 
-    .{"return", .RETURN},
+    .{"defer",        .DEFER}, 
+    .{"if",           .IF}, 
+    .{"else",         .ELSE}, 
+    .{"case",         .CASE}, 
+    .{"for",          .FOR}, 
+    .{"while",        .WHILE}, 
+    .{"or",           .OR}, 
+    .{"break",        .BREAK}, 
+    .{"continue",     .CONTINUE}, 
+    .{"remove",       .REMOVE}, 
+    .{"return",       .RETURN},
     .{"push_context", .PUSH_CONTEXT}, 
      
-    .{"using", .USING}, 
-    .{"cast", .CAST}, 
-    .{"size_of", .SIZE_OF}, 
-    .{"type_of", .TYPE_OF}, 
-    .{"type_info", .TYPE_INFO}, 
+    .{"using",       .USING}, 
+    .{"cast",        .CAST}, 
+    .{"size_of",     .SIZE_OF}, 
+    .{"type_of",     .TYPE_OF}, 
+    .{"type_info",   .TYPE_INFO}, 
     .{"is_constant", .IS_CONSTANT}, 
     
     .{"context", .CONTEXT}, 
-    .{"true", .TRUE},
-    .{"false", .FALSE}, 
-    .{"null", .NULL}, 
+    .{"true",    .TRUE},
+    .{"false",   .FALSE}, 
+    .{"null",    .NULL}, 
     
-    .{"#import", .IMPORT}, 
-    .{"#load", .LOAD}, 
-    .{"#run", .RUN}, 
-    .{"#must", .MUST}, 
-    .{"#through", .THROUGH}, 
-    .{"#add_context", .ADD_CONTEXT}, 
-    .{"#exteral", .EXTERNAL}, 
-    .{"#c_call", .C_CALL}, 
-    .{"#compiler", .COMPILER}, 
-    .{"#intrinsic", .INTRINSIC}, 
-    .{"#pack", .PACK}, 
-    .{"#complete", .COMPLETE}, 
+    .{"#import",       .IMPORT}, 
+    .{"#load",         .LOAD}, 
+    .{"#run",          .RUN}, 
+    .{"#must",         .MUST}, 
+    .{"#through",      .THROUGH}, 
+    .{"#add_context",  .ADD_CONTEXT}, 
+    .{"#external",     .EXTERNAL}, 
+    .{"#c_call",       .C_CALL}, 
+    .{"#compiler",     .COMPILER}, 
+    .{"#intrinsic",    .INTRINSIC}, 
+    .{"#pack",         .PACK}, 
+    .{"#complete",     .COMPLETE}, 
     .{"#scope_module", .SCOPE_MODULE}, 
     .{"#scope_export", .SCOPE_EXPORT}, 
-    .{"#if", .STATIC_IF}
+    .{"#if",           .STATIC_IF}, 
+    .{"#entry_point",  .ENTRY_POINT}
 ])
 
 lex_string :: (file_id_: s32, s: string) -> (#must success: bool, #must tokens: [..]Token) {
@@ -258,8 +260,10 @@ lex_single_token :: (using lexer: *Lexer) -> (#must success: bool, #must token: 
         token.tag = .INT_LITERAL
         
         while remaining {
-            if remaining[0] == '_'
+            if remaining[0] == '_' {
+                remaining = remaining[1..]
                 continue;
+            }
             
             digit, valid := get_digit(remaining[0], base)
             
@@ -290,13 +294,17 @@ lex_single_token :: (using lexer: *Lexer) -> (#must success: bool, #must token: 
             }
             
             while remaining {
-                if remaining[0] == '_'
+                if remaining[0] == '_' {
+                    remaining = remaining[1..]
                     continue;
+                }
                 
                 digit, valid := get_digit(remaining[0], 10)
                 
                 if !valid
                     break;
+
+                remaining = remaining[1..]
             }
             
             if remaining && remaining[0] == 'e' {
@@ -321,13 +329,17 @@ lex_single_token :: (using lexer: *Lexer) -> (#must success: bool, #must token: 
             
             
             while remaining {
-                if remaining[0] == '_'
+                if remaining[0] == '_' {
+                    remaining = remaining[1..]
                     continue;
+                }
                 
                 digit, valid := get_digit(remaining[0], 10)
                 
                 if !valid
                     break;
+
+                remaining = remaining[1..]
             }
         }
         
@@ -606,9 +618,14 @@ lex_single_token :: (using lexer: *Lexer) -> (#must success: bool, #must token: 
             if remaining.count >= 2 {
                 if remaining[1] == 'x' {
                     remaining = remaining[2..]
+                    
+                    while remaining && remaining[0] == '_'
+                        remaining = remaining[1..]
+                    
                     if !ensure_token_continues(lexer, token.start_offset, "a hexadecimal value")
                         return false, .{}
-                     
+                    
+                    
                     digit, valid := get_digit(remaining[0], 16)
                     
                     if !valid {
@@ -620,6 +637,10 @@ lex_single_token :: (using lexer: *Lexer) -> (#must success: bool, #must token: 
                     read_number(lexer, *token, 16)
                 } else if remaining[1] == 'b' {
                     remaining = remaining[2..]
+                    
+                    while remaining && remaining[0] == '_'
+                        remaining = remaining[1..]
+                    
                     if !ensure_token_continues(lexer, token.start_offset, "a binary value")
                         return false, .{}
                         
@@ -709,9 +730,9 @@ lex_single_token :: (using lexer: *Lexer) -> (#must success: bool, #must token: 
             remaining = remaining[1..]
         
             while remaining &&
-                remaining[0] == '#' || remaining[0] == '_' || 
+                (remaining[0] == '#' || remaining[0] == '_' || 
                 ('0' <= remaining[0] && remaining[0] <= '9') || 
-                ('A' <= (remaining[0] & cast() ~0x20) && (remaining[0] & cast() ~0x20) <= 'Z') {
+                ('A' <= (remaining[0] & cast() ~0x20) && (remaining[0] & cast() ~0x20) <= 'Z')) {
                     remaining = remaining[1..]
             }
             
@@ -732,7 +753,7 @@ lex_single_token :: (using lexer: *Lexer) -> (#must success: bool, #must token: 
             }
         else
             token.end_offset = token.start_offset + 1
-            report_error(token, "Unkown character")
+            report_error(token, "Unkown character (%)", remaining[0])
             return false, .{}
     }
     
@@ -773,20 +794,15 @@ remove_whitespace_and_comments :: (s: string) -> string {
                 if remaining[1] == '/' {
                     remaining = remove_line(remaining[2..])
                 } else if remaining[1] == '*' {
-                    remaining = remaining
+                    remaining = remaining[2..]
                     
                     block_comment_count := 1
                     
                     while remaining {
-                        if remaining.count < 2 {
-                            remaining = ""
-                            break
-                        }
-                        
-                        if remaining[0..1] == "/*" {
+                        if begins_with(remaining, "/*") {
                             block_comment_count += 1
                             remaining = remaining[2..]
-                        } else if remaining[0..1] == "*/" {
+                        } else if begins_with(remaining, "*/") {
                             block_comment_count -= 1
                             remaining = remaining[2..]
                             if !block_comment_count
