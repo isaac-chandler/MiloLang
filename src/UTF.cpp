@@ -63,7 +63,7 @@ u8 *isInvalidUtf8(String string) {
 		else if (count == 2) {
 			TRAILING_ERROR(1);
 
-			if ((string.characters[0] & 0b000'1111'0) == 0) reinterpret_cast<u8 *>(&string.characters[0]); // The encoding is overlong if the 4msb are 0
+			if ((string.characters[0] & 0b000'1111'0) == 0) return reinterpret_cast<u8 *>(&string.characters[0]); // The encoding is overlong if the 4msb are 0
 		}
 		else if (count == 3) {
 			TRAILING_ERROR(1);
@@ -82,7 +82,7 @@ u8 *isInvalidUtf8(String string) {
 
 			u32 utf32 = utf32Build(reinterpret_cast<u8 *>(string.characters), 4);
 
-			if (!UTF8_IN_RANGE(utf32, 4)) reinterpret_cast<u8 *>(&string.characters[0]); // Out of Unicode range
+			if (!UTF8_IN_RANGE(utf32, 4)) return reinterpret_cast<u8 *>(&string.characters[0]); // Out of Unicode range
 		}
 		else {
 			return reinterpret_cast<u8 *>(&string.characters[0]);
@@ -134,6 +134,7 @@ u64 utf8Len(u8 *string) {
 	return len;
 }
 
+#if BUILD_WINDOWS
 static u64 utf8LenForUtf16(u8 *string) {
 	assert(!isInvalidUtf8(string));
 
@@ -164,6 +165,7 @@ static u64 utf8LenForUtf16(String string) {
 
 	return len;
 }
+#endif
 
 u32 *utf8ToUtf32(u8 *string) {
 	assert(!isInvalidUtf8(string));

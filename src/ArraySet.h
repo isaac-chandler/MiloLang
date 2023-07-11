@@ -3,17 +3,17 @@
 #include "Array.h"
 #include "Basic.h"
 
-template <class ArrayType, typename T>
-class _ArraySet {
+template <typename T>
+class ArraySet {
 public:
-	ArrayType array;
+	Array<T> array;
 
 	T &first() {
 		return array[0];
 	}
 
-	_ArraySet() {}
-	_ArraySet(std::initializer_list<T> init) : array(init) {}
+	ArraySet() {}
+	ArraySet(std::initializer_list<T> init) : array(init) {}
 
 	bool empty() const {
 		return array.count == 0;
@@ -52,12 +52,12 @@ public:
 		return array[index];
 	}
 
-	const u32 size() const {
+	u32 size() const {
 		return array.count;
 	}
 
 	void resize(u32 size) {
-		array.resize();
+		array.resize(size);
 	}
 
 	void clear() {
@@ -92,8 +92,7 @@ public:
 		array.unordered_remove(&array[index]);
 	}
 
-	template <typename Other>
-	bool operator==(const _ArraySet<Other, T> &other) {
+	bool operator==(const ArraySet<T> &other) {
 		if (other.size() != size())
 			return false;
 
@@ -101,8 +100,7 @@ public:
 	}
 
 
-	template <typename Other>
-	bool containsAll(const _ArraySet<Other, T> &other) {
+	bool containsAll(const ArraySet<T> &other) {
 		for (const T &o : other) {
 			if (!contains(o)) return false;
 		}
@@ -110,8 +108,7 @@ public:
 		return true;
 	}
 
-	template <typename Other>
-	bool addAll(const _ArraySet<Other, T> &other) {
+	bool addAll(const ArraySet<T> &other) {
 		bool change = false;
 
 		for (const T &o : other) {
@@ -122,8 +119,7 @@ public:
 	}
 
 
-	template <typename Other>
-	bool retainAll(const _ArraySet<Other, T> &other) {
+	bool retainAll(const ArraySet<T> &other) {
 		bool change = false;
 
 		for (u32 i = 0; i < array.size(); i++) {
@@ -134,11 +130,10 @@ public:
 			}
 		}
 
-		return true;
+		return change;
 	}
 
-	template <typename Other>
-	bool removeAll(const _ArraySet<Other, T> &other) {
+	bool removeAll(const ArraySet<T> &other) {
 		bool change = false;
 
 		for (const T &o : other) {
@@ -153,9 +148,8 @@ public:
 		return change;
 	}
 
-	template <typename Other>
-	_ArraySet(const _ArraySet<Other, T> &other) : array(other.size()) {
-		memcpy(array.storage, other.storage, sizeof(T) * array.size());
+	ArraySet(const ArraySet<T> &other) : array(other.array.count) {
+		memcpy(array.storage, other.array.storage, sizeof(T) * array.count);
 	}
 
 	void free() {
@@ -163,6 +157,3 @@ public:
 	}
 
 };
-
-template <typename T>
-using ArraySet = _ArraySet<Array<T>, T>;

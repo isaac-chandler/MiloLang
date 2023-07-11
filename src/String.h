@@ -12,9 +12,9 @@ struct String {
 	char *characters;
 	u32 length;
 
-	String() : length(0), characters(0) {};
+	String() : characters(0), length(0) {};
 	String(const char *cString);
-	String(char *characters, u32 length) : length(length), characters(characters) {};
+	String(char *characters, u32 length) : characters(characters), length(length) {};
 	String(const char *begin, const char *end);
 
 

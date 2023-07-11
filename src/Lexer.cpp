@@ -181,7 +181,7 @@ static u32 readCharacter(LexerFile *file, bool *endOfFile, bool silent = false) 
 	}
 }
 
-static void undoReadChar(LexerFile *lexer, u32 character) {
+static void undoReadChar(LexerFile *lexer) {
 	lexer->bytesRemaining += lexer->location.locationInMemory - lexer->undoLocation.locationInMemory;
 	lexer->location = lexer->undoLocation;
 }
@@ -238,7 +238,7 @@ whitespace:
 			return TokenT::tokenType;                           \
 		}                                                       \
 		else {                                                  \
-			undoReadChar(this, c);                              \
+			undoReadChar(this);                              \
 			return TOKEN((character));                          \
 		}                                                       \
 	}                                                           \
@@ -252,7 +252,7 @@ whitespace:
 			return TokenT::tokenType;               \
 		}                                           \
 		else {                                      \
-			undoReadChar(this, c);                  \
+			undoReadChar(this);                  \
 			return TOKEN((character));              \
 		}                                           \
 	}                                               \
@@ -288,12 +288,12 @@ whitespace:
 					return TokenT::SHIFT_RIGHT_EQUALS;
 				}
 				else {
-					undoReadChar(this, c);
+					undoReadChar(this);
 					return TokenT::SHIFT_RIGHT;
 				}
 			}
 			else {
-				undoReadChar(this, c);
+				undoReadChar(this);
 				return TOKEN('>');
 			}
 		case '<':
@@ -309,12 +309,12 @@ whitespace:
 					return TokenT::SHIFT_LEFT_EQUALS;
 				}
 				else {
-					undoReadChar(this, c);
+					undoReadChar(this);
 					return TokenT::SHIFT_LEFT;
 				}
 			}
 			else {
-				undoReadChar(this, c);
+				undoReadChar(this);
 				return TOKEN('<');
 			}
 		case '-':
@@ -330,7 +330,7 @@ whitespace:
 				return TokenT::DOUBLE_DASH;
 			}
 			else {
-				undoReadChar(this, c);
+				undoReadChar(this);
 				return TOKEN('-');
 			}
 		case '/':
@@ -415,7 +415,7 @@ charEscape:
 			return TokenT::INT_LITERAL;
 		}
 		else {
-			undoReadChar(this, c);
+			undoReadChar(this);
 			return TokenT::INT_LITERAL;
 		}
 	}
@@ -457,7 +457,7 @@ charEscape:
 	}
 	else if (c >= '0' && c <= '9') {
 		base = 10;
-		undoReadChar(this, c);
+		undoReadChar(this);
 		goto charNumericEscape;
 	}
 	else if (c == 'u' || c == 'x') {
@@ -543,7 +543,7 @@ stringEscape:
 	}
 	else if (c >= '0' && c <= '9') {
 		base = 10;
-		undoReadChar(this, c);
+		undoReadChar(this);
 		goto stringNumericEscape;
 	}
 	else {
@@ -587,7 +587,7 @@ zero:
 		goto integerLiteral;
 	}
 	else {
-		undoReadChar(this, c);
+		undoReadChar(this);
 		return TokenT::INT_LITERAL;
 	}
 
@@ -602,7 +602,7 @@ dot:
 		return TokenT::DOUBLE_DOT;
 	}
 	else {
-		undoReadChar(this, c);
+		undoReadChar(this);
 		return TOKEN('.');
 	}
 
@@ -617,7 +617,7 @@ slash:
 		case '=':
 			return TokenT::DIVIDE_EQUALS;
 		default:
-			undoReadChar(this, c);
+			undoReadChar(this);
 			return TOKEN('/');
 	}
 
@@ -677,7 +677,7 @@ identifier:
 		goto identifier;
 	}
 	else {
-		undoReadChar(this, c);
+		undoReadChar(this);
 
 
 		for (auto &keyword : keywords) {
@@ -720,7 +720,7 @@ integerLiteral:
 		goto exponentSign;
 	}
 	else {
-		undoReadChar(this, c);
+		undoReadChar(this);
 		return TokenT::INT_LITERAL;
 	}
 
@@ -751,7 +751,7 @@ decimalPointFirst:
 		return TokenT::INT_LITERAL;
 	}
 	else {
-		undoReadChar(this, c);
+		undoReadChar(this);
 		return TokenT::FLOAT_LITERAL;
 	}
 
@@ -777,7 +777,7 @@ decimalPoint:
 		goto exponentSign;
 	}
 	else {
-		undoReadChar(this, c);
+		undoReadChar(this);
 		return TokenT::FLOAT_LITERAL;
 	}
 
@@ -829,7 +829,7 @@ exponent:
 		goto exponentDigit;
 	}
 	else {
-		undoReadChar(this, c);
+		undoReadChar(this);
 		return TokenT::FLOAT_LITERAL;
 	}
 
@@ -923,7 +923,7 @@ whitespaceAlreadyRead:
 			return;                                             \
 		}                                                       \
 		else {                                                  \
-			undoReadChar(this, c);                              \
+			undoReadChar(this);                              \
 			token.end = location;                               \
 			token.type = TOKEN((character));                    \
 			return;                                             \
@@ -942,7 +942,7 @@ whitespaceAlreadyRead:
 			return;                           \
 		}                                     \
 		else {                                \
-			undoReadChar(this, c);            \
+			undoReadChar(this);            \
 			token.end = location;             \
 			token.type = TOKEN((character));  \
 			return;                           \
@@ -987,14 +987,14 @@ whitespaceAlreadyRead:
 					return;
 				}
 				else {
-					undoReadChar(this, c);
+					undoReadChar(this);
 					token.end = location;
 					token.type = TokenT::SHIFT_RIGHT;
 					return;
 				}
 			}
 			else {
-				undoReadChar(this, c);
+				undoReadChar(this);
 				token.end = location;
 				token.type = TOKEN('>');
 				return;
@@ -1017,14 +1017,14 @@ whitespaceAlreadyRead:
 					return;
 				}
 				else {
-					undoReadChar(this, c);
+					undoReadChar(this);
 					token.end = location;
 					token.type = TokenT::SHIFT_LEFT;
 					return;
 				}
 			}
 			else {
-				undoReadChar(this, c);
+				undoReadChar(this);
 				token.end = location;
 				token.type = TOKEN('<');
 				return;
@@ -1049,7 +1049,7 @@ whitespaceAlreadyRead:
 				return;
 			}
 			else {
-				undoReadChar(this, c);
+				undoReadChar(this);
 				token.end = location;
 				token.type = TOKEN('-');
 				return;
@@ -1173,7 +1173,7 @@ charEscape:
 			return;
 		}
 		else {
-			undoReadChar(this, c);
+			undoReadChar(this);
 			token.unsignedValue = '\\';
 			token.end = location;
 			token.type = TokenT::INT_LITERAL;
@@ -1237,7 +1237,7 @@ charEscape:
 		token.unsignedValue = c - '0';
 		escapeMaxValue = UINT64_MAX;
 		escapeIsUnicode = false;
-		undoReadChar(this, c);
+		undoReadChar(this);
 		goto charNumericEscape;
 	}
 	else if (c == 'u') {
@@ -1399,7 +1399,7 @@ stringEscape:
 		token.unsignedValue = c - '0';
 		escapeMaxValue = 255;
 		escapeIsUnicode = false;
-		undoReadChar(this, c);
+		undoReadChar(this);
 		goto stringNumericEscape;
 	}
 	else if (c == 'u') {
@@ -1505,7 +1505,7 @@ zero:
 		goto integerLiteral;
 	}
 	else {
-		undoReadChar(this, c);
+		undoReadChar(this);
 		token.flags |= LITERAL_IS_DECIMAL;
 		token.end = location;
 		token.type = TokenT::INT_LITERAL;
@@ -1529,7 +1529,7 @@ dot:
 		return;
 	}
 	else {
-		undoReadChar(this, c);
+		undoReadChar(this);
 		token.end = location;
 		token.type = TOKEN('.');
 		return;
@@ -1570,7 +1570,7 @@ slash:
 			token.type = TokenT::DIVIDE_EQUALS;
 			return;
 		default:
-			undoReadChar(this, c);
+			undoReadChar(this);
 			token.end = location;
 			token.type = TOKEN('/');
 			return;
@@ -1659,7 +1659,7 @@ identifier:
 		goto identifier;
 	}
 	else {
-		undoReadChar(this, c);
+		undoReadChar(this);
 		
 		token.end = location;
 		
@@ -1708,7 +1708,7 @@ integerLiteral:
 		goto exponentSign;
 	}
 	else {
-		undoReadChar(this, c);
+		undoReadChar(this);
 		token.end = location;
 		token.type = TokenT::INT_LITERAL;
 
@@ -1757,7 +1757,7 @@ decimalPointFirst:
 		return;
 	}
 	else {
-		undoReadChar(this, c);
+		undoReadChar(this);
 		token.end = location;
 		token.type = TokenT::FLOAT_LITERAL; // @Incomplete: bounds check float literals
 		token.floatValue = bigInt.getDouble() *          // @Improvement, do this calculation in such a way that we get the maximum possible precision for float literals
@@ -1789,7 +1789,7 @@ decimalPoint:
 		goto exponentSign;
 	}
 	else {
-		undoReadChar(this, c);
+		undoReadChar(this);
 		token.end = location;
 		token.type = TokenT::FLOAT_LITERAL; // @Incomplete: bounds check float literals
 		token.floatValue = bigInt.getDouble() *          // @Improvement, do this calculation in such a way that we get the maximum possible precision for float literals
@@ -1880,7 +1880,7 @@ exponent:
 		goto exponentDigit;
 	}
 	else {
-		undoReadChar(this, c);
+		undoReadChar(this);
 		token.end = location;
 		token.type = TokenT::FLOAT_LITERAL; // @Incomplete: bounds check float literals
 		token.floatValue = bigInt.getDouble() *          // @Improvement, do this calculation in such a way that we get the maximum possible precision for float literals
@@ -1895,18 +1895,26 @@ exponent:
 bool LexerFile::open(FileInfo *file) {
 	PROFILE_FUNC();
 
+	file->directoryId = file->module->moduleId + 2;
+	file->name = file->path;
 	if (file->module->name.length) {
 		if (file->path.length) {
-			file->path = msprintf("%s/modules/%.*s/%.*s", modulePath, STRING_PRINTF(file->module->name), STRING_PRINTF(file->path));
+			file->path = msprintf("%s/%.*s/%.*s", modulePath, STRING_PRINTF(file->module->name), STRING_PRINTF(file->path));
 		}
 		else {
-			if (directoryExists(mprintf("%s/modules/%.*s", modulePath, STRING_PRINTF(file->module->name)))) {
-				file->path = msprintf("%s/modules/%.*s/module.milo", modulePath, STRING_PRINTF(file->module->name));
+			if (directoryExists(mprintf("%s/%.*s", modulePath, STRING_PRINTF(file->module->name)))) {
+				file->path = msprintf("%s/%.*s/module.milo", modulePath, STRING_PRINTF(file->module->name));
+				file->name = "module.milo";
 			}
 			else {
-				file->path = msprintf("%s/modules/%.*s.milo", modulePath, STRING_PRINTF(file->module->name));
+				file->directoryId = 1;
+				file->path = msprintf("%s/%.*s.milo", modulePath, STRING_PRINTF(file->module->name));
+				file->name = msprintf("%.*s.milo", STRING_PRINTF(file->module->name));
 			}
 		}
+	}
+	else {
+		file->directoryId = 0;
 	}
 
 	auto pathString = toCString(file->path);
@@ -1932,7 +1940,12 @@ bool LexerFile::open(FileInfo *file) {
 	text = static_cast<char *>(malloc(size));
 	file->data = text;
 	
-	fread(file->data, size, 1, handle);
+	int readCount = fread(file->data, size, 1, handle);
+
+	if (readCount != 1) {
+		reportError("Error: Failed to read file: %.*s", STRING_PRINTF(file->path));
+		return false;
+	}
 
 	fclose(handle);
 

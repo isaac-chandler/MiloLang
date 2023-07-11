@@ -79,7 +79,7 @@ struct Type {
 
 	llvm::Type *llvmType = nullptr;
 
-	union Symbol *symbol = nullptr;
+	void *symbol = nullptr;
 	u32 physicalStorage;
 
 	struct Expr *defaultValue = nullptr;
@@ -94,12 +94,27 @@ struct TypePointer : Type {
 	Type *pointerTo;
 };
 
+enum class SystemVCallingType : u8 {
+	UNKNOWN,
+	EMPTY, 
+	INT, 
+	FLOAT, 
+	INT_INT, 
+	INT_FLOAT, 
+	FLOAT_INT,
+	FLOAT_FLOAT, 
+	MEMORY
+};
+
 struct TypeStruct : Type {
 	struct Block *enclosingScope; // This field is only used for debug info for struct, union, enum, enum_flags	
 	Block constants;
 	Block members;
 	Array<TypeStruct *> polymorphs;
+	SystemVCallingType systemVCallingType;
 };
+
+SystemVCallingType getSystemVCallingType(Type *type);
 
 struct TypeEnum : TypeStruct {
 	Type *integerType;
@@ -131,6 +146,11 @@ struct TypeFunction : Type {
 	u32 returnCount;
 	bool isVarargs;
 };
+
+#if BUILD_LINUX
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+#endif
 
 inline Type TYPE_S8 = { 1, 1, "s8", 2, TYPE_INTEGER_IS_SIGNED, TypeFlavor::INTEGER };
 inline Type TYPE_S16 = { 2, 2, "s16", 3, TYPE_INTEGER_IS_SIGNED, TypeFlavor::INTEGER };
@@ -168,6 +188,9 @@ inline Type TYPE_OVERLOAD_SET         = { 8, 8, "<overload set>",         83, TY
 inline Type TYPE_POLYMORPHIC_FUNCTION = { 8, 8, "<polymorhpic function>", 89, TYPE_IS_INTERNAL, TypeFlavor::AUTO_CAST };
 inline TypeStruct TYPE_CONTEXT        = { 0, 0, "context",                0, 0, TypeFlavor::STRUCT };
 
+#if BUILD_LINUX
+#pragma GCC diagnostic pop
+#endif
 
 inline Type *TYPE_VOID_POINTER;
 inline Type *TYPE_U8_POINTER;

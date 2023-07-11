@@ -1,4 +1,5 @@
 #include "Basic.h"
+#include "IrGenerator.h"
 #include "IrRunner.h"
 #include <dyncall.h>
 #include <dyncall_signature.h>
@@ -6,6 +7,8 @@
 #include "Infer.h"
 #include "CompilerMain.h"
 #include "Error.h"
+#include "TypeTable.h"
+#include "dyncall_args.h"
 #include <math.h>
 
 struct StackNode {
@@ -62,10 +65,148 @@ void freeStack(VMState *state, u32 count) {
 	}
 }
 
+struct MemoryDcAggr {
+	DCaggr *aggr;
+	u32 size;
+};
 
+DCaggr *emptyDcAggr;
+DCaggr *intDcAggr[16];
+DCaggr *float4DcAggr;
+DCaggr *float8DcAggr;
+DCaggr *float12DcAggr;
+DCaggr *float16DcAggr;
+DCaggr *floatIntDcAggr[8]; // Can have a packed struct with a weird number of int bytes after a double
+DCaggr *intFloat12DcAggr;
+DCaggr *intFloat16DcAggr;
+Array<MemoryDcAggr> memoryDcAggr;
+
+DCaggr *getDcAggr(Type *type) {
+	switch (getSystemVCallingType(type)) {
+		case SystemVCallingType::EMPTY:
+			if (!emptyDcAggr) {
+				emptyDcAggr = dcNewAggr(0, 1);
+				dcCloseAggr(emptyDcAggr);
+			}
+			return emptyDcAggr;
+		case SystemVCallingType::INT:
+		case SystemVCallingType::INT_INT:
+			if (!intDcAggr[type->size]) {
+				auto aggr = intDcAggr[type->size] = dcNewAggr(1, type->size);
+				
+				if (type->size % 8 == 0) {
+					dcAggrField(aggr, DC_SIGCHAR_ULONGLONG, 0, type->size / 8);
+				}
+				else if (type->size % 4 == 0) {
+					dcAggrField(aggr, DC_SIGCHAR_UINT, 0, type->size / 4);
+				}
+				else if (type->size % 2 == 0) {
+					dcAggrField(aggr, DC_SIGCHAR_USHORT, 0, type->size / 2);
+				}
+				else {
+					dcAggrField(aggr, DC_SIGCHAR_UCHAR, 0, type->size);
+				}
+				dcCloseAggr(aggr);
+			}
+			return intDcAggr[type->size];
+		case SystemVCallingType::FLOAT:
+			if (type->size == 4) {
+				if (!float4DcAggr) {
+					float4DcAggr = dcNewAggr(1, 4);
+					dcAggrField(float4DcAggr, DC_SIGCHAR_FLOAT, 0, 1);
+					dcCloseAggr(float4DcAggr);
+				}
+				return float4DcAggr;
+			} else {
+				if (!float8DcAggr) {
+					float8DcAggr = dcNewAggr(1, 8);
+					dcAggrField(float8DcAggr, DC_SIGCHAR_DOUBLE, 0, 1);
+					dcCloseAggr(float8DcAggr);
+				}
+				return float8DcAggr;
+			}
+		case SystemVCallingType::INT_FLOAT:
+			if (type->size == 12) {
+				if (!intFloat12DcAggr) {
+					intFloat12DcAggr = dcNewAggr(2, 12);
+					dcAggrField(intFloat12DcAggr, DC_SIGCHAR_UINT, 0, 2);
+					dcAggrField(intFloat12DcAggr, DC_SIGCHAR_FLOAT, 8, 1);
+					dcCloseAggr(intFloat12DcAggr);
+				}
+				return intFloat12DcAggr;
+			} else {
+				if (!intFloat16DcAggr) {
+					intFloat16DcAggr = dcNewAggr(2, 16);
+					dcAggrField(intFloat16DcAggr, DC_SIGCHAR_UINT, 0, 2);
+					dcAggrField(intFloat16DcAggr, DC_SIGCHAR_DOUBLE, 8, 1);
+					dcCloseAggr(intFloat16DcAggr);
+				}
+				return intFloat16DcAggr;
+			}
+		case SystemVCallingType::FLOAT_INT:
+			if (!floatIntDcAggr[type->size - 8]) {
+				auto aggr = floatIntDcAggr[type->size - 8] = dcNewAggr(2, type->size);
+				dcAggrField(aggr, DC_SIGCHAR_DOUBLE, 0, 1);
+				dcAggrField(aggr, DC_SIGCHAR_UCHAR, 8, type->size - 8);
+				dcCloseAggr(aggr);
+			}
+			return floatIntDcAggr[type->size - 8];
+		case SystemVCallingType::FLOAT_FLOAT:
+			if (type->size == 12) {
+				if (!float12DcAggr) {
+					float12DcAggr = dcNewAggr(1, 12);
+					dcAggrField(float12DcAggr, DC_SIGCHAR_FLOAT, 0, 3);
+					dcCloseAggr(float12DcAggr);
+				}
+				return float12DcAggr;
+			} else {
+				if (!float16DcAggr) {
+					float16DcAggr = dcNewAggr(1, 16);
+					dcAggrField(float16DcAggr, DC_SIGCHAR_DOUBLE, 0, 2);
+					dcCloseAggr(float16DcAggr);
+				}
+				return float16DcAggr;
+			}
+		case SystemVCallingType::MEMORY: {
+			for (auto &aggr : memoryDcAggr) {
+				if (aggr.size == type->size)
+					return aggr.aggr;
+			}
+			DCaggr *aggr = dcNewAggr(1 + type->size >= 3, type->size);
+			if (type->size % 8 == 0) {
+				dcAggrField(aggr, DC_SIGCHAR_ULONGLONG, 0, type->size / 8);
+			}
+			else if (type->size % 4 == 0) {
+				dcAggrField(aggr, DC_SIGCHAR_UINT, 0, type->size / 4);
+			}
+			else if (type->size % 2 == 0) {
+				dcAggrField(aggr, DC_SIGCHAR_USHORT, 0, type->size / 2);
+			}
+			else {
+				dcAggrField(aggr, DC_SIGCHAR_UCHAR, 0, type->size);
+			}
+
+			if (type->size >= 3) {
+				// Enforce this aggr being passed in memory with an unaligned field
+				dcAggrField(aggr, DC_SIGCHAR_USHORT, 1, 1);
+			}
+
+			dcCloseAggr(aggr);
+			memoryDcAggr.add({aggr, type->size});
+			return aggr;
+		}
+		case SystemVCallingType::UNKNOWN:
+		default:
+			assert(false);
+			return nullptr;
+	}
+}
 
 char getSigChar(Type *type) {
-	if (type == &TYPE_VOID) {
+	if (type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::ARRAY || type->flavor == TypeFlavor::STRING) {
+		return DC_SIGCHAR_AGGREGATE;
+	}
+	else if (type == &TYPE_VOID) {
 		return DC_SIGCHAR_VOID;
 	}
 	else if (type == &TYPE_F32) {
@@ -87,7 +228,8 @@ char getSigChar(Type *type) {
 		return DC_SIGCHAR_ULONGLONG;
 	}
 	else {
-		return DC_SIGCHAR_POINTER;
+		assert(false);
+		return DC_SIGCHAR_CHAR;
 	}
 
 }
@@ -163,7 +305,6 @@ void createRuntimeValue(Expr *value, void *dest) {
 	else if (value->flavor == ExprFlavor::STRUCT_LITERAL) {
 		auto literal = static_cast<ExprStructLiteral *>(value);
 
-		auto arrayType = static_cast<TypeArray *>(value->type);
 		auto store = static_cast<u8 *>(dest);
 
 		for (u32 i = 0; i < literal->initializers.count; i++) {
@@ -211,30 +352,6 @@ void deinitVMState(VMState *state) {
 
 static ExprRun *runningDirective;
 
-void getDcParameter(u64 *dest, Type *type, DCArgs *dcArgs) {
-	if (type == &TYPE_F32) {
-		*reinterpret_cast<float *>(dest) = dcbArgFloat(dcArgs);
-	}
-	else if (type == &TYPE_F64) {
-		*reinterpret_cast<double *>(dest) = dcbArgDouble(dcArgs);
-	}
-	else if (type->size == 1) {
-		*dest = dcbArgUChar(dcArgs);
-	}
-	else if (type->size == 2) {
-		*dest = dcbArgUShort(dcArgs);
-	}
-	else if (type->size == 4) {
-		*dest = dcbArgUInt(dcArgs);
-	}
-	else if (type->size == 8) {
-		*dest = dcbArgULongLong(dcArgs);
-	}
-	else {
-		*reinterpret_cast<void **>(dest) = dcbArgPointer(dcArgs);
-	}
-}
-
 void runFunction(VMState *state, ExprFunction *expr, Ir *caller, DCArgs *dcArgs, u64 *callerStack) {
 	auto callerArguments = static_cast<FunctionCall *>(caller->data);
 
@@ -253,7 +370,7 @@ void runFunction(VMState *state, ExprFunction *expr, Ir *caller, DCArgs *dcArgs,
 			name->flavor = ExprFlavor::STRING_LITERAL;
 			name->start = {};
 			name->end = {};
-			name->string = *reinterpret_cast<String *>(callerStack[callerArguments->args[1].number]);
+			name->string = *reinterpret_cast<String *>(callerStack[callerArguments->arguments[1]]);
 			name->type = &TYPE_STRING;
 
 			auto load = new ExprLoad;
@@ -269,7 +386,7 @@ void runFunction(VMState *state, ExprFunction *expr, Ir *caller, DCArgs *dcArgs,
 			inferInput.add(InferQueueJob(import, runningDirective->module));
 		}
 		else if (expr->valueOfDeclaration->name == "set_build_options") {
-			auto options = *reinterpret_cast<Build_Options *>(callerStack[callerArguments->args[1].number]);
+			auto options = *reinterpret_cast<Build_Options *>(callerStack[callerArguments->arguments[1]]);
 
 			if (options.backend != Build_Options::Backend::X64 && options.backend != Build_Options::Backend::LLVM) {
 				reportError(caller, "Error: Unrecognized backend %llu in set_build_options", options.backend);
@@ -317,10 +434,10 @@ void runFunction(VMState *state, ExprFunction *expr, Ir *caller, DCArgs *dcArgs,
 			buildOptions = options;
 		}
 		else if (expr->valueOfDeclaration->name == "get_build_options") {
-			*reinterpret_cast<Build_Options *>(callerStack[callerArguments->args[0].number]) = buildOptions;
+			*reinterpret_cast<Build_Options *>(callerStack[caller->dest]) = buildOptions;
 		}
 		else if (expr->valueOfDeclaration->name == "get_build_arguments") {
-			*reinterpret_cast<MiloArray<MiloString> *>(callerStack[callerArguments->args[0].number]) = buildArguments;
+			*reinterpret_cast<MiloArray<MiloString> *>(callerStack[caller->dest]) = buildArguments;
 		}
 		else {
 			reportError(caller,           "Error: Unknown compiler function: %.*s", STRING_PRINTF(expr->valueOfDeclaration->name));
@@ -338,25 +455,41 @@ void runFunction(VMState *state, ExprFunction *expr, Ir *caller, DCArgs *dcArgs,
 	CodeLocation line;
 #endif
 
+	bool returnPointer = returnsViaPointer(static_cast<TypeFunction *>(expr->type));
 	if (dcArgs) {
-		u32 argIndex = 0;
-
-		if (!isStandardSize(getDeclarationType(expr->returns.declarations[0])->size)) {
-			getDcParameter(stack + argIndex++, getDeclarationType(expr->returns.declarations[0]), dcArgs);
-		}
+		// Pointer return is handled by the callback handler
+		// If we are here this is a c call function so there is no context parameter
 
 		for (auto argument : expr->arguments.declarations) {
-			getDcParameter(stack + argIndex++, getDeclarationType(argument), dcArgs);
-		}
+			auto type = getDeclarationType(argument);
 
-		for (u32 i = 0; i < expr->returns.declarations.count; i++) {
-			getDcParameter(stack + argIndex++, getDeclarationType(expr->returns.declarations[i]), dcArgs);
+			if (isStoredByPointer(type)) {
+				u32 allocate = (type->size + 7) / 8;
+				spaceToAllocate += allocate;
+				auto address = allocateStack(state, allocate);
+				dcbArgAggr(dcArgs, address);
+				stack[argument->registerOfStorage] = reinterpret_cast<u64>(address);
+			}
+			else if (type->flavor == TypeFlavor::FLOAT) {
+				*reinterpret_cast<double *>(&stack[argument->registerOfStorage]) = dcbArgDouble(dcArgs);
+			}
+			else {
+				stack[argument->registerOfStorage] = dcbArgULongLong(dcArgs);
+			}
 		}
 	}
 	else {
-		for (u32 i = 0; i < callerArguments->argCount; i++) {
-			stack[i] = callerStack[callerArguments->args[i].number];
+
+		// C call functions will take the other branch of the if so we always have a context register
+		stack[expr->state.contextRegister] = callerStack[callerArguments->arguments[0]];
+
+		for (u32 i = 0; i < expr->arguments.declarations.count; i++) {
+			stack[expr->arguments.declarations[i]->registerOfStorage] = callerStack[callerArguments->arguments[i + 1]];
 		}
+	}
+
+	if (returnPointer) {
+		stack[expr->state.returnPointerRegister] = callerStack[caller->dest];
 	}
 
 	for (u32 i = 0; i < expr->state.ir.count;) {
@@ -433,6 +566,7 @@ if (op.flags & IR_FLOAT_OP) {\
 				else {
 					*reinterpret_cast<float *>(stack + op.dest) = fmod(*reinterpret_cast<float *>(stack + op.a), *reinterpret_cast<float *>(stack + op.b));
 				}
+				break;
 			}
 			else if (op.flags & IR_SIGNED_OP) {
 				s64 a = S_A;
@@ -594,81 +728,62 @@ if (op.flags & IR_FLOAT_OP) {\
 			break;
 		}
 		case IrOp::CALL: {
-			if (op.flags & IR_C_CALL) {
+			auto arguments = static_cast<FunctionCall *>(op.data);
+			if (arguments->function->flags & TYPE_FUNCTION_IS_C_CALL) {
 				auto function = reinterpret_cast<void *>(stack[op.a]);
 
-				dcReset(state->dc);
+				bool pointerReturn = returnsViaPointer(arguments->function);
+				DCaggr *aggrReturn = nullptr;
+				
+				if (pointerReturn) {
+					dcArgPointer(state->dc, (DCpointer)stack[op.dest]);
+				} else if (isStoredByPointer(arguments->function->returnTypes[0])) {
+					aggrReturn = getDcAggr(arguments->function->returnTypes[0]);
+					dcBeginCallAggr(state->dc, aggrReturn);
+				}
 
-				auto arguments = static_cast<FunctionCall *>(op.data);
+				// C call function so no context
 
-				for (u64 i = 0; i < arguments->argCount; i++) {
-					auto type = arguments->args[i].type;
-					auto number = arguments->args[i].number;
+				for (u64 i = 0; i < op.opSize; i++) {
+					auto type = arguments->function->argumentTypes[i];
+					auto number = arguments->arguments[i];
 
-					if (type == &TYPE_F32) {
-						dcArgFloat(state->dc, *reinterpret_cast<float *>(stack + number));
+					if (isStoredByPointer(type)) {
+						dcArgAggr(state->dc, getDcAggr(type), (DCpointer) stack[number]);
 					}
-					else if (type == &TYPE_F64) {
-						dcArgDouble(state->dc, *reinterpret_cast<double *>(stack + number));
-					}
-					else if (type->size == 1) {
-						dcArgChar(state->dc, stack[number] & 0xFF);
-					}
-					else if (type->size == 2) {
-						dcArgShort(state->dc, stack[number] & 0xFF);
-					}
-					else if (type->size == 4) {
-						dcArgInt(state->dc, stack[number] & 0xFFFF'FFFFULL);
-					}
-					else if (type->size == 8) {
-						dcArgLongLong(state->dc, stack[number]);
+					else if (type->flavor == TypeFlavor::FLOAT) {
+						dcArgDouble(state->dc, *(double *)&stack[number]);
 					}
 					else {
-						assert(false);
+						dcArgLongLong(state->dc, stack[number]);
 					}
 				}
 
-				auto type = arguments->returnType;
-
-
-				if (type == &TYPE_VOID || op.opSize == 0) {
+				auto type = arguments->function->returnTypes[0];
+				if (pointerReturn) {
+					dcCallPointer(state->dc, function);
+				} else if (aggrReturn) {
+					dcCallAggr(state->dc, function, aggrReturn, (DCpointer)stack[op.dest]);
+				} else if (type == &TYPE_VOID) {
 					dcCallVoid(state->dc, function);
 				}
 				else if (type == &TYPE_F32) {
-					float val = dcCallFloat(state->dc, function);
-
-					if (op.dest)
-						*reinterpret_cast<float *>(stack + op.dest) = val;
+					*(float *)stack[op.dest] = dcCallFloat(state->dc, function);
 				}
 				else if (type == &TYPE_F64) {
-					double val = dcCallDouble(state->dc, function);
-
-					if (op.dest)
-						*reinterpret_cast<double *>(stack + op.dest) = val;
+					*(double *)stack[op.dest] = dcCallDouble(state->dc, function);
 				}
 				else if (type->size == 1) {
-					char val = dcCallChar(state->dc, function);
-
-					if (op.dest)
-						stack[op.dest] = val;
+					*(char *)stack[op.dest] = dcCallChar(state->dc, function);
 				}
 				else if (type->size == 2) {
-					short val = dcCallShort(state->dc, function);
-
-					if (op.dest)
-						stack[op.dest] = type->flags & TYPE_INTEGER_IS_SIGNED ? (u64) (s64) val : (u64) val;
+					*(short *)stack[op.dest] = dcCallShort(state->dc, function);
 				}
 				else if (type->size == 4) {
-					int val = dcCallInt(state->dc, function);
-
-					if (op.dest)
-						stack[op.dest] = type->flags & TYPE_INTEGER_IS_SIGNED ? (u64) (s64) val : (u64) val;
+					*(int *)stack[op.dest] = dcCallInt(state->dc, function);
 				}
 				else if (type->size == 8) {
-					long long val = dcCallLongLong(state->dc, function);
-					
-					if (op.dest)
-						stack[op.dest] = val;
+					*(long long *)stack[op.dest] = dcCallLongLong(state->dc, function);
 				}
 				else {
 					assert(false);
@@ -680,8 +795,27 @@ if (op.flags & IR_FLOAT_OP) {\
 			break;
 		}
 		case IrOp::RETURN: {
-			if (op.opSize != 0 && caller->opSize != 0) {
-				memcpy(callerStack + caller->dest, stack + op.a, op.opSize);
+			switch (static_cast<SystemVCallingType>(op.opSize)) {
+				case SystemVCallingType::INT:
+				case SystemVCallingType::FLOAT:
+				case SystemVCallingType::INT_INT:
+				case SystemVCallingType::INT_FLOAT:
+				case SystemVCallingType::FLOAT_INT:
+				case SystemVCallingType::FLOAT_FLOAT: {
+					auto returnType = static_cast<Type *>(op.data);
+					if (isStoredByPointer(returnType)) {
+						memcpy(reinterpret_cast<void *>(callerStack[caller->dest]), reinterpret_cast<void *>(stack[op.a]), returnType->size);
+					}
+					else {
+						memcpy(reinterpret_cast<void *>(callerStack[caller->dest]), &stack[op.a], returnType->size);
+					}
+					break;
+				}
+				case SystemVCallingType::MEMORY:
+				case SystemVCallingType::EMPTY:
+					break;
+				case SystemVCallingType::UNKNOWN:
+					assert(false);
 			}
 			freeStack(state, spaceToAllocate);
 			return;
@@ -781,7 +915,7 @@ if (op.flags & IR_FLOAT_OP) {\
 			break;
 		}
 		case IrOp::FUNCTION: {
-			auto function = static_cast<ExprFunction *>(op.function);
+			auto function = static_cast<ExprFunction *>(op.data);
 
 			if (function->flags & EXPR_FUNCTION_IS_C_CALL) {
 				assert(function->loadedFunctionPointer);
@@ -895,7 +1029,7 @@ Expr *getReturnValueFromBytes(CodeLocation start, EndLocation end, Type *type, v
 	case TypeFlavor::ENUM: {
 		auto integer = static_cast<TypeEnum *>(type)->integerType;
 
-		u64 value;
+		u64 value = 0;
 
 		if (integer == &TYPE_U8) {
 			value = *static_cast<u8 *>(bytes);
@@ -932,7 +1066,7 @@ Expr *getReturnValueFromBytes(CodeLocation start, EndLocation end, Type *type, v
 		return literal;
 	}
 	case TypeFlavor::FLOAT: {
-		double value;
+		double value = 0;
 
 		if (type == &TYPE_F32) {
 			value = *static_cast<float *>(bytes);
@@ -959,7 +1093,7 @@ Expr *getReturnValueFromBytes(CodeLocation start, EndLocation end, Type *type, v
 		return *static_cast<ExprFunction **>(bytes);
 	}
 	case TypeFlavor::INTEGER: {
-		u64 value;
+		u64 value = 0;
 
 		if (type == &TYPE_U8) {
 			value = *static_cast<u8 *>(bytes);
@@ -1075,126 +1209,150 @@ Expr *getReturnValueFromBytes(CodeLocation start, EndLocation end, Type *type, v
 
 Expr *runFunctionRoot(VMState *state, ExprRun *directive) {
 	PROFILE_FUNC();
-	char argumentsStore[sizeof(FunctionCall) + sizeof(Argument) * 2];
-	u64 argumentData[3];
+	char argumentsStore[sizeof(FunctionCall) + sizeof(u32)];
+	u64 argumentData[2] = {};
 
 	runningDirective = directive;
 
 	auto function = static_cast<ExprFunction *>(directive->function);
 
-	auto returnType = getDeclarationType(function->returns.declarations[0]);
-
-	
-	auto contextPointer = malloc(TYPE_CONTEXT.size);
-
-	assert(TYPE_CONTEXT.defaultValue);
-	createRuntimeValue(TYPE_CONTEXT.defaultValue, contextPointer);
-
-	u32 bigReturn = !isStandardSize(returnType->size);
-
 	Ir dummyOp;
 	dummyOp.op = IrOp::CALL;
 	FunctionCall *arguments = reinterpret_cast<FunctionCall *>(argumentsStore);
+	arguments->function = static_cast<TypeFunction *>(function->type);
 
-	arguments->args[0].number = 1;
-	arguments->args[0].type = TYPE_VOID_POINTER;
+	auto contextPointer = malloc(TYPE_CONTEXT.size);
+	assert(TYPE_CONTEXT.defaultValue);
+	createRuntimeValue(TYPE_CONTEXT.defaultValue, contextPointer);
+	arguments->arguments[0] = 1;
+	argumentData[1] = reinterpret_cast<u64>(contextPointer);
 
-	void *returnPointer;
-	if (bigReturn) {
-		returnPointer = malloc(returnType->size);
-		arguments->argCount = 2;
-		arguments->args[1].number = 2;
-		arguments->args[1].type = TYPE_VOID_POINTER;
-
-		argumentData[1] = reinterpret_cast<u64>(returnPointer);
-		argumentData[2] = reinterpret_cast<u64>(contextPointer);
-	}
-	else {
-		returnPointer = static_cast<void *>(argumentData);
-		arguments->argCount = 1;
-
-		argumentData[1] = reinterpret_cast<u64>(contextPointer);
-	}
-
-	arguments->returnType = bigReturn ? &TYPE_VOID : returnType;
+	auto returnType = getDeclarationType(function->returns.declarations[0]);	
+	void *returnPointer = malloc(returnType->size);
 	dummyOp.data = arguments;
-	dummyOp.opSize = bigReturn || returnType == &TYPE_VOID ? 0 : returnType->size;
 	dummyOp.dest = 0;
 
 	runFunction(state, function, &dummyOp, nullptr, argumentData);
 
 	auto result = getReturnValueFromBytes(function->start, function->end, returnType, returnPointer);
 
-	if (bigReturn)
-		free(returnPointer);
+	free(returnPointer);
 	free(contextPointer);
 
 	return result;
 }
-
+	
 
 char cCallCallback(DCCallback *pcb, DCArgs *args, DCValue *result, void *userdata) {
+	(void)pcb;
 	auto function = static_cast<ExprFunction *>(userdata);
+	auto functionType = static_cast<TypeFunction *>(function->type);
 
-	auto returnType = getDeclarationType(function->returns.declarations[0]);
-
-	bool bigReturn = !isStandardSize(returnType->size);
-
-	u64 *resultPointer = reinterpret_cast<u64 *>(&result->L);
+	u64 callerStack[2];
+	char returnBuffer[16];
+	
+	bool pointerReturn = returnsViaPointer(functionType);
+	bool aggrReturn = false;
+	
+	callerStack[1] = (u64)&returnBuffer[0];
+	if (pointerReturn) {
+		callerStack[1] = (u64)dcbArgPointer(args);
+	} else {
+		aggrReturn = isStoredByPointer(functionType->returnTypes[0]);
+	}
 
 	Ir dummyOp;
 	dummyOp.op = IrOp::CALL;
 	FunctionCall arguments;
-	arguments.argCount = 0;
-	arguments.returnType = bigReturn ? TYPE_VOID_POINTER : returnType;
+	arguments.function = functionType;
 	dummyOp.data = &arguments;
-	dummyOp.dest = 0;
-	dummyOp.opSize = arguments.returnType == &TYPE_VOID ? 0 : arguments.returnType->size;
+	dummyOp.dest = 1;
+	dummyOp.opSize = 0;
 
 	VMState state;
 
 	initVMState(&state);
-	runFunction(&state, function, &dummyOp, args, resultPointer);
+	runFunction(&state, function, &dummyOp, args, callerStack);
 	deinitVMState(&state);
 
-	return getSigChar(returnType);
+	if (pointerReturn) {
+		result->L = callerStack[1];
+	} 
+	else if (aggrReturn) {
+		dcbReturnAggr(args, result, returnBuffer);
+		return 'A';
+	}
+	else {
+		memcpy(result, returnBuffer, functionType->returnTypes[0]->size);
+	}
+
+	return getSigChar(functionType->returnTypes[0]);
 }
 
 
 void *createCCallFunction(ExprFunction *function) {
 	assert(function->returns.declarations.count == 1);
-	auto returnType = getDeclarationType(function->returns.declarations[0]);
+	
+	Array<char> signature;
+	Array<DCaggr *> aggrs;
 
-	char *callback;
+	auto functionType = static_cast<TypeFunction *>(function->type);
+	bool pointerReturn = returnsViaPointer(functionType);
+	
+	if (pointerReturn) {
+		signature.add(DC_SIGCHAR_POINTER);
+	} 
 
-	if (!isStandardSize(returnType->size)) {
-		callback = static_cast<char *>(malloc(function->arguments.declarations.count + 4));
-
-		callback[0] = 'p';
-
-		for (u32 i = 0; i < function->arguments.declarations.count; i++) {
-			auto arg = getDeclarationType(function->arguments.declarations[i]);
-
-			callback[i + 1] = getSigChar(arg);
+	for (u32 i = 0; i < functionType->argumentCount; i++) {
+		auto type = functionType->argumentTypes[i];
+		if (isStoredByPointer(type)) {
+			signature.add(DC_SIGCHAR_AGGREGATE);
+			aggrs.add(getDcAggr(type));
 		}
+		else if (type->flavor == TypeFlavor::FLOAT) {
+			signature.add(DC_SIGCHAR_DOUBLE);
+		}
+		else {
+			signature.add(DC_SIGCHAR_LONGLONG);
+		}
+	}
 
-		callback[function->arguments.declarations.count + 1] = ')';
-		callback[function->arguments.declarations.count + 2] = 'p';
-		callback[function->arguments.declarations.count + 3] = 0;
+	signature.add(')');
+
+	auto returnType = functionType->returnTypes[0];
+	if (pointerReturn) {
+		signature.add(DC_SIGCHAR_POINTER);
+	}
+	else if (isStoredByPointer(functionType->returnTypes[0])) {
+		signature.add(DC_SIGCHAR_AGGREGATE);
+		aggrs.add(getDcAggr(functionType->returnTypes[0]));
+	}
+	else if (returnType == &TYPE_VOID) {
+		signature.add(DC_SIGCHAR_VOID);
+	}
+	else if (returnType == &TYPE_F32) {
+		signature.add(DC_SIGCHAR_FLOAT);
+	} 
+	else if (returnType == &TYPE_F64) {
+		signature.add(DC_SIGCHAR_DOUBLE);
+	}
+	else if (returnType->size == 1) {
+		signature.add(DC_SIGCHAR_CHAR);
+	}
+	else if (returnType->size == 2) {
+		signature.add(DC_SIGCHAR_SHORT);
+	}
+	else if (returnType->size == 4) {
+		signature.add(DC_SIGCHAR_INT);
+	}
+	else if (returnType->size == 8) {
+		signature.add(DC_SIGCHAR_LONGLONG);
 	}
 	else {
-		callback = static_cast<char *>(malloc(function->arguments.declarations.count + 3));
-
-		for (u32 i = 0; i < function->arguments.declarations.count; i++) {
-			auto arg = getDeclarationType(function->arguments.declarations[i]);
-
-			callback[i] = getSigChar(arg);
-		}
-
-		callback[function->arguments.declarations.count] = ')';
-		callback[function->arguments.declarations.count + 1] = getSigChar(returnType);
-		callback[function->arguments.declarations.count + 2] = 0;
+		assert(false);
 	}
 
-	return dcbNewCallback(callback, cCallCallback, function);
+	signature.add(0);
+
+	return dcbNewCallback2(signature.storage, cCallCallback, function, aggrs.storage);
 }

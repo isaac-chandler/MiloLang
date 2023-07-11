@@ -22,6 +22,132 @@ static u32 nextStructHash = STRUCT_HASH_PRIME;
 
 static u32 count;
 
+void setSystemVByteTypes(Type *type, u32 *intBytes, bool *hadMember, bool *aligned, u32 offset) {
+	assert(offset + type->size <= 16);
+	
+	if (type->flavor == TypeFlavor::STRUCT) {
+		auto struct_ = static_cast<TypeStruct *>(type);
+		for (auto member : struct_->members.declarations) {
+			if (member->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING)) continue;
+
+			setSystemVByteTypes(getDeclarationType(member), intBytes, hadMember, aligned, offset + member->physicalStorage);
+		}
+	}
+	else {
+		if (offset & (type->alignment - 1)) {
+			*aligned = false;
+		}
+
+		*hadMember = true;
+		auto callingType = getSystemVCallingType(type);
+		if (callingType == SystemVCallingType::INT || callingType == SystemVCallingType::INT_INT) {
+			*intBytes |= ((1 << type->size) - 1) << offset;
+		}
+	}
+}
+/*
+	System V calling convention is a huge pain in the ass for
+	implementors....
+
+        --------
+	   /        \
+	  /  o    o  \
+	  \          /
+	   \        /
+        | ++++ |
+   O--\	________ /--O 
+       --\    /-- 
+          ----
+       --/    \--
+   O--/          \--O
+                
+*/
+SystemVCallingType getSystemVCallingType(Type *type) {
+	if (type->size > 16)
+		return SystemVCallingType::MEMORY;
+
+
+	switch(type->flavor) {
+		case TypeFlavor::ARRAY:
+			if (type->flags & TYPE_ARRAY_IS_FIXED) {
+				return getSystemVCallingType(static_cast<TypeArray *>(type)->arrayOf);
+			}
+			else {
+				// Dynamic arrays are handled by size > 16 case
+				return SystemVCallingType::INT_INT;
+			}
+		case TypeFlavor::STRING:
+			return SystemVCallingType::INT_INT;
+		case TypeFlavor::BOOL:
+		case TypeFlavor::ENUM:
+		case TypeFlavor::FUNCTION:
+		case TypeFlavor::INTEGER:
+		case TypeFlavor::POINTER:
+		case TypeFlavor::TYPE:
+			return SystemVCallingType::INT;
+		case TypeFlavor::FLOAT:
+			return SystemVCallingType::FLOAT;
+		case TypeFlavor::VOID:
+			return SystemVCallingType::EMPTY;
+		case TypeFlavor::STRUCT: {
+			auto struct_ = static_cast<TypeStruct *>(type);
+
+			if (struct_->systemVCallingType == SystemVCallingType::UNKNOWN) {
+				if (type->size < 8) {
+					
+					auto hadMember = false;
+					for (auto member : struct_->members.declarations) {
+						if (member->flags & (DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_CONSTANT)) continue;
+
+						auto declarationType = getDeclarationType(member);
+
+						if (member->physicalStorage & (declarationType->alignment - 1)) {
+							struct_->systemVCallingType = SystemVCallingType::MEMORY;
+							return struct_->systemVCallingType;
+						}
+
+						if (getSystemVCallingType(declarationType) == SystemVCallingType::INT) {
+							struct_->systemVCallingType = SystemVCallingType::INT;
+							return struct_->systemVCallingType;
+						}
+					}
+
+					struct_->systemVCallingType = hadMember ? SystemVCallingType::FLOAT : SystemVCallingType::EMPTY;
+				}
+				else {
+					u32 intBytes = 0;
+					bool hadMember = false;
+					bool aligned = true;
+
+					setSystemVByteTypes(type, &intBytes, &hadMember, &aligned, 0);
+					
+					if (!aligned) {
+						struct_->systemVCallingType = SystemVCallingType::MEMORY;
+					}
+					else if (!hadMember) {
+						struct_->systemVCallingType = SystemVCallingType::EMPTY;
+					}
+					else if (intBytes & 0xFF) {
+						if (intBytes & 0xFF00) {
+							struct_->systemVCallingType = SystemVCallingType::INT_INT;
+						} else {
+							struct_->systemVCallingType = SystemVCallingType::INT_FLOAT;
+						}
+					} else if (intBytes & 0xFF00) {
+						struct_->systemVCallingType = SystemVCallingType::FLOAT_INT;
+					} else {
+						struct_->systemVCallingType = SystemVCallingType::FLOAT_FLOAT;
+					}
+				}
+			}
+			return struct_->systemVCallingType;
+		}
+		default:
+			assert(false);
+			return SystemVCallingType::UNKNOWN;
+	}
+}
+
 u32 findInTypeTable(Type *type) {
 	u32 slot = type->hash & (typeTableCapacity - 1);
 

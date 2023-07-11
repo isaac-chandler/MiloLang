@@ -18,6 +18,7 @@ u32 allocateStackSpace(IrState *state, u32 size, u32 alignment) {
 	state->stackSpace = AlignPO2(state->stackSpace, alignment);
 	u32 offset = state->stackSpace;
 	state->stackSpace += size;
+	state->stackSpace = AlignPO2(state->stackSpace, 8);
 	return offset;
 }
 
@@ -127,7 +128,6 @@ struct Loop {
 };
 
 static Array<Expr *> deferStack;
-static Block *currentBlock;
 
 static Array<Loop> loopStack;
 static u32 loopCount;
@@ -159,7 +159,6 @@ static void popLoop(IrState *state) {
 
 
 static void generateIncrement(IrState *state, ExprLoop *loop) {
-	auto it = loop->iteratorBlock.declarations[0];
 	auto it_index = loop->iteratorBlock.declarations[1];
 
 	Ir &index = state->ir.add();
@@ -284,7 +283,7 @@ u32 generateSlice(IrState *state, ExprSlice *slice) {
 		}
 	}
 
-	u32 elementSize;
+	u32 elementSize = 0;
 
 	if (slice->array->type->flavor == TypeFlavor::POINTER) {
 		elementSize = static_cast<TypePointer *>(slice->array->type)->pointerTo->size;
@@ -451,7 +450,7 @@ u32 loadAddressOf(IrState *state, Expr *expr, u32 offset = 0) {
 			}
 		}
 
-		u32 elementSize;
+		u32 elementSize = 0;
 
 		if (binary->left->type->flavor == TypeFlavor::POINTER) {
 			elementSize = static_cast<TypePointer *>(binary->left->type)->pointerTo->size;
@@ -605,6 +604,7 @@ u32 generateCast(IrState *state, ExprBinaryOperator *binary) {
 	auto left = binary->left;
 	auto right = binary->right;
 
+	(void)left;
 	assert(left->flavor == ExprFlavor::TYPE_LITERAL);
 
 	u32 rightReg = generateIr(state, right);
@@ -892,7 +892,7 @@ u32 generateEquals(IrState *state, u32 leftReg, Expr *right, bool equals) {
 	u32 rightReg = generateIr(state, right);
 
 	if (right->type == &TYPE_STRING) {
-		if (!stringsEqualFunction) {
+		if (!stringsEqualFunction || !stringsEqualFunction->type) {
 			reportError("Internal Compiler Error: Comparing strings before __strings_equal is declared");
 			assert(false);
 			exit(1); // @Cleanup Forceful exit since we don't have good error handling here and its an internal compiler error
@@ -900,26 +900,19 @@ u32 generateEquals(IrState *state, u32 leftReg, Expr *right, bool equals) {
 
 		u32 function = generateIr(state, stringsEqualFunction);
 
-		FunctionCall *argumentInfo = static_cast<FunctionCall *>(state->allocator.allocate(sizeof(FunctionCall) + sizeof(argumentInfo->args[0]) * 2));
-		argumentInfo->argCount = 2;
+		u32 returnValue = allocateStackSpaceAndLoadAddress(state, 1, 1);
+		FunctionCall *arguments = static_cast<FunctionCall *>(state->allocator.allocate(sizeof(FunctionCall) + 2 * sizeof(u32)));
+		arguments->function = static_cast<TypeFunction *>(stringsEqualFunction->type);
+		arguments->arguments[0] = leftReg;
+		arguments->arguments[1] = rightReg;
 
-		argumentInfo->args[0].number = leftReg;
-		argumentInfo->args[0].type = TYPE_VOID_POINTER;
-		argumentInfo->args[1].number = rightReg;
-		argumentInfo->args[1].type = TYPE_VOID_POINTER;
+		Ir &call = state->ir.add();
+		call.op = IrOp::CALL;
+		call.dest = returnValue;
+		call.a = function;
+		call.data = arguments;
 
-		argumentInfo->returnType = &TYPE_BOOL;
-
-		state->maxCallArguments = my_max(state->maxCallArguments, 4);
-
-		Ir &ir = state->ir.add();
-		ir.op = IrOp::CALL;
-		ir.a = function;
-		ir.data = argumentInfo;
-		ir.dest = result;
-		ir.opSize = 1;
-		ir.flags |= IR_C_CALL;
-
+		memop(state, IrOp::READ, result, returnValue, 1);
 
 		if (!equals) {
 			Ir &invert = state->ir.add();
@@ -1200,7 +1193,7 @@ void generateBreak(IrState *state, ExprBreakOrContinue *break_) {
 }
 
 void generateContinue(IrState *state, ExprBreakOrContinue *continue_) {
-	u32 begin;
+	u32 begin = 0;
 
 	for (u32 i = loopCount; i-- != 0;) {
 		if (loopStack[i].loop == continue_->refersTo) {
@@ -1216,7 +1209,7 @@ void generateContinue(IrState *state, ExprBreakOrContinue *continue_) {
 }
 
 void generateRemove(IrState *state, ExprBreakOrContinue *remove) {
-	if (!removeFunction) {
+	if (!removeFunction || !removeFunction->type) {
 		reportError(remove, "Internal Compiler Error: Removing something before __remove is declared");
 		assert(false);
 		exit(1); // @Cleanup Forceful exit since we don't have good error handling here and its an internal compiler error
@@ -1225,31 +1218,25 @@ void generateRemove(IrState *state, ExprBreakOrContinue *remove) {
 	assert(remove->refersTo->forBegin->type->flavor == TypeFlavor::ARRAY);
 	assert(!(remove->refersTo->forBegin->type->flags & TYPE_ARRAY_IS_FIXED));
 
+	u32 returnValue = allocateStackSpaceAndLoadAddress(state, 8, 8 );
 	u32 function = generateIr(state, removeFunction);
 
-	FunctionCall *argumentInfo = static_cast<FunctionCall *>(state->allocator.allocate(sizeof(FunctionCall) + sizeof(argumentInfo->args[0]) * 3));
-	argumentInfo->argCount = 3;
+	FunctionCall *argumentInfo = static_cast<FunctionCall *>(state->allocator.allocate(sizeof(FunctionCall) + sizeof(u32) * 3));
 
 	u32 sizeReg = constant(state, allocateRegister(state), 8, static_cast<TypeArray *>(remove->refersTo->forBegin->type)->arrayOf->size);
 
-	argumentInfo->args[0].number = remove->refersTo->arrayPointer;
-	argumentInfo->args[0].type = TYPE_VOID_POINTER;
-	argumentInfo->args[1].number = remove->refersTo->irPointer;
-	argumentInfo->args[1].type = TYPE_VOID_POINTER;
-	argumentInfo->args[2].number = sizeReg;
-	argumentInfo->args[2].type = &TYPE_U64;
-
-	argumentInfo->returnType = TYPE_VOID_POINTER;
-
-	state->maxCallArguments = my_max(state->maxCallArguments, 4);
+	argumentInfo->arguments[0] = remove->refersTo->arrayPointer;
+	argumentInfo->arguments[1] = remove->refersTo->irPointer;
+	argumentInfo->arguments[2] = sizeReg;
+	argumentInfo->function = static_cast<TypeFunction *>(removeFunction->type);
 
 	Ir &ir = state->ir.add();
 	ir.op = IrOp::CALL;
 	ir.a = function;
 	ir.data = argumentInfo;
-	ir.dest = remove->refersTo->irPointer;
-	ir.opSize = TYPE_VOID_POINTER->size;
-	ir.flags |= IR_C_CALL;
+	ir.dest = returnValue;
+
+	memop(state, IrOp::READ, remove->refersTo->irPointer, returnValue, 8);
 
 	Ir &sub = state->ir.add();
 	sub.op = IrOp::ADD_CONSTANT;
@@ -1308,7 +1295,7 @@ void generateFor(IrState *state, ExprLoop *loop) {
 
 	constant(state, it_indexReg, 8, 0);
 
-	u32 irEnd;
+	u32 irEnd = 0;
 
 	if (loop->forEnd) {
 		irEnd = generateIr(state, loop->forEnd);
@@ -1371,6 +1358,7 @@ void generateFor(IrState *state, ExprLoop *loop) {
 	exitBlock(state, &loop->iteratorBlock, false);
 
 	Expr *inc = deferStack.pop();
+	(void)inc;
 	assert(inc == loop);
 
 	Ir &jump = state->ir.add();
@@ -1390,6 +1378,138 @@ void generateFor(IrState *state, ExprLoop *loop) {
 	}
 
 	popLoop(state);
+}
+
+bool returnsViaPointer(TypeFunction *function) {
+	if (function->returnCount > 1)
+		return true;
+
+	#if BUILD_WINDOWS
+	return !isStandardSize(function->returnTypes[0]->size);
+	#else
+	return getSystemVCallingType(function->returnTypes[0]) == SystemVCallingType::MEMORY;
+	#endif
+}
+
+SystemVCallingState initSystemVCallingState(TypeFunction *function) {
+	SystemVCallingState state;
+	state.intRegsRemaining = 6;
+	state.floatRegsRemaining = 8;
+
+	if (function->returnCount > 1) {
+		state.intRegsRemaining -= 1;
+	}
+	else if (getSystemVCallingType(function->returnTypes[0]) == SystemVCallingType::MEMORY) {
+		state.intRegsRemaining -= 1;
+	}
+
+	if (!(function->flags & TYPE_FUNCTION_IS_C_CALL)) {
+		state.intRegsRemaining -= 1;
+	}
+
+	return state;
+}
+
+SystemVCallingType passSystemVParameter(SystemVCallingState *state, Type *type) {
+	switch (getSystemVCallingType(type)) {
+		case SystemVCallingType::EMPTY:
+			return SystemVCallingType::EMPTY;
+		case SystemVCallingType::FLOAT:
+			if (state->floatRegsRemaining) {
+				state->floatRegsRemaining--;
+				return SystemVCallingType::FLOAT;
+			}
+			else {
+				return SystemVCallingType::MEMORY;
+			}
+			break;
+		case SystemVCallingType::INT:
+			if (state->intRegsRemaining) {
+				state->intRegsRemaining--;
+				return SystemVCallingType::INT;
+			}
+			else {
+				return SystemVCallingType::MEMORY;
+			}
+			break;
+		case SystemVCallingType::FLOAT_FLOAT:
+			if (state->floatRegsRemaining >= 2) {
+				state->floatRegsRemaining -= 2;
+				return SystemVCallingType::FLOAT_FLOAT;
+			}
+			else {
+				return SystemVCallingType::MEMORY;
+			} 
+		case SystemVCallingType::INT_INT:
+			if (state->intRegsRemaining >= 2) {
+				state->intRegsRemaining -= 2;
+				return SystemVCallingType::INT_INT;
+			} 
+			else {
+				return SystemVCallingType::MEMORY;
+			}
+		case SystemVCallingType::FLOAT_INT:
+			if (state->intRegsRemaining && state->floatRegsRemaining) {
+				state->intRegsRemaining--;
+				state->floatRegsRemaining--;
+				return SystemVCallingType::FLOAT_INT;
+			}
+			else {
+				return SystemVCallingType::MEMORY;
+			}
+			break;
+		case SystemVCallingType::INT_FLOAT:
+			if (state->intRegsRemaining && state->floatRegsRemaining) {
+				state->intRegsRemaining--;
+				state->floatRegsRemaining--;
+				return SystemVCallingType::FLOAT_INT;
+			}
+			else {
+				return SystemVCallingType::MEMORY;
+			}
+			break;
+		case SystemVCallingType::MEMORY:
+			return SystemVCallingType::MEMORY;
+		default:
+			assert(false);
+			return SystemVCallingType::UNKNOWN;
+	}
+}
+
+u32 requiredStackSpaceForCallingConvention(TypeFunction *function) {
+#if BUILD_WINDOWS
+	bool hasContext = !(function->flags & TYPE_FUNCTION_IS_C_CALL);
+	bool bigReturn = !isStandardSize(function->returnTypes[0]->size) || function->returnCount > 1;
+	
+	u32 argumentCount = my_max(bigReturn + hasContext + function->argumentCount, 4);
+
+	u32 space = AlignPO2(argumentCount * 8, 16);
+
+	// External functions may write to the space we pass large arguments in, 
+	// (at least according to what MSVC outputs, actual documentation doesn't specify)
+	// For our own functions we know the arguments are immutable so we effectively pass by
+	// const reference
+	if (function->flags & TYPE_FUNCTION_IS_C_CALL) {
+		for (u32 i = 0; i < function->argumentCount; i++) {
+			if (!isStandardSize(function->argumentTypes[i]->size)) {
+				space = AlignPO2(space + function->argumentTypes[i]->size, 16);
+			}
+		}
+	}
+
+	return space;
+#else
+	auto callingState = initSystemVCallingState(function);
+
+	u32 space = 0;
+	for (u32 i = 0; i < function->argumentCount; i++) {
+		if (passSystemVParameter(&callingState, function->argumentTypes[i]) == SystemVCallingType::MEMORY) {
+			space = AlignPO2(space + function->argumentTypes[i]->size, 8);
+		}
+	}
+
+	return space;
+#endif
 }
 
 u32 generateCall(IrState *state, ExprFunctionCall *call, ExprCommaAssignment *comma = nullptr) {
@@ -1459,134 +1579,83 @@ u32 generateCall(IrState *state, ExprFunctionCall *call, ExprCommaAssignment *co
 		}
 	}
 
-	u32 extraParams = 0;
-	bool bigReturn = !isStandardSize(type->returnTypes[0]->size);
+	state->stackSpaceForCallingConvention = my_max(state->stackSpaceForCallingConvention, requiredStackSpaceForCallingConvention(type));
 
-	if (bigReturn) {
-		extraParams++;
-	}
+	bool hasReturns = type->returnTypes[0] != &TYPE_VOID;
+	bool hasContext = !(type->flags & TYPE_FUNCTION_IS_C_CALL);
+	u32 returnStorage = 0;
 
-	if (!(type->flags & TYPE_FUNCTION_IS_C_CALL)) {
-		extraParams++;
-	}
+	if (hasReturns) {
+		u32 stackSpaceForReturn = 0;
+		u32 alignmentForReturn = 1;
 
-	u32 argCount = extraParams + call->arguments.count + type->returnCount - 1;
-	FunctionCall *argumentInfo = static_cast<FunctionCall *>(state->allocator.allocate(sizeof(FunctionCall) + 
-		sizeof(argumentInfo->args[0]) * argCount));
-	argumentInfo->argCount = argCount;
+		for (u32 i = 0; i < type->returnCount; i++) {
+			auto returnType = type->returnTypes[i];
 
-	u32 contextArgumentIndex = bigReturn ? 1 : 0;
-
-	argumentInfo->args[contextArgumentIndex].number = state->contextRegister;
-	argumentInfo->args[contextArgumentIndex].type   = TYPE_VOID_POINTER;
-
-	u32 unusedReturnSize = 0;
-	u32 unusedReturnAlignment = 0;
-
-
-	for (u32 i = comma ? comma->exprCount : 1; i < type->returnCount; i++) {
-		unusedReturnSize = my_max(unusedReturnSize, type->returnTypes[i]->size);
-		unusedReturnAlignment = my_max(unusedReturnAlignment, type->returnTypes[i]->alignment);
-	}
-
-	u32 unusedReturnReg;
-
-	if (unusedReturnSize) {
-		unusedReturnReg = allocateStackSpaceAndLoadAddress(state, unusedReturnSize, unusedReturnAlignment);
-	}
-
-	for (u32 i = 1; i < type->returnCount; i++) {
-		if (comma && i < comma->exprCount) {
-			if (comma->left[i]->flavor == ExprFlavor::IDENTIFIER) {
-				auto identifier = static_cast<ExprIdentifier *>(comma->left[i]);
-
-				if (!identifier->structAccess && !declarationIsStoredByPointer(identifier->declaration)) {
-					u32 address = allocateStackSpaceAndLoadAddress(state, comma->left[i]->type);
-
-					argumentInfo->args[call->arguments.count + extraParams + i - 1].number = address;
-					argumentInfo->args[call->arguments.count + extraParams + i - 1].type = TYPE_VOID_POINTER;
-					continue;
-				}
-			}
-			u32 address = loadAddressOf(state, comma->left[i]);
-
-			argumentInfo->args[call->arguments.count + extraParams + i - 1].number = address;
-			argumentInfo->args[call->arguments.count + extraParams + i - 1].type = TYPE_VOID_POINTER;
+			alignmentForReturn = my_max(alignmentForReturn, returnType->alignment);
+			stackSpaceForReturn = AlignPO2(stackSpaceForReturn, returnType->alignment);
+			stackSpaceForReturn += returnType->size;
 		}
-		else {
-			argumentInfo->args[call->arguments.count + extraParams + i - 1].number = unusedReturnReg;
-			argumentInfo->args[call->arguments.count + extraParams + i - 1].type = TYPE_VOID_POINTER;
-		}
+
+		if (stackSpaceForReturn)
+			returnStorage = allocateStackSpace(state, stackSpaceForReturn, alignmentForReturn);
 	}
 
 	u32 function = generateIr(state, call->function);
 
-	u32 result;
+	u32 argumentCount = hasContext + type->argumentCount;
+	FunctionCall *callArguments = static_cast<FunctionCall *>(state->allocator.allocate(sizeof(FunctionCall) + argumentCount * sizeof(u32)));
+	callArguments->function = type;
 
-	if (bigReturn) {
-		result = allocateStackSpaceAndLoadAddress(state, type->returnTypes[0]);
-		argumentInfo->args[0].number = result;
-		argumentInfo->args[0].type = TYPE_VOID_POINTER;
+	if (hasContext) {
+		callArguments->arguments[0] = state->contextRegister;
 	}
-	else {
-		result = allocateRegister(state);
-	}
-	
+
 	for (u32 i = 0; i < call->arguments.count; i++) {
-		auto arg = call->arguments.values[i];
-		u32 argument = generateIr(state, arg);
-
-		
-		if (!isStandardSize(arg->type->size)) {
-			argumentInfo->args[i + extraParams].number = memop(state, IrOp::COPY, allocateStackSpaceAndLoadAddress(state, arg->type->size, 16), argument, arg->type->size);
-			argumentInfo->args[i + extraParams].type = TYPE_VOID_POINTER;
-		}
-		else if (isStoredByPointer(call->arguments.values[i]->type)) {
-			argumentInfo->args[i + extraParams].number = memop(state, IrOp::READ, allocateRegister(state), argument, arg->type->size);
-			argumentInfo->args[i + extraParams].type = arg->type;
-		}
-		else {
-			argumentInfo->args[i + extraParams].number = argument;
-			argumentInfo->args[i + extraParams].type = arg->type;
-		}
+		callArguments->arguments[hasContext + i] = generateIr(state, call->arguments.values[i]);
 	}
 
-	argumentInfo->returnType = bigReturn ? TYPE_VOID_POINTER : call->type;
-
-	state->maxCallArguments = my_max(state->maxCallArguments, 4);
-	state->maxCallArguments = my_max(state->maxCallArguments, argCount);
-
-	
 	Ir &ir = state->ir.add();
 	ir.op = IrOp::CALL;
+	ir.dest = returnStorage;
 	ir.a = function;
-	ir.data = argumentInfo;
-	ir.dest = bigReturn ? 0 : result;
-	ir.opSize = argumentInfo->returnType == &TYPE_VOID || bigReturn ? 0 : argumentInfo->returnType->size;
-
-	if (call->function->type->flags & TYPE_FUNCTION_IS_C_CALL) {
-		ir.flags |= IR_C_CALL;
-	}
-
-	if (!bigReturn && isStoredByPointer(type->returnTypes[0])) {
-		result = memop(state, IrOp::WRITE, allocateStackSpaceAndLoadAddress(state, type->returnTypes[0]), result, type->returnTypes[0]->size);
-	}
+	ir.data = callArguments;
+	ir.opSize = argumentCount;
 
 	if (comma) {
-		for (u32 i = 1; i < comma->exprCount; i++) {
-			if (comma->left[i]->flavor == ExprFlavor::IDENTIFIER) {
-				auto identifier = static_cast<ExprIdentifier *>(comma->left[i]);
+		u32 returnOffset = 0;
 
-				if (!identifier->structAccess && !declarationIsStoredByPointer(identifier->declaration)) {
-					u32 address = argumentInfo->args[call->arguments.count + extraParams + i - 1].number;
+		for (u32 i = 0; i < comma->exprCount; i++) {
+			auto left = comma->left[i];
 
-					memop(state, IrOp::READ, identifier->declaration->registerOfStorage, address, identifier->type->size);
+			returnOffset = AlignPO2(returnOffset, type->returnTypes[i]->alignment);
+			if (left->flavor == ExprFlavor::IDENTIFIER) {
+				auto identifier = static_cast<ExprIdentifier *>(left);
+				if (!declarationIsStoredByPointer(static_cast<ExprIdentifier *>(left)->declaration)) {
+					memop(state, IrOp::READ, identifier->declaration->registerOfStorage, returnStorage, type->returnTypes[i]->size, returnOffset);
+				}
+				else {
+					memop(state, IrOp::COPY, loadAddressOf(state, left), returnStorage, type->returnTypes[i]->size, returnOffset);
 				}
 			}
-		}
-	}
+			else {
+				memop(state, IrOp::COPY, loadAddressOf(state, left), returnStorage, type->returnTypes[i]->size, returnOffset);
+			}
 
-	return result;
+			returnOffset += type->returnTypes[i]->size;
+		}
+
+		return 0;
+	}
+	else if ((call->flags & EXPR_FUNCTION_CALL_IS_STATEMENT_LEVEL) || !hasReturns) {
+		return 0;
+	}
+	else if (isStoredByPointer(type->returnTypes[0])) {
+		return returnStorage;
+	}
+	else {
+		return memop(state, IrOp::READ, allocateRegister(state), returnStorage, type->returnTypes[0]->size);
+	}
 }
 
 u32 generateArrayLiteral(IrState *state, ExprArrayLiteral *array) {
@@ -1716,7 +1785,7 @@ u32 generateIr(IrState *state, Expr *expr) {
 		address.dest = result;
 		address.opSize = 8;
 		address.op = IrOp::FUNCTION;
-		address.function = static_cast<ExprFunction *>(expr);
+		address.data = expr;
 
 		return result;
 	}
@@ -1893,60 +1962,46 @@ u32 generateIr(IrState *state, Expr *expr) {
 	}
 	case ExprFlavor::COMMA_ASSIGNMENT: {
 		auto comma = static_cast<ExprCommaAssignment *>(expr);
-
-		if (comma->left[0]->flavor == ExprFlavor::IDENTIFIER) {
-			auto identifier = static_cast<ExprIdentifier *>(comma->left[0]);
-
-			if (!identifier->structAccess && !declarationIsStoredByPointer(identifier->declaration)) {
-				u32 result = generateCall(state, static_cast<ExprFunctionCall *>(comma->call), comma);
-
-				set(state, identifier->declaration->registerOfStorage, result, identifier->type->size);
-
-				return 0;
-			}
-		}
-		u32 address = loadAddressOf(state, comma->left[0]);
-
-		u32 result = generateCall(state, static_cast<ExprFunctionCall *>(comma->call), comma);
-
-		copyOrWrite(state, address, result, comma->left[0]->type);
-
+		generateCall(state, static_cast<ExprFunctionCall *>(comma->call), comma);
 		return 0;
 	}
 	case ExprFlavor::RETURN: {
 		auto return_ = static_cast<ExprReturn *>(expr);
 		
-		u32 result = 0;
-
 		if (return_->returns.count) {
-			u32 result = generateIr(state, return_->returns.values[0]);
+			auto functionType = static_cast<TypeFunction *>(return_->returnsFrom->type);
+			if (returnsViaPointer(functionType)) {
+				u32 offset = 0;
+				for (u32 i = 0; i < return_->returns.count; i++) {
+					auto value = return_->returns.values[i];
+					offset = AlignPO2(offset, value->type->alignment);
+					copyOrWrite(state, state->returnPointerRegister, generateIr(state, value), value->type, offset);
+					offset += value->type->size;
+				}
 
-			u32 bigReturn = !isStandardSize(return_->returns.values[0]->type->size);
+				exitBlock(state, nullptr, true);
+				
 
-			if (bigReturn) {
-				memop(state, IrOp::COPY, return_->returnsFrom->returns.declarations[0]->registerOfStorage, result, return_->returns.values[0]->type->size);
+				Ir &ir = state->ir.add();
+				ir.op = IrOp::RETURN;
+				ir.opSize = static_cast<u32>(SystemVCallingType::MEMORY);
+				ir.a = state->contextRegister;
+				ir.data = TYPE_VOID_POINTER;
 			}
-			else if (isStoredByPointer(return_->returns.values[0]->type)) {
-				result = memop(state, IrOp::READ, allocateRegister(state), result, return_->returns.values[0]->type->size);
-			}
+			else {
+				assert(return_->returns.count == 1);
 
-			// @Incomplete: Make the writes happen after exitBlock in case the return pointers alias
-			for (u32 i = 1; i < return_->returns.count; i++) {
-				u32 store = generateIr(state, return_->returns.values[i]);
+				auto returnType = functionType->returnTypes[0];
 
-				copyOrWrite(state, return_->returnsFrom->returns.declarations[i]->registerOfStorage, store, return_->returns.values[i]->type);
-			}
+				auto value = generateIr(state, return_->returns.values[0]);
 
+				exitBlock(state, nullptr, true);
 
-			exitBlock(state, nullptr, true);
-
-			Ir &ir = state->ir.add();
-			ir.op = IrOp::RETURN;
-			ir.a = bigReturn ? return_->returnsFrom->returns.declarations[0]->registerOfStorage : result;
-			ir.opSize = bigReturn ? 8 : return_->returns.values[0]->type->size;
-
-			if (return_->returns.values[0]->type->flavor == TypeFlavor::FLOAT) {
-				ir.flags |= IR_FLOAT_OP;
+				Ir &ir = state->ir.add();
+				ir.op = IrOp::RETURN;
+				ir.opSize = static_cast<u32>(getSystemVCallingType(returnType));
+				ir.a = value;
+				ir.data = returnType;
 			}
 		}
 		else {
@@ -1954,8 +2009,8 @@ u32 generateIr(IrState *state, Expr *expr) {
 
 			Ir &ir = state->ir.add();
 			ir.op = IrOp::RETURN;
-			ir.a = 0;
-			ir.opSize = 0;
+			ir.opSize = static_cast<u32>(SystemVCallingType::EMPTY);
+			ir.data = &TYPE_VOID;
 		}
 
 
@@ -2182,34 +2237,34 @@ u32 generateIr(IrState *state, Expr *expr) {
 	}
 }
 
-void generateCCallPreamble(ExprFunction *function) {
-	for (auto argument : function->arguments.declarations) {
-		auto type = getDeclarationType(argument);
-		if (isStandardSize(type->size) && isStoredByPointer(type)) {
-			argument->physicalStorage = allocateStackSpace(&function->state, type);
-
-			argument->registerOfStorage = memop(&function->state, IrOp::WRITE, loadStackAddress(&function->state, argument->physicalStorage), argument->registerOfStorage, type->size);
-		}
-	}
-}
-
 bool generateIrForFunction(ExprFunction *function) {
 	function->state.nextRegister = 0;
 
-	if (!isStandardSize(getDeclarationType(function->returns.declarations[0])->size)) {
-		function->returns.declarations[0]->registerOfStorage = function->state.nextRegister++;
+	auto functionType = static_cast<TypeFunction *>(function->type);
+	if (returnsViaPointer(functionType)) {
+		function->state.returnPointerRegister = allocateRegister(&function->state);
 	}
 
 	if (!(function->flags & EXPR_FUNCTION_IS_C_CALL)) {
-		function->state.contextRegister = function->state.nextRegister++;
+		function->state.contextRegister = allocateRegister(&function->state);
 	}
 
+	SystemVCallingState callingState = initSystemVCallingState(functionType);
 
 	for (u32 i = 0; i < function->arguments.declarations.count; i++) {
 		auto declaration = function->arguments.declarations[i];
 		auto type = getDeclarationType(declaration);
 
-		declaration->registerOfStorage = function->state.nextRegister++;
+		declaration->registerOfStorage = allocateRegister(&function->state);
+
+#if BUILD_WINDOWS
+		auto passedInMemory = !isStandardSize(type) || declaration->registerOfStorage >= 4;
+#else
+		auto passedInMemory = passSystemVParameter(&callingState, type) == SystemVCallingType::MEMORY;
+#endif
+		if (isStoredByPointer(type) && !passedInMemory) {
+			declaration->physicalStorage = allocateStackSpace(&function->state, getDeclarationType(declaration));
+		}
 	}
 
 	for (u32 i = 1; i < function->returns.declarations.count; i++) {
@@ -2218,9 +2273,6 @@ bool generateIrForFunction(ExprFunction *function) {
 		declaration->registerOfStorage = function->state.nextRegister++;
 	}
 
-	function->state.parameters = function->state.nextRegister;
-
-	generateCCallPreamble(function);
 	generateIr(&function->state, function->body);
 
 	if (hadError) {

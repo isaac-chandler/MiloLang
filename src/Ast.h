@@ -79,22 +79,27 @@ enum class IrOp : u8 {
 
 #define IR_SIGNED_OP 0x1
 #define IR_FLOAT_OP 0x2
-#define IR_C_CALL 0x4
 
 
 inline bool isStandardSize(u64 size) {
 	return size == 1 || size == 2 || size == 4 || size == 8;
 }
 
-struct Argument {
-	u32 number;
-	struct Type *type;
-};
+inline bool isSystemVTwoRegisterValue(u64 size) {
+	return size > 8 && size <= 16;
+}
+
+inline bool isSystemVStackValue(u64 size) {
+	return size > 16;
+}
+
+inline bool isSystemVOneRegisterValue(u64 size) {
+	return size <= 8;
+}
 
 struct FunctionCall {
-	struct Type *returnType;
-	u32 argCount;
-	Argument args[];
+	TypeFunction *function;
+	u32 arguments[];
 };
 
 struct Ir {
@@ -102,10 +107,7 @@ struct Ir {
 		struct {
 			u32 dest;
 			u32 opSize;
-			union {
-				u32 a;
-				struct ExprFunction *function;
-			};
+			u32 a;
 
 			union {
 				u32 b;
@@ -127,10 +129,10 @@ struct Ir {
 
 struct IrState {
 	u32 nextRegister = 0;
+	u32 returnPointerRegister = 0;
 	u32 contextRegister = 0;
-	u32 parameters = 0;
 	u32 stackSpace = 0;
-	u32 maxCallArguments = 0;
+	u32 stackSpaceForCallingConvention = 0;
 	Array<Ir> ir;
 
 	BucketedArenaAllocator allocator;
@@ -343,7 +345,6 @@ struct ExprSwitch : Expr {
 struct ExprStringLiteral : Expr {
 	String string;
 
-	union Symbol *symbol;
 	u32 physicalStorage;
 };
 
@@ -412,7 +413,6 @@ struct ExprArrayLiteral : Expr {
 
 	union {
 		struct {
-			union Symbol *symbol;
 			u32 physicalStorage;
 		};
 
@@ -428,7 +428,6 @@ struct ExprStructLiteral : Expr {
 
 	union {
 		struct {
-			union Symbol *symbol;
 			u32 physicalStorage;
 		};
 
@@ -452,7 +451,7 @@ struct ExprFunction : Expr {
 
 	union {
 		struct {
-			union Symbol *symbol;
+			void *symbol;
 			u32 physicalStorage;
 		};
 

@@ -123,6 +123,12 @@ type *BucketedArenaAllocator::name(type value) {					\
 	return location;												\
 }
 
+void BucketedArenaAllocator::align(u64 alignment) {
+	u64 bytesToAdd = -totalSize & (alignment - 1);
+	void *added = allocateUnaligned(bytesToAdd);
+	memset(added, 0, bytesToAdd);
+}
+
 addNUnchecked(add1Unchecked, u8)
 addNUnchecked(add2Unchecked, u16)
 addNUnchecked(add4Unchecked, u32)

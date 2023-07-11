@@ -39,6 +39,8 @@ inline char *objectFileName;
 
 struct FileInfo { // @Platform
 	String path;
+	String name;
+	u32 directoryId;
 	u32 fileUid;
 
 	char *data;
@@ -51,6 +53,7 @@ struct FileInfo { // @Platform
 
 FileInfo *getFileInfoByUid(u32 fileUid);
 
+inline Array<String> compilerDirectories;
 inline Array<FileInfo *> compilerFiles;
 inline Array<struct Module *> modules;
 
@@ -82,6 +85,7 @@ String msprintf(const char *format, ...);
 
 inline bool linkLibC = false;
 
+inline char *initialFilePath;
 inline char *modulePath;
 
 #define PROGRAM_START "__program_start"

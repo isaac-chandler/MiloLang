@@ -17,7 +17,6 @@
 
 struct BinaryOperator {
 	TokenT tokens[7];
-	bool rightAssociative;
 };
 
 static const BinaryOperator binaryOpPrecedences[] = {
@@ -59,6 +58,7 @@ static void pushBlock(LexerFile *lexer, Block *block) {
 
 static void popBlock(LexerFile *lexer, Block *block) { // This only takes the parameter to make sure we are always popping the block we think we are in debug
 	assert(lexer->currentBlock == block);
+	(void)block;
 
 	lexer->currentBlock = lexer->currentBlock->parentBlock;
 }
@@ -101,6 +101,7 @@ ExprIdentifier *makeIdentifier(LexerFile *lexer, Declaration *declaration) {
 	identifier->name = declaration->name;
 	identifier->resolveFrom = lexer->currentBlock;
 	identifier->enclosingScope = lexer->currentBlock;
+	identifier->module = lexer->module;
 	identifier->serial = 0;
 	identifier->structAccess = nullptr;
 
@@ -141,7 +142,7 @@ Importer *createImporterForUsing(LexerFile *lexer, Declaration *declaration) {
 	return import;
 }
 
-bool parseArguments(LexerFile *lexer, Arguments *args, const char *message);
+bool parseArguments(LexerFile *lexer, Arguments *args);
 
 void parseModuleOrExportScope(LexerFile *lexer) {
 	if (expectAndConsume(lexer, TokenT::SCOPE_EXPORT)) {
@@ -602,8 +603,6 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 		loop->iteratorBlock.flavor = BlockFlavor::IMPERATIVE;
 		loop->iteratorBlock.loop = true;
 
-		EndLocation end = lexer->token.end;
-
 		lexer->advance();
 
 		if (lexer->token.type == TokenT::IDENTIFIER) {
@@ -875,7 +874,7 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 			return_->returns.count = 0;
 		}
 		else {
-			if (!parseArguments(lexer, &return_->returns, "returns"))
+			if (!parseArguments(lexer, &return_->returns))
 				return nullptr;
 
 		}
@@ -1036,8 +1035,6 @@ ExprBlock *parseBlock(LexerFile *lexer, bool isCase, ExprBlock *block) {
 				continue;
 			}
 			else if (lexer->token.type == TokenT::USING) {
-				auto start = lexer->token.start;
-
 				lexer->advance();
 
 				auto using_ = parseExpr(lexer);
@@ -1260,8 +1257,6 @@ u32 getPolymorphCount(LexerFile *lexer) {
 }
 
 Declaration *parseSingleArgument(LexerFile *lexer, Expr *argumentHolder, bool arguments, bool named) {
-	auto token = lexer->token;
-
 	bool must = expectAndConsume(lexer, TokenT::MUST);
 
 	if (must && arguments) {
@@ -1357,17 +1352,11 @@ bool parseArgumentList(LexerFile *lexer, Expr *argumentHolder, bool arguments) {
 
 	bool named = checkForNamedArguments(lexer);
 
-	Declaration *hadVarargs = nullptr;
-
 	do {
 		auto declaration = parseSingleArgument(lexer, argumentHolder, arguments, named);
 
 		if (!declaration)
 			return false;
-
-		if (declaration->flags & DECLARATION_IS_VARARGS) {
-			hadVarargs = declaration;
-		}
 	} while (expectAndConsume(lexer, ','));
 
 	if (!expectAndConsume(lexer, ')')) {
@@ -1377,8 +1366,6 @@ bool parseArgumentList(LexerFile *lexer, Expr *argumentHolder, bool arguments) {
 
 	return true;
 }
-
-static ExprFunction *currentFunction = nullptr;
 
 ExprFunction *parseFunctionOrFunctionType(LexerFile *lexer, CodeLocation start, bool allowBody) {
 	PROFILE_FUNC();
@@ -1659,7 +1646,7 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 	return expr;
 }
 
-bool parseArguments(LexerFile *lexer, Arguments *args, const char *message) {
+bool parseArguments(LexerFile *lexer, Arguments *args) {
 	Array<Expr *> arguments;
 	Array<String> names;
 
@@ -2006,11 +1993,11 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		const char *kind = "<unhandled>";
 
 		switch (lexer->token.type) {
-		case TokenT::SIZE_OF: kind = "size_of";
-		case TokenT::ALIGN_OF: kind = "align_of";
-		case TokenT::TYPE_OF: kind = "type_of";
-		case TokenT::TYPE_INFO: kind = "type_info";
-		case TokenT::IS_CONSTANT: kind = "is_constant";
+		case TokenT::SIZE_OF: kind = "size_of"; break;
+		case TokenT::ALIGN_OF: kind = "align_of"; break;
+		case TokenT::TYPE_OF: kind = "type_of"; break;
+		case TokenT::TYPE_INFO: kind = "type_info"; break;
+		case TokenT::IS_CONSTANT: kind = "is_constant"; break;
 		}
 
 		ExprUnaryOperator *unary = PARSER_NEW(ExprUnaryOperator);
@@ -2091,6 +2078,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		type->flavor = TypeFlavor::STRUCT;
 		type->constants.flavor = BlockFlavor::CONSTANTS;
 		type->members.flavor = BlockFlavor::STRUCT;
+		type->systemVCallingType = SystemVCallingType::UNKNOWN;
 
 		if (tokenType == TokenT::UNION) {
 			type->flags |= TYPE_STRUCT_IS_UNION;
@@ -2358,7 +2346,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 				call->arguments.names = nullptr;
 			}
 			else {
-				if (!parseArguments(lexer, &call->arguments, "arguments"))
+				if (!parseArguments(lexer, &call->arguments))
 					return nullptr;
 			
 				call->end = lexer->token.end;
@@ -2513,7 +2501,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 Expr *parsePrefixExpr(LexerFile *lexer, CodeLocation plusStart = {});
 
-Expr *makeUnaryOperator(LexerFile *lexer, CodeLocation &start, EndLocation &end, TokenT type) {
+Expr *makeUnaryOperator(LexerFile *lexer, CodeLocation &start, TokenT type) {
 	ExprUnaryOperator *expr = PARSER_NEW(ExprUnaryOperator);
 	expr->start = start;
 	expr->flavor = ExprFlavor::UNARY_OPERATOR;
@@ -2534,22 +2522,22 @@ Expr *parsePrefixExpr(LexerFile *lexer, CodeLocation plusStart) {
 	EndLocation end = lexer->token.end;
 
 	if (expectAndConsume(lexer, '*')) {
-		return makeUnaryOperator(lexer, start, end, TOKEN('*'));
+		return makeUnaryOperator(lexer, start, TOKEN('*'));
 	}
 	else if (expectAndConsume(lexer, TokenT::SHIFT_LEFT)) {
-		return makeUnaryOperator(lexer, start, end, TokenT::SHIFT_LEFT);
+		return makeUnaryOperator(lexer, start, TokenT::SHIFT_LEFT);
 	}
 	else if (expectAndConsume(lexer, '-')) {
-		return makeUnaryOperator(lexer, start, end, TOKEN('-'));
+		return makeUnaryOperator(lexer, start, TOKEN('-'));
 	}
 	else if (expectAndConsume(lexer, '~')) {
-		return makeUnaryOperator(lexer, start, end, TOKEN('~'));
+		return makeUnaryOperator(lexer, start, TOKEN('~'));
 	}
 	else if (expectAndConsume(lexer, '!')) {
-		return makeUnaryOperator(lexer, start, end, TOKEN('!'));
+		return makeUnaryOperator(lexer, start, TOKEN('!'));
 	}
 	else if (expectAndConsume(lexer, '+')) {
-		auto expr = makeUnaryOperator(lexer, start, end, TOKEN('+'));
+		auto expr = makeUnaryOperator(lexer, start, TOKEN('+'));
 
 		if (!expr && plusStart.line && plusStart.locationInMemory + 1 == start.locationInMemory) {
 			reportError(&plusStart, &end, "Error: '++' is not supported");
@@ -3145,8 +3133,6 @@ void runParser() {
 
 				}
 				else {
-					auto start = lexer->token.start;
-
 					lexer->advance();
 
 					auto using_ = parseExpr(lexer);
@@ -3227,7 +3213,6 @@ void runParser() {
 	}
 
 	if (printDiagnostics) {
-		wchar_t *name;
-		reportInfo("Parser memory used %ukb", name, lexer->parserArena.totalSize / 1024);
+		reportInfo("Parser memory used %ukb", lexer->parserArena.totalSize / 1024);
 	}
 }

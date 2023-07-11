@@ -8,5 +8,6 @@
         "utility": "cpp",
         "string": "cpp",
         "functional": "cpp"
-    }
+    },
+    "cmake.configureOnOpen": true
 }

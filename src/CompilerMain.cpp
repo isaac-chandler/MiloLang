@@ -136,10 +136,7 @@ Module *getModule(String name) {
 	module->members.module = true;
 	module->name = name;
 	
-	if (name.length) {		
-		loadNewFile("", module);
-	}
-
+	module->moduleId = modules.count;
 	modules.add(module);
 
 	if (runtimeModule) {
@@ -162,6 +159,14 @@ Module *getModule(String name) {
 
 		inferQueue.add(InferQueueJob(importer, module));
 	}
+	
+	if (name.length) {		
+		loadNewFile("", module);
+		compilerDirectories.add(msprintf("%s/%.*s", modulePath, STRING_PRINTF(name)));
+	}
+	else {
+		compilerDirectories.add(initialFilePath);
+	}
 
 	return module;
 }
@@ -182,6 +187,7 @@ char *getFileName(char *path) {
 		return path;
 }
 
+#if BUILD_WINDOWS
 static const char *getLibC() {
 	switch (buildOptions.c_runtime_library & ~Build_Options::C_Runtime_Library::FORCED) {
 	case Build_Options::C_Runtime_Library::STATIC:        return  "libcmt.lib libvcruntime.lib libucrt.lib kernel32.lib";
@@ -191,8 +197,7 @@ static const char *getLibC() {
 	default: assert(false); return "";
 	}
 }
-
-
+#endif
 
 #if 1
 int main(int argc, char *argv[]) {
@@ -225,6 +230,7 @@ int main(int argc, char *argv[]) {
 	chopFinalDir(modulePath);
 	chopFinalDir(modulePath);
 
+	modulePath = mprintf("%s/modules", modulePath);
 
 	for (int i = 1; i < argc; i++) {
 		if (strcmp("-llvm", argv[i]) == 0) {
@@ -309,12 +315,13 @@ int main(int argc, char *argv[]) {
 		reportError("Usage: %s <file>", argv[0]);
 	}
 
-	char *pathToInputFile = fullPath(input);
+	initialFilePath = fullPath(input);
 
-	if (pathToInputFile) {
-		input = getFileName(pathToInputFile);
+	if (initialFilePath) {
+		input = getFileName(initialFilePath);
 
-		chopFinalDir(pathToInputFile);
+		chopFinalDir(initialFilePath);
+		chdir(initialFilePath);
 
 		char *lastDot = strrchr(input, '.');
 
@@ -328,6 +335,9 @@ int main(int argc, char *argv[]) {
 		reportError("Error: File %s does not exist", input);
 		return 1;
 	}
+
+	compilerDirectories.add(initialFilePath);
+	compilerDirectories.add(modulePath);
 
 	buildOptions.output_name.data = new u8[buildOptions.output_name.count];
 	memcpy(buildOptions.output_name.data, input, buildOptions.output_name.count);
@@ -455,10 +465,10 @@ int main(int argc, char *argv[]) {
 			backendEnd - start)).count() / 1000.0);
 	}
 
-#if BUILD_WINDOWS
 	if (!hadError && buildOptions.output_name.count) {
 		auto linkerStart = high_resolution_clock::now();
 
+#if BUILD_WINDOWS
 		wchar_t *linkerCommand;
 
 		wchar_t *linkerPath;
@@ -748,6 +758,22 @@ int main(int argc, char *argv[]) {
 
 			CloseHandle(info.hProcess);
 		}
+#else
+		char *libBuffer = mprintf("");
+		for (auto lib : libraries) {
+			char *oldLibBuffer = libBuffer;
+			libBuffer = mprintf("%s -l%.*s", oldLibBuffer, STRING_PRINTF(lib.name));
+			free(oldLibBuffer);
+		}
+
+		char *linkerCommand = mprintf("gcc -gdwarf-5%s %s __milo_cmain.o -o %.*s", libBuffer, objectFileName, STRING_PRINTF(outputFileName));
+		printf("Linker command: %s\n", linkerCommand);
+
+		if (system(linkerCommand) != 0) {
+			hadError = true;
+			return 1;
+		}
+#endif
 
 	error:;
 
@@ -757,9 +783,6 @@ int main(int argc, char *argv[]) {
 		reportInfo("Total Time: %.1fms", duration_cast<microseconds>(duration<double>(
 			high_resolution_clock::now() - start)).count() / 1000.0);
 	}
-#else
-	// @Platform
-#endif
 
 #if BUILD_PROFILE
 	{

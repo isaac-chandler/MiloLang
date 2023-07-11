@@ -100,7 +100,7 @@ struct SubJob {
 	const char *sleepReason;
 #endif
 
-	SubJob(JobFlavor flavor, Array<Type *> *sizeDependencies) : flavor(flavor), sizeDependencies(sizeDependencies) {}
+	SubJob(JobFlavor flavor, Array<Type *> *sizeDependencies) : sizeDependencies(sizeDependencies), flavor(flavor) {}
 };
 
 bool isDone(SubJob *job) {
@@ -120,6 +120,7 @@ void goToSleep(SubJob *job, Array<SubJob *> *sleepingOnMe, const char *reason, S
 	
 	sleepingOnMe->add(job);
 
+	(void)reason;
 #if BUILD_DEBUG
 	job->sleepReason = reason;
 #endif
@@ -134,6 +135,7 @@ void goToSleep(SubJob *job, Array<SubJob *> *sleepingOnMe, const char *reason) {
 
 	sleepingOnMe->add(job);
 
+	(void)reason;
 #if BUILD_DEBUG
 	job->sleepReason = reason;
 #endif
@@ -311,7 +313,7 @@ void addBlock(Block *block) {
 
 	for (auto &declaration : block->declarations) {
 		auto success = addDeclaration(declaration, nullptr);
-
+		(void)success;
 		assert(success); // Adding a block should never fail, the only failing cases for addDeclaration are if it is added to global scope
 	}
 
@@ -2504,6 +2506,8 @@ bool inferOverloadSetForNonCall(SubJob *job, Type *correct, Expr *&given, bool *
 }
 
 bool inferPolymorphicFunctionForNonCall(Type *correct, ExprFunction *given) {
+	(void)correct;
+	(void)given;
 	return false;
 }
 
@@ -2752,6 +2756,7 @@ bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yi
 					reportError(location, "Error: Cannot convert from %.*s to %.*s", STRING_PRINTF(given->type->name), STRING_PRINTF(correct->name));
 					return false;
 				}
+				break;
 			}
 			default:
 				assert(false);
@@ -3335,7 +3340,7 @@ bool inferArguments(SubJob *job, Arguments *arguments, Block *block, bool *yield
 	return true;
 }
 
-bool checkArgumentsForOverload(SubJob *job, Arguments *arguments, Block *block, ExprFunction *function, u32 *conversions, bool *yield) {
+bool checkArgumentsForOverload(SubJob *job, Arguments *arguments, Block *block, u32 *conversions, bool *yield) {
 	*yield = false;
 
 #if BUILD_DEBUG
@@ -3640,9 +3645,6 @@ bool doPolymorphMatchingForCall(Arguments *arguments, ExprFunction *function, bo
 
 		Declaration *argument = function->arguments.declarations[i];
 		assert(!(argument->flags & DECLARATION_IMPORTED_BY_USING));
-
-		auto argumentType = arguments->values[i]->type;
-
 		
 		auto argumentExpr = arguments->values[i];
 
@@ -4016,8 +4018,6 @@ bool inferBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 			}
 		}
 
-		bool handled = left->type == right->type;
-
 		if (binary->op == TOKEN('+')) {
 			if (left->type->flavor == TypeFlavor::POINTER && right->type->flavor == TypeFlavor::POINTER) {
 				reportError(binary, "Error: Cannot add pointers %.*s and %.*s", STRING_PRINTF(left->type->name), STRING_PRINTF(right->type->name));
@@ -4351,7 +4351,7 @@ bool inferFlattened(SubJob *job) {
 						identifier->declaration = findDeclarationNoYield(&import->module->members, identifier->name);
 
 						if (!identifier->declaration) {
-							goToSleep(job, &identifier->module->members.sleepingOnMe, "Identifier not found in module by namespace", identifier->name);
+							goToSleep(job, &import->module->members.sleepingOnMe, "Identifier not found in module by namespace", identifier->name);
 
 							return true;
 						}
@@ -4619,7 +4619,6 @@ bool inferFlattened(SubJob *job) {
 
 			if (!literal->type) {
 				assert(literal->typeValue);
-				bool yield;
 				if (literal->typeValue->type == &TYPE_AUTO_CAST) {
 					bool yield = false;
 					if (!tryAutoCast(job, &literal->typeValue, &TYPE_TYPE, &yield)) {
@@ -4882,8 +4881,6 @@ bool inferFlattened(SubJob *job) {
 		}
 		case ExprFlavor::RUN: {
 			auto run = static_cast<ExprRun *>(expr);
-
-			auto function = static_cast<ExprFunction *>(run->function);
 
 			if (run->returnValue) {
 				*exprPointer = run->returnValue;
@@ -5306,7 +5303,6 @@ bool inferFlattened(SubJob *job) {
 			break;
 		}
 		case ExprFlavor::BINARY_OPERATOR: {
-			auto binary = static_cast<ExprBinaryOperator *>(expr);
 			bool yield;
 
 			// Split this into a separate function so microsofts shitty optimizer doesn't fuck us during profiling builds
@@ -5627,13 +5623,13 @@ bool inferFlattened(SubJob *job) {
 					while (Declaration *declaration = it.next()) {
 						assert(declaration->initialValue->flavor == ExprFlavor::FUNCTION);
 
-						OverloadMatchCost conversions { declaration };
+						OverloadMatchCost conversions { declaration, {} };
 
 						auto function = static_cast<ExprFunction *>(declaration->initialValue);
 
 						assert(function->type != &TYPE_POLYMORPHIC_FUNCTION);
 
-						if (!checkArgumentsForOverload(job, &call->arguments, &function->arguments, function, conversions.argumentCount, &yield)) {
+						if (!checkArgumentsForOverload(job, &call->arguments, &function->arguments, conversions.argumentCount, &yield)) {
 							if (yield)
 								return true;
 							else
@@ -5927,7 +5923,7 @@ bool inferFlattened(SubJob *job) {
 									return yield;
 								}
 
-								array->values[i];
+								array->values[i] = argument;
 								array->end = argument->end;
 							}
 
@@ -7022,7 +7018,6 @@ bool inferImporter(SubJob *subJob) {
 	auto importer = job->importer;
 
 	Block *block = nullptr;
-	Expr *structAccess = nullptr;
 
 	bool onlyConstants = false;
 
@@ -7081,7 +7076,7 @@ bool inferImporter(SubJob *subJob) {
 
 				if (!importDeclarationIntoModule(importer->enclosingScope, member, importer->import))
 					return false;
-			} while (member = member->nextOverload);
+			} while ((member = member->nextOverload));
 		}
 	done:;
 	}
@@ -7110,7 +7105,6 @@ bool inferImporter(SubJob *subJob) {
 	if (block) {
 		if (importer->import->flavor == ExprFlavor::STATIC_IF) {
 			assert(!onlyConstants);
-			assert(!structAccess);
 
 			for (auto member : block->importers) {
 				addImporterToBlock(importer->enclosingScope, member, member->serial);
@@ -7154,7 +7148,7 @@ bool inferImporter(SubJob *subJob) {
 
 					if (!addDeclaration(member, nullptr))
 						return false;
-				} while (member = member->nextOverload);
+				} while ((member = member->nextOverload));
 			}
 
 			block->declarations.clear();
@@ -8402,8 +8396,6 @@ bool inferRun(SubJob *subJob) {
 	assert(function->returnCount == 1);
 	assert(!(function->flags & TYPE_FUNCTION_IS_C_CALL));
 
-	auto returnType = function->returnTypes[0];
-
 	while (job->checkingFunctions.count) {
 		auto &index = job->checkingFunctionIndices[job->checkingFunctionIndices.count - 1];
 		auto &function = job->checkingFunctions[job->checkingFunctions.count - 1];
@@ -8493,8 +8485,9 @@ bool inferRun(SubJob *subJob) {
 
 					}
 					else if (op.op == IrOp::FUNCTION) {
-						if (!(op.function->flags & EXPR_FUNCTION_RUN_CHECKED)) {
-							if (pushFunctionToRunCheck(job, op.function)) {
+						auto function= static_cast<ExprFunction *>(op.data);
+						if (!(function->flags & EXPR_FUNCTION_RUN_CHECKED)) {
+							if (pushFunctionToRunCheck(job, function)) {
 								break;
 							}
 						}
@@ -8687,6 +8680,7 @@ bool addContext(ExprAddContext *addContext) {
 	}
 
 	bool success = addDeclaration(addContext->declaration, runtimeModule);
+	(void) success;
 	assert(success);
 
 	if (addContext->using_) {
@@ -9018,10 +9012,6 @@ outer:
 				auto haltedOn = *getHalt(&job->value);
 
 				reportError(haltedOn, "%.*s value halted here", STRING_PRINTF(name));
-
-				if (haltedOn->flavor == ExprFlavor::IDENTIFIER) {
-					auto identifier = static_cast<ExprIdentifier *>(haltedOn);
-				}
 			}
 
 			if (isDone(&job->type) && isDone(&job->value)) {

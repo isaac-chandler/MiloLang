@@ -22,3 +22,5 @@ tests/log.txt
 bin
 profile.json
 build/
+build_debug/
+build_release/

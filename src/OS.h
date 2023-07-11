@@ -78,7 +78,7 @@ inline bool directoryExists(const char *file) {
 inline char *exePath() {
 	char *buffer = nullptr;
 
-	for (size_t buf_size = 256;; buf_size *= 2) {
+	for (int buf_size = 256;; buf_size *= 2) {
 		buffer = static_cast<char *>(realloc(buffer, buf_size));
 
 		int result = readlink("/proc/self/exe", buffer, buf_size);

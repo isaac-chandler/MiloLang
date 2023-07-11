@@ -8,9 +8,26 @@
             "name": "Run Compiler", 
             "request": "launch",
             "type": "cppdbg", 
-            "program": "${workspaceRoot}/build/milo", 
-            "args": ["bare.milo"], 
+            "program": "${workspaceRoot}/build_debug/milo", 
+            "args": ["hello.milo"], 
             "cwd": "${workspaceRoot}"
+        }, 
+        {
+            "name": "Release Compiler", 
+            "request": "launch",
+            "type": "cppdbg", 
+            "program": "${workspaceRoot}/build_release/milo", 
+            "args": ["hello.milo"], 
+            "cwd": "${workspaceRoot}"
+        }, 
+        {
+            "name": "Bare", 
+            "request": "launch",
+            "type": "cppdbg", 
+            "program": "${workspaceRoot}/hello", 
+            "args": [], 
+            "cwd": "${workspaceRoot}", 
+            "stopAtEntry": true
         }
     ]
 }

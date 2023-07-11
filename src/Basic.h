@@ -71,8 +71,6 @@ namespace llvm {
 #undef FALSE
 #undef VOID
 
-#pragma warning(error: 4715)
-
 // Magic color names for chrome://tracing
 #define PROFILE_BLUE "vsync_highlight_color"
 #define PROFILE_BLACK "black"
@@ -155,6 +153,11 @@ struct MiloString {
 #if BUILD_LINUX
 #pragma GCC diagnostic ignored "-Winvalid-offsetof"
 #pragma GCC diagnostic ignored "-Wvolatile"
+#pragma GCC diagnostic ignored "-Wparentheses"
+#pragma GCC diagnostic ignored "-Wswitch"
+#pragma GCC diagnostic ignored "-Wstrict-aliasing"
+#elif BUILD_WINDOWS
+#pragma warning(error: 4715)
 #endif
 
 #define CAST_FROM_SUBSTRUCT(castTo, subStruct, castFrom) (	reinterpret_cast<castTo *>(reinterpret_cast<u8 *>(castFrom) - offsetof(castTo, subStruct)) + ((decltype(castFrom)) 0 - (decltype(&((castTo *) 0)->subStruct)) 0)	)

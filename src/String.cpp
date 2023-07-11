@@ -4,7 +4,6 @@
 String::String(const char *cString) {
 	length = static_cast<u32>(strlen(cString));
 	
-	const char *s = cString;
 	characters = static_cast<char *>(malloc(length));
 	memcpy(characters, cString, length);
 }

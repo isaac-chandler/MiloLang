@@ -28,12 +28,12 @@ u64 MurmurHash64A(const void *key, u64 len, u64 seed) {
 	const u8 *data2 = reinterpret_cast<const u8 *>(data);
 
 	switch (len & 7) {
-		case 7: hash ^= static_cast<u64>(data2[6]) << 48;
-		case 6: hash ^= static_cast<u64>(data2[5]) << 40;
-		case 5: hash ^= static_cast<u64>(data2[4]) << 32;
-		case 4: hash ^= static_cast<u64>(data2[3]) << 24;
-		case 3: hash ^= static_cast<u64>(data2[2]) << 16;
-		case 2: hash ^= static_cast<u64>(data2[1]) << 8;
+		case 7: hash ^= static_cast<u64>(data2[6]) << 48; [[fallthrough]];
+		case 6: hash ^= static_cast<u64>(data2[5]) << 40; [[fallthrough]];
+		case 5: hash ^= static_cast<u64>(data2[4]) << 32; [[fallthrough]];
+		case 4: hash ^= static_cast<u64>(data2[3]) << 24; [[fallthrough]];
+		case 3: hash ^= static_cast<u64>(data2[2]) << 16; [[fallthrough]];
+		case 2: hash ^= static_cast<u64>(data2[1]) << 8; [[fallthrough]];
 		case 1: hash ^= static_cast<u64>(data2[0]);
 		hash *= multiplier;
 	};
@@ -154,7 +154,7 @@ void addImplicitImport(Block *block, ExprIdentifier *identifier) {
 	block->implicitImports.add(identifier);
 }
 
-void addToOverloads(Block *block, Declaration *overload, Declaration *add) {
+void addToOverloads(Declaration *overload, Declaration *add) {
 	while (overload->nextOverload) {
 		overload = overload->nextOverload;
 	}

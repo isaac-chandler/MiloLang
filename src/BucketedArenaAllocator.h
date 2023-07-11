@@ -52,6 +52,8 @@ struct BucketedArenaAllocator {
 	void addString(String string);
 	void addString(const char *string);
 	void ensure(u32 size);
+
+	void align(u64 alignment);
 };
 
 template<typename T, u32 bucketSize = 1024>

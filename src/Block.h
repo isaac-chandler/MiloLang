@@ -79,7 +79,7 @@ struct Declaration {
 
 	union {
 		struct {
-			union Symbol *symbol;
+			void *symbol;
 			u32 physicalStorage;
 			u32 registerOfStorage;
 		};
@@ -135,6 +135,7 @@ struct Block {
 struct Module {
 	String name;
 	Block members;
+	u32 moduleId;
 	Array<struct Importer *> imports;
 };
 
@@ -184,7 +185,7 @@ inline void putDeclarationInBlock(Block *block, Declaration *declaration) {
 	}
 }
 
-void addToOverloads(Block *block, Declaration *overload, Declaration *add);
+void addToOverloads(Declaration *overload, Declaration *add);
 
 inline void addDeclarationToBlockUnchecked(Block *block, Declaration *declaration, Declaration *overloadSet, u32 serial) {
 	assert(checkForRedeclaration(block, declaration, &overloadSet, nullptr));
@@ -194,7 +195,7 @@ inline void addDeclarationToBlockUnchecked(Block *block, Declaration *declaratio
 	declaration->enclosingScope = block;
 	
 	if (overloadSet) {
-		addToOverloads(block, overloadSet, declaration);
+		addToOverloads(overloadSet, declaration);
 	}
 	else {
 		putDeclarationInBlock(block, declaration);

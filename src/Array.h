@@ -8,7 +8,7 @@ inline u32 findHigherPowerOf2(u32 value) {
 
 	u32 index = bitScanReverse(value);
 
-	if ((value & value - 1) == 0) [[likely]] {
+	if ((value & (value - 1)) == 0) [[likely]] {
 		return index;
 	}
 	else {
@@ -27,8 +27,11 @@ struct ArrayAllocator {
 
 	static constexpr u32 blocksToAllocate = 64;
 
-	ArrayAllocatorBlock *freeBlocks[32] = {};
+	ArrayAllocatorBlock **freeBlocks;
 
+	ArrayAllocator() {
+		freeBlocks = new ArrayAllocatorBlock * [32] {};
+	}
 
 	void createBlocks(u32 powerOf2) {
 		u32 blockSize = 8 + itemSize * (1 << powerOf2);
@@ -66,11 +69,8 @@ struct ArrayAllocator {
 		freeBlocks[powerOf2] = block;
 	}
 
-	static thread_local ArrayAllocator instance;
+	static inline thread_local ArrayAllocator instance;
 };
-
-template<u32 itemSize>
-inline thread_local ArrayAllocator<itemSize> ArrayAllocator<itemSize>::instance;
 
 template <typename T>
 class Array {
@@ -93,9 +93,9 @@ public:
 		}
 
 		T *newStorage = (T *) Allocator::instance.allocate(newCapacity);
-		memcpy(newStorage, storage, sizeof(T) * count);
 
-		if (storage) {
+		if (storage) {	
+			memcpy(newStorage, storage, sizeof(T) * count);
 			Allocator::instance.free(capacity, (u8 *) storage);
 		}
 
