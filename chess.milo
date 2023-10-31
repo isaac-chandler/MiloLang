@@ -12,280 +12,280 @@ should_quit: bool
 window_width: s32 = 800
 window_height: s32 = 800
 
-load_image :: (filename: string) -> u32 {	
-	file, success := read_entire_file(filename)
-	defer free_array(file)
-	
-	if !success {
-		print("Failed to load image ")
-		print(filename)
-		print("\n")
-		return 0
-	}
-	
-	if file.count < size_of(Bmp_File_Header) + size_of(Bmp_Dib_Header) {
-		return 0
-	}
+load_image :: (filename: string) -> u32 {    
+    file, success := read_entire_file(filename)
+    defer free_array(file)
+    
+    if !success {
+        print("Failed to load image ")
+        print(filename)
+        print("\n")
+        return 0
+    }
+    
+    if file.count < size_of(Bmp_File_Header) + size_of(Bmp_Dib_Header) {
+        return 0
+    }
 
-	file_header := cast(*Bmp_File_Header)file.data
-	dib_header := cast(*Bmp_Dib_Header)(file.data + size_of(Bmp_File_Header))
-	
-	if file_header.header != Bmp_File_Header.EXPECTED_HEADER || file_header.file_size != file.count {
-		return 0
-	}
-	
-	if dib_header.bits_per_pixel != 32 || 
-		dib_header.compression_method != .BI_BITFIELDS || 
-		dib_header.alpha_mask != 0xFF000000 ||
-		dib_header.red_mask   != 0x00FF0000 ||
-		dib_header.green_mask != 0x0000FF00 ||
-		dib_header.blue_mask  != 0x000000FF ||
-		dib_header.height <= 0 {
-		
-		return 0
-	}
-	
-	texture: u32
-	
-	glGenTextures(1, *texture)
-	glBindTexture(GL_TEXTURE_2D, texture)
-	
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP)
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP)
-	
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, dib_header.width, dib_header.height, 0, GL_BGRA_EXT, GL_UNSIGNED_BYTE, file.data + file_header.offset_to_image)
-	
-	return texture
+    file_header := cast(*Bmp_File_Header)file.data
+    dib_header := cast(*Bmp_Dib_Header)(file.data + size_of(Bmp_File_Header))
+    
+    if file_header.header != Bmp_File_Header.EXPECTED_HEADER || file_header.file_size != file.count {
+        return 0
+    }
+    
+    if dib_header.bits_per_pixel != 32 || 
+        dib_header.compression_method != .BI_BITFIELDS || 
+        dib_header.alpha_mask != 0xFF000000 ||
+        dib_header.red_mask   != 0x00FF0000 ||
+        dib_header.green_mask != 0x0000FF00 ||
+        dib_header.blue_mask  != 0x000000FF ||
+        dib_header.height <= 0 {
+        
+        return 0
+    }
+    
+    texture: u32
+    
+    glGenTextures(1, *texture)
+    glBindTexture(GL_TEXTURE_2D, texture)
+    
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP)
+    
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, dib_header.width, dib_header.height, 0, GL_BGRA_EXT, GL_UNSIGNED_BYTE, file.data + file_header.offset_to_image)
+    
+    return texture
 }
 
 Opening_Info :: struct {
-	hash: u64
-	moves: [..]Move
+    hash: u64
+    moves: [..]Move
 }
 
 openings: [..]Opening_Info
 
 opening_table_insert :: (hash: u64) -> *Opening_Info {
-		
-	allocate_openings :: (count: u64) {
-		result := new_array(Opening_Info, count)
-		openings.data = result.data
-		openings.count = 0
-		openings.capacity = count
-	}
-	
-	if openings.capacity == 0 {
-		allocate_openings(1024)
-	} else if openings.count * 10 > openings.capacity * 7 {
-		old_openings := openings
-		defer free_array([]Opening_Info.{old_openings.data, old_openings.capacity})
-		
-		allocate_openings(old_openings.capacity * 2)
-		
-		for old_openings.capacity {
-			if old_openings[it].hash {
-				<<opening_table_insert(old_openings[it].hash) = old_openings[it]
-			}
-		}
-	}
-	
-	key := hash
-	if key == 0
-		key = 1
-	openings.count += 1
-	
-	slot := key & (openings.capacity - 1)
-	
-	while true {
-		if openings[slot].hash == 0 {
-			openings[slot].hash = key
-			return *openings[slot]
-		}
-	
-		slot = (slot + 1) & (openings.capacity - 1)
-	}
-	
-	assert(false)
-	return null
+        
+    allocate_openings :: (count: u64) {
+        result := new_array(Opening_Info, count)
+        openings.data = result.data
+        openings.count = 0
+        openings.capacity = count
+    }
+    
+    if openings.capacity == 0 {
+        allocate_openings(1024)
+    } else if openings.count * 10 > openings.capacity * 7 {
+        old_openings := openings
+        defer free_array([]Opening_Info.{old_openings.data, old_openings.capacity})
+        
+        allocate_openings(old_openings.capacity * 2)
+        
+        for old_openings.capacity {
+            if old_openings[it].hash {
+                <<opening_table_insert(old_openings[it].hash) = old_openings[it]
+            }
+        }
+    }
+    
+    key := hash
+    if key == 0
+        key = 1
+    openings.count += 1
+    
+    slot := key & (openings.capacity - 1)
+    
+    while true {
+        if openings[slot].hash == 0 {
+            openings[slot].hash = key
+            return *openings[slot]
+        }
+    
+        slot = (slot + 1) & (openings.capacity - 1)
+    }
+    
+    assert(false)
+    return null
 }
 
 opening_table_lookup :: (hash: u64) -> *Opening_Info {
-	if openings.count == 0  return null
+    if openings.count == 0  return null
 
-	key := hash
-	if key == 0
-		key = 1
-	
-	slot := key & (openings.capacity - 1)
-	
-	while true {
-		if openings[slot].hash == key
-			return *openings[slot]
-		else if openings[slot].hash == 0
-			return null
-	
-		slot = (slot + 1) & (openings.capacity - 1)
-	}
-	
-	assert(false)
-	return null
+    key := hash
+    if key == 0
+        key = 1
+    
+    slot := key & (openings.capacity - 1)
+    
+    while true {
+        if openings[slot].hash == key
+            return *openings[slot]
+        else if openings[slot].hash == 0
+            return null
+    
+        slot = (slot + 1) & (openings.capacity - 1)
+    }
+    
+    assert(false)
+    return null
 }
 
 calculate_openings_table :: () -> bool {
-	file, success := read_entire_file("openings.txt")
-	
-	if !success
-		return false
-	
-	remaining := cast(string) file
-	
-	starting_board := initialize_from_fen(STARTING_BOARD)
-	legal_moves: [..]Move
-	
-	
-	while true {
-		line: string
-		line, remaining = get_line(remaining)
-		
-		if !line
-			break;
-		
-		using state := starting_board
-		
-		while true {
-			key := hash(state)
-		
-			move: string
-			move, line = split_at_first(line, ' ')
-			
-			if !move
-				break;
-			
-			move_info: Move
-			if move == "O-O" {
-				if player_color == BLACK {
-					move_info.piece_index = BLACK_KING_INDEX
-				} else {
-					move_info.piece_index = WHITE_KING_INDEX					
-				}
-				move_info.end = pieces[move_info.piece_index].location + 2
+    file, success := read_entire_file("openings.txt")
+    
+    if !success
+        return false
+    
+    remaining := cast(string) file
+    
+    starting_board := initialize_from_fen(STARTING_BOARD)
+    legal_moves: [..]Move
+    
+    
+    while true {
+        line: string
+        line, remaining = get_line(remaining)
+        
+        if !line
+            break;
+        
+        using state := starting_board
+        
+        while true {
+            key := hash(state)
+        
+            move: string
+            move, line = split_at_first(line, ' ')
+            
+            if !move
+                break;
+            
+            move_info: Move
+            if move == "O-O" {
+                if player_color == BLACK {
+                    move_info.piece_index = BLACK_KING_INDEX
+                } else {
+                    move_info.piece_index = WHITE_KING_INDEX                    
+                }
+                move_info.end = pieces[move_info.piece_index].location + 2
 
-				new_state, valid := checked_do_move(state, move_info)
-						
-				if valid
-					state = new_state
-				else 
-					return false
-			} else if move == "O-O-O" {
-				if player_color == BLACK {
-					move_info.piece_index = BLACK_KING_INDEX
-				} else {
-					move_info.piece_index = WHITE_KING_INDEX					
-				}
-				move_info.end = pieces[move_info.piece_index].location - 2
+                new_state, valid := checked_do_move(state, move_info)
+                        
+                if valid
+                    state = new_state
+                else 
+                    return false
+            } else if move == "O-O-O" {
+                if player_color == BLACK {
+                    move_info.piece_index = BLACK_KING_INDEX
+                } else {
+                    move_info.piece_index = WHITE_KING_INDEX                    
+                }
+                move_info.end = pieces[move_info.piece_index].location - 2
 
-				new_state, valid := checked_do_move(state, move_info)
-						
-				if valid
-					state = new_state
-				else 
-					return false
-			} else {
-				piece := player_color
-				
-				file: s8 = -1
-				rank: s8 = -1
-				
-				if 'a' <= move[0] && move[0] <= 'h' {
-					piece |= PAWN
-				
-					file = cast() (move[0] - 'a')
-					
-					if 'a' <= move[1] && move[1] <= 'h' {
-						move = move[1..]
-					}
-				} else if move[0] == 'R' {
-					move = move[1..]
-					piece |= ROOK
-				} else if move[0] == 'N' {
-					move = move[1..]
-					piece |= KNIGHT
-				} else if move[0] == 'B' {
-					move = move[1..]
-					piece |= BISHOP
-				} else if move[0] == 'K' {
-					move = move[1..]
-					piece |= KING
-				} else if move[0] == 'Q' {
-					move = move[1..]
-					piece |= QUEEN
-				} else {
-					return false
-				}
-				
-				if move.count > 2 && 'a' <= move[0] && move[0] <= 'h' {
-					file = cast() (move[0] - 'a')
-					move = move[1..]
-				}
-				
-				if move.count > 2 && '1' <= move[0] && move[0] <= '8' {
-					rank = cast() (7 - (move[0] - '1'))
-					move = move[1..]
-				}
-				
-				if move.count != 2
-					return false
-				
-				end := pack(cast() (move[0] - 'a'), cast() (7 - (move[1] - '1')))
-				
-				for p: pieces {
-					if p.location == -1 || p.piece != piece 
-						continue;
-					
-					x, y := unpack(p.location)
-					
-					if (file != -1 && x != file) || (rank != -1 && rank != y)
-						continue;
-					
-					legal_moves.count = 0
-					
-					get_moves_for_piece(state, *legal_moves, cast() it_index)
-					
-					for legal_moves {
-						if it.end != end  continue;
-						new_state, valid := checked_do_move(state, it)
-						
-						if valid {
-							state = new_state
-							move_info = it
-						
-							break p
-						}
-					}
-				} or {
-					return false
-				}
-				
-				
-			}
-			
-			moves := opening_table_lookup(key)
-			if !moves  moves = opening_table_insert(key)
-			
-			array_add(*moves.moves, move_info)
-		}
-	}
-	
-	return true
+                new_state, valid := checked_do_move(state, move_info)
+                        
+                if valid
+                    state = new_state
+                else 
+                    return false
+            } else {
+                piece := player_color
+                
+                file: s8 = -1
+                rank: s8 = -1
+                
+                if 'a' <= move[0] && move[0] <= 'h' {
+                    piece |= PAWN
+                
+                    file = cast() (move[0] - 'a')
+                    
+                    if 'a' <= move[1] && move[1] <= 'h' {
+                        move = move[1..]
+                    }
+                } else if move[0] == 'R' {
+                    move = move[1..]
+                    piece |= ROOK
+                } else if move[0] == 'N' {
+                    move = move[1..]
+                    piece |= KNIGHT
+                } else if move[0] == 'B' {
+                    move = move[1..]
+                    piece |= BISHOP
+                } else if move[0] == 'K' {
+                    move = move[1..]
+                    piece |= KING
+                } else if move[0] == 'Q' {
+                    move = move[1..]
+                    piece |= QUEEN
+                } else {
+                    return false
+                }
+                
+                if move.count > 2 && 'a' <= move[0] && move[0] <= 'h' {
+                    file = cast() (move[0] - 'a')
+                    move = move[1..]
+                }
+                
+                if move.count > 2 && '1' <= move[0] && move[0] <= '8' {
+                    rank = cast() (7 - (move[0] - '1'))
+                    move = move[1..]
+                }
+                
+                if move.count != 2
+                    return false
+                
+                end := pack(cast() (move[0] - 'a'), cast() (7 - (move[1] - '1')))
+                
+                for p: pieces {
+                    if p.location == -1 || p.piece != piece 
+                        continue;
+                    
+                    x, y := unpack(p.location)
+                    
+                    if (file != -1 && x != file) || (rank != -1 && rank != y)
+                        continue;
+                    
+                    legal_moves.count = 0
+                    
+                    get_moves_for_piece(state, *legal_moves, cast() it_index)
+                    
+                    for legal_moves {
+                        if it.end != end  continue;
+                        new_state, valid := checked_do_move(state, it)
+                        
+                        if valid {
+                            state = new_state
+                            move_info = it
+                        
+                            break p
+                        }
+                    }
+                } or {
+                    return false
+                }
+                
+                
+            }
+            
+            moves := opening_table_lookup(key)
+            if !moves  moves = opening_table_insert(key)
+            
+            array_add(*moves.moves, move_info)
+        }
+    }
+    
+    return true
 }
 
 Rectangle :: struct {
-	x: f32
-	y: f32
-	width: f32
-	height: f32
+    x: f32
+    y: f32
+    width: f32
+    height: f32
 }
 
 rng: Random_State
@@ -294,523 +294,523 @@ rng: Random_State
 gl_context: HGLRC
 
 pack :: (x: s8, y: s8) -> s8 {
-	return y * 8 + x
+    return y * 8 + x
 }
 
 unpack :: (postion: s8) -> (s8, s8) {
-	return postion & 7, postion >> 3
+    return postion & 7, postion >> 3
 }
 
 Move :: struct {
-	piece_index: s8
-	end: s8
+    piece_index: s8
+    end: s8
 }
 
 using Piece :: enum_flags u8 {
-	ROOK   :: 0x1
-	BISHOP :: 0x2
-	QUEEN  :: 0x3
-	KING   :: 0x4
-	KNIGHT :: 0x5
-	PAWN   :: 0x6
-	
-	BLACK  :: 0x8
+    ROOK   :: 0x1
+    BISHOP :: 0x2
+    QUEEN  :: 0x3
+    KING   :: 0x4
+    KNIGHT :: 0x5
+    PAWN   :: 0x6
+    
+    BLACK  :: 0x8
 }
 
 // @Volatile: Indices of king and rooks are hardocded below, an arbitrary board state cannot be used here
 global_board: State
 
 print_fen :: (using state: State) {
-	for y: 8 {
-		x := 0
-		
-		while x < 8 { 
-			pos := pack(cast() x, cast() y)
-			
-			if board[pos] == -1 {
-				count := 0
-			
-				while board[pos] == -1 && x < 8 {
-					count += 1
-					x += 1
-					pos = pack(cast() x, cast() y)
-				}
-				
-				print("%", count)
-			} else {
-				if pieces[board[pos]].piece == {
-					case ROOK          print("R")
-					case KNIGHT        print("N")
-					case BISHOP        print("B")
-					case KING          print("K")
-					case QUEEN         print("Q")
-					case PAWN          print("P")
-					case ROOK  |BLACK  print("r")
-					case KNIGHT|BLACK  print("n")
-					case BISHOP|BLACK  print("b")
-					case KING  |BLACK  print("k")
-					case QUEEN |BLACK  print("q")
-					case PAWN  |BLACK  print("p")
-					else assert(false)
-				}
-				
-				x += 1
-			}
-		}
-		
-		if y != 7 print("/")
-	}
+    for y: 8 {
+        x := 0
+        
+        while x < 8 { 
+            pos := pack(cast() x, cast() y)
+            
+            if board[pos] == -1 {
+                count := 0
+            
+                while board[pos] == -1 && x < 8 {
+                    count += 1
+                    x += 1
+                    pos = pack(cast() x, cast() y)
+                }
+                
+                print("%", count)
+            } else {
+                if pieces[board[pos]].piece == {
+                    case ROOK          print("R")
+                    case KNIGHT        print("N")
+                    case BISHOP        print("B")
+                    case KING          print("K")
+                    case QUEEN         print("Q")
+                    case PAWN          print("P")
+                    case ROOK  |BLACK  print("r")
+                    case KNIGHT|BLACK  print("n")
+                    case BISHOP|BLACK  print("b")
+                    case KING  |BLACK  print("k")
+                    case QUEEN |BLACK  print("q")
+                    case PAWN  |BLACK  print("p")
+                    else assert(false)
+                }
+                
+                x += 1
+            }
+        }
+        
+        if y != 7 print("/")
+    }
 
 
-	
-	if player_color == BLACK
-		print(" b ")
-	else
-		print(" w ")
-	
-	if castle_state == cast() 0xF
-		print("-")
-	if !(castle_state & .WHITE_NO_KINGSIDE)
-		print("K")
-	if !(castle_state & .WHITE_NO_QUEENSIDE)
-		print("Q")
-	if !(castle_state & .BLACK_NO_KINGSIDE)
-		print("k")
-	if !(castle_state & .BLACK_NO_QUEENSIDE)
-		print("q")
+    
+    if player_color == BLACK
+        print(" b ")
+    else
+        print(" w ")
+    
+    if castle_state == cast() 0xF
+        print("-")
+    if !(castle_state & .WHITE_NO_KINGSIDE)
+        print("K")
+    if !(castle_state & .WHITE_NO_QUEENSIDE)
+        print("Q")
+    if !(castle_state & .BLACK_NO_KINGSIDE)
+        print("k")
+    if !(castle_state & .BLACK_NO_QUEENSIDE)
+        print("q")
 
-	en_passant_data := u8.['-', 0]
-	en_passant := string.{en_passant_data.data, 1}
+    en_passant_data := u8.['-', 0]
+    en_passant := string.{en_passant_data.data, 1}
 
-	if en_passant_position >= 0 {
-		x, y := unpack(en_passant_position)
+    if en_passant_position >= 0 {
+        x, y := unpack(en_passant_position)
 
-		y = 7 - y
+        y = 7 - y
 
-		en_passant.count = 2
-		en_passant[0] = cast(u8) x + 'a'
-		en_passant[1] = cast(u8) y + '1'
-	}
-	
-	print(" % % %", en_passant, 0, move_count / 2 + 1)
-		
+        en_passant.count = 2
+        en_passant[0] = cast(u8) x + 'a'
+        en_passant[1] = cast(u8) y + '1'
+    }
+    
+    print(" % % %", en_passant, 0, move_count / 2 + 1)
+        
 
-	print("\n")
+    print("\n")
 }
 
 initialize_from_fen :: (fen: string) -> (State, bool) {
-	x: s8 = 0
-	y: s8 = 0
-	
-	layout: [64]Piece
-	
-	c: u32
-	remaining := fen
-	
-	while remaining {
-		if x > 8 || y > 7 {
-			return .{}, false
-		}
-	
-		pos := pack(x, y)
-		
-		c, remaining = read_character(remaining)
-		
-		if c ==  {
-			case cast()-1
-				return .{--}, false
-			case 'R' layout[pos] = ROOK
-			case 'N' layout[pos] = KNIGHT
-			case 'B' layout[pos] = BISHOP
-			case 'K' layout[pos] = KING
-			case 'Q' layout[pos] = QUEEN
-			case 'P' layout[pos] = PAWN
-			case 'r' layout[pos] = ROOK  |BLACK
-			case 'n' layout[pos] = KNIGHT|BLACK
-			case 'b' layout[pos] = BISHOP|BLACK
-			case 'k' layout[pos] = KING  |BLACK
-			case 'q' layout[pos] = QUEEN |BLACK
-			case 'p' layout[pos] = PAWN  |BLACK
-			case '/'
-				if x != 8  return .{}, false
-				x = 0
-				y += 1
-				if y >= 8  return .{}, false
-				continue
-			case '1'
-			case '2' x += 1
-			case '3' x += 2
-			case '4' x += 3
-			case '5' x += 4
-			case '6' x += 5
-			case '7' x += 6
-			case '8' x += 7
-			else
-				if x != 8 || y != 7 return .{}, false
-				
-				break
-		}
-	
-		x += 1
-	}
-	
-	using state := initialize_state(layout)
-	
-	remaining = trim_leading_whitespace(remaining)
-	
-	c, remaining = read_character(remaining)
+    x: s8 = 0
+    y: s8 = 0
+    
+    layout: [64]Piece
+    
+    c: u32
+    remaining := fen
+    
+    while remaining {
+        if x > 8 || y > 7 {
+            return .{}, false
+        }
+    
+        pos := pack(x, y)
+        
+        c, remaining = read_character(remaining)
+        
+        if c ==  {
+            case cast()-1
+                return .{--}, false
+            case 'R' layout[pos] = ROOK
+            case 'N' layout[pos] = KNIGHT
+            case 'B' layout[pos] = BISHOP
+            case 'K' layout[pos] = KING
+            case 'Q' layout[pos] = QUEEN
+            case 'P' layout[pos] = PAWN
+            case 'r' layout[pos] = ROOK  |BLACK
+            case 'n' layout[pos] = KNIGHT|BLACK
+            case 'b' layout[pos] = BISHOP|BLACK
+            case 'k' layout[pos] = KING  |BLACK
+            case 'q' layout[pos] = QUEEN |BLACK
+            case 'p' layout[pos] = PAWN  |BLACK
+            case '/'
+                if x != 8  return .{}, false
+                x = 0
+                y += 1
+                if y >= 8  return .{}, false
+                continue
+            case '1'
+            case '2' x += 1
+            case '3' x += 2
+            case '4' x += 3
+            case '5' x += 4
+            case '6' x += 5
+            case '7' x += 6
+            case '8' x += 7
+            else
+                if x != 8 || y != 7 return .{}, false
+                
+                break
+        }
+    
+        x += 1
+    }
+    
+    using state := initialize_state(layout)
+    
+    remaining = trim_leading_whitespace(remaining)
+    
+    c, remaining = read_character(remaining)
 
-	if c == 'w' player_color = 0
-	else if c == 'b' player_color = BLACK
-	else return .{}, false
-	
-	castle_state |= .BLACK_NO_KINGSIDE
-	castle_state |= .BLACK_NO_QUEENSIDE
-	castle_state |= .WHITE_NO_KINGSIDE
-	castle_state |= .WHITE_NO_QUEENSIDE
-	
-	remaining = trim_leading_whitespace(remaining)
-	
-	while true {
-		c, remaining = read_character(remaining)
-		
-		if c == {
-			case 'k' castle_state &= ~.BLACK_NO_KINGSIDE
-			case 'q' castle_state &= ~.BLACK_NO_QUEENSIDE
-			case 'K' castle_state &= ~.WHITE_NO_KINGSIDE
-			case 'Q' castle_state &= ~.WHITE_NO_QUEENSIDE
-			else
-				break
-		}
-	}
-	
-	remaining = trim_leading_whitespace(remaining)
-	
-	c, remaining = read_character(remaining)
-	
-	if c != '-' {
-		if c < 'a' || c > 'h'
-			return .{}, false
-		
-		en_passant_file := c - 'a'
-		
-		c, remaining = read_character(remaining)
-		
-		if c < '1' || c > '8'
-			return .{}, false
-			
-		en_passant_rank := 7 - (c - '1') // the 1st rank is at the bottom
-		
-		en_passant_position = pack(cast() en_passant_file, cast() en_passant_rank)
-	}
-	
-	remaining = trim_leading_whitespace(remaining)
-	
-	moves: u64
-	
-	moves, remaining = read_u64(remaining) // ignore 50 move rule info for now
-	
-	remaining = trim_leading_whitespace(remaining)	
-	moves, remaining = read_u64(remaining)
-	
-	move_count = cast() (2 * (moves - 1))
-	
-	if player_color == BLACK
-		move_count += 1
+    if c == 'w' player_color = 0
+    else if c == 'b' player_color = BLACK
+    else return .{}, false
+    
+    castle_state |= .BLACK_NO_KINGSIDE
+    castle_state |= .BLACK_NO_QUEENSIDE
+    castle_state |= .WHITE_NO_KINGSIDE
+    castle_state |= .WHITE_NO_QUEENSIDE
+    
+    remaining = trim_leading_whitespace(remaining)
+    
+    while true {
+        c, remaining = read_character(remaining)
+        
+        if c == {
+            case 'k' castle_state &= ~.BLACK_NO_KINGSIDE
+            case 'q' castle_state &= ~.BLACK_NO_QUEENSIDE
+            case 'K' castle_state &= ~.WHITE_NO_KINGSIDE
+            case 'Q' castle_state &= ~.WHITE_NO_QUEENSIDE
+            else
+                break
+        }
+    }
+    
+    remaining = trim_leading_whitespace(remaining)
+    
+    c, remaining = read_character(remaining)
+    
+    if c != '-' {
+        if c < 'a' || c > 'h'
+            return .{}, false
+        
+        en_passant_file := c - 'a'
+        
+        c, remaining = read_character(remaining)
+        
+        if c < '1' || c > '8'
+            return .{}, false
+            
+        en_passant_rank := 7 - (c - '1') // the 1st rank is at the bottom
+        
+        en_passant_position = pack(cast() en_passant_file, cast() en_passant_rank)
+    }
+    
+    remaining = trim_leading_whitespace(remaining)
+    
+    moves: u64
+    
+    moves, remaining = read_u64(remaining) // ignore 50 move rule info for now
+    
+    remaining = trim_leading_whitespace(remaining)    
+    moves, remaining = read_u64(remaining)
+    
+    move_count = cast() (2 * (moves - 1))
+    
+    if player_color == BLACK
+        move_count += 1
 
-	
-	remaining = trim_leading_whitespace(remaining)
-	
-	if remaining return .{}, false
-	
-	return state, true
+    
+    remaining = trim_leading_whitespace(remaining)
+    
+    if remaining return .{}, false
+    
+    return state, true
 }
 
 BLACK_KING_INDEX        :: 0
 WHITE_KING_INDEX        :: 16
 
 pawn_square_bonus :: f32.[
-	0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00,
-	0.50, 0.50, 0.50, 0.50, 0.50, 0.50, 0.50, 0.50,
-	0.10, 0.10, 0.20, 0.30, 0.30, 0.20, 0.10, 0.10,
-	0.05, 0.05, 0.10, 0.25, 0.25, 0.10, 0.05, 0.05,
-	0.00, 0.00, 0.00, 0.20, 0.20, 0.00, 0.00, 0.00,
-	0.05,-0.05,-0.10, 0.00, 0.00,-0.10,-0.05, 0.05,
-	0.05, 0.10, 0.10,-0.20,-0.20, 0.10, 0.10, 0.05,
-	0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00
+    0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00,
+    0.50, 0.50, 0.50, 0.50, 0.50, 0.50, 0.50, 0.50,
+    0.10, 0.10, 0.20, 0.30, 0.30, 0.20, 0.10, 0.10,
+    0.05, 0.05, 0.10, 0.25, 0.25, 0.10, 0.05, 0.05,
+    0.00, 0.00, 0.00, 0.20, 0.20, 0.00, 0.00, 0.00,
+    0.05,-0.05,-0.10, 0.00, 0.00,-0.10,-0.05, 0.05,
+    0.05, 0.10, 0.10,-0.20,-0.20, 0.10, 0.10, 0.05,
+    0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00
 ]
 
 pawn_endgame_square_bonus :: f32.[
-	0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00,
-	1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00,
-	0.50, 0.50, 0.50, 0.50, 0.50, 0.50, 0.50, 0.50,
-	0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25,
-	0.10, 0.10, 0.10, 0.20, 0.20, 0.10, 0.10, 0.10,
-	0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00,
-	0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00,
-	0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00
+    0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00,
+    1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00,
+    0.50, 0.50, 0.50, 0.50, 0.50, 0.50, 0.50, 0.50,
+    0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25,
+    0.10, 0.10, 0.10, 0.20, 0.20, 0.10, 0.10, 0.10,
+    0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00,
+    0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00,
+    0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00
 ]
 
 knight_square_bonus :: f32.[
-	-0.50,-0.40,-0.30,-0.30,-0.30,-0.30,-0.40,-0.50,
-	-0.40,-0.20, 0.00, 0.00, 0.00, 0.00,-0.20,-0.40,
-	-0.30, 0.00, 0.10, 0.15, 0.15, 0.10, 0.00,-0.30,
-	-0.30, 0.05, 0.15, 0.20, 0.20, 0.15, 0.05,-0.30,
-	-0.30, 0.00, 0.15, 0.20, 0.20, 0.15, 0.00,-0.30,
-	-0.30, 0.05, 0.10, 0.15, 0.15, 0.10, 0.05,-0.30,
-	-0.40,-0.20, 0.00, 0.05, 0.05, 0.00,-0.20,-0.40,
-	-0.50,-0.40,-0.30,-0.30,-0.30,-0.30,-0.40,-0.50
+    -0.50,-0.40,-0.30,-0.30,-0.30,-0.30,-0.40,-0.50,
+    -0.40,-0.20, 0.00, 0.00, 0.00, 0.00,-0.20,-0.40,
+    -0.30, 0.00, 0.10, 0.15, 0.15, 0.10, 0.00,-0.30,
+    -0.30, 0.05, 0.15, 0.20, 0.20, 0.15, 0.05,-0.30,
+    -0.30, 0.00, 0.15, 0.20, 0.20, 0.15, 0.00,-0.30,
+    -0.30, 0.05, 0.10, 0.15, 0.15, 0.10, 0.05,-0.30,
+    -0.40,-0.20, 0.00, 0.05, 0.05, 0.00,-0.20,-0.40,
+    -0.50,-0.40,-0.30,-0.30,-0.30,-0.30,-0.40,-0.50
 ]
 
 bishop_square_bonus :: f32.[
-	-0.20,-0.10,-0.10,-0.10,-0.10,-0.10,-0.10,-0.20,
-	-0.10, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00,-0.10,
-	-0.10, 0.00, 0.05, 0.10, 0.10, 0.05, 0.00,-0.10,
-	-0.10, 0.05, 0.05, 0.10, 0.10, 0.05, 0.05,-0.10,
-	-0.10, 0.00, 0.10, 0.10, 0.10, 0.10, 0.00,-0.10,
-	-0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10,-0.10,
-	-0.10, 0.05, 0.00, 0.00, 0.00, 0.00, 0.05,-0.10,
-	-0.20,-0.10,-0.10,-0.10,-0.10,-0.10,-0.10,-0.20
+    -0.20,-0.10,-0.10,-0.10,-0.10,-0.10,-0.10,-0.20,
+    -0.10, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00,-0.10,
+    -0.10, 0.00, 0.05, 0.10, 0.10, 0.05, 0.00,-0.10,
+    -0.10, 0.05, 0.05, 0.10, 0.10, 0.05, 0.05,-0.10,
+    -0.10, 0.00, 0.10, 0.10, 0.10, 0.10, 0.00,-0.10,
+    -0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10,-0.10,
+    -0.10, 0.05, 0.00, 0.00, 0.00, 0.00, 0.05,-0.10,
+    -0.20,-0.10,-0.10,-0.10,-0.10,-0.10,-0.10,-0.20
 ]
 
 rook_square_bonus :: f32.[
-	 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00,
-	 0.05, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.05,
-	-0.05, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00,-0.05,
-	-0.05, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00,-0.05,
-	-0.05, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00,-0.05,
-	-0.05, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00,-0.05,
-	-0.05, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00,-0.05,
-	 0.00, 0.00, 0.00, 0.05, 0.05, 0.00, 0.00, 0.00
+     0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00,
+     0.05, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.05,
+    -0.05, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00,-0.05,
+    -0.05, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00,-0.05,
+    -0.05, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00,-0.05,
+    -0.05, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00,-0.05,
+    -0.05, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00,-0.05,
+     0.00, 0.00, 0.00, 0.05, 0.05, 0.00, 0.00, 0.00
 ]
 
 queen_square_bonus :: f32.[
-	-0.20,-0.10,-0.10,-0.05,-0.05,-0.10,-0.10,-0.20,
-	-0.10, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00,-0.10,
-	-0.10, 0.00, 0.05, 0.05, 0.05, 0.05, 0.00,-0.10,
-	-0.05, 0.00, 0.05, 0.05, 0.05, 0.05, 0.00,-0.05,
-	 0.00, 0.00, 0.05, 0.05, 0.05, 0.05, 0.00,-0.05,
-	-0.10, 0.05, 0.05, 0.05, 0.05, 0.05, 0.00,-0.10,
-	-0.10, 0.00, 0.05, 0.00, 0.00, 0.00, 0.00,-0.10,
-	-0.20,-0.10,-0.10,-0.05,-0.05,-0.10,-0.10,-0.20
+    -0.20,-0.10,-0.10,-0.05,-0.05,-0.10,-0.10,-0.20,
+    -0.10, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00,-0.10,
+    -0.10, 0.00, 0.05, 0.05, 0.05, 0.05, 0.00,-0.10,
+    -0.05, 0.00, 0.05, 0.05, 0.05, 0.05, 0.00,-0.05,
+     0.00, 0.00, 0.05, 0.05, 0.05, 0.05, 0.00,-0.05,
+    -0.10, 0.05, 0.05, 0.05, 0.05, 0.05, 0.00,-0.10,
+    -0.10, 0.00, 0.05, 0.00, 0.00, 0.00, 0.00,-0.10,
+    -0.20,-0.10,-0.10,-0.05,-0.05,-0.10,-0.10,-0.20
 ]
 
 king_square_bonus :: f32.[
-	-0.30,-0.40,-0.40,-0.50,-0.50,-0.40,-0.40,-0.30,
-	-0.30,-0.40,-0.40,-0.50,-0.50,-0.40,-0.40,-0.30,
-	-0.30,-0.40,-0.40,-0.50,-0.50,-0.40,-0.40,-0.30,
-	-0.30,-0.40,-0.40,-0.50,-0.50,-0.40,-0.40,-0.30,
-	-0.20,-0.30,-0.30,-0.40,-0.40,-0.30,-0.30,-0.20,
-	-0.10,-0.20,-0.20,-0.20,-0.20,-0.20,-0.20,-0.10,
-	 0.20, 0.20, 0.00, 0.00, 0.00, 0.00, 0.20, 0.20,
-	 0.20, 0.30, 0.10, 0.00, 0.00, 0.10, 0.30, 0.20
+    -0.30,-0.40,-0.40,-0.50,-0.50,-0.40,-0.40,-0.30,
+    -0.30,-0.40,-0.40,-0.50,-0.50,-0.40,-0.40,-0.30,
+    -0.30,-0.40,-0.40,-0.50,-0.50,-0.40,-0.40,-0.30,
+    -0.30,-0.40,-0.40,-0.50,-0.50,-0.40,-0.40,-0.30,
+    -0.20,-0.30,-0.30,-0.40,-0.40,-0.30,-0.30,-0.20,
+    -0.10,-0.20,-0.20,-0.20,-0.20,-0.20,-0.20,-0.10,
+     0.20, 0.20, 0.00, 0.00, 0.00, 0.00, 0.20, 0.20,
+     0.20, 0.30, 0.10, 0.00, 0.00, 0.10, 0.30, 0.20
 ]
 
 king_endgame_square_bonus :: f32.[
-	-0.50,-0.40,-0.30,-0.20,-0.20,-0.30,-0.40,-0.50,
-	-0.30,-0.20,-0.10, 0.00, 0.00,-0.10,-0.20,-0.30,
-	-0.30,-0.10, 0.20, 0.30, 0.30, 0.20,-0.10,-0.30,
-	-0.30,-0.10, 0.30, 0.40, 0.40, 0.30,-0.10,-0.30,
-	-0.30,-0.10, 0.30, 0.40, 0.40, 0.30,-0.10,-0.30,
-	-0.30,-0.10, 0.20, 0.30, 0.30, 0.20,-0.10,-0.30,
-	-0.30,-0.30, 0.00, 0.00, 0.00, 0.00,-0.30,-0.30,
-	-0.50,-0.30,-0.30,-0.30,-0.30,-0.30,-0.30,-0.50
+    -0.50,-0.40,-0.30,-0.20,-0.20,-0.30,-0.40,-0.50,
+    -0.30,-0.20,-0.10, 0.00, 0.00,-0.10,-0.20,-0.30,
+    -0.30,-0.10, 0.20, 0.30, 0.30, 0.20,-0.10,-0.30,
+    -0.30,-0.10, 0.30, 0.40, 0.40, 0.30,-0.10,-0.30,
+    -0.30,-0.10, 0.30, 0.40, 0.40, 0.30,-0.10,-0.30,
+    -0.30,-0.10, 0.20, 0.30, 0.30, 0.20,-0.10,-0.30,
+    -0.30,-0.30, 0.00, 0.00, 0.00, 0.00,-0.30,-0.30,
+    -0.50,-0.30,-0.30,-0.30,-0.30,-0.30,-0.30,-0.50
 ]
 
 
 State :: struct {
-	Castle :: enum_flags u8 {
-		BLACK_NO_KINGSIDE
-		BLACK_NO_QUEENSIDE
-		WHITE_NO_KINGSIDE
-		WHITE_NO_QUEENSIDE
-	}	
+    Castle :: enum_flags u8 {
+        BLACK_NO_KINGSIDE
+        BLACK_NO_QUEENSIDE
+        WHITE_NO_KINGSIDE
+        WHITE_NO_QUEENSIDE
+    }    
 
-	move_count: u16
-	castle_state: Castle
-	en_passant_position: s8 = -128
-	board: [64]s8
-	
-	Piece_Info :: struct {
-		piece: Piece
-		location: s8
-	}
-	
-	previous_move: Move
-	pieces: [32]Piece_Info
-	white_pawn_mask: u64
-	black_pawn_mask: u64
-	player_color: Piece
+    move_count: u16
+    castle_state: Castle
+    en_passant_position: s8 = -128
+    board: [64]s8
+    
+    Piece_Info :: struct {
+        piece: Piece
+        location: s8
+    }
+    
+    previous_move: Move
+    pieces: [32]Piece_Info
+    white_pawn_mask: u64
+    black_pawn_mask: u64
+    player_color: Piece
 }
 
 create_mask :: (bits: [64]u64) -> u64 {
-	mask: u64 = 0
-	
-	for bits {
-		if it
-			mask |= 1 << it_index
-	}
+    mask: u64 = 0
+    
+    for bits {
+        if it
+            mask |= 1 << it_index
+    }
 
-	return mask
+    return mask
 }
 
 pawns_that_can_right_capture_mask :: #run create_mask(.[
-	0, 0, 0, 0, 0, 0, 0, 0,  
-	1, 1, 1, 1, 1, 1, 1, 0,  
-	1, 1, 1, 1, 1, 1, 1, 0,  
-	1, 1, 1, 1, 1, 1, 1, 0,  
-	1, 1, 1, 1, 1, 1, 1, 0,  
-	1, 1, 1, 1, 1, 1, 1, 0,  
-	1, 1, 1, 1, 1, 1, 1, 0,  
-	0, 0, 0, 0, 0, 0, 0, 0
+    0, 0, 0, 0, 0, 0, 0, 0,  
+    1, 1, 1, 1, 1, 1, 1, 0,  
+    1, 1, 1, 1, 1, 1, 1, 0,  
+    1, 1, 1, 1, 1, 1, 1, 0,  
+    1, 1, 1, 1, 1, 1, 1, 0,  
+    1, 1, 1, 1, 1, 1, 1, 0,  
+    1, 1, 1, 1, 1, 1, 1, 0,  
+    0, 0, 0, 0, 0, 0, 0, 0
 ])
 
 pawns_that_can_left_capture_mask :: #run create_mask(.[
-	0, 0, 0, 0, 0, 0, 0, 0,  
-	0, 1, 1, 1, 1, 1, 1, 1,  
-	0, 1, 1, 1, 1, 1, 1, 1,  
-	0, 1, 1, 1, 1, 1, 1, 1,  
-	0, 1, 1, 1, 1, 1, 1, 1,  
-	0, 1, 1, 1, 1, 1, 1, 1,  
-	0, 1, 1, 1, 1, 1, 1, 1,  
-	0, 0, 0, 0, 0, 0, 0, 0
+    0, 0, 0, 0, 0, 0, 0, 0,  
+    0, 1, 1, 1, 1, 1, 1, 1,  
+    0, 1, 1, 1, 1, 1, 1, 1,  
+    0, 1, 1, 1, 1, 1, 1, 1,  
+    0, 1, 1, 1, 1, 1, 1, 1,  
+    0, 1, 1, 1, 1, 1, 1, 1,  
+    0, 1, 1, 1, 1, 1, 1, 1,  
+    0, 0, 0, 0, 0, 0, 0, 0
 ])
 
 
-	
+    
 file_mask :: #run create_mask(.[
-	1, 0, 0, 0, 0, 0, 0, 0, 
-	1, 0, 0, 0, 0, 0, 0, 0, 
-	1, 0, 0, 0, 0, 0, 0, 0, 
-	1, 0, 0, 0, 0, 0, 0, 0, 
-	1, 0, 0, 0, 0, 0, 0, 0, 
-	1, 0, 0, 0, 0, 0, 0, 0, 
-	1, 0, 0, 0, 0, 0, 0, 0, 
-	1, 0, 0, 0, 0, 0, 0, 0
+    1, 0, 0, 0, 0, 0, 0, 0, 
+    1, 0, 0, 0, 0, 0, 0, 0, 
+    1, 0, 0, 0, 0, 0, 0, 0, 
+    1, 0, 0, 0, 0, 0, 0, 0, 
+    1, 0, 0, 0, 0, 0, 0, 0, 
+    1, 0, 0, 0, 0, 0, 0, 0, 
+    1, 0, 0, 0, 0, 0, 0, 0, 
+    1, 0, 0, 0, 0, 0, 0, 0
 ])
 
 initialize_state :: (layout: [64]Piece) -> State {
-	using state: State
-	
-	black_index: s8 = BLACK_KING_INDEX + 1
-	white_index: s8 = WHITE_KING_INDEX + 1
-	
-	for layout {
-		if it == PAWN {
-			white_pawn_mask |= 1 << it_index
-		} else if it == PAWN|BLACK {
-			black_pawn_mask |= 1 << it_index
-		}
-		
-		if it {
-			index := white_index
-			
+    using state: State
+    
+    black_index: s8 = BLACK_KING_INDEX + 1
+    white_index: s8 = WHITE_KING_INDEX + 1
+    
+    for layout {
+        if it == PAWN {
+            white_pawn_mask |= 1 << it_index
+        } else if it == PAWN|BLACK {
+            black_pawn_mask |= 1 << it_index
+        }
+        
+        if it {
+            index := white_index
+            
 
-			if it == KING {
-				index = WHITE_KING_INDEX
-			} else if it == KING|BLACK {
-				index = BLACK_KING_INDEX
-			} else if it & BLACK {
-				index = black_index
-				black_index += 1
-			} 
-			else {
-				white_index += 1
-			}
-			
-			board[it_index] = index
-			pieces[index].piece = it
-			pieces[index].location = cast() it_index
-		} else {
-			board[it_index] = -1
-		}
-	}
-	
-	return state
+            if it == KING {
+                index = WHITE_KING_INDEX
+            } else if it == KING|BLACK {
+                index = BLACK_KING_INDEX
+            } else if it & BLACK {
+                index = black_index
+                black_index += 1
+            } 
+            else {
+                white_index += 1
+            }
+            
+            board[it_index] = index
+            pieces[index].piece = it
+            pieces[index].location = cast() it_index
+        } else {
+            board[it_index] = -1
+        }
+    }
+    
+    return state
 }
 
 add_move_if_legal :: (using state: State, moves: *[..]Move, using move: Move) {
-	if board[end] == -1 || (move.piece_index >= 16) != (board[end] >= 16) {
-		array_add(moves, move)
-	}
+    if board[end] == -1 || (move.piece_index >= 16) != (board[end] >= 16) {
+        array_add(moves, move)
+    }
 }
 
 add_capture_move_if_legal :: (using state: State, moves: *[..]Move, using move: Move) {
-	if board[end] != -1 && (move.piece_index >= 16) != (board[end] >= 16) {		
-		array_add(moves, move)
-	}
+    if board[end] != -1 && (move.piece_index >= 16) != (board[end] >= 16) {        
+        array_add(moves, move)
+    }
 }
 
 precompute_legal_knight_moves :: () -> [64][8]s8 {
-	result: [64][8]s8
-	
-	for * result {
-		moves := [..]s8.{data = it.data, count = 0, capacity = 8}
-		
-		x, y := unpack(cast() it_index)
-		
-		if x >= 1 && y >= 2  array_add(*moves, pack(x - 1, y - 2))
-		if x >= 1 && y <= 5  array_add(*moves, pack(x - 1, y + 2))
-		if x >= 2 && y >= 1  array_add(*moves, pack(x - 2, y - 1))
-		if x >= 2 && y <= 6  array_add(*moves, pack(x - 2, y + 1))
-		if x <= 6 && y >= 2  array_add(*moves, pack(x + 1, y - 2))
-		if x <= 6 && y <= 5  array_add(*moves, pack(x + 1, y + 2))
-		if x <= 5 && y >= 1  array_add(*moves, pack(x + 2, y - 1))
-		if x <= 5 && y <= 6  array_add(*moves, pack(x + 2, y + 1))
-		
-		if moves.count != 8 {
-			array_add(*moves, -1)
-		}
-	}
-	
-	return result
+    result: [64][8]s8
+    
+    for * result {
+        moves := [..]s8.{data = it.data, count = 0, capacity = 8}
+        
+        x, y := unpack(cast() it_index)
+        
+        if x >= 1 && y >= 2  array_add(*moves, pack(x - 1, y - 2))
+        if x >= 1 && y <= 5  array_add(*moves, pack(x - 1, y + 2))
+        if x >= 2 && y >= 1  array_add(*moves, pack(x - 2, y - 1))
+        if x >= 2 && y <= 6  array_add(*moves, pack(x - 2, y + 1))
+        if x <= 6 && y >= 2  array_add(*moves, pack(x + 1, y - 2))
+        if x <= 6 && y <= 5  array_add(*moves, pack(x + 1, y + 2))
+        if x <= 5 && y >= 1  array_add(*moves, pack(x + 2, y - 1))
+        if x <= 5 && y <= 6  array_add(*moves, pack(x + 2, y + 1))
+        
+        if moves.count != 8 {
+            array_add(*moves, -1)
+        }
+    }
+    
+    return result
 }
 
 precompute_legal_king_moves :: () -> [64][8]s8 {
-	result: [64][8]s8
-	
-	for * result {
-		moves := [..]s8.{data = it.data, count = 0, capacity = 8}
-		
-		x, y := unpack(cast() it_index)
-		
-		if x >= 1            array_add(*moves, pack(x - 1, y    ))
-		if x <= 6            array_add(*moves, pack(x + 1, y    ))
-		if y >= 1            array_add(*moves, pack(x    , y - 1))
-		if y <= 6            array_add(*moves, pack(x    , y + 1))
-		if x >= 1 && y >= 1  array_add(*moves, pack(x - 1, y - 1))
-		if x >= 1 && y <= 6  array_add(*moves, pack(x - 1, y + 1))
-		if x <= 6 && y >= 1  array_add(*moves, pack(x + 1, y - 1))
-		if x <= 6 && y <= 6  array_add(*moves, pack(x + 1, y + 1))
-		
-		if moves.count != 8 {
-			array_add(*moves, -1)
-		}
-	}
-	
-	return result
+    result: [64][8]s8
+    
+    for * result {
+        moves := [..]s8.{data = it.data, count = 0, capacity = 8}
+        
+        x, y := unpack(cast() it_index)
+        
+        if x >= 1            array_add(*moves, pack(x - 1, y    ))
+        if x <= 6            array_add(*moves, pack(x + 1, y    ))
+        if y >= 1            array_add(*moves, pack(x    , y - 1))
+        if y <= 6            array_add(*moves, pack(x    , y + 1))
+        if x >= 1 && y >= 1  array_add(*moves, pack(x - 1, y - 1))
+        if x >= 1 && y <= 6  array_add(*moves, pack(x - 1, y + 1))
+        if x <= 6 && y >= 1  array_add(*moves, pack(x + 1, y - 1))
+        if x <= 6 && y <= 6  array_add(*moves, pack(x + 1, y + 1))
+        
+        if moves.count != 8 {
+            array_add(*moves, -1)
+        }
+    }
+    
+    return result
 }
 
 Bishop_Move_Distance :: struct {
-	up_left:    s8
-	up_right:   s8
-	down_left:  s8
-	down_right: s8
+    up_left:    s8
+    up_right:   s8
+    down_left:  s8
+    down_right: s8
 }
 
 precompute_bishop_move_distances :: () -> [64]Bishop_Move_Distance {
-	result: [64]Bishop_Move_Distance
-	
-	for * result {
-		x, y := unpack(cast() it_index)
-		
-		it.up_left    = min(    x,     y)
-		it.up_right   = min(7 - x,     y)
-		it.down_left  = min(    x, 7 - y)
-		it.down_right = min(7 - x, 7 - y)
-	}
-	
-	return result
+    result: [64]Bishop_Move_Distance
+    
+    for * result {
+        x, y := unpack(cast() it_index)
+        
+        it.up_left    = min(    x,     y)
+        it.up_right   = min(7 - x,     y)
+        it.down_left  = min(    x, 7 - y)
+        it.down_right = min(7 - x, 7 - y)
+    }
+    
+    return result
 }
 
 legal_knight_moves :: #run precompute_legal_knight_moves()
@@ -818,17 +818,17 @@ legal_king_moves    :: #run precompute_legal_king_moves()
 legal_bishop_moves  :: #run precompute_bishop_move_distances()
 
 legal_king_moves_mask :: #run () -> [64]u64 {
-	result: [64]u64
-	
-	for it, index: legal_king_moves {
-		for it {
-			if it != -1
-		
-			result[index] |= 1 << cast(u64) it
-		}
-	}
-	
-	return result
+    result: [64]u64
+    
+    for it, index: legal_king_moves {
+        for it {
+            if it != -1
+        
+            result[index] |= 1 << cast(u64) it
+        }
+    }
+    
+    return result
 }()
 
 MAX_DEPTH :: 255
@@ -843,828 +843,828 @@ evaluation_list: [..]f32
 moves_explored: u64
 
 transposition_table: [(1 << 25) + 1]struct {
-	hash: u64
-	value: f32
-	kind: enum u8 {
-		LOWER_BOUND
-		UPPER_BOUND
-		EXACT
-	}
-	depth: s8
-	move: Move
+    hash: u64
+    value: f32
+    kind: enum u8 {
+        LOWER_BOUND
+        UPPER_BOUND
+        EXACT
+    }
+    depth: s8
+    move: Move
 }
 
 evaluate_black :: (using state: State, using piece: State.Piece_Info, endgame_weight: f32 = 0) -> f32 {
-	if location == -1 return 0
-	
-	x, y := unpack(location)
-	y = 7 - y
-	flipped_location := pack(x, y)
-	
-	value: f32
-	
-	if piece & ~BLACK == {
-		case PAWN   value = 1.0 + pawn_square_bonus[flipped_location] * (1.0 - endgame_weight) + pawn_endgame_square_bonus[flipped_location]  * endgame_weight
-		case BISHOP value = 3.3 + bishop_square_bonus[flipped_location]
-		case KNIGHT value = 3.2 + knight_square_bonus[flipped_location]
-		case ROOK   
-			value = 5.0 + rook_square_bonus  [flipped_location]
-			// Apply a bonus for rooks on open and semi-open files
-			mask := file_mask << cast()(location & 7)
-			if !(white_pawn_mask & mask) {
-				value += 0.3
-			}
-			if !(black_pawn_mask & mask) {
-				value += 0.3
-			}
-		case QUEEN  value = 9.0 + queen_square_bonus [flipped_location]
-		case KING   value = king_square_bonus[flipped_location] * (1.0 - endgame_weight) + king_endgame_square_bonus[flipped_location]  * endgame_weight
-	}
-	
-	return value
+    if location == -1 return 0
+    
+    x, y := unpack(location)
+    y = 7 - y
+    flipped_location := pack(x, y)
+    
+    value: f32
+    
+    if piece & ~BLACK == {
+        case PAWN   value = 1.0 + pawn_square_bonus[flipped_location] * (1.0 - endgame_weight) + pawn_endgame_square_bonus[flipped_location]  * endgame_weight
+        case BISHOP value = 3.3 + bishop_square_bonus[flipped_location]
+        case KNIGHT value = 3.2 + knight_square_bonus[flipped_location]
+        case ROOK   
+            value = 5.0 + rook_square_bonus  [flipped_location]
+            // Apply a bonus for rooks on open and semi-open files
+            mask := file_mask << cast()(location & 7)
+            if !(white_pawn_mask & mask) {
+                value += 0.3
+            }
+            if !(black_pawn_mask & mask) {
+                value += 0.3
+            }
+        case QUEEN  value = 9.0 + queen_square_bonus [flipped_location]
+        case KING   value = king_square_bonus[flipped_location] * (1.0 - endgame_weight) + king_endgame_square_bonus[flipped_location]  * endgame_weight
+    }
+    
+    return value
 }
 
 evaluate_white :: (using state: State, using piece: State.Piece_Info, endgame_weight: f32 = 0) -> f32 {
-	if location == -1 return 0
-	
-	value: f32
-	
-	if piece & ~BLACK == {
-		case PAWN   value = 1.0 + pawn_square_bonus[location] * (1.0 - endgame_weight) + pawn_endgame_square_bonus[location]  * endgame_weight
-		case BISHOP value = 3.3 + bishop_square_bonus[location]
-		case KNIGHT value = 3.2 + knight_square_bonus[location]
-		case ROOK   
-			value = 5.0 + rook_square_bonus[location]
-			// Apply a bonus for rooks on open and semi-open files
-			mask := file_mask << cast()(location & 7)
-			if !(white_pawn_mask & mask) {
-				value += 0.3
-			}
-			if !(black_pawn_mask & mask) {
-				value += 0.3
-			}
-		case QUEEN  value = 9.0 + queen_square_bonus [location]
-		case KING   value = king_square_bonus[location] * (1.0 - endgame_weight) + king_endgame_square_bonus[location]  * endgame_weight
-	}
-	
-	return value
+    if location == -1 return 0
+    
+    value: f32
+    
+    if piece & ~BLACK == {
+        case PAWN   value = 1.0 + pawn_square_bonus[location] * (1.0 - endgame_weight) + pawn_endgame_square_bonus[location]  * endgame_weight
+        case BISHOP value = 3.3 + bishop_square_bonus[location]
+        case KNIGHT value = 3.2 + knight_square_bonus[location]
+        case ROOK   
+            value = 5.0 + rook_square_bonus[location]
+            // Apply a bonus for rooks on open and semi-open files
+            mask := file_mask << cast()(location & 7)
+            if !(white_pawn_mask & mask) {
+                value += 0.3
+            }
+            if !(black_pawn_mask & mask) {
+                value += 0.3
+            }
+        case QUEEN  value = 9.0 + queen_square_bonus [location]
+        case KING   value = king_square_bonus[location] * (1.0 - endgame_weight) + king_endgame_square_bonus[location]  * endgame_weight
+    }
+    
+    return value
 }
-	
+    
 order_moves :: (using state: State, moves: []Move, old_best: Move, depth: s8, alpha: f32, beta: f32) {
-	if evaluation_list.capacity < moves.count {
-		array_reserve(*evaluation_list, moves.count)
-	}
-	
-	evaluation_list.count = moves.count
-	
-	killer_move := killer_moves[depth]
-	old_killer_move := old_killer_moves[depth]
-	counter_move := counter_moves[previous_move.piece_index][previous_move.end]
-	
-	for moves {
-		evaluation_list[it_index] = 0
-	
-		if it.piece_index == old_best.piece_index && it.end == old_best.end {
-			evaluation_list[it_index] += 1000000
-		}
-		
-		if it.piece_index == killer_move.piece_index && it.end == killer_move.end {
-			evaluation_list[it_index] += 2000
-		} 
-		
-		if it.piece_index == old_killer_move.piece_index && it.end == old_killer_move.end {
-			evaluation_list[it_index] += 1000
-		} 
-		
-		if board[it.end] != -1 {
-			if player_color == BLACK evaluation_list[it_index] += 1000 + evaluate_white(state, pieces[board[it.end]]) - evaluate_black(state, pieces[it.piece_index])
-			else                     evaluation_list[it_index] += 1000 + evaluate_black(state, pieces[board[it.end]]) - evaluate_white(state, pieces[it.piece_index])
-		//} else if depth > 5 {
-		//	new_state := do_move(state, it)
-		//	evaluation_list[it_index] = -quiesce(new_state, -beta, -alpha) - 100 // offset so captures will always be ahead
-		}
-		
-		if it.piece_index == counter_move.piece_index && it.end == counter_move.end {
-			evaluation_list[it_index] += 1000
-		}
-		
-		evaluation_list[it_index] += history[cast(Piece.integer) pieces[it.piece_index].piece][it.end]
-	}
+    if evaluation_list.capacity < moves.count {
+        array_reserve(*evaluation_list, moves.count)
+    }
+    
+    evaluation_list.count = moves.count
+    
+    killer_move := killer_moves[depth]
+    old_killer_move := old_killer_moves[depth]
+    counter_move := counter_moves[previous_move.piece_index][previous_move.end]
+    
+    for moves {
+        evaluation_list[it_index] = 0
+    
+        if it.piece_index == old_best.piece_index && it.end == old_best.end {
+            evaluation_list[it_index] += 1000000
+        }
+        
+        if it.piece_index == killer_move.piece_index && it.end == killer_move.end {
+            evaluation_list[it_index] += 2000
+        } 
+        
+        if it.piece_index == old_killer_move.piece_index && it.end == old_killer_move.end {
+            evaluation_list[it_index] += 1000
+        } 
+        
+        if board[it.end] != -1 {
+            if player_color == BLACK evaluation_list[it_index] += 1000 + evaluate_white(state, pieces[board[it.end]]) - evaluate_black(state, pieces[it.piece_index])
+            else                     evaluation_list[it_index] += 1000 + evaluate_black(state, pieces[board[it.end]]) - evaluate_white(state, pieces[it.piece_index])
+        //} else if depth > 5 {
+        //    new_state := do_move(state, it)
+        //    evaluation_list[it_index] = -quiesce(new_state, -beta, -alpha) - 100 // offset so captures will always be ahead
+        }
+        
+        if it.piece_index == counter_move.piece_index && it.end == counter_move.end {
+            evaluation_list[it_index] += 1000
+        }
+        
+        evaluation_list[it_index] += history[cast(Piece.integer) pieces[it.piece_index].piece][it.end]
+    }
 
-	for moves {
-		i := it_index
-		
-		if evaluation_list[i] <= -10000
-			continue;
-		
-		while i > 0 {
-			a := evaluation_list[i - 1]
-			b := evaluation_list[i]
-		
-			if a > b
-				break;
-			
-			evaluation_list[i] = a
-			evaluation_list[i - 1] = b
-			
-			moves[i] = moves[i - 1]
-			moves[i - 1] = it
-			
-			i -= 1
-		}
-	}
+    for moves {
+        i := it_index
+        
+        if evaluation_list[i] <= -10000
+            continue;
+        
+        while i > 0 {
+            a := evaluation_list[i - 1]
+            b := evaluation_list[i]
+        
+            if a > b
+                break;
+            
+            evaluation_list[i] = a
+            evaluation_list[i - 1] = b
+            
+            moves[i] = moves[i - 1]
+            moves[i - 1] = it
+            
+            i -= 1
+        }
+    }
 }
 
 evaluate_position :: (using state: State) -> f32 {
-	piece_count := count_pieces(state)
+    piece_count := count_pieces(state)
 
-	if check_for_drawn_endgame(piece_count)
-		return 0
-	
-	PIECE_PHASE  :: 1.0 / 24
-	ROOK_PHASE   :: 2.0 / 24
-	QUEEN_PHASE  :: 4.0 / 24
-	
-	endgame_weight: f32 = 1.0
-	
-	endgame_weight -= PIECE_PHASE * cast(f32) (piece_count.white_knights + piece_count.black_knights + piece_count.white_bishops + piece_count.black_bishops)
-	endgame_weight -= ROOK_PHASE *  cast(f32) (piece_count.white_rooks + piece_count.black_rooks)
-	endgame_weight -= QUEEN_PHASE * cast(f32) (piece_count.white_queens + piece_count.black_queens)
+    if check_for_drawn_endgame(piece_count)
+        return 0
+    
+    PIECE_PHASE  :: 1.0 / 24
+    ROOK_PHASE   :: 2.0 / 24
+    QUEEN_PHASE  :: 4.0 / 24
+    
+    endgame_weight: f32 = 1.0
+    
+    endgame_weight -= PIECE_PHASE * cast(f32) (piece_count.white_knights + piece_count.black_knights + piece_count.white_bishops + piece_count.black_bishops)
+    endgame_weight -= ROOK_PHASE *  cast(f32) (piece_count.white_rooks + piece_count.black_rooks)
+    endgame_weight -= QUEEN_PHASE * cast(f32) (piece_count.white_queens + piece_count.black_queens)
 
 
-	evaluation: f32 = 0
-	
-	left_black_pawns: u64
-	left_white_pawns: u64
-	middle_black_pawns: u64
-	middle_white_pawns: u64
-	
-	mask := file_mask
-	
-	
-	
-	for 8 {
-		black_pawns := black_pawn_mask & mask
-		white_pawns := white_pawn_mask & mask
-		
-		// Bonus for passed pawns
-		if black_pawns && !white_pawns {
-			evaluation += 0.2
-		} else if white_pawns && !black_pawns {
-			evaluation -= 0.2
-		}
-		
-		// Penalty for doubled pawns (currently no extra penalty for tripled or more so we can avoid a loop)
-		if black_pawns & (black_pawns - 1) {
-			evaluation -= 0.1
-		}
-		if white_pawns & (white_pawns - 1) {
-			evaluation += 0.1
-		}
-		
-		// Penalty for isolated pawns
-		if !left_black_pawns && middle_black_pawns && !black_pawns {
-			evaluation -= 0.1
-		}
-		if !left_white_pawns && middle_white_pawns && !white_pawns {
-			evaluation += 0.1
-		}
-		
-		left_black_pawns = middle_black_pawns
-		left_white_pawns = middle_white_pawns
-		middle_black_pawns = black_pawns
-		middle_white_pawns = white_pawns
-		
-		mask <<= 1
-	}
-	
-	// Still need to check for isolated pawns on the h file
-	if !left_black_pawns && middle_black_pawns {
-		evaluation -= 0.3
-	}
-	if !left_white_pawns && middle_white_pawns {
-		evaluation += 0.3
-	}
+    evaluation: f32 = 0
+    
+    left_black_pawns: u64
+    left_white_pawns: u64
+    middle_black_pawns: u64
+    middle_white_pawns: u64
+    
+    mask := file_mask
+    
+    
+    
+    for 8 {
+        black_pawns := black_pawn_mask & mask
+        white_pawns := white_pawn_mask & mask
+        
+        // Bonus for passed pawns
+        if black_pawns && !white_pawns {
+            evaluation += 0.2
+        } else if white_pawns && !black_pawns {
+            evaluation -= 0.2
+        }
+        
+        // Penalty for doubled pawns (currently no extra penalty for tripled or more so we can avoid a loop)
+        if black_pawns & (black_pawns - 1) {
+            evaluation -= 0.1
+        }
+        if white_pawns & (white_pawns - 1) {
+            evaluation += 0.1
+        }
+        
+        // Penalty for isolated pawns
+        if !left_black_pawns && middle_black_pawns && !black_pawns {
+            evaluation -= 0.1
+        }
+        if !left_white_pawns && middle_white_pawns && !white_pawns {
+            evaluation += 0.1
+        }
+        
+        left_black_pawns = middle_black_pawns
+        left_white_pawns = middle_white_pawns
+        middle_black_pawns = black_pawns
+        middle_white_pawns = white_pawns
+        
+        mask <<= 1
+    }
+    
+    // Still need to check for isolated pawns on the h file
+    if !left_black_pawns && middle_black_pawns {
+        evaluation -= 0.3
+    }
+    if !left_white_pawns && middle_white_pawns {
+        evaluation += 0.3
+    }
 
-	for 0..16 {		
-		evaluation += evaluate_black(state, pieces[it], endgame_weight)
-	}
-	
-	for 16..32 {
-		evaluation -= evaluate_white(state, pieces[it], endgame_weight)
-	}
-	
-	if player_color != BLACK return -evaluation
-	else return evaluation
+    for 0..16 {        
+        evaluation += evaluate_black(state, pieces[it], endgame_weight)
+    }
+    
+    for 16..32 {
+        evaluation -= evaluate_white(state, pieces[it], endgame_weight)
+    }
+    
+    if player_color != BLACK return -evaluation
+    else return evaluation
 }
 
 max_moves: u64 = 500_000
 
 quiesce :: (using state: State, alpha: f32, beta: f32, depth := 0) -> f32 {
-	if moves_explored == max_moves  return 0
+    if moves_explored == max_moves  return 0
 
-	
-	key := hash(state)
+    
+    key := hash(state)
 
-	entry := *transposition_table[key % transposition_table.count]
-	
-	current_alpha := alpha
-	current_beta  := beta
-	
-	if entry.hash == key && entry.depth >= 0 {
-		stats.transpositions_matched += 1
-	
-		if entry.kind == .EXACT {
-			return entry.value
-		} else if entry.kind == .LOWER_BOUND {
-			current_alpha = max(entry.value, current_alpha)
-		} else if entry.kind == .UPPER_BOUND {
-			current_beta = min(current_beta, entry.value)
-		}
-		
-		if current_alpha >= current_beta {
-			stats.beta_cutoffs += 1
-			return entry.value
-		}
-	}
-	
-	moves_explored += 1
-	stand_pat := evaluate_position(state)
-	
-	if stand_pat >= beta {
-		stats.beta_cutoffs += 1
-		return beta
-	}
-	
-	if current_alpha < stand_pat
-		current_alpha = stand_pat
-	
-	
-	legal_moves := *legal_quiesce_moves_list[depth]
-	legal_moves.count = 0
-	
-	if player_color == BLACK {
-		for 0..16 {
-			if pieces[it].location != -1 get_capture_moves_for_piece(state, legal_moves, cast() it)		
-		}
-	} else {
-		for 16..32 {
-			if pieces[it].location != -1 get_capture_moves_for_piece(state, legal_moves, cast() it)		
-		}
-	}
+    entry := *transposition_table[key % transposition_table.count]
+    
+    current_alpha := alpha
+    current_beta  := beta
+    
+    if entry.hash == key && entry.depth >= 0 {
+        stats.transpositions_matched += 1
+    
+        if entry.kind == .EXACT {
+            return entry.value
+        } else if entry.kind == .LOWER_BOUND {
+            current_alpha = max(entry.value, current_alpha)
+        } else if entry.kind == .UPPER_BOUND {
+            current_beta = min(current_beta, entry.value)
+        }
+        
+        if current_alpha >= current_beta {
+            stats.beta_cutoffs += 1
+            return entry.value
+        }
+    }
+    
+    moves_explored += 1
+    stand_pat := evaluate_position(state)
+    
+    if stand_pat >= beta {
+        stats.beta_cutoffs += 1
+        return beta
+    }
+    
+    if current_alpha < stand_pat
+        current_alpha = stand_pat
+    
+    
+    legal_moves := *legal_quiesce_moves_list[depth]
+    legal_moves.count = 0
+    
+    if player_color == BLACK {
+        for 0..16 {
+            if pieces[it].location != -1 get_capture_moves_for_piece(state, legal_moves, cast() it)        
+        }
+    } else {
+        for 16..32 {
+            if pieces[it].location != -1 get_capture_moves_for_piece(state, legal_moves, cast() it)        
+        }
+    }
 
-	
-	best_move: Move
-	
-	for <<legal_moves {
-		new_state, valid := checked_do_move(state, it)
-		
-		if valid {
-			value := -quiesce(new_state, -beta, -current_alpha, depth + 1)
-		
-			if value > current_alpha {
-				best_move = it
-				current_alpha = value
-			}
-		
-			if current_alpha >= beta {
-				stats.beta_cutoffs += 1
-				return beta
-			}
-		}
-	}
+    
+    best_move: Move
+    
+    for <<legal_moves {
+        new_state, valid := checked_do_move(state, it)
+        
+        if valid {
+            value := -quiesce(new_state, -beta, -current_alpha, depth + 1)
+        
+            if value > current_alpha {
+                best_move = it
+                current_alpha = value
+            }
+        
+            if current_alpha >= beta {
+                stats.beta_cutoffs += 1
+                return beta
+            }
+        }
+    }
 
-	return current_alpha
+    return current_alpha
 }
 
 repetition_table: [1024]u64
 repetition_count: u32
 
 check_for_repetition :: (key_: u64) -> (repeated: bool, index: u64) {
-	key := key_
-	if key < 1 key = 1
+    key := key_
+    if key < 1 key = 1
 
-	slot := key & (repetition_table.count - 1)
-	
-	while repetition_table[slot] {
-		if repetition_table[slot] == key {
-			return true, slot
-		}
-		
-		slot += 1
-		slot &= repetition_table.count - 1
-	}
-	
-	repetition_count += 1
-	repetition_table[slot] = key
-	return false, slot
+    slot := key & (repetition_table.count - 1)
+    
+    while repetition_table[slot] {
+        if repetition_table[slot] == key {
+            return true, slot
+        }
+        
+        slot += 1
+        slot &= repetition_table.count - 1
+    }
+    
+    repetition_count += 1
+    repetition_table[slot] = key
+    return false, slot
 }
 
 remove_repetition :: (slot: u64) {
-	
-	repetition_table[slot] = 0
-	
-	repetition_count -= 1
+    
+    repetition_table[slot] = 0
+    
+    repetition_count -= 1
 
-	i := slot
-	
-	j := i
-	
-	while true {
-		j += 1
-		j &= repetition_table.count - 1
-		
-		if !repetition_table[j]
-			break;
-	
-		key := repetition_table[j]
-		key &= repetition_table.count - 1
-	
-		if i <= j {
-			if i < key && key <= j
-				continue
-		} else {
-			if i < key || key <= j
-				continue
-		}
-		
-		repetition_table[i] = repetition_table[j]
-		i = j
-	}
+    i := slot
+    
+    j := i
+    
+    while true {
+        j += 1
+        j &= repetition_table.count - 1
+        
+        if !repetition_table[j]
+            break;
+    
+        key := repetition_table[j]
+        key &= repetition_table.count - 1
+    
+        if i <= j {
+            if i < key && key <= j
+                continue
+        } else {
+            if i < key || key <= j
+                continue
+        }
+        
+        repetition_table[i] = repetition_table[j]
+        i = j
+    }
 }
 
 Piece_Count :: struct {
-	white_pawns:     s8
-	white_knights:   s8
-	white_bishops:   s8
-	white_rooks:     s8
-	white_queens:    s8
-	black_pawns:     s8
-	black_knights:   s8
-	black_bishops:   s8
-	black_rooks:     s8
-	black_queens:    s8
+    white_pawns:     s8
+    white_knights:   s8
+    white_bishops:   s8
+    white_rooks:     s8
+    white_queens:    s8
+    black_pawns:     s8
+    black_knights:   s8
+    black_bishops:   s8
+    black_rooks:     s8
+    black_queens:    s8
 }
 
 count_pieces :: (using state: State) -> Piece_Count {
-	using result: Piece_Count
+    using result: Piece_Count
 
-	for 0..16 {
-		using _ := pieces[it]
-	
-		if location == -1 continue;
-	
-		if piece & ~BLACK == {
-			case PAWN   black_pawns   += 1
-			case BISHOP black_bishops += 1
-			case KNIGHT black_knights += 1
-			case ROOK   black_rooks   += 1
-			case QUEEN  black_queens  += 1
-		}
-	}
-	
-	for 16..32 {
-		using _ := pieces[it]
-	
-		if location == -1 continue;
-	
-		if piece & ~BLACK == {
-			case PAWN   white_pawns   += 1
-			case BISHOP white_bishops += 1
-			case KNIGHT white_knights += 1
-			case ROOK   white_rooks   += 1
-			case QUEEN  white_queens  += 1
-		}
-	}
-	
-	return result
+    for 0..16 {
+        using _ := pieces[it]
+    
+        if location == -1 continue;
+    
+        if piece & ~BLACK == {
+            case PAWN   black_pawns   += 1
+            case BISHOP black_bishops += 1
+            case KNIGHT black_knights += 1
+            case ROOK   black_rooks   += 1
+            case QUEEN  black_queens  += 1
+        }
+    }
+    
+    for 16..32 {
+        using _ := pieces[it]
+    
+        if location == -1 continue;
+    
+        if piece & ~BLACK == {
+            case PAWN   white_pawns   += 1
+            case BISHOP white_bishops += 1
+            case KNIGHT white_knights += 1
+            case ROOK   white_rooks   += 1
+            case QUEEN  white_queens  += 1
+        }
+    }
+    
+    return result
 }
 
 check_for_drawn_endgame :: (using pieces: Piece_Count) -> bool {
-	if white_pawns || black_pawns || white_rooks || black_rooks || white_queens || black_queens
-		return false
-	
-	// 2 knights or 1 bishop is a draw
-	
-	return ((white_bishops <= 1 && white_knights == 0) || white_knights <= 2) && 
-		((black_bishops <= 1 && black_knights == 0) || black_knights <= 2)
+    if white_pawns || black_pawns || white_rooks || black_rooks || white_queens || black_queens
+        return false
+    
+    // 2 knights or 1 bishop is a draw
+    
+    return ((white_bishops <= 1 && white_knights == 0) || white_knights <= 2) && 
+        ((black_bishops <= 1 && black_knights == 0) || black_knights <= 2)
 }
 
 stats: struct {
-	beta_cutoffs: u64
-	transpositions_matched: u64
+    beta_cutoffs: u64
+    transpositions_matched: u64
 }
 
 minimax :: (using state: State, depth: s8, alpha: f32 = -1e4, beta: f32 = 1e4) -> (f32, Move) {
-	if moves_explored == max_moves  return 0, .{}
-	
-	current_alpha := alpha
-	current_beta := beta
-	
-	key := hash(state)
-	
-	repeated, repetition_stored := check_for_repetition(key)
-	
-	if repeated
-		return 0, .{-1}
+    if moves_explored == max_moves  return 0, .{}
+    
+    current_alpha := alpha
+    current_beta := beta
+    
+    key := hash(state)
+    
+    repeated, repetition_stored := check_for_repetition(key)
+    
+    if repeated
+        return 0, .{-1}
 
-	defer remove_repetition(repetition_stored)
-	
-	entry := *transposition_table[key % transposition_table.count]
-	
+    defer remove_repetition(repetition_stored)
+    
+    entry := *transposition_table[key % transposition_table.count]
+    
 
-	current_depth := depth
-	
-	if entry.hash == key && entry.depth >= current_depth {
-		stats.transpositions_matched += 1
-	
-		if entry.kind == .EXACT {
-			return entry.value, entry.move
-		} else if entry.kind == .LOWER_BOUND {
-			current_alpha = max(entry.value, current_alpha)
-		} else if entry.kind == .UPPER_BOUND {
-			current_beta = min(current_beta, entry.value)
-		}
-		
-		if current_alpha >= current_beta {
-			stats.beta_cutoffs += 1
-			return entry.value, entry.move
-		}
-	}
-	
-	best_move := Move.{-1}
-	best_move_value: f32 = -1e12
-	
-	
-	player_king := pieces[WHITE_KING_INDEX].location
-	
-	if player_color == BLACK player_king = pieces[BLACK_KING_INDEX].location
-	in_check := look_for_checks(state, player_king, player_color)
-	
-	legal_moves := *legal_moves_list[current_depth]
-	legal_moves.count = 0
-	
-	if player_color == BLACK {
-		for 0..16 {
-			if pieces[it].location != -1 get_moves_for_piece(state, legal_moves, cast() it)		
-		}
-	} else {
-		for 16..32 {
-			if pieces[it].location != -1 get_moves_for_piece(state, legal_moves, cast() it)		
-		}
-	}
-	
-	if current_depth <= 0 {
-		best_move_value = quiesce(state, alpha, beta)
-		
-		return best_move_value, best_move
-	}
-	
-	if current_depth >= 1
-		order_moves(state, <<legal_moves, entry.move, current_depth, current_alpha, current_beta)
-	
-	had_legal: bool
-	
-	for <<legal_moves {
-		new_state, valid := checked_do_move(state, it)
-		
-		if valid {
-			had_legal = true
-			
-			value: f32
-			
-			if it_index == 0 {
-				value = -minimax(new_state, current_depth - 1, -current_beta, -current_alpha)
-			} else {
-				value = -minimax(new_state, current_depth - 1, -current_alpha - 0.02, -current_alpha)
-				
-				if current_alpha < value && value < current_beta {
-					value = -minimax(new_state, current_depth - 1, -current_beta, -current_alpha)
-				}
-			}
-			
-			history_location := *history[cast(Piece.integer) pieces[it.piece_index].piece][it.end]
-			if value > best_move_value {
-				best_move = it
-				best_move_value = value
-				add_history(history_location, 0.001 * cast(f32) depth * cast(f32) depth)
-			} else {
-				remove_history(history_location, 0.001 * cast(f32) depth * cast(f32) depth)
-			}
+    current_depth := depth
+    
+    if entry.hash == key && entry.depth >= current_depth {
+        stats.transpositions_matched += 1
+    
+        if entry.kind == .EXACT {
+            return entry.value, entry.move
+        } else if entry.kind == .LOWER_BOUND {
+            current_alpha = max(entry.value, current_alpha)
+        } else if entry.kind == .UPPER_BOUND {
+            current_beta = min(current_beta, entry.value)
+        }
+        
+        if current_alpha >= current_beta {
+            stats.beta_cutoffs += 1
+            return entry.value, entry.move
+        }
+    }
+    
+    best_move := Move.{-1}
+    best_move_value: f32 = -1e12
+    
+    
+    player_king := pieces[WHITE_KING_INDEX].location
+    
+    if player_color == BLACK player_king = pieces[BLACK_KING_INDEX].location
+    in_check := look_for_checks(state, player_king, player_color)
+    
+    legal_moves := *legal_moves_list[current_depth]
+    legal_moves.count = 0
+    
+    if player_color == BLACK {
+        for 0..16 {
+            if pieces[it].location != -1 get_moves_for_piece(state, legal_moves, cast() it)        
+        }
+    } else {
+        for 16..32 {
+            if pieces[it].location != -1 get_moves_for_piece(state, legal_moves, cast() it)        
+        }
+    }
+    
+    if current_depth <= 0 {
+        best_move_value = quiesce(state, alpha, beta)
+        
+        return best_move_value, best_move
+    }
+    
+    if current_depth >= 1
+        order_moves(state, <<legal_moves, entry.move, current_depth, current_alpha, current_beta)
+    
+    had_legal: bool
+    
+    for <<legal_moves {
+        new_state, valid := checked_do_move(state, it)
+        
+        if valid {
+            had_legal = true
+            
+            value: f32
+            
+            if it_index == 0 {
+                value = -minimax(new_state, current_depth - 1, -current_beta, -current_alpha)
+            } else {
+                value = -minimax(new_state, current_depth - 1, -current_alpha - 0.02, -current_alpha)
+                
+                if current_alpha < value && value < current_beta {
+                    value = -minimax(new_state, current_depth - 1, -current_beta, -current_alpha)
+                }
+            }
+            
+            history_location := *history[cast(Piece.integer) pieces[it.piece_index].piece][it.end]
+            if value > best_move_value {
+                best_move = it
+                best_move_value = value
+                add_history(history_location, 0.001 * cast(f32) depth * cast(f32) depth)
+            } else {
+                remove_history(history_location, 0.001 * cast(f32) depth * cast(f32) depth)
+            }
 
-			current_alpha = max(current_alpha, value)
-		
-			if current_alpha >= current_beta {
-				old_killer_moves[depth] = killer_moves[depth]
-				killer_moves[depth] = it
-				counter_moves[previous_move.piece_index][previous_move.end] = it
-				
-				add_history(history_location, 0.001 * cast(f32) depth * cast(f32) depth)
-			
-				stats.beta_cutoffs += 1
-				break
-			}
-		}
-	}
-	
-	if !had_legal {
-		if in_check {
-			best_move_value = -(1e3 - 0.1 * cast(f32) move_count)
-			return best_move_value, best_move
-		} else {
-			best_move_value = 0
-			return best_move_value, best_move
-		}
-	}
-	
-	entry.value = best_move_value
-	entry.hash = key
-	entry.depth = current_depth
-	entry.move = best_move
-	
-	if best_move_value <= alpha
-		entry.kind = .UPPER_BOUND
-	else if best_move_value >= current_beta
-		entry.kind = .LOWER_BOUND
-	else
-		entry.kind = .EXACT
-	
-	return best_move_value, best_move
-	
+            current_alpha = max(current_alpha, value)
+        
+            if current_alpha >= current_beta {
+                old_killer_moves[depth] = killer_moves[depth]
+                killer_moves[depth] = it
+                counter_moves[previous_move.piece_index][previous_move.end] = it
+                
+                add_history(history_location, 0.001 * cast(f32) depth * cast(f32) depth)
+            
+                stats.beta_cutoffs += 1
+                break
+            }
+        }
+    }
+    
+    if !had_legal {
+        if in_check {
+            best_move_value = -(1e3 - 0.1 * cast(f32) move_count)
+            return best_move_value, best_move
+        } else {
+            best_move_value = 0
+            return best_move_value, best_move
+        }
+    }
+    
+    entry.value = best_move_value
+    entry.hash = key
+    entry.depth = current_depth
+    entry.move = best_move
+    
+    if best_move_value <= alpha
+        entry.kind = .UPPER_BOUND
+    else if best_move_value >= current_beta
+        entry.kind = .LOWER_BOUND
+    else
+        entry.kind = .EXACT
+    
+    return best_move_value, best_move
+    
 }
 
 get_piece :: (using state: State, index: s8) -> Piece {
-	if board[index] == -1 return 0
-	else return pieces[board[index]].piece
+    if board[index] == -1 return 0
+    else return pieces[board[index]].piece
 }
 
 print_mask :: (mask: u64) {
-	current_mask := mask
+    current_mask := mask
 
-	for 8 {
-		for 8 {
-			print("%", current_mask & 1)
-			current_mask >>= 1
-		}
-		
-		print("\n")
-	}
+    for 8 {
+        for 8 {
+            print("%", current_mask & 1)
+            current_mask >>= 1
+        }
+        
+        print("\n")
+    }
 }
 
 look_for_checks :: (using state: State, king_position: s8, king_color: Piece) -> bool {
-	enemy_color := king_color ^ BLACK
-	
-	if king_color == BLACK {		
-		if ((white_pawn_mask & pawns_that_can_right_capture_mask) >> 7 | 
-		    (white_pawn_mask & pawns_that_can_left_capture_mask) >> 9) & 
-			(1 << cast(u64) king_position) return true
-			
-		if legal_king_moves_mask[pieces[WHITE_KING_INDEX].location] & 1 << cast(u64) king_position return true
-	} else {
-		if ((black_pawn_mask & pawns_that_can_left_capture_mask) << 7 | 
-		    (black_pawn_mask & pawns_that_can_right_capture_mask) << 9) & 
-			(1 << cast(u64) king_position) return true
-		
-		if legal_king_moves_mask[pieces[BLACK_KING_INDEX].location] & 1 << cast(u64) king_position return true
-	}
+    enemy_color := king_color ^ BLACK
+    
+    if king_color == BLACK {        
+        if ((white_pawn_mask & pawns_that_can_right_capture_mask) >> 7 | 
+            (white_pawn_mask & pawns_that_can_left_capture_mask) >> 9) & 
+            (1 << cast(u64) king_position) return true
+            
+        if legal_king_moves_mask[pieces[WHITE_KING_INDEX].location] & 1 << cast(u64) king_position return true
+    } else {
+        if ((black_pawn_mask & pawns_that_can_left_capture_mask) << 7 | 
+            (black_pawn_mask & pawns_that_can_right_capture_mask) << 9) & 
+            (1 << cast(u64) king_position) return true
+        
+        if legal_king_moves_mask[pieces[BLACK_KING_INDEX].location] & 1 << cast(u64) king_position return true
+    }
 
-	for legal_knight_moves[king_position] {
-		if it == -1  break;
-		
-		if get_piece(state, it) == KNIGHT|enemy_color {
-			return true
-		}
-	}
-	
-	/*
-	for legal_king_moves[king_position] {
-		if it == -1  break;
-		
-		if get_piece(state, it) == KING|enemy_color {
-			return true
-		}
-	}
-	*/
-	
-	
-	look_for_line_checks :: (using state: State, king_position: s8, king_color: Piece, num_moves: s8, delta: s8, piece_kind: Piece) -> bool {
-		move := king_position
-		
-		for num_moves {
-			move += delta
-			
-			piece := get_piece(state, move)
-				
-			if piece {
-				
-				if piece & BLACK == king_color {
-					return false
-				} else {
-					kind := piece & ~BLACK
-					return kind == piece_kind || kind == QUEEN
-				}
-			}
-		}
-		
-		return false
-	}
-	
-	if look_for_line_checks(state, king_position, king_color, legal_bishop_moves[king_position].up_left,   -9, BISHOP)  return true
-	if look_for_line_checks(state, king_position, king_color, legal_bishop_moves[king_position].up_right,  -7, BISHOP)  return true
-	if look_for_line_checks(state, king_position, king_color, legal_bishop_moves[king_position].down_left,  7, BISHOP)  return true
-	if look_for_line_checks(state, king_position, king_color, legal_bishop_moves[king_position].down_right, 9, BISHOP)  return true
-	
-	x, y := unpack(king_position)
-	
-	if look_for_line_checks(state, king_position, king_color,     y, -8, ROOK)  return true
-	if look_for_line_checks(state, king_position, king_color,     x, -1, ROOK)  return true
-	if look_for_line_checks(state, king_position, king_color, 7 - y,  8, ROOK)  return true
-	if look_for_line_checks(state, king_position, king_color, 7 - x,  1, ROOK)  return true
+    for legal_knight_moves[king_position] {
+        if it == -1  break;
+        
+        if get_piece(state, it) == KNIGHT|enemy_color {
+            return true
+        }
+    }
+    
+    /*
+    for legal_king_moves[king_position] {
+        if it == -1  break;
+        
+        if get_piece(state, it) == KING|enemy_color {
+            return true
+        }
+    }
+    */
+    
+    
+    look_for_line_checks :: (using state: State, king_position: s8, king_color: Piece, num_moves: s8, delta: s8, piece_kind: Piece) -> bool {
+        move := king_position
+        
+        for num_moves {
+            move += delta
+            
+            piece := get_piece(state, move)
+                
+            if piece {
+                
+                if piece & BLACK == king_color {
+                    return false
+                } else {
+                    kind := piece & ~BLACK
+                    return kind == piece_kind || kind == QUEEN
+                }
+            }
+        }
+        
+        return false
+    }
+    
+    if look_for_line_checks(state, king_position, king_color, legal_bishop_moves[king_position].up_left,   -9, BISHOP)  return true
+    if look_for_line_checks(state, king_position, king_color, legal_bishop_moves[king_position].up_right,  -7, BISHOP)  return true
+    if look_for_line_checks(state, king_position, king_color, legal_bishop_moves[king_position].down_left,  7, BISHOP)  return true
+    if look_for_line_checks(state, king_position, king_color, legal_bishop_moves[king_position].down_right, 9, BISHOP)  return true
+    
+    x, y := unpack(king_position)
+    
+    if look_for_line_checks(state, king_position, king_color,     y, -8, ROOK)  return true
+    if look_for_line_checks(state, king_position, king_color,     x, -1, ROOK)  return true
+    if look_for_line_checks(state, king_position, king_color, 7 - y,  8, ROOK)  return true
+    if look_for_line_checks(state, king_position, king_color, 7 - x,  1, ROOK)  return true
 
-	
-	return false
+    
+    return false
 }
 
 get_moves_for_piece :: (using state: State, moves: *[..]Move, piece_index: s8) {
-	position := pieces[piece_index].location
-	piece := pieces[piece_index].piece
-	
-	color := piece & BLACK
-	piece_kind := piece & ~BLACK
-	
-	x, y := unpack(position)
-		
-	add_line_moves :: (using state: State, moves: *[..]Move, piece_index: s8, num_moves: s8, delta: s8) {
-		move := pieces[piece_index].location
-		
-		for num_moves {
-			move += delta
-			
-			add_move_if_legal(state, moves, .{piece_index, move})
-			
-			if board[move] != -1
-				break
-		}
-	}
-	
-	if piece == PAWN {
-		if board[position - 8] == -1 {
-			if y == 6 && board[position - 16] == -1 {
-				add_move_if_legal(state, moves, .{piece_index, position - 16})
-			}
-			
-			add_move_if_legal(state, moves, .{piece_index, position - 8})
-		}
-		
-		if x < 7 && board[position - 7] != -1  add_move_if_legal(state, moves, .{piece_index, position - 7})
-		if x > 0 && board[position - 9] != -1  add_move_if_legal(state, moves, .{piece_index, position - 9})
-		
-		
-		if position - 7 == en_passant_position || position - 9 == en_passant_position {
-			add_move_if_legal(state, moves, .{piece_index, en_passant_position})
-		}
-	} else if piece == PAWN|BLACK {
-		if board[position + 8] == -1 {
-			if y == 1 && board[position + 16] == -1 {
-				add_move_if_legal(state, moves, .{piece_index, position + 16})
-			}
-			
-			add_move_if_legal(state, moves, .{piece_index, position + 8})
-		}
-		
-		if x < 7 && board[position + 9] != -1  add_move_if_legal(state, moves, .{piece_index, position + 9})
-		if x > 0 && board[position + 7] != -1  add_move_if_legal(state, moves, .{piece_index, position + 7})
-		
-		
-		if position + 7 == en_passant_position || position + 9 == en_passant_position {
-			add_move_if_legal(state, moves, .{piece_index, en_passant_position})
-		}
-	} else if piece_kind == KNIGHT {
-		for legal_knight_moves[position] {
-			if it == -1  break;
-			
-			add_move_if_legal(state, moves, .{piece_index, it})
-		}
-	} else if piece_kind == KING {
-		for legal_king_moves[position] {
-			if it == -1  break;
-			
-			add_move_if_legal(state, moves, .{piece_index, it})
-		}
-		
-		if (color == BLACK && !(castle_state & .BLACK_NO_KINGSIDE)) || (color != BLACK && !(castle_state & .WHITE_NO_KINGSIDE)) {
-			if board[position + 1] == -1 && board[position + 2] == -1 {
-				add_move_if_legal(state, moves, .{piece_index, position + 2})
-			}
-		}
-		
-		if (color == BLACK && !(castle_state & .BLACK_NO_QUEENSIDE)) || (color != BLACK && !(castle_state & .WHITE_NO_QUEENSIDE)) {
-			if board[position - 1] == -1 && board[position - 2] == -1 && board[position - 3] == -1 {
-			add_move_if_legal(state, moves, .{piece_index, position - 2})
-			}
-		}
-	} else if piece_kind == BISHOP {
-		add_line_moves(state, moves, piece_index, legal_bishop_moves[position].up_left,   -9)
-		add_line_moves(state, moves, piece_index, legal_bishop_moves[position].up_right,  -7)
-		add_line_moves(state, moves, piece_index, legal_bishop_moves[position].down_left,  7)
-		add_line_moves(state, moves, piece_index, legal_bishop_moves[position].down_right, 9)
-	} else if piece_kind == ROOK {
-		x, y := unpack(position)
-	
-		add_line_moves(state, moves, piece_index,     y, -8)
-		add_line_moves(state, moves, piece_index,     x, -1)
-		add_line_moves(state, moves, piece_index, 7 - y,  8)
-		add_line_moves(state, moves, piece_index, 7 - x,  1)
-	} else if piece_kind == QUEEN {
-		add_line_moves(state, moves, piece_index, legal_bishop_moves[position].up_left,   -9)
-		add_line_moves(state, moves, piece_index, legal_bishop_moves[position].up_right,  -7)
-		add_line_moves(state, moves, piece_index, legal_bishop_moves[position].down_left,  7)
-		add_line_moves(state, moves, piece_index, legal_bishop_moves[position].down_right, 9)
-		
-		x, y := unpack(position)
-	
-		add_line_moves(state, moves, piece_index,     y, -8)
-		add_line_moves(state, moves, piece_index,     x, -1)
-		add_line_moves(state, moves, piece_index, 7 - y,  8)
-		add_line_moves(state, moves, piece_index, 7 - x,  1)
-	}
+    position := pieces[piece_index].location
+    piece := pieces[piece_index].piece
+    
+    color := piece & BLACK
+    piece_kind := piece & ~BLACK
+    
+    x, y := unpack(position)
+        
+    add_line_moves :: (using state: State, moves: *[..]Move, piece_index: s8, num_moves: s8, delta: s8) {
+        move := pieces[piece_index].location
+        
+        for num_moves {
+            move += delta
+            
+            add_move_if_legal(state, moves, .{piece_index, move})
+            
+            if board[move] != -1
+                break
+        }
+    }
+    
+    if piece == PAWN {
+        if board[position - 8] == -1 {
+            if y == 6 && board[position - 16] == -1 {
+                add_move_if_legal(state, moves, .{piece_index, position - 16})
+            }
+            
+            add_move_if_legal(state, moves, .{piece_index, position - 8})
+        }
+        
+        if x < 7 && board[position - 7] != -1  add_move_if_legal(state, moves, .{piece_index, position - 7})
+        if x > 0 && board[position - 9] != -1  add_move_if_legal(state, moves, .{piece_index, position - 9})
+        
+        
+        if position - 7 == en_passant_position || position - 9 == en_passant_position {
+            add_move_if_legal(state, moves, .{piece_index, en_passant_position})
+        }
+    } else if piece == PAWN|BLACK {
+        if board[position + 8] == -1 {
+            if y == 1 && board[position + 16] == -1 {
+                add_move_if_legal(state, moves, .{piece_index, position + 16})
+            }
+            
+            add_move_if_legal(state, moves, .{piece_index, position + 8})
+        }
+        
+        if x < 7 && board[position + 9] != -1  add_move_if_legal(state, moves, .{piece_index, position + 9})
+        if x > 0 && board[position + 7] != -1  add_move_if_legal(state, moves, .{piece_index, position + 7})
+        
+        
+        if position + 7 == en_passant_position || position + 9 == en_passant_position {
+            add_move_if_legal(state, moves, .{piece_index, en_passant_position})
+        }
+    } else if piece_kind == KNIGHT {
+        for legal_knight_moves[position] {
+            if it == -1  break;
+            
+            add_move_if_legal(state, moves, .{piece_index, it})
+        }
+    } else if piece_kind == KING {
+        for legal_king_moves[position] {
+            if it == -1  break;
+            
+            add_move_if_legal(state, moves, .{piece_index, it})
+        }
+        
+        if (color == BLACK && !(castle_state & .BLACK_NO_KINGSIDE)) || (color != BLACK && !(castle_state & .WHITE_NO_KINGSIDE)) {
+            if board[position + 1] == -1 && board[position + 2] == -1 {
+                add_move_if_legal(state, moves, .{piece_index, position + 2})
+            }
+        }
+        
+        if (color == BLACK && !(castle_state & .BLACK_NO_QUEENSIDE)) || (color != BLACK && !(castle_state & .WHITE_NO_QUEENSIDE)) {
+            if board[position - 1] == -1 && board[position - 2] == -1 && board[position - 3] == -1 {
+            add_move_if_legal(state, moves, .{piece_index, position - 2})
+            }
+        }
+    } else if piece_kind == BISHOP {
+        add_line_moves(state, moves, piece_index, legal_bishop_moves[position].up_left,   -9)
+        add_line_moves(state, moves, piece_index, legal_bishop_moves[position].up_right,  -7)
+        add_line_moves(state, moves, piece_index, legal_bishop_moves[position].down_left,  7)
+        add_line_moves(state, moves, piece_index, legal_bishop_moves[position].down_right, 9)
+    } else if piece_kind == ROOK {
+        x, y := unpack(position)
+    
+        add_line_moves(state, moves, piece_index,     y, -8)
+        add_line_moves(state, moves, piece_index,     x, -1)
+        add_line_moves(state, moves, piece_index, 7 - y,  8)
+        add_line_moves(state, moves, piece_index, 7 - x,  1)
+    } else if piece_kind == QUEEN {
+        add_line_moves(state, moves, piece_index, legal_bishop_moves[position].up_left,   -9)
+        add_line_moves(state, moves, piece_index, legal_bishop_moves[position].up_right,  -7)
+        add_line_moves(state, moves, piece_index, legal_bishop_moves[position].down_left,  7)
+        add_line_moves(state, moves, piece_index, legal_bishop_moves[position].down_right, 9)
+        
+        x, y := unpack(position)
+    
+        add_line_moves(state, moves, piece_index,     y, -8)
+        add_line_moves(state, moves, piece_index,     x, -1)
+        add_line_moves(state, moves, piece_index, 7 - y,  8)
+        add_line_moves(state, moves, piece_index, 7 - x,  1)
+    }
 }
 
 get_capture_moves_for_piece :: (using state: State, moves: *[..]Move, piece_index: s8) {
-	position := pieces[piece_index].location
-	piece := pieces[piece_index].piece
-	
-	color := piece & BLACK
-	piece_kind := piece & ~BLACK
-	
-	x, y := unpack(position)
-		
-	add_line_moves :: (using state: State, moves: *[..]Move, piece_index: s8, num_moves: s8, delta: s8) {
-		move := pieces[piece_index].location
-		
-		for num_moves {
-			move += delta
-			
-			add_capture_move_if_legal(state, moves, .{piece_index, move})
-			
-			if board[move] != -1
-				break
-		}
-	}
-	
-	if piece == PAWN {		
-		if x < 7  add_capture_move_if_legal(state, moves, .{piece_index, position - 7})
-		if x > 0  add_capture_move_if_legal(state, moves, .{piece_index, position - 9})
-		
-		
-		if position - 7 == en_passant_position || position - 9 == en_passant_position {
-			add_move_if_legal(state, moves, .{piece_index, en_passant_position})
-		}
-	} else if piece == PAWN|BLACK {
-		if x < 7  add_capture_move_if_legal(state, moves, .{piece_index, position + 9})
-		if x > 0  add_capture_move_if_legal(state, moves, .{piece_index, position + 7})
-		
-		
-		if position + 7 == en_passant_position || position + 9 == en_passant_position {
-			add_move_if_legal(state, moves, .{piece_index, en_passant_position})
-		}
-	} else if piece_kind == KNIGHT {
-		for legal_knight_moves[position] {
-			if it == -1  break;
-			
-			add_capture_move_if_legal(state, moves, .{piece_index, it})
-		}
-	} else if piece_kind == KING {
-		for legal_king_moves[position] {
-			if it == -1  break;
-			
-			add_capture_move_if_legal(state, moves, .{piece_index, it})
-		}
-	} else if piece_kind == BISHOP {
-		add_line_moves(state, moves, piece_index, legal_bishop_moves[position].up_left,   -9)
-		add_line_moves(state, moves, piece_index, legal_bishop_moves[position].up_right,  -7)
-		add_line_moves(state, moves, piece_index, legal_bishop_moves[position].down_left,  7)
-		add_line_moves(state, moves, piece_index, legal_bishop_moves[position].down_right, 9)
-	} else if piece_kind == ROOK {
-		x, y := unpack(position)
-	
-		add_line_moves(state, moves, piece_index,     y, -8)
-		add_line_moves(state, moves, piece_index,     x, -1)
-		add_line_moves(state, moves, piece_index, 7 - y,  8)
-		add_line_moves(state, moves, piece_index, 7 - x,  1)
-	} else if piece_kind == QUEEN {
-		add_line_moves(state, moves, piece_index, legal_bishop_moves[position].up_left,   -9)
-		add_line_moves(state, moves, piece_index, legal_bishop_moves[position].up_right,  -7)
-		add_line_moves(state, moves, piece_index, legal_bishop_moves[position].down_left,  7)
-		add_line_moves(state, moves, piece_index, legal_bishop_moves[position].down_right, 9)
-		
-		x, y := unpack(position)
-	
-		add_line_moves(state, moves, piece_index,     y, -8)
-		add_line_moves(state, moves, piece_index,     x, -1)
-		add_line_moves(state, moves, piece_index, 7 - y,  8)
-		add_line_moves(state, moves, piece_index, 7 - x,  1)
-	}
+    position := pieces[piece_index].location
+    piece := pieces[piece_index].piece
+    
+    color := piece & BLACK
+    piece_kind := piece & ~BLACK
+    
+    x, y := unpack(position)
+        
+    add_line_moves :: (using state: State, moves: *[..]Move, piece_index: s8, num_moves: s8, delta: s8) {
+        move := pieces[piece_index].location
+        
+        for num_moves {
+            move += delta
+            
+            add_capture_move_if_legal(state, moves, .{piece_index, move})
+            
+            if board[move] != -1
+                break
+        }
+    }
+    
+    if piece == PAWN {        
+        if x < 7  add_capture_move_if_legal(state, moves, .{piece_index, position - 7})
+        if x > 0  add_capture_move_if_legal(state, moves, .{piece_index, position - 9})
+        
+        
+        if position - 7 == en_passant_position || position - 9 == en_passant_position {
+            add_move_if_legal(state, moves, .{piece_index, en_passant_position})
+        }
+    } else if piece == PAWN|BLACK {
+        if x < 7  add_capture_move_if_legal(state, moves, .{piece_index, position + 9})
+        if x > 0  add_capture_move_if_legal(state, moves, .{piece_index, position + 7})
+        
+        
+        if position + 7 == en_passant_position || position + 9 == en_passant_position {
+            add_move_if_legal(state, moves, .{piece_index, en_passant_position})
+        }
+    } else if piece_kind == KNIGHT {
+        for legal_knight_moves[position] {
+            if it == -1  break;
+            
+            add_capture_move_if_legal(state, moves, .{piece_index, it})
+        }
+    } else if piece_kind == KING {
+        for legal_king_moves[position] {
+            if it == -1  break;
+            
+            add_capture_move_if_legal(state, moves, .{piece_index, it})
+        }
+    } else if piece_kind == BISHOP {
+        add_line_moves(state, moves, piece_index, legal_bishop_moves[position].up_left,   -9)
+        add_line_moves(state, moves, piece_index, legal_bishop_moves[position].up_right,  -7)
+        add_line_moves(state, moves, piece_index, legal_bishop_moves[position].down_left,  7)
+        add_line_moves(state, moves, piece_index, legal_bishop_moves[position].down_right, 9)
+    } else if piece_kind == ROOK {
+        x, y := unpack(position)
+    
+        add_line_moves(state, moves, piece_index,     y, -8)
+        add_line_moves(state, moves, piece_index,     x, -1)
+        add_line_moves(state, moves, piece_index, 7 - y,  8)
+        add_line_moves(state, moves, piece_index, 7 - x,  1)
+    } else if piece_kind == QUEEN {
+        add_line_moves(state, moves, piece_index, legal_bishop_moves[position].up_left,   -9)
+        add_line_moves(state, moves, piece_index, legal_bishop_moves[position].up_right,  -7)
+        add_line_moves(state, moves, piece_index, legal_bishop_moves[position].down_left,  7)
+        add_line_moves(state, moves, piece_index, legal_bishop_moves[position].down_right, 9)
+        
+        x, y := unpack(position)
+    
+        add_line_moves(state, moves, piece_index,     y, -8)
+        add_line_moves(state, moves, piece_index,     x, -1)
+        add_line_moves(state, moves, piece_index, 7 - y,  8)
+        add_line_moves(state, moves, piece_index, 7 - x,  1)
+    }
 }
 
 
@@ -1672,136 +1672,136 @@ selected_square: s8 = -1
 undo_last_move := false
 
 checked_do_move :: (using state: State, using move: Move) -> (State, #must bool) {
-	start := pieces[move.piece_index].location
-	piece := pieces[move.piece_index].piece
-	
-	
-	if piece & ~BLACK == KING {
-		distance := end - start
-		
-		if distance == -2 {
-			if look_for_checks(state, start, player_color)      return state, false
-			if look_for_checks(state, start - 1, player_color)  return state, false
-		} else if distance == 2 {
-			if look_for_checks(state, start, player_color)      return state, false
-			if look_for_checks(state, start + 1, player_color)  return state, false				
-		}
-	}
+    start := pieces[move.piece_index].location
+    piece := pieces[move.piece_index].piece
+    
+    
+    if piece & ~BLACK == KING {
+        distance := end - start
+        
+        if distance == -2 {
+            if look_for_checks(state, start, player_color)      return state, false
+            if look_for_checks(state, start - 1, player_color)  return state, false
+        } else if distance == 2 {
+            if look_for_checks(state, start, player_color)      return state, false
+            if look_for_checks(state, start + 1, player_color)  return state, false                
+        }
+    }
 
-	new_state := do_move(state, move)
-	player_king := new_state.pieces[WHITE_KING_INDEX].location
-	
-	if player_color == BLACK  player_king = new_state.pieces[BLACK_KING_INDEX].location
-	
-	return new_state, !look_for_checks(new_state, player_king, player_color)
+    new_state := do_move(state, move)
+    player_king := new_state.pieces[WHITE_KING_INDEX].location
+    
+    if player_color == BLACK  player_king = new_state.pieces[BLACK_KING_INDEX].location
+    
+    return new_state, !look_for_checks(new_state, player_king, player_color)
 }
 
 do_move :: (state: State, using move: Move) -> State {
-	using new_state := state
+    using new_state := state
 
-	previous_move = move
-	
-	piece_info := *pieces[piece_index]
-	
-	start := piece_info.location
-	piece_info.location = end
-	piece := piece_info.piece
-	
-	if board[end] != -1 {
-		pieces[board[end]].location = -1
-	}
-	
-	white_pawn_mask &= ~(1 << cast(u64) start | 1 << cast(u64) end)
-	black_pawn_mask &= ~(1 << cast(u64) start | 1 << cast(u64) end)
-	
-	distance := end - start
-	
-	if piece & ~BLACK == KING {	
-		if distance == 2 {
-			rook := board[63]
-			
-			if piece & BLACK {
-				rook = board[7]	
-			}
-			
-			pieces[rook].location = end - 1
-		
-			board[end - 1] = rook
-			board[end + 1] = -1
-		} else if distance == -2 {
-			rook := board[56]
-			
-			if piece & BLACK {
-				rook = board[0]
-			}
-			
-			pieces[rook].location = end + 1
-		
-			board[end + 1] = rook
-			board[end - 2] = -1
-		}
-	}
+    previous_move = move
+    
+    piece_info := *pieces[piece_index]
+    
+    start := piece_info.location
+    piece_info.location = end
+    piece := piece_info.piece
+    
+    if board[end] != -1 {
+        pieces[board[end]].location = -1
+    }
+    
+    white_pawn_mask &= ~(1 << cast(u64) start | 1 << cast(u64) end)
+    black_pawn_mask &= ~(1 << cast(u64) start | 1 << cast(u64) end)
+    
+    distance := end - start
+    
+    if piece & ~BLACK == KING {    
+        if distance == 2 {
+            rook := board[63]
+            
+            if piece & BLACK {
+                rook = board[7]    
+            }
+            
+            pieces[rook].location = end - 1
+        
+            board[end - 1] = rook
+            board[end + 1] = -1
+        } else if distance == -2 {
+            rook := board[56]
+            
+            if piece & BLACK {
+                rook = board[0]
+            }
+            
+            pieces[rook].location = end + 1
+        
+            board[end + 1] = rook
+            board[end - 2] = -1
+        }
+    }
 
-	board[end] = piece_index
-	board[start] = -1
-	
-	old_en_passant_position := en_passant_position
-	en_passant_position = -128
-	
-	if piece == PAWN {
-		white_pawn_mask |= (1 << cast(u64) end)
-	
-		if end == old_en_passant_position {
-			pieces[board[end + 8]].location = -1
-			board[end + 8] = -1
-			
-			black_pawn_mask &= ~(1 << cast(u64) (end + 8))
-		} else if distance == -16 {
-			en_passant_position = start - 8
-		} else if end < 8 {
-			piece_info.piece = QUEEN
-			white_pawn_mask &= ~(1 << cast(u64) end)
-		}
-	} else if piece == PAWN|BLACK {	
-		black_pawn_mask |= (1 << cast(u64) end)	
-		
-		if end == old_en_passant_position {
-			pieces[board[end - 8]].location = -1
-			board[end - 8] = -1
-			
-			white_pawn_mask &= ~(1 << cast(u64) (end - 8))
-		} else if distance == 16 {
-			en_passant_position = start + 8
-		} else if end >= 56 {
-			piece_info.piece = QUEEN|BLACK
-			black_pawn_mask &= ~(1 << cast(u64) end)
-		}
-	}
-	
-	if piece == KING {
-		castle_state |= .WHITE_NO_KINGSIDE
-		castle_state |= .WHITE_NO_QUEENSIDE
-	} else if piece == KING|BLACK {
-		castle_state |= .BLACK_NO_KINGSIDE
-		castle_state |= .BLACK_NO_QUEENSIDE
-	}
-	
-	if start == 0 || end == 0 {
-		castle_state |= .BLACK_NO_QUEENSIDE
-	} else if start == 7 || end == 7 {
-		castle_state |= .BLACK_NO_KINGSIDE
-	}
-	
-	if start == 56 || end == 56 {
-		castle_state |= .WHITE_NO_QUEENSIDE
-	} else if start == 63 || end == 63 {
-		castle_state |= .WHITE_NO_KINGSIDE
-	}
-	
-	player_color ^= BLACK
-	move_count += 1
-	
-	return new_state
+    board[end] = piece_index
+    board[start] = -1
+    
+    old_en_passant_position := en_passant_position
+    en_passant_position = -128
+    
+    if piece == PAWN {
+        white_pawn_mask |= (1 << cast(u64) end)
+    
+        if end == old_en_passant_position {
+            pieces[board[end + 8]].location = -1
+            board[end + 8] = -1
+            
+            black_pawn_mask &= ~(1 << cast(u64) (end + 8))
+        } else if distance == -16 {
+            en_passant_position = start - 8
+        } else if end < 8 {
+            piece_info.piece = QUEEN
+            white_pawn_mask &= ~(1 << cast(u64) end)
+        }
+    } else if piece == PAWN|BLACK {    
+        black_pawn_mask |= (1 << cast(u64) end)    
+        
+        if end == old_en_passant_position {
+            pieces[board[end - 8]].location = -1
+            board[end - 8] = -1
+            
+            white_pawn_mask &= ~(1 << cast(u64) (end - 8))
+        } else if distance == 16 {
+            en_passant_position = start + 8
+        } else if end >= 56 {
+            piece_info.piece = QUEEN|BLACK
+            black_pawn_mask &= ~(1 << cast(u64) end)
+        }
+    }
+    
+    if piece == KING {
+        castle_state |= .WHITE_NO_KINGSIDE
+        castle_state |= .WHITE_NO_QUEENSIDE
+    } else if piece == KING|BLACK {
+        castle_state |= .BLACK_NO_KINGSIDE
+        castle_state |= .BLACK_NO_QUEENSIDE
+    }
+    
+    if start == 0 || end == 0 {
+        castle_state |= .BLACK_NO_QUEENSIDE
+    } else if start == 7 || end == 7 {
+        castle_state |= .BLACK_NO_KINGSIDE
+    }
+    
+    if start == 56 || end == 56 {
+        castle_state |= .WHITE_NO_QUEENSIDE
+    } else if start == 63 || end == 63 {
+        castle_state |= .WHITE_NO_KINGSIDE
+    }
+    
+    player_color ^= BLACK
+    move_count += 1
+    
+    return new_state
 }
 
 move_history: [..]Move
@@ -1809,52 +1809,52 @@ black_ai: bool
 white_ai: bool
 
 Hashing_Data :: struct {
-	piece_positions: [16][65]u64
-	castle_state: [4]u64
-	en_passant_file: [8]u64
-	black_move: u64
+    piece_positions: [16][65]u64
+    castle_state: [4]u64
+    en_passant_file: [8]u64
+    black_move: u64
 }
 
 hash ::  (using state: State) -> u64 {
-	hash: u64 = 0
-	
-	for pieces {
-		hash ^= hashing_data.piece_positions[cast(u8) it.piece][it.location + 1]
-	}
-	
-	hash ^= hashing_data.castle_state[cast(u8) castle_state]
-	
-	if en_passant_position >= 0
-		hash ^= hashing_data.en_passant_file[en_passant_position & 7]
-	
-	if player_color
-		hash ^= hashing_data.black_move
-	
-	return hash
+    hash: u64 = 0
+    
+    for pieces {
+        hash ^= hashing_data.piece_positions[cast(u8) it.piece][it.location + 1]
+    }
+    
+    hash ^= hashing_data.castle_state[cast(u8) castle_state]
+    
+    if en_passant_position >= 0
+        hash ^= hashing_data.en_passant_file[en_passant_position & 7]
+    
+    if player_color
+        hash ^= hashing_data.black_move
+    
+    return hash
 }
 
 precompute_hashing_data :: () -> Hashing_Data {
-	rng := create_random(10, 20)
-	
-	using data: Hashing_Data
-	
-	for * piece_positions {
-		for * <<it {
-			<<it = random_u64(*rng)
-		} 
-	}
-	
-	for * castle_state {
-		<<it = random_u64(*rng)
-	}
-	
-	for * en_passant_file {
-		<<it = random_u64(*rng)
-	}
-	
-	black_move = random_u64(*rng)
-	
-	return data
+    rng := create_random(10, 20)
+    
+    using data: Hashing_Data
+    
+    for * piece_positions {
+        for * <<it {
+            <<it = random_u64(*rng)
+        } 
+    }
+    
+    for * castle_state {
+        <<it = random_u64(*rng)
+    }
+    
+    for * en_passant_file {
+        <<it = random_u64(*rng)
+    }
+    
+    black_move = random_u64(*rng)
+    
+    return data
 }
 
 hashing_data :: #run precompute_hashing_data()
@@ -1865,299 +1865,299 @@ history: [16][64]f32
 counter_moves: [32][64]Move
 
 add_history :: (value: *f32, bonus: f32) {
-	MAX_HISTORY_BONUS :: 10;
-	
-	<<value += bonus - <<value * bonus / MAX_HISTORY_BONUS
+    MAX_HISTORY_BONUS :: 10;
+    
+    <<value += bonus - <<value * bonus / MAX_HISTORY_BONUS
 }
 
 remove_history :: (value: *f32, penalty: f32) {
-	MAX_HISTORY_BONUS :: 10;
-	
-	<<value -= penalty - <<value * penalty / MAX_HISTORY_BONUS
+    MAX_HISTORY_BONUS :: 10;
+    
+    <<value -= penalty - <<value * penalty / MAX_HISTORY_BONUS
 }
 
 select_ai_move :: () -> Move {
-	if use_book {
-		// Try and use a book move for the first 6 moves
-		if global_board.move_count < 12 {
-			key := hash(global_board)
-			
-			book := opening_table_lookup(key)
-			
-			if !book {
-				print("Position not found in opening book\n")
-			} else {
-				print("Playing book move\n")
-				return book.moves[random_u64(*rng) % book.moves.count]
-			}
-		}
-	}
+    if use_book {
+        // Try and use a book move for the first 6 moves
+        if global_board.move_count < 12 {
+            key := hash(global_board)
+            
+            book := opening_table_lookup(key)
+            
+            if !book {
+                print("Position not found in opening book\n")
+            } else {
+                print("Playing book move\n")
+                return book.moves[random_u64(*rng) % book.moves.count]
+            }
+        }
+    }
 
-	old_max_moves := max_moves
-	// no limit on moves for the first iteration to make sure we always get at least 1
-	max_moves = cast() 1e9
+    old_max_moves := max_moves
+    // no limit on moves for the first iteration to make sure we always get at least 1
+    max_moves = cast() 1e9
 
-	stats = .{}
-	moves_explored = 0
-	
-	for * history {
-		for * <<it {
-			<<it = 0
-		}
-	}
-	
-	for * transposition_table {
-		<<it = .{}
-	}
-	
-	depth := 2
-	value, ai_move := minimax(global_board, cast() depth)
-	
-	total_explored := moves_explored
-	
-	max_moves = old_max_moves
-	
-	
-	while outer: moves_explored < max_moves {
-		
-		if depth == MAX_DEPTH  
-			break;
-		
-		low_delta: f32 = 0.5
-		high_delta: f32 = 0.5
-		
-		while true {
-			alpha := value - low_delta
-			beta := value + high_delta
-			
-			new_value, new_move := minimax(global_board, cast() depth, alpha, beta)
-		
-			if moves_explored >= max_moves 
-				break outer
-			
-			if new_value <= alpha {
-				print("Alpha fail\n")
-				low_delta *= 2
-				continue
-			} else if new_value >= beta {
-				print("Beta fail\n")
-				high_delta *= 2
-				continue
-			} else {
-				if new_move.piece_index == -1
-					break outer
-					
-				value = new_value
-				ai_move = new_move
-			
-				print("Move: %\n", new_move)
-				break
-			}
-		}
+    stats = .{}
+    moves_explored = 0
+    
+    for * history {
+        for * <<it {
+            <<it = 0
+        }
+    }
+    
+    for * transposition_table {
+        <<it = .{}
+    }
+    
+    depth := 2
+    value, ai_move := minimax(global_board, cast() depth)
+    
+    total_explored := moves_explored
+    
+    max_moves = old_max_moves
+    
+    
+    while outer: moves_explored < max_moves {
+        
+        if depth == MAX_DEPTH  
+            break;
+        
+        low_delta: f32 = 0.5
+        high_delta: f32 = 0.5
+        
+        while true {
+            alpha := value - low_delta
+            beta := value + high_delta
+            
+            new_value, new_move := minimax(global_board, cast() depth, alpha, beta)
+        
+            if moves_explored >= max_moves 
+                break outer
+            
+            if new_value <= alpha {
+                print("Alpha fail\n")
+                low_delta *= 2
+                continue
+            } else if new_value >= beta {
+                print("Beta fail\n")
+                high_delta *= 2
+                continue
+            } else {
+                if new_move.piece_index == -1
+                    break outer
+                    
+                value = new_value
+                ai_move = new_move
+            
+                print("Move: %\n", new_move)
+                break
+            }
+        }
 
-		total_explored = moves_explored
-		
-		if value <= -900 || value >= 900 {
-			print("Forced mate found\n")
-			break;
-		}
-		depth += 1
-	}
-	
-	print("%\n", ai_move)
-	print("%\n", stats)
-	print("% moves explored at depth %, (%)\n", total_explored, depth, moves_explored)
-	print("move valued at %\n", value)
-	
-	return ai_move
+        total_explored = moves_explored
+        
+        if value <= -900 || value >= 900 {
+            print("Forced mate found\n")
+            break;
+        }
+        depth += 1
+    }
+    
+    print("%\n", ai_move)
+    print("%\n", stats)
+    print("% moves explored at depth %, (%)\n", total_explored, depth, moves_explored)
+    print("move valued at %\n", value)
+    
+    return ai_move
 }
 
 draw :: (moves: []Move) {
-	glViewport(0, 0, window_width, window_height)
-	glClear(GL_COLOR_BUFFER_BIT)
-	
-	glMatrixMode(GL_PROJECTION)
-	glLoadIdentity()
-	glOrtho(0, 8, 8, 0, -5, 5)
-	glMatrixMode(GL_MODELVIEW)
-	glLoadIdentity()
-	
-	glDisable(GL_TEXTURE_2D)
-	glBegin(GL_QUADS)
-	
-	for y: 8 {
-		for x: 8 {
-			if x + y & 1
-				glColor3f(0.4, 0.3, 0.2)
-			else
-				glColor3f(0.8, 0.7, 0.5)
-			
-			
-			glVertex2f(cast(f32) x, cast(f32) y)
-			glVertex2f(cast(f32) x + 1, cast(f32) y)
-			glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
-			glVertex2f(cast(f32) x, cast(f32) y + 1)
-		}
-	}
-	
-	if selected_square != -1 {
-		x, y := unpack(selected_square)
-		
-		if white_ai && !black_ai  {
-			x = 7 - x
-			y = 7 - y
-		}
-		
-		glColor4f(1, 1, 0, 0.4)
-		
-		glVertex2f(cast(f32) x, cast(f32) y)
-		glVertex2f(cast(f32) x + 1, cast(f32) y)
-		glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
-		glVertex2f(cast(f32) x, cast(f32) y + 1)
-	}
-	
-	if move_history {
-		move := array_peek(move_history)
-		
-		start := undo_list[undo_list.count - 1].pieces[move.piece_index].location
-		
-		glColor4f(0, 0, 1, 0.4)
-		
-		x, y := unpack(start)
-	
-		if white_ai && !black_ai  {
-			x = 7 - x
-			y = 7 - y
-		}
-		
-		glVertex2f(cast(f32) x, cast(f32) y)
-		glVertex2f(cast(f32) x + 1, cast(f32) y)
-		glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
-		glVertex2f(cast(f32) x, cast(f32) y + 1)
-		
-		x, y = unpack(move.end)
-		
-		if white_ai && !black_ai  {
-			x = 7 - x
-			y = 7 - y
-		}
-		
-		glVertex2f(cast(f32) x, cast(f32) y)
-		glVertex2f(cast(f32) x + 1, cast(f32) y)
-		glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
-		glVertex2f(cast(f32) x, cast(f32) y + 1)
-	}
-	
-	glColor4f(0, 1, 0, 0.4)
-	
-	for moves {
-		_, valid := checked_do_move(global_board, it)
-		
-		if valid {
-			x, y := unpack(it.end)
-			
-			if white_ai && !black_ai  {
-				x = 7 - x
-				y = 7 - y
-			}
-			
-			
-			
-			glVertex2f(cast(f32) x, cast(f32) y)
-			glVertex2f(cast(f32) x + 1, cast(f32) y)
-			glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
-			glVertex2f(cast(f32) x, cast(f32) y + 1)
-		}
-	}
-	
-	glEnd()
-	
-	glColor3f(1, 1, 1)
-	
-	glEnable(GL_TEXTURE_2D)
-	glBegin(GL_QUADS)
-	
-	for global_board.pieces {
-		piece := it.piece
-		
-		if piece {
-			x, y := unpack(it.location)
-			
-			if white_ai && !black_ai  {
-				x = 7 - x
-				y = 7 - y
-			}
-			
-			y_coord: f32 = 0.5
-			x_coord: f32 = 0
-			
-			if piece & BLACK {
-				y_coord = 0
-			}
-			
-			kind := piece & ~BLACK
-			
-			if kind == {
-				case QUEEN
-					x_coord = 1.0 / 6.0
-				case BISHOP 
-					x_coord = 2.0 / 6.0
-				case KNIGHT
-					x_coord = 3.0 / 6.0
-				case ROOK
-					x_coord = 4.0 / 6.0
-				case PAWN
-					x_coord = 5.0 / 6.0
-			}
-			
-			
-			glTexCoord2f(x_coord, y_coord + 0.5)
-			glVertex2f(cast(f32) x, cast(f32) y)
-			
-			glTexCoord2f(x_coord + 1.0 / 6.0, y_coord + 0.5)
-			glVertex2f(cast(f32) x + 1, cast(f32) y)
-			
-			glTexCoord2f(x_coord + 1.0 / 6.0, y_coord)
-			glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
-			
-			glTexCoord2f(x_coord, y_coord)
-			glVertex2f(cast(f32) x, cast(f32) y + 1)
-		}
-	}
-	
-	glEnd()
+    glViewport(0, 0, window_width, window_height)
+    glClear(GL_COLOR_BUFFER_BIT)
+    
+    glMatrixMode(GL_PROJECTION)
+    glLoadIdentity()
+    glOrtho(0, 8, 8, 0, -5, 5)
+    glMatrixMode(GL_MODELVIEW)
+    glLoadIdentity()
+    
+    glDisable(GL_TEXTURE_2D)
+    glBegin(GL_QUADS)
+    
+    for y: 8 {
+        for x: 8 {
+            if x + y & 1
+                glColor3f(0.4, 0.3, 0.2)
+            else
+                glColor3f(0.8, 0.7, 0.5)
+            
+            
+            glVertex2f(cast(f32) x, cast(f32) y)
+            glVertex2f(cast(f32) x + 1, cast(f32) y)
+            glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
+            glVertex2f(cast(f32) x, cast(f32) y + 1)
+        }
+    }
+    
+    if selected_square != -1 {
+        x, y := unpack(selected_square)
+        
+        if white_ai && !black_ai  {
+            x = 7 - x
+            y = 7 - y
+        }
+        
+        glColor4f(1, 1, 0, 0.4)
+        
+        glVertex2f(cast(f32) x, cast(f32) y)
+        glVertex2f(cast(f32) x + 1, cast(f32) y)
+        glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
+        glVertex2f(cast(f32) x, cast(f32) y + 1)
+    }
+    
+    if move_history {
+        move := array_peek(move_history)
+        
+        start := undo_list[undo_list.count - 1].pieces[move.piece_index].location
+        
+        glColor4f(0, 0, 1, 0.4)
+        
+        x, y := unpack(start)
+    
+        if white_ai && !black_ai  {
+            x = 7 - x
+            y = 7 - y
+        }
+        
+        glVertex2f(cast(f32) x, cast(f32) y)
+        glVertex2f(cast(f32) x + 1, cast(f32) y)
+        glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
+        glVertex2f(cast(f32) x, cast(f32) y + 1)
+        
+        x, y = unpack(move.end)
+        
+        if white_ai && !black_ai  {
+            x = 7 - x
+            y = 7 - y
+        }
+        
+        glVertex2f(cast(f32) x, cast(f32) y)
+        glVertex2f(cast(f32) x + 1, cast(f32) y)
+        glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
+        glVertex2f(cast(f32) x, cast(f32) y + 1)
+    }
+    
+    glColor4f(0, 1, 0, 0.4)
+    
+    for moves {
+        _, valid := checked_do_move(global_board, it)
+        
+        if valid {
+            x, y := unpack(it.end)
+            
+            if white_ai && !black_ai  {
+                x = 7 - x
+                y = 7 - y
+            }
+            
+            
+            
+            glVertex2f(cast(f32) x, cast(f32) y)
+            glVertex2f(cast(f32) x + 1, cast(f32) y)
+            glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
+            glVertex2f(cast(f32) x, cast(f32) y + 1)
+        }
+    }
+    
+    glEnd()
+    
+    glColor3f(1, 1, 1)
+    
+    glEnable(GL_TEXTURE_2D)
+    glBegin(GL_QUADS)
+    
+    for global_board.pieces {
+        piece := it.piece
+        
+        if piece {
+            x, y := unpack(it.location)
+            
+            if white_ai && !black_ai  {
+                x = 7 - x
+                y = 7 - y
+            }
+            
+            y_coord: f32 = 0.5
+            x_coord: f32 = 0
+            
+            if piece & BLACK {
+                y_coord = 0
+            }
+            
+            kind := piece & ~BLACK
+            
+            if kind == {
+                case QUEEN
+                    x_coord = 1.0 / 6.0
+                case BISHOP 
+                    x_coord = 2.0 / 6.0
+                case KNIGHT
+                    x_coord = 3.0 / 6.0
+                case ROOK
+                    x_coord = 4.0 / 6.0
+                case PAWN
+                    x_coord = 5.0 / 6.0
+            }
+            
+            
+            glTexCoord2f(x_coord, y_coord + 0.5)
+            glVertex2f(cast(f32) x, cast(f32) y)
+            
+            glTexCoord2f(x_coord + 1.0 / 6.0, y_coord + 0.5)
+            glVertex2f(cast(f32) x + 1, cast(f32) y)
+            
+            glTexCoord2f(x_coord + 1.0 / 6.0, y_coord)
+            glVertex2f(cast(f32) x + 1, cast(f32) y + 1)
+            
+            glTexCoord2f(x_coord, y_coord)
+            glVertex2f(cast(f32) x, cast(f32) y + 1)
+        }
+    }
+    
+    glEnd()
 }
 
 player_is_ai :: () -> bool {
-	if global_board.player_color == BLACK {
-		return black_ai
-	}
-	
-	return white_ai
+    if global_board.player_color == BLACK {
+        return black_ai
+    }
+    
+    return white_ai
 }
 
 undo_move :: () {
-	if undo_list.count {
-		global_board = array_pop(*undo_list)
-		array_pop(*move_history)
-		
-		repeated, repetition_stored := check_for_repetition(hash(global_board));
-		remove_repetition(repetition_stored)
-	}
+    if undo_list.count {
+        global_board = array_pop(*undo_list)
+        array_pop(*move_history)
+        
+        repeated, repetition_stored := check_for_repetition(hash(global_board));
+        remove_repetition(repetition_stored)
+    }
 }
 
 make_move :: (move: Move) {
-	array_add(*undo_list, global_board)
-	
-	if check_for_repetition(hash(global_board)) {
-		game_over = true
-		print("Repetition!\n")
-	}
+    array_add(*undo_list, global_board)
+    
+    if check_for_repetition(hash(global_board)) {
+        game_over = true
+        print("Repetition!\n")
+    }
 
-	global_board = do_move(global_board, move)
-	
-	print_fen(global_board)
-	array_add(*move_history, move)
+    global_board = do_move(global_board, move)
+    
+    print_fen(global_board)
+    array_add(*move_history, move)
 }
 
 game_over: bool
@@ -2166,27 +2166,27 @@ ai_start_semaphore: HANDLE
 ai_stop_semaphore:  HANDLE
 
 ai_thread_proc :: (thread: *Thread) {
-	performance_counter_frequency: s64
-	
-	QueryPerformanceFrequency(*performance_counter_frequency)
-	
-	counter_scale := 1.0 / cast(f32) performance_counter_frequency
+    performance_counter_frequency: s64
+    
+    QueryPerformanceFrequency(*performance_counter_frequency)
+    
+    counter_scale := 1.0 / cast(f32) performance_counter_frequency
 
-	ai_move := cast(*Move) thread.user_data
-	while true {
-		WaitForSingleObject(ai_start_semaphore);
-		
-		start_time: s64
-		end_time: s64
-		
-		QueryPerformanceCounter(*start_time);
-		<<ai_move = select_ai_move()
-		QueryPerformanceCounter(*end_time)
-		
-		print("Move took % s\n", cast() (end_time - start_time) * counter_scale)
-		
-		ReleaseSemaphore(ai_stop_semaphore)
-	}
+    ai_move := cast(*Move) thread.user_data
+    while true {
+        WaitForSingleObject(ai_start_semaphore);
+        
+        start_time: s64
+        end_time: s64
+        
+        QueryPerformanceCounter(*start_time);
+        <<ai_move = select_ai_move()
+        QueryPerformanceCounter(*end_time)
+        
+        print("Move took % s\n", cast() (end_time - start_time) * counter_scale)
+        
+        ReleaseSemaphore(ai_stop_semaphore)
+    }
 }
 
 STARTING_BOARD :: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
@@ -2194,357 +2194,358 @@ STARTING_BOARD :: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 use_book := true
 
 main :: () {
-	defer exit(0)
-	
-	
-	ai_start_semaphore = CreateSemaphoreA(lMaximumCount = 1)
-	ai_stop_semaphore  = CreateSemaphoreA(lMaximumCount = 1)
-	
-	ai_move: Move
-	
-	ai_thread := create_thread(ai_thread_proc, *ai_move)
+    defer exit(0)
+    
+    
+    ai_start_semaphore = CreateSemaphoreA(lMaximumCount = 1)
+    ai_stop_semaphore  = CreateSemaphoreA(lMaximumCount = 1)
+    
+    ai_move: Move
+    
+    ai_thread := create_thread(ai_thread_proc, *ai_move)
 
-	arguments := get_command_line_arguments()
-	
-	fen := STARTING_BOARD
-	
-	
-	for arguments[1..] {
-		if it == "-w" {
-			white_ai = true
-		} else if it == "-b" {
-			black_ai = true
-		} else if it == "-no_book" {
-			use_book = false
-		} else if begins_with(it, "-moves=") {
-			before, after := split_at_first(it, '=')
-			
-			max_moves = read_u64(after)
-			
-			if max_moves < 10_000 {
-				print("Cannot run with fewer than 10,000 moves to explore")
-				return
-			}
-		} else if begins_with(it, "-fen=") {
-			before, after := split_at_first(it, '=')
-			
-			fen = after
-		} else {
-			print("Unknown argument: %\n", it)
-			return
-		}
-	}
-	
-	if use_book {
-		if !calculate_openings_table() {
-			print("Failed to read openings file\n")
-			return
-		}
-	}
-	
-	
-	success: bool
-	global_board, success = initialize_from_fen(fen)
-	
-	if !success {
-		print("Invalid FEN string\n")
-		return
-	}
-	
-	rand_seed: s64
-	
-	QueryPerformanceCounter(*rand_seed)
+    arguments := get_command_line_arguments()
+    
+    fen := STARTING_BOARD
+    
+    
+    for arguments[1..] {
+        if it == "-w" {
+            white_ai = true
+        } else if it == "-b" {
+            black_ai = true
+        } else if it == "-no_book" {
+            use_book = false
+        } else if begins_with(it, "-moves=") {
+            before, after := split_at_first(it, '=')
+            
+            max_moves = read_u64(after)
+            
+            if max_moves < 10_000 {
+                print("Cannot run with fewer than 10,000 moves to explore")
+                return
+            }
+        } else if begins_with(it, "-fen=") {
+            before, after := split_at_first(it, '=')
+            
+            fen = after
+        } else {
+            print("Unknown argument: %\n", it)
+            return
+        }
+    }
+    
+    if use_book {
+        if !calculate_openings_table() {
+            print("Failed to read openings file\n")
+            return
+        }
+    }
+    
+    
+    success: bool
+    global_board, success = initialize_from_fen(fen)
+    
+    if !success {
+        print("Invalid FEN string\n")
+        return
+    }
+    
+    rand_seed: s64
+    
+    QueryPerformanceCounter(*rand_seed)
 
-	rng = create_random(cast(u64) rand_seed, GetTickCount())
-	
-	performance_counter_frequency: s64
-	
-	QueryPerformanceFrequency(*performance_counter_frequency)
-	
-	counter_scale := 1.0 / cast(f32) performance_counter_frequency
-	
-	startup_info: STARTUPINFOW
-	
-	GetStartupInfoW(*startup_info)
-	
-	show_command : = SW_SHOWDEFAULT
-	if startup_info.dwFlags & STARTF_USESHOWWINDOW {
-		show_command = cast() startup_info.wShowWindow
-	}
-	
-	instance := GetModuleHandleW(null)
-	
-	class_name := to_windows_string("Window Class")
-	window_class: WNDCLASSW
-	
-	window_class.style = CS_OWNDC | CS_VREDRAW | CS_HREDRAW
-	window_class.lpfnWndProc = (hwnd: HWND, uMsg: MSG.Message, wParam: u64, lParam: s64) -> s64 #c_call {
-		push_context .{} {
-			if uMsg == {
-				case WM_CLOSE
+    rng = create_random(cast(u64) rand_seed, GetTickCount())
+    
+    performance_counter_frequency: s64
+    
+    QueryPerformanceFrequency(*performance_counter_frequency)
+    
+    counter_scale := 1.0 / cast(f32) performance_counter_frequency
+    
+    startup_info: STARTUPINFOW
+    
+    GetStartupInfoW(*startup_info)
+    
+    show_command : = SW_SHOWDEFAULT
+    if startup_info.dwFlags & STARTF_USESHOWWINDOW {
+        show_command = cast() startup_info.wShowWindow
+    }
+    
+    instance := GetModuleHandleW(null)
+    
+    class_name := to_windows_string("Window Class")
+    window_class: WNDCLASSW
+    
+    window_class.style = CS_OWNDC | CS_VREDRAW | CS_HREDRAW
+    window_class.lpfnWndProc = (hwnd: HWND, uMsg: MSG.Message, wParam: u64, lParam: s64) -> s64 #c_call {
+        push_context .{} {
+            if uMsg == {
+                case WM_CLOSE
 
-					DestroyWindow(hwnd)
-					
-					print("Closing\n")
-					
-				case WM_DESTROY
-					glFinish()
-					
-					dc := wglGetCurrentDC()
-					
-					if !wglDeleteContext(gl_context)
-						print("Failed to delete gl context\n")
-						
-					if !ReleaseDC(hwnd, dc)
-						print("Failed to delete device context\n")
-					
-					PostQuitMessage(0)
-					
-				case WM_PAINT
-					paint: PAINTSTRUCT = --
-					
-					dc := BeginPaint(hwnd, *paint)
-					EndPaint(hwnd, *paint)
-					
-				case WM_SIZE
-					client_rect: RECT = --
-					
-					GetClientRect(hwnd, *client_rect)
-					
-					window_width = client_rect.right - client_rect.left
-					window_height = client_rect.bottom - client_rect.top
-					
-					print("%x%\n", window_width, window_height)
-					print("----------\n")
-					
-				case WM_LBUTTONDOWN
-					
-					x := cast(s16) lParam
-					y := cast(s16) (lParam >> 16)
-					
-					x /= 100
-					y /= 100
-					
-					if white_ai && !black_ai {
-						x = 7 - x
-						y = 7 - y
-					}
-					
-					square := pack(cast() x, cast() y)
-					
-					if square == selected_square
-						selected_square = -1
-					else
-						selected_square = square
-						
-				case WM_RBUTTONDOWN
-					
-					undo_last_move = true
-					
-				else
-					return DefWindowProcW(hwnd, uMsg, wParam, lParam)
-			}
-			
-			return 0
-		}
-	}
-	window_class.hInstance = instance
-	window_class.lpszClassName = class_name.data
-	window_class.hbrBackground = GetStockObject(BLACK_BRUSH)
-	
-	
-	if RegisterClassW(*window_class) == 0 {
-		print("Failed to register window class\n")
-		print("%\n", GetLastError())
-		return
-	}
-	
-	
-	window_style := WS_OVERLAPPEDWINDOW ^ WS_THICKFRAME ^ WS_MAXIMIZEBOX
-	
-	window_rect: RECT
-	
-	window_rect.top = 0
-	window_rect.bottom = window_height
-	window_rect.left = 0
-	window_rect.right = window_width
-	
-	AdjustWindowRectEx(*window_rect, window_style ^ WS_OVERLAPPED | WS_TILED)
-	
-	window_handle := CreateWindowExW(lpClassName = class_name.data, lpWindowName = to_windows_string("Test Window").data, dwStyle = window_style, 
-		nWidth = window_rect.right - window_rect.left, nHeight = window_rect.bottom - window_rect.top, hInstance = instance)
-	
-	if window_handle == null {
-		print("Failed to open window\n")
-		print("%\n", GetLastError())
-		return
-	}
-	
-	device_context := GetDC(window_handle)
-	
-	desired_format: PIXELFORMATDESCRIPTOR
-	desired_format.dwFlags = PFD_SUPPORT_OPENGL | PFD_DRAW_TO_WINDOW | PFD_DOUBLEBUFFER
-	desired_format.cColorBits = 32
-	desired_format.cAlphaBits = 8
-	desired_format.iLayerType = PFD_MAIN_PLANE
-	
-	found_format := ChoosePixelFormat(device_context, *desired_format)
-	
-	if found_format == 0 {
-		print("Could not find a pixel format\n")
-		return
-	}
-	
-	used_format: PIXELFORMATDESCRIPTOR
-	
-	if !SetPixelFormat(device_context, found_format, *used_format) {
-		print("Failed to set pixel format")
-		return
-	}
-	
-	
-	gl_context = wglCreateContext(device_context)
-	
-	if !gl_context {
-		print("Failed to create gl context")
-		return
-	}
-	
-	wglMakeCurrent(device_context, gl_context)
-	
-	
-	load_gl_extensions()
-	wglSwapIntervalEXT(1)
-	
-	glEnable(GL_TEXTURE_2D)
-	texture := load_image("chess.bmp")
-	
-	glEnable(GL_BLEND)
-	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-	
-	ShowWindow(window_handle, show_command)
-	
-	last_time: s64
+                    DestroyWindow(hwnd)
+                    
+                    print("Closing\n")
+                    
+                case WM_DESTROY
+                    glFinish()
+                    
+                    dc := wglGetCurrentDC()
+                    
+                    if !wglDeleteContext(gl_context)
+                        print("Failed to delete gl context\n")
+                        
+                    if !ReleaseDC(hwnd, dc)
+                        print("Failed to delete device context\n")
+                    
+                    PostQuitMessage(0)
+                    
+                case WM_PAINT
+                    paint: PAINTSTRUCT = --
+                    
+                    dc := BeginPaint(hwnd, *paint)
+                    EndPaint(hwnd, *paint)
+                    
+                case WM_SIZE
+                    client_rect: RECT = --
+                    
+                    GetClientRect(hwnd, *client_rect)
+                    
+                    window_width = client_rect.right - client_rect.left
+                    window_height = client_rect.bottom - client_rect.top
+                    
+                    print("%x%\n", window_width, window_height)
+                    print("----------\n")
+                    
+                case WM_LBUTTONDOWN
+                    
+                    x := cast(s16) lParam
+                    y := cast(s16) (lParam >> 16)
+                    
+                    x /= 100
+                    y /= 100
+                    
+                    if white_ai && !black_ai {
+                        x = 7 - x
+                        y = 7 - y
+                    }
+                    
+                    square := pack(cast() x, cast() y)
+                    
+                    if square == selected_square
+                        selected_square = -1
+                    else
+                        selected_square = square
+                        
+                case WM_RBUTTONDOWN
+                    
+                    undo_last_move = true
+                    
+                else
+                    return DefWindowProcW(hwnd, uMsg, wParam, lParam)
+            }
+            
+            return 0
+        }
+    }
+    window_class.hInstance = instance
+    window_class.lpszClassName = class_name.data
+    window_class.hbrBackground = GetStockObject(BLACK_BRUSH)
+    
+    
+    if RegisterClassW(*window_class) == 0 {
+        print("Failed to register window class\n")
+        print("%\n", GetLastError())
+        return
+    }
+    
+    
+    window_style := WS_OVERLAPPEDWINDOW ^ WS_THICKFRAME ^ WS_MAXIMIZEBOX
+    
+    window_rect: RECT
+    
+    window_rect.top = 0
+    window_rect.bottom = window_height
+    window_rect.left = 0
+    window_rect.right = window_width
+    
+    AdjustWindowRectEx(*window_rect, window_style ^ WS_OVERLAPPED | WS_TILED)
+    
+    window_handle := CreateWindowExW(lpClassName = class_name.data, lpWindowName = to_windows_string("Test Window").data, dwStyle = window_style, 
+        nWidth = window_rect.right - window_rect.left, nHeight = window_rect.bottom - window_rect.top, hInstance = instance)
+    
+    if window_handle == null {
+        print("Failed to open window\n")
+        print("%\n", GetLastError())
+        return
+    }
+    
+    device_context := GetDC(window_handle)
+    
+    desired_format: PIXELFORMATDESCRIPTOR
+    desired_format.dwFlags = PFD_SUPPORT_OPENGL | PFD_DRAW_TO_WINDOW | PFD_DOUBLEBUFFER
+    desired_format.cColorBits = 32
+    desired_format.cAlphaBits = 8
+    desired_format.iLayerType = PFD_MAIN_PLANE
+    
+    found_format := ChoosePixelFormat(device_context, *desired_format)
+    
+    if found_format == 0 {
+        print("Could not find a pixel format\n")
+        return
+    }
+    
+    used_format: PIXELFORMATDESCRIPTOR
+    
+    if !SetPixelFormat(device_context, found_format, *used_format) {
+        print("Failed to set pixel format")
+        return
+    }
+    
+    
+    gl_context = wglCreateContext(device_context)
+    
+    if !gl_context {
+        print("Failed to create gl context")
+        return
+    }
+    
+    wglMakeCurrent(device_context, gl_context)
+    
+    
+    load_gl_extensions()
+    wglSwapIntervalEXT(1)
+    
+    glEnable(GL_TEXTURE_2D)
+    texture := load_image("chess.bmp")
+    
+    glEnable(GL_BLEND)
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+    
+    ShowWindow(window_handle, show_command)
+    
+    last_time: s64
 
-	
-	QueryPerformanceCounter(*last_time)
-	
-	moves: [..]Move
-	
-	making_ai_move := false
-	
-	while !should_quit {
-		current_time: s64
-		
-		QueryPerformanceCounter(*current_time)
-		
-		delta := cast() (current_time - last_time) * counter_scale
-		
-		message: MSG = --
-		
-		while PeekMessageW(*message, null) {
-			if (message.message == WM_QUIT) {
-				should_quit = true
-				break
-			}
-			
-			TranslateMessage(*message)
-			DispatchMessageW(*message)
-		}
-		
-		if undo_last_move {
-			undo_last_move = false
-			
-			if !making_ai_move {
-				if (!black_ai || !white_ai) && undo_list.count {
-					undo_move()
-				
-					if player_is_ai() undo_move()
-				}
-			}
-		}
-		
-		if game_over
-			selected_square = -1
-		
-		if !game_over {
-			if player_is_ai() {
-				if making_ai_move {
-					result := WaitForSingleObject(ai_stop_semaphore, 0)
-					if result != WAIT_TIMEOUT {
-						if ai_move.piece_index == -1 {
-							print("Bad\n")
-							game_over = true
-						} else {
-							make_move(ai_move)
-						}
-						
-						making_ai_move = false
-					}
-				} else {
-					ReleaseSemaphore(ai_start_semaphore)
-					making_ai_move = true
-				}
-		} else if selected_square != -1 {
-				for moves {
-					if it.end == selected_square {
-						selected_square = -1
-						make_move(it)
-						
-						break
-					}
-				} or {
-					piece := get_piece(global_board, selected_square)
-					
-					if !piece || piece & BLACK != global_board.player_color {
-						selected_square = -1
-					} else {
-						piece_index: s8
-						
-						moves.count = 0
-						get_moves_for_piece(global_board, *moves, global_board.board[selected_square])
+    
+    QueryPerformanceCounter(*last_time)
+    
+    moves: [..]Move
+    
+    making_ai_move := false
+    
+    while !should_quit {
+        current_time: s64
+        
+        QueryPerformanceCounter(*current_time)
+        
+        delta := cast() (current_time - last_time) * counter_scale
+        
+        message: MSG = --
+        
+        while PeekMessageW(*message, null) {
+            if (message.message == WM_QUIT) {
+                should_quit = true
+                break
+            }
+            
+            TranslateMessage(*message)
+            DispatchMessageW(*message)
+        }
+        
+        if undo_last_move {
+            undo_last_move = false
+            
+            if !making_ai_move {
+                if (!black_ai || !white_ai) && undo_list.count {
+                    undo_move()
+                
+                    if player_is_ai() undo_move()
+                }
+            }
+        }
+        
+        if game_over
+            selected_square = -1
+        
+        if !game_over {
+            if player_is_ai() {
+                if making_ai_move {
+                    result := WaitForSingleObject(ai_stop_semaphore, 0)
+                    if result != WAIT_TIMEOUT {
+                        if ai_move.piece_index == -1 {
+                            print("Bad\n")
+                            game_over = true
+                        } else {
+                            make_move(ai_move)
+                        }
+                        
+                        making_ai_move = false
+                    }
+                } else {
+                    ReleaseSemaphore(ai_start_semaphore)
+                    making_ai_move = true
+                }
+        } else if selected_square != -1 {
+                for moves {
+                    if it.end == selected_square {
+                        selected_square = -1
+                        make_move(it)
+                        
+                        break
+                    }
+                } or {
+                    piece := get_piece(global_board, selected_square)
+                    
+                    if !piece || piece & BLACK != global_board.player_color {
+                        selected_square = -1
+                    } else {
+                        piece_index: s8
+                        
+                        moves.count = 0
+                        get_moves_for_piece(global_board, *moves, global_board.board[selected_square])
 
-						for moves {
-							new_state, valid := checked_do_move(global_board, it)
+                        for moves {
+                            new_state, valid := checked_do_move(global_board, it)
 
-							if !valid
-								remove
-						}
-					}
-				}
-			}
-		}
-		
-		if selected_square == -1 {
-			moves.count = 0
-		}
-		
-		draw(moves)
-		
-		if (delta > 1.0 / 55) {
-			print("%\n", delta)
-		}
-		
-		SwapBuffers(device_context)
-		
-		last_time = current_time
-	}
-	
-	exit(0)
+                            if !valid
+                                remove
+                        }
+                    }
+                }
+            }
+        }
+        
+        if selected_square == -1 {
+            moves.count = 0
+        }
+        
+        draw(moves)
+        
+        if (delta > 1.0 / 55) {
+            print("%\n", delta)
+        }
+        
+        SwapBuffers(device_context)
+        
+        last_time = current_time
+    }
+    
+    exit(0)
 }
 
 #import "Compiler"
 
 setup_build :: () {
-	arguments := get_build_arguments()
-	
-	if arguments {
-		options := get_build_options()
-		options.backend = .LLVM
-		options.llvm_options = arguments
-		
-		set_build_options(options)
-	}
+    arguments := get_build_arguments()
+    
+    if arguments {
+        options := get_build_options()
+        options.backend = .LLVM
+        options.llvm_options = arguments
+        options.enable_stack_trace = false
+        
+        set_build_options(options)
+    }
 }
 
 #run setup_build()

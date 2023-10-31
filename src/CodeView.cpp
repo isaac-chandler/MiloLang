@@ -208,10 +208,10 @@ u32 createFunctionIDType(ExprFunction *function) {
 }
 
 
-void addStructUniqueNumber(Section *section, u32 name = debugTypeId) {
+void addStructUniqueNumber(Section *section, Type *type) {
 	char buffer[32];
 
-	snprintf(buffer, sizeof(buffer), "%x", static_cast<int>(name - 0x1000));
+	snprintf(buffer, sizeof(buffer), "%p", type);
 
 	section->addString(buffer);
 }
@@ -262,7 +262,7 @@ bool appendCoffName(Section *section, Type *type) {
 		section->addString("<unnamed-");
 		section->addString(type->name);
 		section->add1('-');
-		addStructUniqueNumber(section, getCoffTypeIndex(type));
+		addStructUniqueNumber(section, type);
 		section->add1('>');
 	}
 	else if (type->flavor == TypeFlavor::POINTER) {
@@ -367,8 +367,7 @@ u32 createTypeImpl(Type *type, CodeViewTypeInfo *codeView) {
 			debugTypes->add4Unchecked(0); // vtable
 			debugTypes->add2Unchecked(16);
 			debugTypes->addNullTerminatedString("string");
-			debugTypes->add1('@');
-			addStructUniqueNumber(debugTypes);
+			debugTypes->addNullTerminatedString("@string");
 			debugTypes->add1(0);
 		};
 	}
@@ -433,7 +432,7 @@ u32 createTypeImpl(Type *type, CodeViewTypeInfo *codeView) {
 				appendCoffName(debugTypes, array);
 				debugTypes->add1(0);
 				debugTypes->add1('@');
-				addStructUniqueNumber(debugTypes);
+				appendCoffName(debugTypes, array);
 				debugTypes->add1(0);
 			};
 		}
@@ -561,9 +560,6 @@ u32 createTypeImpl(Type *type, CodeViewTypeInfo *codeView) {
 				}
 			};
 
-			// Enum naming for anonymous enums needs the type id to be set
-			codeView->id = debugTypeId;
-
 			return DEBUG_LEAF{
 				debugTypes->ensure(20);
 				debugTypes->add2Unchecked(LF_STRUCTURE);
@@ -576,7 +572,7 @@ u32 createTypeImpl(Type *type, CodeViewTypeInfo *codeView) {
 				appendCoffName(debugTypes, enumeration);
 				debugTypes->add1(0);
 				debugTypes->add1('@');
-				addStructUniqueNumber(debugTypes);
+				addStructUniqueNumber(debugTypes, type);
 				debugTypes->add1(0);
 			};
 		}
@@ -601,9 +597,6 @@ u32 createTypeImpl(Type *type, CodeViewTypeInfo *codeView) {
 				}
 			};
 
-			// Enum naming for anonymous enums needs the type id to be set
-			codeView->id = debugTypeId;
-
 			return DEBUG_LEAF{
 				debugTypes->ensure(14);
 				debugTypes->add2Unchecked(LF_ENUM);
@@ -614,7 +607,7 @@ u32 createTypeImpl(Type *type, CodeViewTypeInfo *codeView) {
 				appendCoffName(debugTypes, enumeration);
 				debugTypes->add1(0);
 				debugTypes->add1('@');
-				addStructUniqueNumber(debugTypes);
+				addStructUniqueNumber(debugTypes, type);
 				debugTypes->add1(0);
 			};
 		}
@@ -641,8 +634,7 @@ u32 createTypeImpl(Type *type, CodeViewTypeInfo *codeView) {
 			debugTypes->add4Unchecked(0); // vtable
 			debugTypes->add2Unchecked(8);
 			debugTypes->addNullTerminatedString("type");
-			debugTypes->add1('@');
-			addStructUniqueNumber(debugTypes);
+			debugTypes->addNullTerminatedString("@type");
 			debugTypes->add1(0);
 		};
 	}
@@ -712,11 +704,6 @@ u32 createTypeImpl(Type *type, CodeViewTypeInfo *codeView) {
 
 		u16 packed = structure->flags & TYPE_STRUCT_IS_PACKED ? 1 : 0;
 
-		// Struct naming uses the type id, so if we don't have one created by a forward declaration, assign the type id
-		if (!codeView->id) {
-			codeView->id = debugTypeId;
-		}
-
 		return DEBUG_LEAF{
 			debugTypes->ensure(20);
 			debugTypes->add2Unchecked(isUnion ? LF_UNION : LF_STRUCTURE);
@@ -729,7 +716,7 @@ u32 createTypeImpl(Type *type, CodeViewTypeInfo *codeView) {
 			appendCoffName(debugTypes, structure);
 			debugTypes->add1(0);
 			debugTypes->add1('@');
-			addStructUniqueNumber(debugTypes, codeView->id);
+			addStructUniqueNumber(debugTypes, type);
 			debugTypes->add1(0);
 		};
 	}
@@ -786,7 +773,7 @@ u32 createTypeOrForwardDeclaration(Type *type, CodeViewTypeInfo *codeView) {
 		appendCoffName(debugTypes, structure);
 		debugTypes->add1(0);
 		debugTypes->add1('@');
-		addStructUniqueNumber(debugTypes);
+		addStructUniqueNumber(debugTypes, type);
 		debugTypes->add1(0);
 	};
 
@@ -1062,9 +1049,9 @@ void emitCodeViewEpilogue() {
 			auto type = entry.value;
 
 
-
-			if (type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::ARRAY || type->flavor == TypeFlavor::ENUM) {
-				if (!(type->flags & (TYPE_ARRAY_IS_FIXED | TYPE_ENUM_IS_FLAGS)))
+			if (type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::ARRAY || type->flavor == TypeFlavor::ENUM || 
+				type->flavor == TypeFlavor::STRING || type->flavor == TypeFlavor::TYPE) {
+				if (!(type->flags & (TYPE_ARRAY_IS_FIXED)))
 					emitUDT(type);
 			}
 		}

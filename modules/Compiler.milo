@@ -1,55 +1,56 @@
 #import "Standard"
 
 Build_Options :: struct {
-	Backend :: enum u64 {
-		X64 :: 0
-		LLVM :: 1
-	}
-	
-	C_Runtime_Library :: enum_flags u64 {
-		DYNAMIC :: 0x1
-		DEBUG   :: 0x2
-		FORCED  :: 0x4
-		
-		STATIC        :: 0
-		STATIC_DEBUG  :: STATIC  | DEBUG
-		DYNAMIC_DEBUG :: DYNAMIC | DEBUG
-	}
-	
-	backend := Backend.X64
-	c_runtime_library := C_Runtime_Library.STATIC
-	llvm_options: []string
-	output_name: string
+    Backend :: enum u64 {
+        X64 :: 0
+        LLVM :: 1
+    }
+    
+    C_Runtime_Library :: enum_flags u64 {
+        DYNAMIC :: 0x1
+        DEBUG   :: 0x2
+        FORCED  :: 0x4
+        
+        STATIC        :: 0
+        STATIC_DEBUG  :: STATIC  | DEBUG
+        DYNAMIC_DEBUG :: DYNAMIC | DEBUG
+    }
+    
+    backend := Backend.X64
+    c_runtime_library := C_Runtime_Library.STATIC
+    llvm_options: []string
+    output_name: string
     icon_name:   string
     show_console := true
+    enable_stack_trace := true
 }
 
 add_build_file :: (filename: string) #compiler {
-	runtime_call("add_build_file")
+    runtime_call("add_build_file")
 }
 
 set_build_options :: (build_options: Build_Options) #compiler {
-	runtime_call("set_build_options")
+    runtime_call("set_build_options")
 }
 
 get_build_options :: () -> #must Build_Options #compiler {
-	runtime_call("get_build_options")
-	
-	result: Build_Options
-	
-	return result
+    runtime_call("get_build_options")
+    
+    result: Build_Options
+    
+    return result
 }
 
 get_build_arguments :: () -> #must []string #compiler {
-	runtime_call("get_build_arguments")
-	
-	result: []string
-	
-	return result
+    runtime_call("get_build_arguments")
+    
+    result: []string
+    
+    return result
 }
 
 #scope_module
 
 runtime_call :: (function: string) {
-	print("Cannot call #compiler function % at runtime\n", function)
+    print("Cannot call #compiler function % at runtime\n", function)
 }

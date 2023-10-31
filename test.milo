@@ -16,52 +16,52 @@ window_height: s32 = 720
 
 counter_scale: f32
 
-load_image :: (filename: string) -> u32 {	
-	file, success := read_entire_file(filename)
-	defer free_array(file)
-	
-	if !success {
-		print("Failed to load image ")
-		print(filename)
-		print("\n")
-		return 0
-	}
-	
-	if file.count < size_of(Bmp_File_Header) + size_of(Bmp_Dib_Header) {
-		return 0
-	}
+load_image :: (filename: string) -> u32 {    
+    file, success := read_entire_file(filename)
+    defer free_array(file)
+    
+    if !success {
+        print("Failed to load image ")
+        print(filename)
+        print("\n")
+        return 0
+    }
+    
+    if file.count < size_of(Bmp_File_Header) + size_of(Bmp_Dib_Header) {
+        return 0
+    }
 
-	file_header := cast(*Bmp_File_Header)file.data
-	dib_header := cast(*Bmp_Dib_Header)(file.data + size_of(Bmp_File_Header))
-	
-	if file_header.header != Bmp_File_Header.EXPECTED_HEADER || file_header.file_size != file.count {
-		return 0
-	}
-	
-	if dib_header.bits_per_pixel != 32 || 
-		dib_header.compression_method != .BI_BITFIELDS || 
-		dib_header.alpha_mask != 0xFF000000 ||
-		dib_header.red_mask   != 0x00FF0000 ||
-		dib_header.green_mask != 0x0000FF00 ||
-		dib_header.blue_mask  != 0x000000FF ||
-		dib_header.height <= 0 {
-		
-		return 0
-	}
-	
-	texture: u32
-	
-	glGenTextures(1, *texture)
-	glBindTexture(GL_TEXTURE_2D, texture)
-	
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP)
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP)
-	
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, dib_header.width, dib_header.height, 0, GL_BGRA_EXT, GL_UNSIGNED_BYTE, file.data + file_header.offset_to_image)
-	
-	return texture
+    file_header := cast(*Bmp_File_Header)file.data
+    dib_header := cast(*Bmp_Dib_Header)(file.data + size_of(Bmp_File_Header))
+    
+    if file_header.header != Bmp_File_Header.EXPECTED_HEADER || file_header.file_size != file.count {
+        return 0
+    }
+    
+    if dib_header.bits_per_pixel != 32 || 
+        dib_header.compression_method != .BI_BITFIELDS || 
+        dib_header.alpha_mask != 0xFF000000 ||
+        dib_header.red_mask   != 0x00FF0000 ||
+        dib_header.green_mask != 0x0000FF00 ||
+        dib_header.blue_mask  != 0x000000FF ||
+        dib_header.height <= 0 {
+        
+        return 0
+    }
+    
+    texture: u32
+    
+    glGenTextures(1, *texture)
+    glBindTexture(GL_TEXTURE_2D, texture)
+    
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP)
+    
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, dib_header.width, dib_header.height, 0, GL_BGRA_EXT, GL_UNSIGNED_BYTE, file.data + file_header.offset_to_image)
+    
+    return texture
 }
 
 left_is_down:  bool
@@ -77,414 +77,414 @@ ENEMY_BULLET_SPEED :: 250.0
 x: f32 = 100.0
 
 Rectangle :: struct {
-	x: f32
-	y: f32
-	width: f32
-	height: f32
+    x: f32
+    y: f32
+    width: f32
+    height: f32
 }
 
 Entity :: struct {
-	using rectangle: Rectangle
-	mesh: [][3]Vector2
-	
-	Flags :: enum_flags u64 {
-		DRAW_RECTANGLE
-	}
-	
-	color: Vector4
-	
-	flags: Flags
-	texture_handle: u32
-	
-	occupied: bool
+    using rectangle: Rectangle
+    mesh: [][3]Vector2
+    
+    Flags :: enum_flags u64 {
+        DRAW_RECTANGLE
+    }
+    
+    color: Vector4
+    
+    flags: Flags
+    texture_handle: u32
+    
+    occupied: bool
 }
 
 
 
 Enemy :: struct {
-	entity: u64
-	cooldown: f32
-	
-	state: enum u8 {
-		LEFT
-		RIGHT
-		DEAD
-	}
+    entity: u64
+    cooldown: f32
+    
+    state: enum u8 {
+        LEFT
+        RIGHT
+        DEAD
+    }
 }
 
 Particle :: struct {
-	using location: Rectangle
-	location_step: Rectangle
-	current_color: Vector4
-	color_step: Vector4
-	lifetime: f32
+    using location: Rectangle
+    location_step: Rectangle
+    current_color: Vector4
+    color_step: Vector4
+    lifetime: f32
 }
 
 Particle_System :: struct {
 
-	relative: u64
-	x: f32
-	y: f32
-	texture_handle: u32
-	active: bool
-	occupied: bool
-	
-	mode: enum u8 {
-		NORMAL 
-		EXPLOSION
-	}
-	
-	spawn_progress: f32
-	spawn_rate: f32	
-	
-	spawn_radius: f32
-	spawn_size: f32
-	spawn_mean_velocity: Vector2
-	spawn_velocity_range: Vector2
-	spawn_lifetime: f32
-	spawn_color: Vector4
-	
-	particles: [..]Particle
+    relative: u64
+    x: f32
+    y: f32
+    texture_handle: u32
+    active: bool
+    occupied: bool
+    
+    mode: enum u8 {
+        NORMAL 
+        EXPLOSION
+    }
+    
+    spawn_progress: f32
+    spawn_rate: f32    
+    
+    spawn_radius: f32
+    spawn_size: f32
+    spawn_mean_velocity: Vector2
+    spawn_velocity_range: Vector2
+    spawn_lifetime: f32
+    spawn_color: Vector4
+    
+    particles: [..]Particle
 }
 
 rng: Random_State
 
 create_particle :: (using particle_system: *Particle_System) {
-	particle: Particle
-	
-	particle.x = x + random_bilateral(*rng) * spawn_radius
-	particle.y = y + random_bilateral(*rng) * spawn_radius
-	particle.width = spawn_size
-	particle.height = spawn_size
-	
-	particle.location_step.x = spawn_mean_velocity.x + random_bilateral(*rng) * spawn_velocity_range.x
-	particle.location_step.y = spawn_mean_velocity.y + random_bilateral(*rng) * spawn_velocity_range.y
+    particle: Particle
+    
+    particle.x = x + random_bilateral(*rng) * spawn_radius
+    particle.y = y + random_bilateral(*rng) * spawn_radius
+    particle.width = spawn_size
+    particle.height = spawn_size
+    
+    particle.location_step.x = spawn_mean_velocity.x + random_bilateral(*rng) * spawn_velocity_range.x
+    particle.location_step.y = spawn_mean_velocity.y + random_bilateral(*rng) * spawn_velocity_range.y
 
-	
-	particle.current_color = spawn_color
-	
-	particle.lifetime = spawn_lifetime
-	
-	array_add(*particles, particle)
+    
+    particle.current_color = spawn_color
+    
+    particle.lifetime = spawn_lifetime
+    
+    array_add(*particles, particle)
 }
 
 sub_vector2 :: (a: Vector2, b: Vector2) -> Vector2 {
-	return .{.{a.x - b.x, a.y - b.y}}
+    return .{.{a.x - b.x, a.y - b.y}}
 }
 
 dot_vector2 :: (a: Vector2, b: Vector2) -> f32 {
-	return a.x * b.x + a.y * b.y
+    return a.x * b.x + a.y * b.y
 }
 
 triangles_intersect :: (a: [3]Vector2, a_offset: Vector2, b: [3]Vector2, b_offset: Vector2) -> bool {
-	v0 := sub_vector2(a[2], a[0])
-	v1 := sub_vector2(a[1], a[0])
-	
-	dot00 := dot_vector2(v0, v0)
-	dot01 := dot_vector2(v0, v1)
-	dot11 := dot_vector2(v1, v1)
-	
-	offset := sub_vector2(a_offset, b_offset)
-	
-	invDenom := 1 / (dot00 * dot11 - dot01 * dot01)
-	
-	{
-		v2 := sub_vector2(sub_vector2(b[0], a[0]), offset)
-		
-		dot02 := dot_vector2(v0, v2)
-		dot12 := dot_vector2(v1, v2)
-		
-		u := (dot11 * dot02 - dot01 * dot12) * invDenom
-		v := (dot00 * dot12 - dot01 * dot02) * invDenom
-		
-		if u >= 0 && v >= 0 && u + v < 1 return true
-	}
-	
-	{
-		v2 := sub_vector2(sub_vector2(b[1], a[0]), offset)
-		
-		dot02 := dot_vector2(v0, v2)
-		dot12 := dot_vector2(v1, v2)
-		
-		u := (dot11 * dot02 - dot01 * dot12) * invDenom
-		v := (dot00 * dot12 - dot01 * dot02) * invDenom
-		
-		if u >= 0 && v >= 0 && u + v < 1 return true
-	}
-	
-	{
-		v2 := sub_vector2(sub_vector2(b[2], a[0]), offset)
-		
-		dot02 := dot_vector2(v0, v2)
-		dot12 := dot_vector2(v1, v2)
-		
-		u := (dot11 * dot02 - dot01 * dot12) * invDenom
-		v := (dot00 * dot12 - dot01 * dot02) * invDenom
-		
-		if u >= 0 && v >= 0 && u + v < 1 return true
-	}
-	
-	return false
+    v0 := sub_vector2(a[2], a[0])
+    v1 := sub_vector2(a[1], a[0])
+    
+    dot00 := dot_vector2(v0, v0)
+    dot01 := dot_vector2(v0, v1)
+    dot11 := dot_vector2(v1, v1)
+    
+    offset := sub_vector2(a_offset, b_offset)
+    
+    invDenom := 1 / (dot00 * dot11 - dot01 * dot01)
+    
+    {
+        v2 := sub_vector2(sub_vector2(b[0], a[0]), offset)
+        
+        dot02 := dot_vector2(v0, v2)
+        dot12 := dot_vector2(v1, v2)
+        
+        u := (dot11 * dot02 - dot01 * dot12) * invDenom
+        v := (dot00 * dot12 - dot01 * dot02) * invDenom
+        
+        if u >= 0 && v >= 0 && u + v < 1 return true
+    }
+    
+    {
+        v2 := sub_vector2(sub_vector2(b[1], a[0]), offset)
+        
+        dot02 := dot_vector2(v0, v2)
+        dot12 := dot_vector2(v1, v2)
+        
+        u := (dot11 * dot02 - dot01 * dot12) * invDenom
+        v := (dot00 * dot12 - dot01 * dot02) * invDenom
+        
+        if u >= 0 && v >= 0 && u + v < 1 return true
+    }
+    
+    {
+        v2 := sub_vector2(sub_vector2(b[2], a[0]), offset)
+        
+        dot02 := dot_vector2(v0, v2)
+        dot12 := dot_vector2(v1, v2)
+        
+        u := (dot11 * dot02 - dot01 * dot12) * invDenom
+        v := (dot00 * dot12 - dot01 * dot02) * invDenom
+        
+        if u >= 0 && v >= 0 && u + v < 1 return true
+    }
+    
+    return false
 }
 
 create_explosion_particle :: (using particle_system: *Particle_System) {
-	particle: Particle
-	
-	xDir := approximate_sqrt(random_f32(*rng)) * 1.2 - 0.1 // Cheese to deal with the circle approximation
-	
-	if random_u32(*rng) & 1 {
-		xDir = -xDir
-	}
-	
-	yDir := approximate_sqrt(1 - xDir * xDir) * 1.2 - 0.1 // Cheese to deal with the circle approximation
-	
-	if random_u32(*rng) & 1 {
-		yDir = -yDir
-	}
-	
-	spawn_distance := random_f32(*rng) * spawn_radius
-	
-	particle.x = x + spawn_distance * xDir
-	particle.y = y + spawn_distance * yDir
-	particle.width  = spawn_size
-	particle.height = spawn_size
-	
-	spawn_velocity := spawn_mean_velocity.x + random_bilateral(*rng) * spawn_velocity_range.x
-	
-	particle.location_step.x = spawn_velocity * xDir
-	particle.location_step.y = spawn_velocity * yDir
+    particle: Particle
+    
+    xDir := approximate_sqrt(random_f32(*rng)) * 1.2 - 0.1 // Cheese to deal with the circle approximation
+    
+    if random_u32(*rng) & 1 {
+        xDir = -xDir
+    }
+    
+    yDir := approximate_sqrt(1 - xDir * xDir) * 1.2 - 0.1 // Cheese to deal with the circle approximation
+    
+    if random_u32(*rng) & 1 {
+        yDir = -yDir
+    }
+    
+    spawn_distance := random_f32(*rng) * spawn_radius
+    
+    particle.x = x + spawn_distance * xDir
+    particle.y = y + spawn_distance * yDir
+    particle.width  = spawn_size
+    particle.height = spawn_size
+    
+    spawn_velocity := spawn_mean_velocity.x + random_bilateral(*rng) * spawn_velocity_range.x
+    
+    particle.location_step.x = spawn_velocity * xDir
+    particle.location_step.y = spawn_velocity * yDir
 
-	
-	particle.current_color = spawn_color
-	
-	particle.lifetime = spawn_lifetime
-	
-	array_add(*particles, particle)
+    
+    particle.current_color = spawn_color
+    
+    particle.lifetime = spawn_lifetime
+    
+    array_add(*particles, particle)
 }
 
 update_particle :: (using particle: *Particle, delta: f32) {
-	lifetime -= delta
-	
-	x      += delta * location_step.x
-	y      += delta * location_step.y
-	width  += delta * location_step.width
-	height += delta * location_step.height
-	
-	current_color.r += delta * color_step.r
-	current_color.g += delta * color_step.g
-	current_color.b += delta * color_step.b
-	current_color.a += delta * color_step.a
+    lifetime -= delta
+    
+    x      += delta * location_step.x
+    y      += delta * location_step.y
+    width  += delta * location_step.width
+    height += delta * location_step.height
+    
+    current_color.r += delta * color_step.r
+    current_color.g += delta * color_step.g
+    current_color.b += delta * color_step.b
+    current_color.a += delta * color_step.a
 }
 
 update_particle_system :: (using particle_system: *Particle_System, delta: f32) {
-	for * particle: particles {
-		update_particle(particle, delta)
-		
-		if particle.lifetime <= 0 {
-			remove
-			continue
-		}
-	}
-	
-	if particle_system.active {
-		particle_system.spawn_progress += delta * particle_system.spawn_rate
-		
-		if particle_system.mode == .NORMAL {
-			while particle_system.spawn_progress > 1 {
-				particle_system.spawn_progress -= 1
-				create_particle(particle_system)
-			}
-		} else {
-			while particle_system.spawn_progress > 1 {
-				particle_system.spawn_progress -= 1
-				create_explosion_particle(particle_system)
-			}
-		}
-	}
+    for * particle: particles {
+        update_particle(particle, delta)
+        
+        if particle.lifetime <= 0 {
+            remove
+            continue
+        }
+    }
+    
+    if particle_system.active {
+        particle_system.spawn_progress += delta * particle_system.spawn_rate
+        
+        if particle_system.mode == .NORMAL {
+            while particle_system.spawn_progress > 1 {
+                particle_system.spawn_progress -= 1
+                create_particle(particle_system)
+            }
+        } else {
+            while particle_system.spawn_progress > 1 {
+                particle_system.spawn_progress -= 1
+                create_explosion_particle(particle_system)
+            }
+        }
+    }
 }
 
 draw_particle_system :: (using particle_system: *Particle_System) {
-	glPushMatrix()
-	defer glPopMatrix()
-	
-	glTranslatef(entities[relative].x, entities[relative].y, 0)
+    glPushMatrix()
+    defer glPopMatrix()
+    
+    glTranslatef(entities[relative].x, entities[relative].y, 0)
 
-	if particle_system.texture_handle {
-		glBindTexture(GL_TEXTURE_2D, particle_system.texture_handle)
-		
-		glBegin(GL_QUADS)
-		defer glEnd()
-		
-		for * particle : particles {
-			set_gl_color(particle.current_color)
-		
-			textured_quad(particle)
-		}
-		
-	} else {
-		glDisable(GL_TEXTURE_2D)
-		defer glEnable(GL_TEXTURE_2D)
-		
-		glBegin(GL_QUADS)
-		defer glEnd()
-		
-		for * particle : particles {
-			set_gl_color(particle.current_color)
-		
-			untextured_quad(particle)
-		}
+    if particle_system.texture_handle {
+        glBindTexture(GL_TEXTURE_2D, particle_system.texture_handle)
+        
+        glBegin(GL_QUADS)
+        defer glEnd()
+        
+        for * particle : particles {
+            set_gl_color(particle.current_color)
+        
+            textured_quad(particle)
+        }
+        
+    } else {
+        glDisable(GL_TEXTURE_2D)
+        defer glEnable(GL_TEXTURE_2D)
+        
+        glBegin(GL_QUADS)
+        defer glEnd()
+        
+        for * particle : particles {
+            set_gl_color(particle.current_color)
+        
+            untextured_quad(particle)
+        }
 
-	}	
+    }    
 }
 
 add_entity :: (entity: *Entity) -> u64 {
-	for * entities {
-		if !it.occupied {
-			<<it = <<entity
-			it.occupied = true
-			
-			return it_index
-		}
-	}
-	
-	array_add(*entities, <<entity)
-	entities[entities.count - 1].occupied = true
-	
-	return entities.count - 1
+    for * entities {
+        if !it.occupied {
+            <<it = <<entity
+            it.occupied = true
+            
+            return it_index
+        }
+    }
+    
+    array_add(*entities, <<entity)
+    entities[entities.count - 1].occupied = true
+    
+    return entities.count - 1
 }
 
 remove_entity :: (index: u64) {
-	entities[index].occupied = false
+    entities[index].occupied = false
 }
 
 remove_particle_system :: (index: u64) {
-	particle_systems[index].occupied = false
+    particle_systems[index].occupied = false
 }
 
 add_particle_system :: (particle_system: *Particle_System) -> u64 {
-	for * particle_systems {
-		if !it.occupied {
-			<<it = <<particle_system
-			it.occupied = true
-			
-			return it_index
-		}
-	}
-	
-	array_add(*particle_systems, <<particle_system)
-	particle_systems[particle_systems.count - 1].occupied = true
-	
-	return particle_systems.count - 1
+    for * particle_systems {
+        if !it.occupied {
+            <<it = <<particle_system
+            it.occupied = true
+            
+            return it_index
+        }
+    }
+    
+    array_add(*particle_systems, <<particle_system)
+    particle_systems[particle_systems.count - 1].occupied = true
+    
+    return particle_systems.count - 1
 }
 
 set_gl_color :: (color: Vector4) {
-	glColor4f(color.r, color.g, color.b, color.a)
+    glColor4f(color.r, color.g, color.b, color.a)
 }
 
 untextured_quad :: (using rectangle: *Rectangle) {
 
-	half_width := width * 0.5
-	half_height := height * 0.5
+    half_width := width * 0.5
+    half_height := height * 0.5
 
-	glVertex2f(x - half_width, y - half_height)
-	
-	glVertex2f(x + half_width, y - half_height)
-	
-	glVertex2f(x + half_width, y + half_height)
-	
-	glVertex2f(x - half_width, y + half_height)
+    glVertex2f(x - half_width, y - half_height)
+    
+    glVertex2f(x + half_width, y - half_height)
+    
+    glVertex2f(x + half_width, y + half_height)
+    
+    glVertex2f(x - half_width, y + half_height)
 }
 
 textured_quad :: (using rectangle: *Rectangle) {
-	half_width := width * 0.5
-	half_height := height * 0.5
-	
-	glTexCoord2f(0, 0)
-	glVertex2f(x - half_width, y - half_height)
-	
-	
-	glTexCoord2f(1, 0)
-	glVertex2f(x + half_width, y - half_height)
-	
-	
-	glTexCoord2f(1, 1)
-	glVertex2f(x + half_width, y + half_height)
-	
-	
-	glTexCoord2f(0, 1)
-	glVertex2f(x - half_width, y + half_height)
+    half_width := width * 0.5
+    half_height := height * 0.5
+    
+    glTexCoord2f(0, 0)
+    glVertex2f(x - half_width, y - half_height)
+    
+    
+    glTexCoord2f(1, 0)
+    glVertex2f(x + half_width, y - half_height)
+    
+    
+    glTexCoord2f(1, 1)
+    glVertex2f(x + half_width, y + half_height)
+    
+    
+    glTexCoord2f(0, 1)
+    glVertex2f(x - half_width, y + half_height)
 }
 
 Bullet :: struct {
-	entity: u64
-	particle_system: u64
-	velocity: Vector2
-	enemy: bool
-	occupied: bool
-	mesh: [2][3]Vector2
+    entity: u64
+    particle_system: u64
+    velocity: Vector2
+    enemy: bool
+    occupied: bool
+    mesh: [2][3]Vector2
 }
 
 Explosion :: struct {
-	particle_system: u64
-	emission_time: f32 = 0.1
-	lifetime: f32 = 0.4
+    particle_system: u64
+    emission_time: f32 = 0.1
+    lifetime: f32 = 0.4
 }
 
 create_bullet :: (x: f32, y: f32, vy: f32, color: Vector4, enemy: bool) {
-	bullet: Bullet = --
+    bullet: Bullet = --
 
-	entity: Entity
-	
-	entity.x = x
-	entity.y = y
-	entity.width = 10
-	entity.height = 0.12 * vy
-	
-	particles: Particle_System
-	
-	
-	particles.x = 0
-	particles.y = entity.height * 0.5
-	
-	if entity.height < 0 entity.height = -entity.height
-	
-	bullet.mesh[0][0].x = entity.width * -0.5
-	bullet.mesh[0][0].y = entity.height * -0.5
-	bullet.mesh[0][1].x = entity.width * -0.5
-	bullet.mesh[0][1].y = entity.height * 0.5
-	bullet.mesh[0][2].x = entity.width * 0.5
-	bullet.mesh[0][2].y = entity.height * -0.5
-	
-	bullet.mesh[1][0].x = entity.width * -0.5
-	bullet.mesh[1][0].y = entity.height * 0.5
-	bullet.mesh[1][1].x = entity.width * 0.5
-	bullet.mesh[1][1].y = entity.height * -0.5
-	bullet.mesh[1][2].x = entity.width * 0.5
-	bullet.mesh[1][2].y = entity.height * 0.5
-	
-	entity.mesh = bullet.mesh
-	
-	bullet.entity = add_entity(*entity)
-	
-	particles.relative = bullet.entity
-	
-	particles.texture_handle = 0
-	particles.spawn_rate = 1000
-	particles.spawn_lifetime = 0.06
-	particles.spawn_color = color
-	particles.spawn_radius = 4
-	particles.spawn_size = 4
-	particles.spawn_mean_velocity = .{.{0, vy * -1.5}}
-	particles.spawn_velocity_range = .{.{0, vy * 0.5}}
-	particles.active = true
-	
-	bullet.particle_system = add_particle_system(*particles)
-	bullet.velocity = .{.{0, vy}}
-	bullet.enemy = enemy
-	
-	
-	
-	array_add(*bullets, bullet)
+    entity: Entity
+    
+    entity.x = x
+    entity.y = y
+    entity.width = 10
+    entity.height = 0.12 * vy
+    
+    particles: Particle_System
+    
+    
+    particles.x = 0
+    particles.y = entity.height * 0.5
+    
+    if entity.height < 0 entity.height = -entity.height
+    
+    bullet.mesh[0][0].x = entity.width * -0.5
+    bullet.mesh[0][0].y = entity.height * -0.5
+    bullet.mesh[0][1].x = entity.width * -0.5
+    bullet.mesh[0][1].y = entity.height * 0.5
+    bullet.mesh[0][2].x = entity.width * 0.5
+    bullet.mesh[0][2].y = entity.height * -0.5
+    
+    bullet.mesh[1][0].x = entity.width * -0.5
+    bullet.mesh[1][0].y = entity.height * 0.5
+    bullet.mesh[1][1].x = entity.width * 0.5
+    bullet.mesh[1][1].y = entity.height * -0.5
+    bullet.mesh[1][2].x = entity.width * 0.5
+    bullet.mesh[1][2].y = entity.height * 0.5
+    
+    entity.mesh = bullet.mesh
+    
+    bullet.entity = add_entity(*entity)
+    
+    particles.relative = bullet.entity
+    
+    particles.texture_handle = 0
+    particles.spawn_rate = 1000
+    particles.spawn_lifetime = 0.06
+    particles.spawn_color = color
+    particles.spawn_radius = 4
+    particles.spawn_size = 4
+    particles.spawn_mean_velocity = .{.{0, vy * -1.5}}
+    particles.spawn_velocity_range = .{.{0, vy * 0.5}}
+    particles.active = true
+    
+    bullet.particle_system = add_particle_system(*particles)
+    bullet.velocity = .{.{0, vy}}
+    bullet.enemy = enemy
+    
+    
+    
+    array_add(*bullets, bullet)
 }
 
 ENEMY_FIRE_SPEED :: 1.6
@@ -492,50 +492,50 @@ ENEMY_SPEED :: 200
 
 
 create_enemy :: (texture_handle: u32, mesh: [][3]Vector2) {
-	entity: Entity
-	
-	entity.flags = .DRAW_RECTANGLE
-	entity.x = (random_f32(*rng) + 0.125) * 0.8 * cast()window_width
-	entity.y = (random_f32(*rng) + 1.25) * 0.4 * cast() window_height
-	entity.width = 96
-	entity.height = 96
-	entity.mesh = mesh
-	
-	entity.texture_handle = texture_handle
-	entity.color = .{.{1, 1, 1, 1}}
+    entity: Entity
+    
+    entity.flags = .DRAW_RECTANGLE
+    entity.x = (random_f32(*rng) + 0.125) * 0.8 * cast()window_width
+    entity.y = (random_f32(*rng) + 1.25) * 0.4 * cast() window_height
+    entity.width = 96
+    entity.height = 96
+    entity.mesh = mesh
+    
+    entity.texture_handle = texture_handle
+    entity.color = .{.{1, 1, 1, 1}}
 
 
-	enemy: Enemy
-	enemy.cooldown = ENEMY_FIRE_SPEED * random_f32(*rng)
-	enemy.state = cast() (random_u32(*rng) & 1)
-	
-	enemy.entity = add_entity(*entity)
-	
-	array_add(*enemies, enemy)
+    enemy: Enemy
+    enemy.cooldown = ENEMY_FIRE_SPEED * random_f32(*rng)
+    enemy.state = cast() (random_u32(*rng) & 1)
+    
+    enemy.entity = add_entity(*entity)
+    
+    array_add(*enemies, enemy)
 }
 
 create_explosion :: (x: f32, y: f32) {
-	explosion: Explosion
-	
-	particles: Particle_System
-	
-	particles.x = x
-	particles.y = y
-	
-	particles.texture_handle = 0
-	particles.spawn_rate = 30000
-	particles.spawn_lifetime = 0.3
-	particles.spawn_color = .{.{0.9, 0.5, 0.07, 1}}
-	particles.spawn_radius = 30
-	particles.spawn_size = 4
-	particles.spawn_mean_velocity =  .{.{300, 0}}
-	particles.spawn_velocity_range = .{.{30 , 0}}
-	particles.active = true
-	particles.mode = .EXPLOSION
-		
-	explosion.particle_system = add_particle_system(*particles)
-	
-	array_add(*explosions, explosion)
+    explosion: Explosion
+    
+    particles: Particle_System
+    
+    particles.x = x
+    particles.y = y
+    
+    particles.texture_handle = 0
+    particles.spawn_rate = 30000
+    particles.spawn_lifetime = 0.3
+    particles.spawn_color = .{.{0.9, 0.5, 0.07, 1}}
+    particles.spawn_radius = 30
+    particles.spawn_size = 4
+    particles.spawn_mean_velocity =  .{.{300, 0}}
+    particles.spawn_velocity_range = .{.{30 , 0}}
+    particles.active = true
+    particles.mode = .EXPLOSION
+        
+    explosion.particle_system = add_particle_system(*particles)
+    
+    array_add(*explosions, explosion)
 }
 
 
@@ -550,580 +550,581 @@ FIRE_COOLDOWN :: 0.6
 time_to_fire: f32 = 0
 
 intersect :: (bullet: *Bullet, b: *Entity) -> bool {
-	a := *entities[bullet.entity]
+    a := *entities[bullet.entity]
 
-	if !(a.x + a.width  * 0.5 < b.x - b.width  * 0.5 || 
-	     a.x - a.width  * 0.5 > b.x + b.width  * 0.5 ||
-	     a.y + a.height * 0.5 < b.y - b.height * 0.5 ||
-	     a.y - a.height * 0.5 > b.y + b.height * 0.5) {
-		
-		a_offset := Vector2.{.{a.x, a.y}}
-		b_offset := Vector2.{.{b.x, b.y}}
-		
-		for i : bullet.mesh {
-			for j : b.mesh {
-				
-				if triangles_intersect(i, a_offset, j, b_offset) return true
-				if triangles_intersect(j, b_offset, i, a_offset) return true
-			}
-		}
-	}
-	
-	return false
+    if !(a.x + a.width  * 0.5 < b.x - b.width  * 0.5 || 
+         a.x - a.width  * 0.5 > b.x + b.width  * 0.5 ||
+         a.y + a.height * 0.5 < b.y - b.height * 0.5 ||
+         a.y - a.height * 0.5 > b.y + b.height * 0.5) {
+        
+        a_offset := Vector2.{.{a.x, a.y}}
+        b_offset := Vector2.{.{b.x, b.y}}
+        
+        for i : bullet.mesh {
+            for j : b.mesh {
+                
+                if triangles_intersect(i, a_offset, j, b_offset) return true
+                if triangles_intersect(j, b_offset, i, a_offset) return true
+            }
+        }
+    }
+    
+    return false
 }
 
 gl_context: HGLRC
 
 main :: () {
-	defer exit(0)
+    defer exit(0)
 
-	rand_seed: s64
-	
-	QueryPerformanceCounter(*rand_seed)
+    rand_seed: s64
+    
+    QueryPerformanceCounter(*rand_seed)
 
-	rng = create_random(cast(u64) rand_seed, GetTickCount())
-	
-	null_entity: Entity
-	
-	add_entity(*null_entity)
-	
-	performance_counter_frequency: s64
-	
-	QueryPerformanceFrequency(*performance_counter_frequency)
-	
-	counter_scale = 1.0 / cast(f32) performance_counter_frequency
-	
-	startup_info: STARTUPINFOW
-	
-	GetStartupInfoW(*startup_info)
-	
-	show_command : = SW_SHOWDEFAULT
-	
-	enemy_mesh: [4][3]Vector2
-	
-	enemy_mesh[0][0].x = -36
-	enemy_mesh[0][0].y = -24
-	enemy_mesh[0][1].x = 0
-	enemy_mesh[0][1].y = -48
-	enemy_mesh[0][2].x = 36
-	enemy_mesh[0][2].y = -24
-		
-	enemy_mesh[1][0].x = -36
-	enemy_mesh[1][0].y = -24
-	enemy_mesh[1][1].x = -36
-	enemy_mesh[1][1].y = 24
-	enemy_mesh[1][2].x = 36
-	enemy_mesh[1][2].y = -24
-		
-	enemy_mesh[2][0].x = -36
-	enemy_mesh[2][0].y = 24
-	enemy_mesh[2][1].x = 36
-	enemy_mesh[2][1].y = -24
-	enemy_mesh[2][2].x = 36
-	enemy_mesh[2][2].y = 24
-		
-	enemy_mesh[3][0].x = -36
-	enemy_mesh[3][0].y = 24
-	enemy_mesh[3][1].x = 0
-	enemy_mesh[3][1].y = 48
-	enemy_mesh[3][2].x = 36
-	enemy_mesh[3][2].y = 24
-	
-	if startup_info.dwFlags & STARTF_USESHOWWINDOW {
-		show_command = cast() startup_info.wShowWindow
-	}
-	
-	instance := GetModuleHandleW(null)
-	
-	class_name := to_windows_string("Window Class")
-	window_class: WNDCLASSW
-	
-	window_class.style = CS_OWNDC | CS_VREDRAW | CS_HREDRAW
-	window_class.lpfnWndProc = (hwnd: HWND, uMsg: MSG.Message, wParam: u64, lParam: s64) -> s64 #c_call {
-		new_context: Context
+    rng = create_random(cast(u64) rand_seed, GetTickCount())
+    
+    null_entity: Entity
+    
+    add_entity(*null_entity)
+    
+    performance_counter_frequency: s64
+    
+    QueryPerformanceFrequency(*performance_counter_frequency)
+    
+    counter_scale = 1.0 / cast(f32) performance_counter_frequency
+    
+    startup_info: STARTUPINFOW
+    
+    GetStartupInfoW(*startup_info)
+    
+    show_command : = SW_SHOWDEFAULT
+    
+    enemy_mesh: [4][3]Vector2
+    
+    enemy_mesh[0][0].x = -36
+    enemy_mesh[0][0].y = -24
+    enemy_mesh[0][1].x = 0
+    enemy_mesh[0][1].y = -48
+    enemy_mesh[0][2].x = 36
+    enemy_mesh[0][2].y = -24
+        
+    enemy_mesh[1][0].x = -36
+    enemy_mesh[1][0].y = -24
+    enemy_mesh[1][1].x = -36
+    enemy_mesh[1][1].y = 24
+    enemy_mesh[1][2].x = 36
+    enemy_mesh[1][2].y = -24
+        
+    enemy_mesh[2][0].x = -36
+    enemy_mesh[2][0].y = 24
+    enemy_mesh[2][1].x = 36
+    enemy_mesh[2][1].y = -24
+    enemy_mesh[2][2].x = 36
+    enemy_mesh[2][2].y = 24
+        
+    enemy_mesh[3][0].x = -36
+    enemy_mesh[3][0].y = 24
+    enemy_mesh[3][1].x = 0
+    enemy_mesh[3][1].y = 48
+    enemy_mesh[3][2].x = 36
+    enemy_mesh[3][2].y = 24
+    
+    if startup_info.dwFlags & STARTF_USESHOWWINDOW {
+        show_command = cast() startup_info.wShowWindow
+    }
+    
+    instance := GetModuleHandleW(null)
+    
+    class_name := to_windows_string("Window Class")
+    window_class: WNDCLASSW
+    
+    window_class.style = CS_OWNDC | CS_VREDRAW | CS_HREDRAW
+    window_class.lpfnWndProc = (hwnd: HWND, uMsg: MSG.Message, wParam: u64, lParam: s64) -> s64 #c_call {
+        new_context: Context
 
-		push_context new_context {
+        push_context new_context {
 
-			VK_SHIFT :: 0x10
-			VK_SPACE :: 0x20
-			VK_LEFT  :: 0x25
-			VK_RIGHT :: 0x27
-		
-			if uMsg == {
-				case WM_CLOSE
+            VK_SHIFT :: 0x10
+            VK_SPACE :: 0x20
+            VK_LEFT  :: 0x25
+            VK_RIGHT :: 0x27
+        
+            if uMsg == {
+                case WM_CLOSE
 
-					DestroyWindow(hwnd)
-					
-					print("Closing\n")
-					
-				case WM_DESTROY
-					glFinish()
-					
-					dc := wglGetCurrentDC()
-					
-					if !wglDeleteContext(gl_context)
-						print("Failed to delete gl context\n")
-						
-					if !ReleaseDC(hwnd, dc)
-						print("Failed to delete device context\n")
-					
-					PostQuitMessage(0)
-					
-				case WM_PAINT
-					paint: PAINTSTRUCT = --
-					
-					dc := BeginPaint(hwnd, *paint)
-					EndPaint(hwnd, *paint)
-					
-				case WM_SIZE
-					client_rect: RECT = --
-					
-					GetClientRect(hwnd, *client_rect)
-					
-					window_width = client_rect.right - client_rect.left
-					window_height = client_rect.bottom - client_rect.top
-					
-					print("%x%\n", window_width, window_height)
-					print("----------\n")
-					
-				case WM_KEYDOWN
-					if wParam == {
-						case VK_LEFT  left_is_down  = true
-						case VK_RIGHT right_is_down = true
-						case VK_SPACE space_is_down = true
-						case VK_SHIFT shift_is_down = true
-					}
-					
-				case WM_KEYUP
-					if wParam == {
-						case VK_LEFT  left_is_down  = false
-						case VK_RIGHT right_is_down = false
-						case VK_SPACE space_is_down = false
-						case VK_SHIFT shift_is_down = false
-					}
-					
-				else
-					return DefWindowProcW(hwnd, uMsg, wParam, lParam)
-			}
-			
-			return 0
-		}
-	}
-	window_class.hInstance = instance
-	window_class.lpszClassName = class_name.data
-	window_class.hbrBackground = GetStockObject(BLACK_BRUSH)
-	
-	
-	if RegisterClassW(*window_class) == 0 {
-		print("Failed to register window class\n")
-		print("%\n", GetLastError())
-		return
-	}
-	
-	
-	window_style := WS_OVERLAPPEDWINDOW ^ WS_THICKFRAME ^ WS_MAXIMIZEBOX
-	
-	window_rect: RECT
-	
-	window_rect.top = 0
-	window_rect.bottom = window_height
-	window_rect.left = 0
-	window_rect.right = window_width
-	
-	AdjustWindowRectEx(*window_rect, window_style ^ WS_OVERLAPPED | WS_TILED)
-	
-	window_handle := CreateWindowExW(lpClassName = class_name.data, lpWindowName = to_windows_string("Test Window").data, dwStyle = window_style, 
-		nWidth = window_rect.right - window_rect.left, nHeight = window_rect.bottom - window_rect.top, hInstance = instance)
-	
-	if window_handle == null {
-		print("Failed to open window\n")
-		print("%\n", GetLastError())
-		return
-	}
-	
-	device_context := GetDC(window_handle)
-	
-	desired_format: PIXELFORMATDESCRIPTOR
-	desired_format.dwFlags = PFD_SUPPORT_OPENGL | PFD_DRAW_TO_WINDOW | PFD_DOUBLEBUFFER
-	desired_format.cColorBits = 32
-	desired_format.cAlphaBits = 8
-	desired_format.iLayerType = PFD_MAIN_PLANE
-	
-	found_format := ChoosePixelFormat(device_context, *desired_format)
-	
-	if found_format == 0 {
-		print("Could not find a pixel format\n")
-		return
-	}
-	
-	used_format: PIXELFORMATDESCRIPTOR
-	
-	if !SetPixelFormat(device_context, found_format, *used_format) {
-		print("Failed to set pixel format")
-		return
-	}
-	
-	
-	gl_context = wglCreateContext(device_context)
-	
-	if !gl_context {
-		print("Failed to create gl context")
-		return
-	}
-	
-	wglMakeCurrent(device_context, gl_context)
-	
-	
-	load_gl_extensions()
-	wglSwapIntervalEXT(0)
-	
-	player_index: u64
+                    DestroyWindow(hwnd)
+                    
+                    print("Closing\n")
+                    
+                case WM_DESTROY
+                    glFinish()
+                    
+                    dc := wglGetCurrentDC()
+                    
+                    if !wglDeleteContext(gl_context)
+                        print("Failed to delete gl context\n")
+                        
+                    if !ReleaseDC(hwnd, dc)
+                        print("Failed to delete device context\n")
+                    
+                    PostQuitMessage(0)
+                    
+                case WM_PAINT
+                    paint: PAINTSTRUCT = --
+                    
+                    dc := BeginPaint(hwnd, *paint)
+                    EndPaint(hwnd, *paint)
+                    
+                case WM_SIZE
+                    client_rect: RECT = --
+                    
+                    GetClientRect(hwnd, *client_rect)
+                    
+                    window_width = client_rect.right - client_rect.left
+                    window_height = client_rect.bottom - client_rect.top
+                    
+                    print("%x%\n", window_width, window_height)
+                    print("----------\n")
+                    
+                case WM_KEYDOWN
+                    if wParam == {
+                        case VK_LEFT  left_is_down  = true
+                        case VK_RIGHT right_is_down = true
+                        case VK_SPACE space_is_down = true
+                        case VK_SHIFT shift_is_down = true
+                    }
+                    
+                case WM_KEYUP
+                    if wParam == {
+                        case VK_LEFT  left_is_down  = false
+                        case VK_RIGHT right_is_down = false
+                        case VK_SPACE space_is_down = false
+                        case VK_SHIFT shift_is_down = false
+                    }
+                    
+                else
+                    return DefWindowProcW(hwnd, uMsg, wParam, lParam)
+            }
+            
+            return 0
+        }
+    }
+    window_class.hInstance = instance
+    window_class.lpszClassName = class_name.data
+    window_class.hbrBackground = GetStockObject(BLACK_BRUSH)
+    
+    
+    if RegisterClassW(*window_class) == 0 {
+        print("Failed to register window class\n")
+        print("%\n", GetLastError())
+        return
+    }
+    
+    
+    window_style := WS_OVERLAPPEDWINDOW ^ WS_THICKFRAME ^ WS_MAXIMIZEBOX
+    
+    window_rect: RECT
+    
+    window_rect.top = 0
+    window_rect.bottom = window_height
+    window_rect.left = 0
+    window_rect.right = window_width
+    
+    AdjustWindowRectEx(*window_rect, window_style ^ WS_OVERLAPPED | WS_TILED)
+    
+    window_handle := CreateWindowExW(lpClassName = class_name.data, lpWindowName = to_windows_string("Test Window").data, dwStyle = window_style, 
+        nWidth = window_rect.right - window_rect.left, nHeight = window_rect.bottom - window_rect.top, hInstance = instance)
+    
+    if window_handle == null {
+        print("Failed to open window\n")
+        print("%\n", GetLastError())
+        return
+    }
+    
+    device_context := GetDC(window_handle)
+    
+    desired_format: PIXELFORMATDESCRIPTOR
+    desired_format.dwFlags = PFD_SUPPORT_OPENGL | PFD_DRAW_TO_WINDOW | PFD_DOUBLEBUFFER
+    desired_format.cColorBits = 32
+    desired_format.cAlphaBits = 8
+    desired_format.iLayerType = PFD_MAIN_PLANE
+    
+    found_format := ChoosePixelFormat(device_context, *desired_format)
+    
+    if found_format == 0 {
+        print("Could not find a pixel format\n")
+        return
+    }
+    
+    used_format: PIXELFORMATDESCRIPTOR
+    
+    if !SetPixelFormat(device_context, found_format, *used_format) {
+        print("Failed to set pixel format")
+        return
+    }
+    
+    
+    gl_context = wglCreateContext(device_context)
+    
+    if !gl_context {
+        print("Failed to create gl context")
+        return
+    }
+    
+    wglMakeCurrent(device_context, gl_context)
+    
+    
+    load_gl_extensions()
+    wglSwapIntervalEXT(0)
+    
+    player_index: u64
 
-	glEnable(GL_TEXTURE_2D)
-	texture := load_image("Invaders/Spaceship.bmp")
-	{
-		player_mesh: [1][3]Vector2 = --
-		
-		player_mesh[0][0].x = -46
-		player_mesh[0][0].y = -64
-		player_mesh[0][1].x = 0
-		player_mesh[0][1].y = 64
-		player_mesh[0][2].x = 46
-		player_mesh[0][2].y = -64
-	
-		entity: Entity = --
-	
-		entity.x = cast(f32) window_width * 0.5
-		entity.y = 150
-		entity.width = 128
-		entity.height = 128
-		entity.flags = .DRAW_RECTANGLE
-		entity.texture_handle = texture
-		entity.color = .{.{1, 1, 1, 1}}
-		entity.mesh = player_mesh
-	
-		player_index = add_entity(*entity)
-	}
-	
-	left_particles: u64
-	right_particles: u64
-	
-	{
-		particle_system: Particle_System
-		
-		particle_system.relative = player_index
-		particle_system.x = -20
-		particle_system.y = 0
-		particle_system.spawn_rate = 3000
-		particle_system.spawn_size = 4
-		particle_system.spawn_radius = 5
-		particle_system.spawn_mean_velocity  = .{.{-240, 0 }}
-		particle_system.spawn_velocity_range = .{.{-120, 60}}
-		particle_system.spawn_lifetime = 0.25
-		particle_system.spawn_color = .{.{0.9, 0.5, 0.07, 1}}
-		
-		left_particles = add_particle_system(*particle_system)
-	}
+    glEnable(GL_TEXTURE_2D)
+    texture := load_image("Invaders/Spaceship.bmp")
+    {
+        player_mesh: [1][3]Vector2 = --
+        
+        player_mesh[0][0].x = -46
+        player_mesh[0][0].y = -64
+        player_mesh[0][1].x = 0
+        player_mesh[0][1].y = 64
+        player_mesh[0][2].x = 46
+        player_mesh[0][2].y = -64
+    
+        entity: Entity = --
+    
+        entity.x = cast(f32) window_width * 0.5
+        entity.y = 150
+        entity.width = 128
+        entity.height = 128
+        entity.flags = .DRAW_RECTANGLE
+        entity.texture_handle = texture
+        entity.color = .{.{1, 1, 1, 1}}
+        entity.mesh = player_mesh
+    
+        player_index = add_entity(*entity)
+    }
+    
+    left_particles: u64
+    right_particles: u64
+    
+    {
+        particle_system: Particle_System
+        
+        particle_system.relative = player_index
+        particle_system.x = -20
+        particle_system.y = 0
+        particle_system.spawn_rate = 3000
+        particle_system.spawn_size = 4
+        particle_system.spawn_radius = 5
+        particle_system.spawn_mean_velocity  = .{.{-240, 0 }}
+        particle_system.spawn_velocity_range = .{.{-120, 60}}
+        particle_system.spawn_lifetime = 0.25
+        particle_system.spawn_color = .{.{0.9, 0.5, 0.07, 1}}
+        
+        left_particles = add_particle_system(*particle_system)
+    }
 
-	{
-		particle_system: Particle_System
-		
-		particle_system.relative = player_index
-		particle_system.x = 20
-		particle_system.y = 0
-		particle_system.spawn_rate = 3000
-		particle_system.spawn_size = 4
-		particle_system.spawn_radius = 5
-		particle_system.spawn_mean_velocity  = .{.{240, 0 }}
-		particle_system.spawn_velocity_range = .{.{120, 60}}
-		particle_system.spawn_lifetime = 0.25
-		particle_system.spawn_color = .{.{0.9, 0.5, 0.07, 1}}
-		
-		right_particles = add_particle_system(*particle_system)
-		
-	}
-	
-	hex_texture := load_image("Invaders/Hex.bmp")
-	
-	for 15 create_enemy(hex_texture, enemy_mesh)
-	
-	glEnable(GL_BLEND)
-	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-	
-	ShowWindow(window_handle, show_command)
-	
-	last_time: s64
+    {
+        particle_system: Particle_System
+        
+        particle_system.relative = player_index
+        particle_system.x = 20
+        particle_system.y = 0
+        particle_system.spawn_rate = 3000
+        particle_system.spawn_size = 4
+        particle_system.spawn_radius = 5
+        particle_system.spawn_mean_velocity  = .{.{240, 0 }}
+        particle_system.spawn_velocity_range = .{.{120, 60}}
+        particle_system.spawn_lifetime = 0.25
+        particle_system.spawn_color = .{.{0.9, 0.5, 0.07, 1}}
+        
+        right_particles = add_particle_system(*particle_system)
+        
+    }
+    
+    hex_texture := load_image("Invaders/Hex.bmp")
+    
+    for 15 create_enemy(hex_texture, enemy_mesh)
+    
+    glEnable(GL_BLEND)
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+    
+    ShowWindow(window_handle, show_command)
+    
+    last_time: s64
 
-	
-	QueryPerformanceCounter(*last_time)
-	
-	dummy_player: u64
-	
-	if !initialize_sound(window_handle) {
-		print("Failed to initialize sound")
-		return
-	}
-	
-	while !should_quit {
-		current_time: s64
-		
-		QueryPerformanceCounter(*current_time)
-		
-		delta := cast() (current_time - last_time) * counter_scale
-		
-		message: MSG = --
-		
-		while PeekMessageW(*message, null) {
-			if (message.message == WM_QUIT) {
-				should_quit = true
-				break
-			}
-			
-			TranslateMessage(*message)
-			DispatchMessageW(*message)
-		}
-		
-		#if DEVELOPER {
-			if shift_is_down
-				delta *= 0.05
-		}
-	
-		glViewport(0, 0, window_width, window_height)
-		glClearColor(0, 0.1, 0.2, 0)
-		glClear(GL_COLOR_BUFFER_BIT)
-		
-		glMatrixMode(GL_PROJECTION)
-		glLoadIdentity()
-		glOrtho(0, 1280, 0, 720, -5, 5)
-		
-		player := *entities[player_index]
-		
-		if !player_index {
-			player = null
-		}
-		
-		if player {
-			particle_systems[right_particles].active = left_is_down
-			particle_systems[left_particles].active = right_is_down
-		
-			if left_is_down {
-				player.x -= PLAYER_SPEED * delta
-			}
-			
-			if right_is_down {
-				player.x += PLAYER_SPEED * delta
-			}
-			
-			if player.x < player.width * 0.5 {
-				player.x = player.width * 0.5
-			} else if player.x > cast() window_width - player.width * 0.5 {
-				player.x = cast() window_width - player.width * 0.5
-			}
-			
-			time_to_fire -= delta
-			
-			if space_is_down && time_to_fire <= 0 {
-				time_to_fire += FIRE_COOLDOWN
-				
-				create_bullet(player.x - 13, player.y + player.height * 0.5 - 30, BULLET_SPEED, .{.{0.45, 0.45, 0.45, 1}}, enemy = false)
-				create_bullet(player.x + 13, player.y + player.height * 0.5 - 30, BULLET_SPEED, .{.{0.45, 0.45, 0.45, 1}}, enemy = false)
-			}
-			
-			if time_to_fire < 0
-				time_to_fire = 0
-			
-		} else {
-			particle_systems[right_particles].active = false
-			particle_systems[left_particles].active = false
-		}
-			
-		
-		for * enemy : enemies {
-			entity := *entities[enemy.entity]
-			
-			enemy.cooldown -= delta
-			
-			if enemy.state == {
-				case .LEFT 
-					entity.x -= ENEMY_SPEED * delta
-				case .RIGHT
-					entity.x += ENEMY_SPEED * delta
-				case .DEAD
-					remove_entity(enemy.entity)
-				
-					remove
-					continue
-			}
-			
-			if entity.x < entity.width * 0.5 {
-				entity.x = entity.width * 0.5
-				enemy.state = .RIGHT
-			} else if entity.x > cast() window_width - entity.width * 0.5 {
-				entity.x = cast() window_width - entity.width * 0.5
-				enemy.state = .LEFT
-			}
-			
-			
-			if enemy.cooldown < 0 {
-				enemy.cooldown += ENEMY_FIRE_SPEED
-				
-				create_bullet(entity.x, entity.y - entity.height * 0.5, -ENEMY_BULLET_SPEED, .{.{0.45, 0.15, 0.15, 1}}, enemy = true)
-			}
-		}
-		
-		
-		for * bullet : bullets {
-			entity := *entities[bullet.entity]
-		
-			entity.x += bullet.velocity.x * delta
-			entity.y += bullet.velocity.y * delta
-			
-			if entity.y < -0.5 * entity.height || entity.y - entity.height * 0.5 > cast() window_height {
-				
-				remove_particle_system(bullet.particle_system)
-				remove_entity(bullet.entity)
-			
-				remove
-			}
-		}
-		
-		for * enemy : enemies {		
-			for * bullet : bullets {
-				if !bullet.enemy {
-				
-					if intersect(bullet, *entities[enemy.entity]) {
-								
-						remove_particle_system(bullet.particle_system)
-						remove_entity(bullet.entity)
-					
-						remove;
-						
-						if enemy.state != .DEAD {
-							enemy.state = .DEAD
-							enemy.cooldown = 0.05
-							
-							create_explosion(entities[enemy.entity].x, entities[enemy.entity].y)
-						}
-					}
-				}
-			}
-		}
-		
-		if player {
-			for * bullet : bullets {
-				if bullet.enemy {				
-					if intersect(bullet, player) {
-						remove_particle_system(bullet.particle_system)
-						remove_entity(bullet.entity)
-					
-						remove;
-						
-						create_explosion(player.x, player.y)
-						
-						dummy: Entity
-						dummy.x = player.x
-						dummy.y = player.y
-						dummy.flags = 0
-						
-						dummy_player = add_entity(*dummy)
-						
-						particle_systems[left_particles].relative = dummy_player
-						particle_systems[right_particles].relative = dummy_player
-						
-						remove_entity(player_index)
-						
-						player_index = 0
-						
-						break
-					}
-				}
-			}
-		}
-		
-		for * explosion : explosions {
-			explosion.emission_time -= delta
-			explosion.lifetime -= delta
-			
-			particle_systems[explosion.particle_system].active = explosion.emission_time > 0
-			
-			if explosion.lifetime <= 0 {
-				remove_particle_system(explosion.particle_system)
-			
-				remove
-			}
-		}
-		
-		glBlendFunc(GL_ONE, GL_ONE)
-		
-		for * particle_system: particle_systems {
-			if !particle_system.occupied continue;
-			
-			update_particle_system(particle_system, delta)
-			draw_particle_system(particle_system)
-		}
-		
-		
-		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-		
-		for * entity: entities {
-			if !entity.occupied continue
-		
-			if entity.flags & .DRAW_RECTANGLE {
-			
-				if entity.texture_handle {
-					glEnable(GL_TEXTURE_2D)
-					glBindTexture(GL_TEXTURE_2D, entity.texture_handle)
-					
-					glBegin(GL_QUADS)
-					defer glEnd()
-				
-					set_gl_color(entity.color)
-					textured_quad(entity)
-				} else {
-					glDisable(GL_TEXTURE_2D)
-					
-					glBegin(GL_QUADS)
-					defer glEnd()
-				
-					set_gl_color(entity.color)
-					untextured_quad(entity)
-				}
-			}
-		}
-		
-		glColor4f(1, 1, 1, 1)
-		glDisable(GL_TEXTURE_2D)
-		
-		
-		if (delta > 1.0 / 55) {
-			print("%\n", delta)
-		} else {
-			set_latency(1.0 / 30)
-		}
-		
-		// print(cast() (delta * 1000_000))
-		// print("\n")
-		
-		fill_sound()
-		
-		SwapBuffers(device_context)
-		
-		last_time = current_time
-	}
+    
+    QueryPerformanceCounter(*last_time)
+    
+    dummy_player: u64
+    
+    if !initialize_sound(window_handle) {
+        print("Failed to initialize sound")
+        return
+    }
+    
+    while !should_quit {
+        current_time: s64
+        
+        QueryPerformanceCounter(*current_time)
+        
+        delta := cast() (current_time - last_time) * counter_scale
+        
+        message: MSG = --
+        
+        while PeekMessageW(*message, null) {
+            if (message.message == WM_QUIT) {
+                should_quit = true
+                break
+            }
+            
+            TranslateMessage(*message)
+            DispatchMessageW(*message)
+        }
+        
+        #if DEVELOPER {
+            if shift_is_down
+                delta *= 0.05
+        }
+    
+        glViewport(0, 0, window_width, window_height)
+        glClearColor(0, 0.1, 0.2, 0)
+        glClear(GL_COLOR_BUFFER_BIT)
+        
+        glMatrixMode(GL_PROJECTION)
+        glLoadIdentity()
+        glOrtho(0, 1280, 0, 720, -5, 5)
+        
+        player := *entities[player_index]
+        
+        if !player_index {
+            player = null
+        }
+        
+        if player {
+            particle_systems[right_particles].active = left_is_down
+            particle_systems[left_particles].active = right_is_down
+        
+            if left_is_down {
+                player.x -= PLAYER_SPEED * delta
+            }
+            
+            if right_is_down {
+                player.x += PLAYER_SPEED * delta
+            }
+            
+            if player.x < player.width * 0.5 {
+                player.x = player.width * 0.5
+            } else if player.x > cast() window_width - player.width * 0.5 {
+                player.x = cast() window_width - player.width * 0.5
+            }
+            
+            time_to_fire -= delta
+            
+            if space_is_down && time_to_fire <= 0 {
+                time_to_fire += FIRE_COOLDOWN
+                
+                create_bullet(player.x - 13, player.y + player.height * 0.5 - 30, BULLET_SPEED, .{.{0.45, 0.45, 0.45, 1}}, enemy = false)
+                create_bullet(player.x + 13, player.y + player.height * 0.5 - 30, BULLET_SPEED, .{.{0.45, 0.45, 0.45, 1}}, enemy = false)
+            }
+            
+            if time_to_fire < 0
+                time_to_fire = 0
+            
+        } else {
+            particle_systems[right_particles].active = false
+            particle_systems[left_particles].active = false
+        }
+            
+        
+        for * enemy : enemies {
+            entity := *entities[enemy.entity]
+            
+            enemy.cooldown -= delta
+            
+            if enemy.state == {
+                case .LEFT 
+                    entity.x -= ENEMY_SPEED * delta
+                case .RIGHT
+                    entity.x += ENEMY_SPEED * delta
+                case .DEAD
+                    remove_entity(enemy.entity)
+                
+                    remove
+                    continue
+            }
+            
+            if entity.x < entity.width * 0.5 {
+                entity.x = entity.width * 0.5
+                enemy.state = .RIGHT
+            } else if entity.x > cast() window_width - entity.width * 0.5 {
+                entity.x = cast() window_width - entity.width * 0.5
+                enemy.state = .LEFT
+            }
+            
+            
+            if enemy.cooldown < 0 {
+                enemy.cooldown += ENEMY_FIRE_SPEED
+                
+                create_bullet(entity.x, entity.y - entity.height * 0.5, -ENEMY_BULLET_SPEED, .{.{0.45, 0.15, 0.15, 1}}, enemy = true)
+            }
+        }
+        
+        
+        for * bullet : bullets {
+            entity := *entities[bullet.entity]
+        
+            entity.x += bullet.velocity.x * delta
+            entity.y += bullet.velocity.y * delta
+            
+            if entity.y < -0.5 * entity.height || entity.y - entity.height * 0.5 > cast() window_height {
+                
+                remove_particle_system(bullet.particle_system)
+                remove_entity(bullet.entity)
+            
+                remove
+            }
+        }
+        
+        for * enemy : enemies {        
+            for * bullet : bullets {
+                if !bullet.enemy {
+                
+                    if intersect(bullet, *entities[enemy.entity]) {
+                                
+                        remove_particle_system(bullet.particle_system)
+                        remove_entity(bullet.entity)
+                    
+                        remove;
+                        
+                        if enemy.state != .DEAD {
+                            enemy.state = .DEAD
+                            enemy.cooldown = 0.05
+                            
+                            create_explosion(entities[enemy.entity].x, entities[enemy.entity].y)
+                        }
+                    }
+                }
+            }
+        }
+        
+        if player {
+            for * bullet : bullets {
+                if bullet.enemy {                
+                    if intersect(bullet, player) {
+                        remove_particle_system(bullet.particle_system)
+                        remove_entity(bullet.entity)
+                    
+                        remove;
+                        
+                        create_explosion(player.x, player.y)
+                        
+                        dummy: Entity
+                        dummy.x = player.x
+                        dummy.y = player.y
+                        dummy.flags = 0
+                        
+                        dummy_player = add_entity(*dummy)
+                        
+                        particle_systems[left_particles].relative = dummy_player
+                        particle_systems[right_particles].relative = dummy_player
+                        
+                        remove_entity(player_index)
+                        
+                        player_index = 0
+                        
+                        break
+                    }
+                }
+            }
+        }
+        
+        for * explosion : explosions {
+            explosion.emission_time -= delta
+            explosion.lifetime -= delta
+            
+            particle_systems[explosion.particle_system].active = explosion.emission_time > 0
+            
+            if explosion.lifetime <= 0 {
+                remove_particle_system(explosion.particle_system)
+            
+                remove
+            }
+        }
+        
+        glBlendFunc(GL_ONE, GL_ONE)
+        
+        for * particle_system: particle_systems {
+            if !particle_system.occupied continue;
+            
+            update_particle_system(particle_system, delta)
+            draw_particle_system(particle_system)
+        }
+        
+        
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        
+        for * entity: entities {
+            if !entity.occupied continue
+        
+            if entity.flags & .DRAW_RECTANGLE {
+            
+                if entity.texture_handle {
+                    glEnable(GL_TEXTURE_2D)
+                    glBindTexture(GL_TEXTURE_2D, entity.texture_handle)
+                    
+                    glBegin(GL_QUADS)
+                    defer glEnd()
+                
+                    set_gl_color(entity.color)
+                    textured_quad(entity)
+                } else {
+                    glDisable(GL_TEXTURE_2D)
+                    
+                    glBegin(GL_QUADS)
+                    defer glEnd()
+                
+                    set_gl_color(entity.color)
+                    untextured_quad(entity)
+                }
+            }
+        }
+        
+        glColor4f(1, 1, 1, 1)
+        glDisable(GL_TEXTURE_2D)
+        
+        
+        if (delta > 1.0 / 55) {
+            print("%\n", delta)
+        } else {
+            set_latency(1.0 / 30)
+        }
+        
+        // print(cast() (delta * 1000_000))
+        // print("\n")
+        
+        fill_sound()
+        
+        SwapBuffers(device_context)
+        
+        last_time = current_time
+    }
 }
 
 #import "Compiler"
 
 setup_build :: () {
-	arguments := get_build_arguments()
-	
-	if arguments {
-		options := get_build_options()
-		options.backend = .LLVM
-		options.llvm_options = arguments
-		
-		set_build_options(options)
-	}
+    arguments := get_build_arguments()
+    
+    if arguments {
+        options := get_build_options()
+        options.backend = .LLVM
+        options.llvm_options = arguments
+        options.enable_stack_trace = false
+        
+        set_build_options(options)
+    }
 }
 
 #run setup_build()

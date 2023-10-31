@@ -31,6 +31,7 @@ struct Build_Options {
 	MiloString output_name;
 	MiloString icon_name;
 	bool show_console = true;
+	bool enable_stack_trace = true;
 };
 
 inline Build_Options buildOptions;

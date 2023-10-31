@@ -1,73 +1,143 @@
 #import "Standard"
 
-unsigned_binary_operators :: (dummy: $T) {
-	a: T = 3
-	b: T = 16
-	
-	assert(a + b == 19)
-	assert(b + a == 19)
-	assert(b - a == 13)
-	assert(a * b == 48)
-	assert(b * a == 48)
-	assert(a / b == 0)
-	assert(b / a == 5)
-	assert(a % b == 3)
-	assert(b % a == 1)
+unsigned_math_operators :: ($T: type, $constexpr: bool) {
+    #if constexpr {
+        a: T: 3
+        b: T: 16
+    } else {
+        a: T = 3
+        b: T = 16
+    }
+    
+    assert(a + b == 19)
+    assert(b + a == 19)
+    assert(b - a == 13)
+    assert(a * b == 48)
+    assert(b * a == 48)
+    assert(a / b == 0)
+    assert(b / a == 5)
+    assert(a % b == 3)
+    assert(b % a == 1)
+    assert(a < b)
+    assert(a <= b)
+    assert(!(a > b))
+    assert(!(a >= b))
+    assert(a != b)
+    assert(!(a == b))
+    assert(!(b < a))
+    assert(!(b <= a))
+    assert(b > a)
+    assert(b >= a)
+    assert(b != a)
+    assert(!(b == a))
 }
 
 floats_are_equal :: (a: $T, b: T, epsilon: T) -> bool {
-	abs :: (val: T) -> T { if val < 0 return -val else return val}
-	
-	return abs(a - b) <= epsilon
+    abs :: (val: T) -> T { if val < 0 return -val else return val}
+    
+    return abs(a - b) <= epsilon
 }
 
-signed_binary_operators :: (dummy: $T) {
-	a: T = -3
-	b: T = 16
-	
-	assert(a + b == 13)
-	assert(b + a == 13)
-	assert(b - a == 19)
-	assert(a - b == -19)
-	assert(a * b == -48)
-	assert(b * a == -48)
-	assert(a / b == 0)
-	assert(b / a == -5)
-	assert(a % b == -3)
-	assert(b % a == 1)
+signed_math_operators :: ($T: type, $constexpr: bool) {
+    #if constexpr {
+        a: T: -3
+        b: T: 16
+    } else {
+        a: T = -3
+        b: T = 16
+    }
+    
+    assert(a + b == 13)
+    assert(b + a == 13)
+    assert(b - a == 19)
+    assert(a - b == -19)
+    assert(a * b == -48)
+    assert(b * a == -48)
+    assert(a / b == 0)
+    assert(b / a == -5)
+    assert(a % b == -3)
+    assert(b % a == 1)
+    assert(a < b)
+    assert(a <= b)
+    assert(!(a > b))
+    assert(!(a >= b))
+    assert(a != b)
+    assert(!(a == b))
+    assert(!(b < a))
+    assert(!(b <= a))
+    assert(b > a)
+    assert(b >= a)
+    assert(b != a)
+    assert(!(b == a))
 }
 
-float_binary_operators :: (dummy: $T) {
-	a: T = -3
-	b: T = 16
-	
-	assert(floats_are_equal(a + b,  13, 1e-4))
-	assert(floats_are_equal(b + a,  13, 1e-4))
-	assert(floats_are_equal(a - b, -19, 1e-4))
-	assert(floats_are_equal(b - a,  19, 1e-4))
-	assert(floats_are_equal(a * b, -48, 1e-4))
-	assert(floats_are_equal(b * a, -48, 1e-4))
-	assert(floats_are_equal(a / b, -0.1875, 1e-4))
-	assert(floats_are_equal(b / a, -5.3333333, 1e-4))
+float_math_operators :: ($T: type, $constexpr: bool) {
+    #if constexpr {
+        a: T: -3
+        b: T: 16
+    } else {
+        a: T = -3
+        b: T = 16
+    
+    }
+    
+    assert(floats_are_equal(a + b,  13, 1e-4))
+    assert(floats_are_equal(b + a,  13, 1e-4))
+    assert(floats_are_equal(a - b, -19, 1e-4))
+    assert(floats_are_equal(b - a,  19, 1e-4))
+    assert(floats_are_equal(a * b, -48, 1e-4))
+    assert(floats_are_equal(b * a, -48, 1e-4))
+    assert(floats_are_equal(a / b, -0.1875, 1e-4))
+    assert(floats_are_equal(b / a, -5.3333333, 1e-4))
+    assert(a < b)
+    assert(a <= b)
+    assert(!(a > b))
+    assert(!(a >= b))
+    assert(a != b)
+    assert(!(a == b))
+    
+    assert(b > a)
+    assert(b >= a)
+    assert(!(b < a))
+    assert(!(b <= a))
+    assert(b != a)
+    assert(!(b == a))
 }
 
 main :: () {
-	unsigned_binary_operators(cast(u8)  0)
-	unsigned_binary_operators(cast(u16) 0)
-	unsigned_binary_operators(cast(u32) 0)
-	unsigned_binary_operators(cast(u64) 0)
-	unsigned_binary_operators(cast(s8)  0)
-	unsigned_binary_operators(cast(s16) 0)
-	unsigned_binary_operators(cast(s32) 0)
-	unsigned_binary_operators(cast(s64) 0)
-	
-	signed_binary_operators(cast(s8) 0)
-	signed_binary_operators(cast(s16) 0)
-	signed_binary_operators(cast(s32) 0)
-	signed_binary_operators(cast(s64) 0)
-	
-	float_binary_operators(cast(f32) 0)
-	float_binary_operators(cast(f64) 0)
+    unsigned_math_operators(u8,  false)
+    unsigned_math_operators(u16, false)
+    unsigned_math_operators(u32, false)
+    unsigned_math_operators(u64, false)
+    unsigned_math_operators(s8,  false)
+    unsigned_math_operators(s16, false)
+    unsigned_math_operators(s32, false)
+    unsigned_math_operators(s64, false)
+    
+    unsigned_math_operators(u8,  true)
+    unsigned_math_operators(u16, true)
+    unsigned_math_operators(u32, true)
+    unsigned_math_operators(u64, true)
+    unsigned_math_operators(s8,  true)
+    unsigned_math_operators(s16, true)
+    unsigned_math_operators(s32, true)
+    unsigned_math_operators(s64, true)
+    
+    signed_math_operators(s8,  false)
+    signed_math_operators(s16, false)
+    signed_math_operators(s32, false)
+    signed_math_operators(s64, false)
+    
+    signed_math_operators(s8,  true)
+    signed_math_operators(s16, true)
+    signed_math_operators(s32, true)
+    signed_math_operators(s64, true)
+    
+    float_math_operators(f32, false)
+    float_math_operators(f64, false)
+    
+    float_math_operators(f32, true)
+    float_math_operators(f64, true)
 }
 
 #run main()

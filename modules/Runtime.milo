@@ -147,9 +147,9 @@ Stack_Trace :: struct {
 
 // The code within __program_start _should_ be safe to modify
 __program_start :: () -> s32 #c_call {
-    new_context: Context
+    initial_context: Context
     
-    push_context new_context {
+    push_context initial_context {
         #if #entry_point {
             #entry_point()    
         }

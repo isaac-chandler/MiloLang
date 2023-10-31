@@ -215,6 +215,10 @@ utf8 identifiers?
 Investigate LINK : fatal error LNK1285: corrupt PDB file
  - This may have been eliminated by emitting proper info for nested structs/enums (or it may now be much less common)
 
+Investigate why PDB file grows with each compile
+ - Seems like type definitions from the previous compile are still included, clearly we are doing something the incremental linker doesn't like, 
+   possilby this is also the cause of LNK1285
+
 function polymorhpism
  - Infer polymorphic function header so we can get improved typechecking during polymorph matching (probably required for most of the others)
  - Allow polymorph solver to yield and have one polymorphic argument be dependent on the matching of another (probably required for most of the others)
@@ -227,10 +231,5 @@ function polymorhpism
  - Allow optionally baked arguments
  - Currently it's probably possible to pass a #import statement to a value bake since it is a constant value, this should probably be illegal
  - Allow manually baking arguments for polymorphic or non-polymorphic functions
-
-separate CoffWriter into platform independent and platform specific parts
- - CodeView/DWARF
- - COFF/ELF
- - x64 codegen, filling data segment
 
 struct polymorhpism

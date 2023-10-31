@@ -19,16 +19,16 @@ global_board: State
 state_history: [..]u64
 
 print_mask :: (mask: u64) {
-	current_mask := mask
+    current_mask := mask
 
-	for 8 {
-		for 8 {
-			print("%", current_mask & 1)
-			current_mask >>= 1
-		}
-		
-		print("\n")
-	}
+    for 8 {
+        for 8 {
+            print("%", current_mask & 1)
+            current_mask >>= 1
+        }
+        
+        print("\n")
+    }
 }
 
 move_history: [..]Move
@@ -37,81 +37,81 @@ white_ai: bool
 undo_list: [..]State
 
 player_is_ai :: () -> bool {
-	if global_board.white_move {
-		return white_ai
-	}
-	
-	return black_ai
+    if global_board.white_move {
+        return white_ai
+    }
+    
+    return black_ai
 }
 
 undo_move :: () {
-	if undo_list.count {
-		global_board = array_pop(*undo_list)
-		array_pop(*move_history)
-		array_pop(*state_history)
-		game_over = false
-	}
+    if undo_list.count {
+        global_board = array_pop(*undo_list)
+        array_pop(*move_history)
+        array_pop(*state_history)
+        game_over = false
+    }
 }
 
 make_move :: (move: Move) {
-	array_add(*undo_list, global_board)
-	array_add(*state_history, global_board.hash)
+    array_add(*undo_list, global_board)
+    array_add(*state_history, global_board.hash)
 
 
-	global_board = do_move(*global_board, move)
-	array_add(*state_history, global_board.hash)
+    global_board = do_move(*global_board, move)
+    array_add(*state_history, global_board.hash)
 
-	repetition: [..]struct {
-		hash: u64
-		count: u64
-	}
-	defer array_free(repetition)
-	
-	if global_board.move_count == 100 {
-		print("50 Move Draw\n")
-		game_over = true
-	}
+    repetition: [..]struct {
+        hash: u64
+        count: u64
+    }
+    defer array_free(repetition)
+    
+    if global_board.move_count == 100 {
+        print("50 Move Draw\n")
+        game_over = true
+    }
 
-	for state: state_history {
-		for * repetition {
-			if state == it.hash {
-				if it.count == 2 {
-					print("Repetition\n")
-					game_over = true
-				} else {
-					it.count += 1
-				}
-				break
-			}
-		} or {
-			array_add(*repetition, .{state, 1})
-		}
-	}
-	
-	if check_for_insufficient_material(*global_board) {
-		print("Insufficient Material\n")
-		game_over = true
-	}
-	
-	moves_buffer: [200]Move = --
-	moves := backed_array(moves_buffer)
-	
-	get_all_legal_moves_slow(*global_board, *moves)
-	
-	if !moves.count {
-		if is_in_check(*global_board) {
-			print("Checkmate\n")
-			game_over = false
-		} else {
-			print("Stalemate\n")
-			game_over = false
-		}
-	}
+    for state: state_history {
+        for * repetition {
+            if state == it.hash {
+                if it.count == 2 {
+                    print("Repetition\n")
+                    game_over = true
+                } else {
+                    it.count += 1
+                }
+                break
+            }
+        } or {
+            array_add(*repetition, .{state, 1})
+        }
+    }
+    
+    if check_for_insufficient_material(*global_board) {
+        print("Insufficient Material\n")
+        game_over = true
+    }
+    
+    moves_buffer: [200]Move = --
+    moves := backed_array(moves_buffer)
+    
+    get_all_legal_moves_slow(*global_board, *moves)
+    
+    if !moves.count {
+        if is_in_check(*global_board) {
+            print("Checkmate\n")
+            game_over = false
+        } else {
+            print("Stalemate\n")
+            game_over = false
+        }
+    }
 
-	array_pop(*state_history)
-	
-	print_fen(*global_board)
-	array_add(*move_history, move)
+    array_pop(*state_history)
+    
+    print_fen(*global_board)
+    array_add(*move_history, move)
 }
 
 game_over: bool
@@ -124,188 +124,189 @@ flip_board := false
 selected_square: s8 = -1
 
 main :: () {
-	defer exit(0)
-	
-	transposition_table.count = 1 << 16
-	transposition_table.data = VirtualAlloc(dwSize = transposition_table.count * size_of(type_of(transposition_table[0])))
+    defer exit(0)
+    
+    transposition_table.count = 1 << 16
+    transposition_table.data = VirtualAlloc(dwSize = transposition_table.count * size_of(type_of(transposition_table[0])))
 
-	magic_table_buffer, success := read_entire_file("magic_bitboard.bin")
+    magic_table_buffer, success := read_entire_file("magic_bitboard.bin")
 
-	if !success || magic_table_buffer.count != size_of(Magic_Table) {
-		print("Failed to read magic bitboard file")
-		return
-	}
+    if !success || magic_table_buffer.count != size_of(Magic_Table) {
+        print("Failed to read magic bitboard file")
+        return
+    }
 
-	memory_copy(*magic_table, magic_table_buffer.data, size_of(Magic_Table))
-	free_array(magic_table_buffer)
-	
-	
-	ai_start_semaphore = create_semaphore()
-	ai_stop_semaphore  = create_semaphore()
-	
-	
-	ai_thread := create_thread(ai_thread_proc, *ai_move)
+    memory_copy(*magic_table, magic_table_buffer.data, size_of(Magic_Table))
+    free_array(magic_table_buffer)
+    
+    
+    ai_start_semaphore = create_semaphore()
+    ai_stop_semaphore  = create_semaphore()
+    
+    
+    ai_thread := create_thread(ai_thread_proc, *ai_move)
 
-	arguments := get_command_line_arguments()
-	
-	fen := STARTING_BOARD
-	
-	for arguments[1..] {
-		if it == "-w" {
-			white_ai = true
-		} else if it == "-b" {
-			black_ai = true
-		} else if it == "-no_book" {
-			use_book = false
-		} else if it == "-flip" {
-			flip_board = true
-		} else if begins_with(it, "-moves=") {
-			before, after := split_at_first(it, '=')
-			
-			max_moves = read_u64(after)
-		} else if begins_with(it, "-fen=") {
-			before, after := split_at_first(it, '=')
-			
-			fen = after
-		} else {
-			print("Unknown argument: %\n", it)
-			return
-		}
-	}
-	
-	if use_book {
-		if !calculate_openings_table() {
-			print("Failed to read openings file\n")
-			return
-		}
-	}
-	
-	
-	global_board, success = initialize_from_fen(fen)
-	
-	if !success {
-		print("Invalid FEN string\n")
-		return
-	}
+    arguments := get_command_line_arguments()
+    
+    fen := STARTING_BOARD
+    
+    for arguments[1..] {
+        if it == "-w" {
+            white_ai = true
+        } else if it == "-b" {
+            black_ai = true
+        } else if it == "-no_book" {
+            use_book = false
+        } else if it == "-flip" {
+            flip_board = true
+        } else if begins_with(it, "-moves=") {
+            before, after := split_at_first(it, '=')
+            
+            max_moves = read_u64(after)
+        } else if begins_with(it, "-fen=") {
+            before, after := split_at_first(it, '=')
+            
+            fen = after
+        } else {
+            print("Unknown argument: %\n", it)
+            return
+        }
+    }
+    
+    if use_book {
+        if !calculate_openings_table() {
+            print("Failed to read openings file\n")
+            return
+        }
+    }
+    
+    
+    global_board, success = initialize_from_fen(fen)
+    
+    if !success {
+        print("Invalid FEN string\n")
+        return
+    }
 
-	rng = create_seeded_random_insecure()
+    rng = create_seeded_random_insecure()
 
-	window := create_window("MiloChess 2", 800, 800, resizable = false)
-	
-	if !window {
-		print("Failed to open window\n")
-		return
-	}
+    window := create_window("MiloChess 2", 800, 800, resizable = false)
+    
+    if !window {
+        print("Failed to open window\n")
+        return
+    }
 
-	defer free(window)
+    defer free(window)
 
-	if !init_graphics(window)
-		return;
-	
-	show_window(window)
-	
-	moves: [..]Move
-	array_reserve(*moves, 200)
-	
-	while poll_events(window) {		
-		for get_window_events(window) {
-			if it.kind != .MOUSE
-				continue;
+    if !init_graphics(window)
+        return;
+    
+    show_window(window)
+    
+    moves: [..]Move
+    array_reserve(*moves, 200)
+    
+    while poll_events(window) {        
+        for get_window_events(window) {
+            if it.kind != .MOUSE
+                continue;
 
-			using it.mouse;
+            using it.mouse;
 
-			if !down
-				continue;
+            if !down
+                continue;
 
-			if button == .RIGHT_MOUSE {
-				if !making_ai_move && (!black_ai || !white_ai) && undo_list.count {
-					undo_move()
-				
-					if player_is_ai() undo_move()
-				}
-			} else if button == .LEFT_MOUSE {
-				file := x / 100
-				rank := y /  100
-				
-				if !flip_board {
-					file = 7 - file
-					rank = 7 - rank
-				}
+            if button == .RIGHT_MOUSE {
+                if !making_ai_move && (!black_ai || !white_ai) && undo_list.count {
+                    undo_move()
+                
+                    if player_is_ai() undo_move()
+                }
+            } else if button == .LEFT_MOUSE {
+                file := x / 100
+                rank := y /  100
+                
+                if !flip_board {
+                    file = 7 - file
+                    rank = 7 - rank
+                }
 
-				promote_to := -1
+                promote_to := -1
 
-				if (modifiers & .CONTROL) && (modifiers & .SHIFT)
-					promote_to = BLACK_BISHOP
-				else if modifiers & .CONTROL
-					promote_to = BLACK_KNIGHT
-				else if modifiers & .SHIFT
-					promote_to = BLACK_ROOK
-				else
-					promote_to = BLACK_QUEEN
-				
-				square := pack(cast() file, cast() rank)
-				
-				if square == selected_square {
-					selected_square = -1
-					continue
-				}
+                if (modifiers & .CONTROL) && (modifiers & .SHIFT)
+                    promote_to = BLACK_BISHOP
+                else if modifiers & .CONTROL
+                    promote_to = BLACK_KNIGHT
+                else if modifiers & .SHIFT
+                    promote_to = BLACK_ROOK
+                else
+                    promote_to = BLACK_QUEEN
+                
+                square := pack(cast() file, cast() rank)
+                
+                if square == selected_square {
+                    selected_square = -1
+                    continue
+                }
 
-				for moves {
-					end_piece := it.end_piece
-					if end_piece >= WHITE_PAWN end_piece -= WHITE_PAWN
+                for moves {
+                    end_piece := it.end_piece
+                    if end_piece >= WHITE_PAWN end_piece -= WHITE_PAWN
 
-					if it.end == square && (!is_promotion_move(it) || promote_to == end_piece) {
-						selected_square = -1
-						make_move(it)
-						
-						break
-					}
-				} or {
-					piece := get_piece(*global_board, square)
-					
-					if piece == -1 || piece >= WHITE_PAWN != global_board.white_move {
-						selected_square = -1
-					} else if !game_over {
-						piece_index: s8
-						
-						selected_square = square
-						moves.count = 0
-						get_all_legal_moves_slow(*global_board, *moves)
+                    if it.end == square && (!is_promotion_move(it) || promote_to == end_piece) {
+                        selected_square = -1
+                        make_move(it)
+                        
+                        break
+                    }
+                } or {
+                    piece := get_piece(*global_board, square)
+                    
+                    if piece == -1 || piece >= WHITE_PAWN != global_board.white_move {
+                        selected_square = -1
+                    } else if !game_over {
+                        piece_index: s8
+                        
+                        selected_square = square
+                        moves.count = 0
+                        get_all_legal_moves_slow(*global_board, *moves)
 
-						for moves {
-							if it.start != selected_square
-								remove
-						}
-					}
-				}
-			}
-		}
-		
-		
-		if !game_over && player_is_ai()
-			make_ai_move()
-		
-		if selected_square == -1
-			moves.count = 0
-		
-		draw(moves, window)
-	}
+                        for moves {
+                            if it.start != selected_square
+                                remove
+                        }
+                    }
+                }
+            }
+        }
+        
+        
+        if !game_over && player_is_ai()
+            make_ai_move()
+        
+        if selected_square == -1
+            moves.count = 0
+        
+        draw(moves, window)
+    }
 
-	destroy_graphics()
+    destroy_graphics()
 }
 
 #import "Compiler"
 
 setup_build :: () {
-	arguments := get_build_arguments()
-	
-	if arguments {
-		options := get_build_options()
-		options.backend = .LLVM
-		options.llvm_options = arguments
-		
-		set_build_options(options)
-	}
+    arguments := get_build_arguments()
+    
+    if arguments {
+        options := get_build_options()
+        options.backend = .LLVM
+        options.llvm_options = arguments
+        options.enable_stack_trace = false
+        
+        set_build_options(options)
+    }
 }
 
 #run setup_build()

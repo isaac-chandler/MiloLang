@@ -1792,7 +1792,7 @@ bool evaluateConstantBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 			}
 		}
 		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
-			*exprPointer = createFloatLiteral(left->start, right->end, left->type, left->floatValue < right->floatValue);
+			*exprPointer = createFloatLiteral(left->start, right->end, left->type, left->floatValue + right->floatValue);
 		}
 		break;
 	}
@@ -1833,7 +1833,7 @@ bool evaluateConstantBinary(SubJob *job, Expr **exprPointer, bool *yield) {
 			}
 		}
 		else if (left->flavor == ExprFlavor::FLOAT_LITERAL) {
-			*exprPointer = createFloatLiteral(left->start, right->end, left->type, left->floatValue < right->floatValue);
+			*exprPointer = createFloatLiteral(left->start, right->end, left->type, left->floatValue - right->floatValue);
 		}
 		break;
 	}

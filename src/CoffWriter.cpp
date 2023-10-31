@@ -1787,6 +1787,30 @@ void runCoffWriter() {
 
 					storeFromIntRegister(function, 8, ir.dest, RAX);
 				} break;
+				case IrOp::STACK_TRACE: {
+					auto stackTrace = static_cast<StackTrace *>(ir.data);
+
+					u32 functionSymbol = createSymbol(rdata);
+					rdata->addNullTerminatedString(stackTrace->function);
+					u32 filenameSymbol = createSymbol(rdata);
+					rdata->addNullTerminatedString(stackTrace->filename);
+
+					Section *section = BUILD_LINUX ? data : rdata;
+					section->ensure(40);
+					u32 symbolIndex = createSymbol(section, "");
+					section->addPointerRelocation(functionSymbol);
+					section->add8Unchecked(stackTrace->function.count);
+					section->addPointerRelocation(filenameSymbol);
+					section->add8Unchecked(stackTrace->filename.count);
+					section->add8Unchecked(stackTrace->line);
+
+					writeIntegerPrefix(8);
+					code->add1Unchecked(LEA);
+					writeModRM(MODRM_MOD_INDIRECT, RAX, MODRM_RM_RIP_OFFSET_32);
+					code->addRel32Relocation(symbolIndex);
+
+					storeFromIntRegister(function, 8, ir.dest, RAX);
+				} break;
 				case IrOp::ADD: {
 					if (ir.flags & IR_FLOAT_OP) {
 						loadIntoFloatRegister(function, ir.opSize, 0, ir.a);

@@ -653,6 +653,7 @@ main :: () {
         build_options.backend = .LLVM
         build_options.llvm_options = .["-O3"]
         build_options.show_console = false
+        build_options.enable_stack_trace = false
     }
     
     build_options.icon_name = "milo_edit.ico"

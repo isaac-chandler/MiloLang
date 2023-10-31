@@ -51,8 +51,17 @@ void BucketedArenaAllocator::addNullTerminatedString(String string) {
 	add1(0);
 }
 
+void BucketedArenaAllocator::addNullTerminatedString(MiloString string) {
+	addString(string);
+	add1(0);
+}
+
 void BucketedArenaAllocator::addString(String string) {
 	add(string.characters, string.length);
+}
+
+void BucketedArenaAllocator::addString(MiloString string) {
+	add(string.data, string.count);
 }
 
 void BucketedArenaAllocator::addNullTerminatedString(const char *string) {

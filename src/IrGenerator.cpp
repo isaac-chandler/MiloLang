@@ -10,41 +10,43 @@
 #include "Infer.h"
 #include "Error.h"
 
-u32 allocateRegister(IrState *state) {
-	return state->nextRegister++;
+#define INVALID_REGISTER UINT32_MAX
+
+u32 allocateRegister(ExprFunction *function) {
+	return function->state.nextRegister++;
 }
 
-u32 allocateStackSpace(IrState *state, u32 size, u32 alignment) {
-	state->stackSpace = AlignPO2(state->stackSpace, alignment);
-	u32 offset = state->stackSpace;
-	state->stackSpace += size;
-	state->stackSpace = AlignPO2(state->stackSpace, 8);
+u32 allocateStackSpace(ExprFunction *function, u32 size, u32 alignment) {
+	function->state.stackSpace = AlignPO2(function->state.stackSpace, alignment);
+	u32 offset = function->state.stackSpace;
+	function->state.stackSpace += size;
+	function->state.stackSpace = AlignPO2(function->state.stackSpace, 8);
 	return offset;
 }
 
-u32 allocateStackSpace(IrState *state, Type *type) {
-	return allocateStackSpace(state, type->size, type->alignment);
+u32 allocateStackSpace(ExprFunction *function, Type *type) {
+	return allocateStackSpace(function, type->size, type->alignment);
 }
 
-u32 loadStackAddress(IrState *state, u32 offset) {
-	Ir &address = state->ir.add();
+u32 loadStackAddress(ExprFunction *function, u32 offset) {
+	Ir &address = function->state.ir.add();
 	address.op = IrOp::STACK_ADDRESS;
-	address.dest = allocateRegister(state);
+	address.dest = allocateRegister(function);
 	address.immediate = offset;
 
 	return address.dest;
 }
 
-u32 allocateStackSpaceAndLoadAddress(IrState *state, u32 size, u32 alignment) {
-	return loadStackAddress(state, allocateStackSpace(state, size, alignment));
+u32 allocateStackSpaceAndLoadAddress(ExprFunction *function, u32 size, u32 alignment) {
+	return loadStackAddress(function, allocateStackSpace(function, size, alignment));
 }
 
-u32 allocateStackSpaceAndLoadAddress(IrState *state, Type *type) {
-	return allocateStackSpaceAndLoadAddress(state, type->size, type->alignment);
+u32 allocateStackSpaceAndLoadAddress(ExprFunction *function, Type *type) {
+	return allocateStackSpaceAndLoadAddress(function, type->size, type->alignment);
 }
 
-u32 memop(IrState *state, IrOp op, u32 dest, u32 src, u32 size, u32 offset = 0) {
-	Ir &memop = state->ir.add();
+u32 memop(ExprFunction *function, IrOp op, u32 dest, u32 src, u32 size, u32 offset = 0) {
+	Ir &memop = function->state.ir.add();
 	memop.op = op;
 	memop.dest = dest;
 	memop.a = src;
@@ -54,12 +56,12 @@ u32 memop(IrState *state, IrOp op, u32 dest, u32 src, u32 size, u32 offset = 0) 
 	return dest;
 }
 
-u32 copyOrWrite(IrState *state, u32 dest, u32 src, Type *type, u32 offset = 0) {
+u32 copyOrWrite(ExprFunction *function, u32 dest, u32 src, Type *type, u32 offset = 0) {
 	if (isStoredByPointer(type)) {
 		if (offset) {
-			Ir &add = state->ir.add();
+			Ir &add = function->state.ir.add();
 			add.op = IrOp::ADD_CONSTANT;
-			add.dest = allocateRegister(state);
+			add.dest = allocateRegister(function);
 			add.a = dest;
 			add.immediate = offset;
 			add.opSize = 8;
@@ -68,20 +70,20 @@ u32 copyOrWrite(IrState *state, u32 dest, u32 src, Type *type, u32 offset = 0) {
 		}
 		
 
-		return memop(state, IrOp::COPY_SRC_OFFSET, dest, src, type->size);
+		return memop(function, IrOp::COPY_SRC_OFFSET, dest, src, type->size);
 	}
 	else {
-		return memop(state, IrOp::WRITE, dest, src, type->size, offset);
+		return memop(function, IrOp::WRITE, dest, src, type->size, offset);
 	}
 }
 
 
-u32 copyOrRead(IrState *state, u32 dest, u32 src, Type *type, u32 offset = 0) {
+u32 copyOrRead(ExprFunction *function, u32 dest, u32 src, Type *type, u32 offset = 0) {
 	if (isStoredByPointer(type)) {
 		if (offset) {
-			Ir &add = state->ir.add();
+			Ir &add = function->state.ir.add();
 			add.op = IrOp::ADD_CONSTANT;
-			add.dest = allocateRegister(state);
+			add.dest = allocateRegister(function);
 			add.a = src;
 			add.immediate = offset;
 			add.opSize = 8;
@@ -89,15 +91,15 @@ u32 copyOrRead(IrState *state, u32 dest, u32 src, Type *type, u32 offset = 0) {
 			src = add.dest;
 		}
 
-		return memop(state, IrOp::COPY_SRC_OFFSET, dest, src, type->size);
+		return memop(function, IrOp::COPY_SRC_OFFSET, dest, src, type->size);
 	}
 	else {
-		return memop(state, IrOp::READ, dest, src, type->size, offset);
+		return memop(function, IrOp::READ, dest, src, type->size, offset);
 	}
 }
 
-u32 set(IrState *state, u32 dest, u32 src, u32 size) {
-	Ir &set = state->ir.add();
+u32 set(ExprFunction *function, u32 dest, u32 src, u32 size) {
+	Ir &set = function->state.ir.add();
 	set.op = IrOp::SET;
 	set.dest = dest;
 	set.a = src;
@@ -106,8 +108,8 @@ u32 set(IrState *state, u32 dest, u32 src, u32 size) {
 	return dest;
 }
 
-u32 constant(IrState *state, u32 dest, u32 size, u64 value) {
-	Ir &constant = state->ir.add();
+u32 constant(ExprFunction *function, u32 dest, u32 size, u64 value) {
+	Ir &constant = function->state.ir.add();
 	constant.op = IrOp::IMMEDIATE;
 	constant.dest = dest;
 	constant.opSize = size;
@@ -116,7 +118,7 @@ u32 constant(IrState *state, u32 dest, u32 size, u64 value) {
 	return dest;
 }
 
-u32 generateIr(IrState *state, Expr *expr);
+u32 generateIr(ExprFunction *function, Expr *expr);
 
 struct Loop {
 	struct ExprLoop *loop;
@@ -130,12 +132,12 @@ static Array<Expr *> deferStack;
 static Array<Loop> loopStack;
 static u32 loopCount;
 
-static void pushLoop(IrState *state, ExprLoop *loop) {
+static void pushLoop(ExprFunction *function, ExprLoop *loop) {
 	if (loopCount >= loopStack.count) {
 		loopStack.add();
 	}
 
-	loopStack[loopCount].start = state->ir.count;
+	loopStack[loopCount].start = function->state.ir.count;
 	loopStack[loopCount].loop = loop;
 	loopStack[loopCount].endPatches.clear();
 
@@ -144,29 +146,29 @@ static void pushLoop(IrState *state, ExprLoop *loop) {
 
 }
 
-static void popLoop(IrState *state) {
+static void popLoop(ExprFunction *function) {
 	--loopCount;
 
 	Loop loop = loopStack[loopCount];
 
 	for (auto patch : loop.endPatches) {
-		state->ir[patch].b = state->ir.count;
+		function->state.ir[patch].b = function->state.ir.count;
 	}
 }
 
 
 
-static void generateIncrement(IrState *state, ExprLoop *loop) {
+static void generateIncrement(ExprFunction *function, ExprLoop *loop) {
 	auto it_index = loop->iteratorBlock.declarations[1];
 
-	Ir &index = state->ir.add();
+	Ir &index = function->state.ir.add();
 	index.op = IrOp::ADD_CONSTANT;
 	index.opSize = 8;
 	index.a = it_index->registerOfStorage;
 	index.immediate = 1;
 	index.dest = it_index->registerOfStorage;
 
-	Ir &increment = state->ir.add();
+	Ir &increment = function->state.ir.add();
 	increment.op = IrOp::ADD_CONSTANT;
 	increment.opSize = loop->forBegin->type->size;
 	increment.a = loop->irPointer;
@@ -192,11 +194,11 @@ static void generateIncrement(IrState *state, ExprLoop *loop) {
 	}
 }
 
-void addLineMarker(IrState *state, Expr *expr) {
+void addLineMarker(ExprFunction *function, Expr *expr) {
 	if (expr->flavor == ExprFlavor::BLOCK)
 		return;
 
-	Ir &ir = state->ir.add();
+	Ir &ir = function->state.ir.add();
 
 	ir.op = IrOp::LINE_MARKER;
 	ir.location.start = expr->start;
@@ -204,7 +206,7 @@ void addLineMarker(IrState *state, Expr *expr) {
 }
 
 
-static void exitBlock(IrState *state, Block *block, bool isBreak) {
+static void exitBlock(ExprFunction *function, Block *block, bool isBreak) {
 	for (s64 i = static_cast<s64>(deferStack.count) - 1; i >= 0; --i) {
 		auto expr = deferStack[static_cast<u32>(i)];
 
@@ -229,7 +231,7 @@ static void exitBlock(IrState *state, Block *block, bool isBreak) {
 			}
 
 			if (!isBreak) // Break statements shouldn't execute the increment
-				generateIncrement(state, loop);
+				generateIncrement(function, loop);
 		}
 		else {
 			assert(expr->flavor == ExprFlavor::DEFER);
@@ -253,31 +255,31 @@ static void exitBlock(IrState *state, Block *block, bool isBreak) {
 					break;
 			}
 
-			addLineMarker(state, defer);
-			generateIr(state, defer->expr);
+			addLineMarker(function, defer);
+			generateIr(function, defer->expr);
 		}
 	}
 }
 
-u32 generateSlice(IrState *state, ExprSlice *slice) {
-	u32 array = generateIr(state, slice->array);
+u32 generateSlice(ExprFunction *function, ExprSlice *slice) {
+	u32 array = generateIr(function, slice->array);
 	u32 pointer = array;
 
 	if (slice->array->type->flavor == TypeFlavor::ARRAY || slice->array->type->flavor == TypeFlavor::STRING) {
 		if (!(slice->array->type->flags & TYPE_ARRAY_IS_FIXED)) {
-			pointer = memop(state, IrOp::READ, allocateRegister(state), array, 8);
+			pointer = memop(function, IrOp::READ, allocateRegister(function), array, 8);
 		}
 	}
 
 
-	u32 countReg = slice->sliceStart ? allocateRegister(state) : 0;
+	u32 countReg = slice->sliceStart ? allocateRegister(function) : 0;
 
 	if (!slice->sliceEnd) {
 		if (slice->array->type->flags & TYPE_ARRAY_IS_FIXED) {
-			constant(state, countReg, 8, static_cast<TypeArray *>(slice->array->type)->count);
+			constant(function, countReg, 8, static_cast<TypeArray *>(slice->array->type)->count);
 		}
 		else {
-			memop(state, IrOp::READ, countReg, array, 8, 8);
+			memop(function, IrOp::READ, countReg, array, 8, 8);
 		}
 	}
 
@@ -294,25 +296,25 @@ u32 generateSlice(IrState *state, ExprSlice *slice) {
 	}
 
 
-	u32 result = allocateStackSpaceAndLoadAddress(state, slice->type);
+	u32 result = allocateStackSpaceAndLoadAddress(function, slice->type);
 
 	if (slice->sliceEnd && slice->sliceStart) {
-		auto offset = generateIr(state, slice->sliceStart);
-		auto end = generateIr(state, slice->sliceEnd);
+		auto offset = generateIr(function, slice->sliceStart);
+		auto end = generateIr(function, slice->sliceEnd);
 
-		auto &count = state->ir.add();
+		auto &count = function->state.ir.add();
 		count.op = IrOp::SUB;
 		count.dest = countReg;
 		count.a = end;
 		count.b = offset;
 		count.opSize = 8;
 
-		memop(state, IrOp::WRITE, result, countReg, 8, 8);
+		memop(function, IrOp::WRITE, result, countReg, 8, 8);
 
 		if (elementSize != 1) {
-			u32 mulReg = allocateRegister(state);
+			u32 mulReg = allocateRegister(function);
 
-			auto &mul = state->ir.add();
+			auto &mul = function->state.ir.add();
 			mul.op = IrOp::MUL_BY_CONSTANT;
 			mul.dest = mulReg;
 			mul.a = offset;
@@ -324,31 +326,31 @@ u32 generateSlice(IrState *state, ExprSlice *slice) {
 
 		u32 dataReg = countReg;
 
-		auto &add = state->ir.add();
+		auto &add = function->state.ir.add();
 		add.op = IrOp::ADD;
 		add.dest = dataReg;
 		add.a = pointer;
 		add.b = offset;
 		add.opSize = 8;
 
-		memop(state, IrOp::WRITE, result, dataReg, 8);
+		memop(function, IrOp::WRITE, result, dataReg, 8);
 	}
 	else if (slice->sliceStart) {
-		auto offset = generateIr(state, slice->sliceStart);
+		auto offset = generateIr(function, slice->sliceStart);
 
-		auto &count = state->ir.add();
+		auto &count = function->state.ir.add();
 		count.op = IrOp::SUB;
 		count.dest = countReg;
 		count.a = countReg;
 		count.b = offset;
 		count.opSize = 8;
 
-		memop(state, IrOp::WRITE, result, countReg, 8, 8);
+		memop(function, IrOp::WRITE, result, countReg, 8, 8);
 
 		if (elementSize != 1) {
-			u32 mulReg = allocateRegister(state);
+			u32 mulReg = allocateRegister(function);
 
-			auto &mul = state->ir.add();
+			auto &mul = function->state.ir.add();
 			mul.op = IrOp::MUL_BY_CONSTANT;
 			mul.dest = mulReg;
 			mul.a = offset;
@@ -360,21 +362,21 @@ u32 generateSlice(IrState *state, ExprSlice *slice) {
 
 		u32 dataReg = countReg;
 
-		auto &add = state->ir.add();
+		auto &add = function->state.ir.add();
 		add.op = IrOp::ADD;
 		add.dest = dataReg;
 		add.a = pointer;
 		add.b = offset;
 		add.opSize = 8;
 
-		memop(state, IrOp::WRITE, result, dataReg, 8);
+		memop(function, IrOp::WRITE, result, dataReg, 8);
 	}
 	else {
 		assert(slice->sliceEnd);
-		auto end = generateIr(state, slice->sliceEnd);
+		auto end = generateIr(function, slice->sliceEnd);
 
-		memop(state, IrOp::WRITE, result, end, 8, 8);
-		memop(state, IrOp::WRITE, result, pointer, 8);
+		memop(function, IrOp::WRITE, result, end, 8, 8);
+		memop(function, IrOp::WRITE, result, pointer, 8);
 	}
 
 	return result;
@@ -435,16 +437,16 @@ IrOp getOpForBinary(TokenT op) {
 	}
 }
 
-u32 loadAddressOf(IrState *state, Expr *expr, u32 offset = 0) {
+u32 loadAddressOf(ExprFunction *function, Expr *expr, u32 offset = 0) {
 	if (expr->flavor == ExprFlavor::BINARY_OPERATOR && static_cast<ExprBinaryOperator *>(expr)->op == TOKEN('[')) {
 		auto binary = static_cast<ExprBinaryOperator *>(expr);
 
-		u32 array = generateIr(state, binary->left);
+		u32 array = generateIr(function, binary->left);
 		u32 pointer = array;
 
 		if (binary->left->type->flavor == TypeFlavor::ARRAY || binary->left->type->flavor == TypeFlavor::STRING) {
 			if (!(binary->left->type->flags & TYPE_ARRAY_IS_FIXED)) {
-				pointer = memop(state, IrOp::READ, allocateRegister(state), array, 8);
+				pointer = memop(function, IrOp::READ, allocateRegister(function), array, 8);
 			}
 		}
 
@@ -460,12 +462,12 @@ u32 loadAddressOf(IrState *state, Expr *expr, u32 offset = 0) {
 			elementSize = static_cast<TypeArray *>(binary->left->type)->arrayOf->size;
 		}
 
-		auto index = generateIr(state, binary->right);
+		auto index = generateIr(function, binary->right);
 
 		if (elementSize != 1) {
-			u32 mulReg = allocateRegister(state);
+			u32 mulReg = allocateRegister(function);
 
-			auto &mul = state->ir.add();
+			auto &mul = function->state.ir.add();
 			mul.op = IrOp::MUL_BY_CONSTANT;
 			mul.dest = mulReg;
 			mul.a = index;
@@ -475,9 +477,9 @@ u32 loadAddressOf(IrState *state, Expr *expr, u32 offset = 0) {
 			index = mulReg;
 		}
 
-		u32 result = allocateRegister(state);
+		u32 result = allocateRegister(function);
 
-		auto &add = state->ir.add();
+		auto &add = function->state.ir.add();
 		add.op = IrOp::ADD;
 		add.dest = result;
 		add.a = pointer;
@@ -485,7 +487,7 @@ u32 loadAddressOf(IrState *state, Expr *expr, u32 offset = 0) {
 		add.opSize = 8;
 
 		if (offset) {
-			auto &add = state->ir.add();
+			auto &add = function->state.ir.add();
 			add.op = IrOp::ADD_CONSTANT;
 			add.dest = result;
 			add.a = result;
@@ -498,12 +500,12 @@ u32 loadAddressOf(IrState *state, Expr *expr, u32 offset = 0) {
 	else if (expr->flavor == ExprFlavor::UNARY_OPERATOR && static_cast<ExprUnaryOperator *>(expr)->op == TokenT::SHIFT_LEFT) {
 		auto unary = static_cast<ExprUnaryOperator *>(expr);
 
-		u32 address = generateIr(state, unary->value);
+		u32 address = generateIr(function, unary->value);
 
 		if (offset) {
-			u32 result = allocateRegister(state);
+			u32 result = allocateRegister(function);
 
-			Ir &add = state->ir.add();
+			Ir &add = function->state.ir.add();
 			add.op = IrOp::ADD_CONSTANT;
 			add.dest = result;
 			add.a = address;
@@ -522,12 +524,12 @@ u32 loadAddressOf(IrState *state, Expr *expr, u32 offset = 0) {
 			offset += identifier->declaration->physicalStorage;
 
 			if (identifier->structAccess->type->flavor == TypeFlavor::POINTER) {
-				u32 address = generateIr(state, identifier->structAccess);
+				u32 address = generateIr(function, identifier->structAccess);
 
 				if (offset) {
-					u32 result = allocateRegister(state);
+					u32 result = allocateRegister(function);
 
-					Ir &add = state->ir.add();
+					Ir &add = function->state.ir.add();
 					add.op = IrOp::ADD_CONSTANT;
 					add.dest = result;
 					add.a = address;
@@ -540,14 +542,14 @@ u32 loadAddressOf(IrState *state, Expr *expr, u32 offset = 0) {
 				return address;
 			}
 			else {
-				return loadAddressOf(state, identifier->structAccess, offset);
+				return loadAddressOf(function, identifier->structAccess, offset);
 			}
 		}
 		else {
 			if (identifier->declaration->enclosingScope->flavor == BlockFlavor::GLOBAL) {
-				u32 result = allocateRegister(state);
+				u32 result = allocateRegister(function);
 
-				Ir &address = state->ir.add();
+				Ir &address = function->state.ir.add();
 				address.op = IrOp::ADDRESS_OF_GLOBAL;
 				address.dest = result;
 				address.a = offset;
@@ -561,8 +563,8 @@ u32 loadAddressOf(IrState *state, Expr *expr, u32 offset = 0) {
 				assert(declarationIsStoredByPointer(identifier->declaration));
 
 				if (offset) {
-					u32 result = allocateRegister(state);
-					Ir &add = state->ir.add();
+					u32 result = allocateRegister(function);
+					Ir &add = function->state.ir.add();
 					add.op = IrOp::ADD_CONSTANT;
 					add.dest = result;
 					add.a = address;
@@ -578,12 +580,12 @@ u32 loadAddressOf(IrState *state, Expr *expr, u32 offset = 0) {
 	}
 	else {
 		assert(isStoredByPointer(expr->type));
-		u32 address = generateIr(state, expr);
+		u32 address = generateIr(function, expr);
 
 		if (offset) {
-			u32 result = allocateRegister(state);
+			u32 result = allocateRegister(function);
 
-			Ir &add = state->ir.add();
+			Ir &add = function->state.ir.add();
 			add.op = IrOp::ADD_CONSTANT;
 			add.opSize = 8;
 			add.dest = result;
@@ -598,14 +600,14 @@ u32 loadAddressOf(IrState *state, Expr *expr, u32 offset = 0) {
 	}
 }
 
-u32 generateCast(IrState *state, ExprBinaryOperator *binary) {
+u32 generateCast(ExprFunction *function, ExprBinaryOperator *binary) {
 	auto left = binary->left;
 	auto right = binary->right;
 
 	(void)left;
 	assert(left->flavor == ExprFlavor::TYPE_LITERAL);
 
-	u32 rightReg = generateIr(state, right);
+	u32 rightReg = generateIr(function, right);
 
 	Type *castTo = binary->type;
 
@@ -613,25 +615,25 @@ u32 generateCast(IrState *state, ExprBinaryOperator *binary) {
 		if (isStoredByPointer(castTo) && !isStoredByPointer(right->type)) {
 			assert(castTo->size == right->type->size);
 
-			return memop(state, IrOp::WRITE, allocateStackSpaceAndLoadAddress(state, castTo), rightReg, castTo->size);
+			return memop(function, IrOp::WRITE, allocateStackSpaceAndLoadAddress(function, castTo), rightReg, castTo->size);
 		}
 		else if (!isStoredByPointer(castTo) && isStoredByPointer(right->type)) {
 			assert(castTo->size == right->type->size);
 
-			return memop(state, IrOp::READ, allocateRegister(state), rightReg, castTo->size);
+			return memop(function, IrOp::READ, allocateRegister(function), rightReg, castTo->size);
 		}
 
 		return rightReg;
 	}
 
 	if (right->type == TYPE_ANY) {
-		u32 pointerReg = memop(state, IrOp::READ, allocateRegister(state), rightReg, 8);
+		u32 pointerReg = memop(function, IrOp::READ, allocateRegister(function), rightReg, 8);
 
 		if (isStoredByPointer(castTo)) {
-			return memop(state, IrOp::COPY_SRC_OFFSET, allocateStackSpaceAndLoadAddress(state, castTo), pointerReg, castTo->size);
+			return memop(function, IrOp::COPY_SRC_OFFSET, allocateStackSpaceAndLoadAddress(function, castTo), pointerReg, castTo->size);
 		}
 		else {
-			return memop(state, IrOp::READ, pointerReg, pointerReg, castTo->size);
+			return memop(function, IrOp::READ, pointerReg, pointerReg, castTo->size);
 		}
 	}
 
@@ -639,26 +641,26 @@ u32 generateCast(IrState *state, ExprBinaryOperator *binary) {
 	case TypeFlavor::STRUCT: {
 		assert(castTo == TYPE_ANY);
 
-		u32 result = allocateStackSpaceAndLoadAddress(state, TYPE_ANY);
+		u32 result = allocateStackSpaceAndLoadAddress(function, TYPE_ANY);
 
-		u32 storage = allocateStackSpaceAndLoadAddress(state, right->type);
-		memop(state, IrOp::WRITE, result, storage, 8);
+		u32 storage = allocateStackSpaceAndLoadAddress(function, right->type);
+		memop(function, IrOp::WRITE, result, storage, 8);
 		
-		copyOrWrite(state, storage, rightReg, right->type);
+		copyOrWrite(function, storage, rightReg, right->type);
 
-		u32 typeReg = allocateRegister(state);
-		Ir &type = state->ir.add();
+		u32 typeReg = allocateRegister(function);
+		Ir &type = function->state.ir.add();
 		type.op = IrOp::TYPE;
 		type.dest = typeReg;
 		type.data = right->type;
 
 
-		Ir &ir = state->ir.add();
+		Ir &ir = function->state.ir.add();
 		ir.op = IrOp::TYPE_INFO;
 		ir.a = typeReg;
 		ir.dest = typeReg;
 
-		memop(state, IrOp::WRITE, result, typeReg, 8, 8);
+		memop(function, IrOp::WRITE, result, typeReg, 8, 8);
 		return result;
 	}
 	case TypeFlavor::BOOL: {
@@ -667,10 +669,10 @@ u32 generateCast(IrState *state, ExprBinaryOperator *binary) {
 
 		if (right->type->flavor == TypeFlavor::ARRAY || right->type == &TYPE_STRING) {
 			if (right->type->flags & TYPE_ARRAY_IS_FIXED) {
-				return constant(state, allocateRegister(state), 1, 1);
+				return constant(function, allocateRegister(function), 1, 1);
 			}
 			else {
-				src = memop(state, IrOp::READ, allocateRegister(state), rightReg, 8, 8);
+				src = memop(function, IrOp::READ, allocateRegister(function), rightReg, 8, 8);
 				size = 8;
 			}
 		}
@@ -679,11 +681,11 @@ u32 generateCast(IrState *state, ExprBinaryOperator *binary) {
 			size = right->type->size;
 		}
 
-		u32 zero = constant(state, allocateRegister(state), size, 0);
+		u32 zero = constant(function, allocateRegister(function), size, 0);
 
-		u32 result = allocateRegister(state);
+		u32 result = allocateRegister(function);
 
-		Ir &ir = state->ir.add();
+		Ir &ir = function->state.ir.add();
 		ir.op = IrOp::NOT_EQUAL;
 		ir.dest = result;
 		ir.a = src;
@@ -696,9 +698,9 @@ u32 generateCast(IrState *state, ExprBinaryOperator *binary) {
 		return result;
 	}
 	case TypeFlavor::FLOAT: {
-		u32 result = allocateRegister(state);
+		u32 result = allocateRegister(function);
 
-		Ir &conversion = state->ir.add();
+		Ir &conversion = function->state.ir.add();
 		conversion.dest = result;
 		conversion.a = rightReg;
 		conversion.b = castTo->size;
@@ -727,9 +729,9 @@ u32 generateCast(IrState *state, ExprBinaryOperator *binary) {
 		}
 
 		if (right->type->flavor == TypeFlavor::FLOAT) {
-			u32 result = allocateRegister(state);
+			u32 result = allocateRegister(function);
 
-			Ir &conversion = state->ir.add();
+			Ir &conversion = function->state.ir.add();
 			conversion.op = IrOp::FLOAT_TO_INT;
 			conversion.dest = result;
 			conversion.a = rightReg;
@@ -747,9 +749,9 @@ u32 generateCast(IrState *state, ExprBinaryOperator *binary) {
 				return rightReg;
 			}
 
-			u32 result = allocateRegister(state);
+			u32 result = allocateRegister(function);
 
-			Ir &conversion = state->ir.add();
+			Ir &conversion = function->state.ir.add();
 			conversion.op = IrOp::EXTEND_INT;
 			conversion.dest = result;
 			conversion.a = rightReg;
@@ -772,11 +774,11 @@ u32 generateCast(IrState *state, ExprBinaryOperator *binary) {
 			assert(right->type->flags & TYPE_ARRAY_IS_FIXED);
 			assert(!(left->type->flags & TYPE_ARRAY_IS_DYNAMIC));
 
-			u32 result = allocateStackSpaceAndLoadAddress(state, castTo);
+			u32 result = allocateStackSpaceAndLoadAddress(function, castTo);
 
-			memop(state, IrOp::WRITE, result, rightReg, 8);
-			u32 count = constant(state, allocateRegister(state), 8, static_cast<TypeArray *>(right->type)->count);
-			memop(state, IrOp::WRITE, result, count, 8, 8);
+			memop(function, IrOp::WRITE, result, rightReg, 8);
+			u32 count = constant(function, allocateRegister(function), 8, static_cast<TypeArray *>(right->type)->count);
+			memop(function, IrOp::WRITE, result, count, 8, 8);
 
 			return result;
 		}
@@ -795,13 +797,13 @@ u32 generateCast(IrState *state, ExprBinaryOperator *binary) {
 	return 0;
 }
 
-u32 generateMathBinaryOp(IrState *state, ExprBinaryOperator *binary) {
-	u32 leftReg = generateIr(state, binary->left);
-	u32 rightReg = generateIr(state, binary->right);
+u32 generateMathBinaryOp(ExprFunction *function, ExprBinaryOperator *binary) {
+	u32 leftReg = generateIr(function, binary->left);
+	u32 rightReg = generateIr(function, binary->right);
 
-	u32 result = allocateRegister(state);
+	u32 result = allocateRegister(function);
 
-	Ir &ir = state->ir.add();
+	Ir &ir = function->state.ir.add();
 	ir.op = getOpForBinary(binary->op);
 	ir.dest = result;
 	ir.a = leftReg;
@@ -826,7 +828,7 @@ struct RMWInfo {
 	u32 value;
 };
 
-RMWInfo readForRMW(IrState *state, Expr *expr) {
+RMWInfo readForRMW(ExprFunction *function, Expr *expr) {
 	RMWInfo result;
 
 	if (expr->flavor == ExprFlavor::IDENTIFIER) {
@@ -839,13 +841,13 @@ RMWInfo readForRMW(IrState *state, Expr *expr) {
 	}
 
 	assert(!isStoredByPointer(expr->type));
-	result.address = loadAddressOf(state, expr);
-	result.value = memop(state, IrOp::READ, allocateRegister(state), result.address, expr->type->size);
+	result.address = loadAddressOf(function, expr);
+	result.value = memop(function, IrOp::READ, allocateRegister(function), result.address, expr->type->size);
 
 	return result;
 }
 
-void writeForRMW(IrState *state, Expr *expr, RMWInfo registers) {
+void writeForRMW(ExprFunction *function, Expr *expr, RMWInfo registers) {
 	if (expr->flavor == ExprFlavor::IDENTIFIER) {
 		auto identifier = static_cast<ExprIdentifier *>(expr);
 
@@ -856,15 +858,15 @@ void writeForRMW(IrState *state, Expr *expr, RMWInfo registers) {
 	}
 
 	assert(!isStoredByPointer(expr->type));
-	memop(state, IrOp::WRITE, registers.address, registers.value, expr->type->size);
+	memop(function, IrOp::WRITE, registers.address, registers.value, expr->type->size);
 }
 
-void generateAssignBinaryOp(IrState *state, ExprBinaryOperator *binary) {
-	RMWInfo registers = readForRMW(state, binary->left);
+void generateAssignBinaryOp(ExprFunction *function, ExprBinaryOperator *binary) {
+	RMWInfo registers = readForRMW(function, binary->left);
 
-	u32 rightReg = generateIr(state, binary->right);
+	u32 rightReg = generateIr(function, binary->right);
 
-	Ir &ir = state->ir.add();
+	Ir &ir = function->state.ir.add();
 	ir.op = getOpForBinary(binary->op);
 	ir.dest = registers.value;
 	ir.a = registers.value;
@@ -881,13 +883,13 @@ void generateAssignBinaryOp(IrState *state, ExprBinaryOperator *binary) {
 		ir.flags |= IR_SIGNED_OP;
 	}
 
-	writeForRMW(state, binary->left, registers);
+	writeForRMW(function, binary->left, registers);
 }
 
-u32 generateEquals(IrState *state, u32 leftReg, Expr *right, bool equals) {
-	u32 result = allocateRegister(state);
+u32 generateEquals(ExprFunction *function, u32 leftReg, Expr *right, bool equals) {
+	u32 result = allocateRegister(function);
 
-	u32 rightReg = generateIr(state, right);
+	u32 rightReg = generateIr(function, right);
 
 	if (right->type == &TYPE_STRING) {
 		if (!stringsEqualFunction || !stringsEqualFunction->type) {
@@ -896,25 +898,25 @@ u32 generateEquals(IrState *state, u32 leftReg, Expr *right, bool equals) {
 			exit(1); // @Cleanup Forceful exit since we don't have good error handling here and its an internal compiler error
 		}
 
-		u32 function = generateIr(state, stringsEqualFunction);
+		u32 functionRegister = generateIr(function, stringsEqualFunction);
 
-		u32 returnValue = allocateStackSpaceAndLoadAddress(state, 1, 1);
-		FunctionCall *arguments = static_cast<FunctionCall *>(state->allocator.allocate(sizeof(FunctionCall) + 2 * sizeof(u32)));
+		u32 returnValue = allocateStackSpaceAndLoadAddress(function, 1, 1);
+		FunctionCall *arguments = static_cast<FunctionCall *>(function->state.allocator.allocate(sizeof(FunctionCall) + 2 * sizeof(u32)));
 		arguments->function = static_cast<TypeFunction *>(stringsEqualFunction->type);
 		arguments->arguments[0] = leftReg;
 		arguments->arguments[1] = rightReg;
 
-		Ir &call = state->ir.add();
+		Ir &call = function->state.ir.add();
 		call.op = IrOp::CALL;
 		call.dest = returnValue;
-		call.a = function;
+		call.a = functionRegister;
 		call.data = arguments;
 		call.opSize = 2;
 
-		memop(state, IrOp::READ, result, returnValue, 1);
+		memop(function, IrOp::READ, result, returnValue, 1);
 
 		if (!equals) {
-			Ir &invert = state->ir.add();
+			Ir &invert = function->state.ir.add();
 
 			invert.op = IrOp::EQUAL;
 			invert.dest = result;
@@ -924,7 +926,7 @@ u32 generateEquals(IrState *state, u32 leftReg, Expr *right, bool equals) {
 		}
 	}
 	else {
-		Ir &ir = state->ir.add();
+		Ir &ir = function->state.ir.add();
 
 		ir.op = equals ? IrOp::EQUAL : IrOp::NOT_EQUAL;
 		ir.dest = result;
@@ -939,29 +941,29 @@ u32 generateEquals(IrState *state, u32 leftReg, Expr *right, bool equals) {
 	return result;
 }
 
-u32 generateBinary(IrState *state, ExprBinaryOperator *binary) {
+u32 generateBinary(ExprFunction *function, ExprBinaryOperator *binary) {
 	auto left = binary->left;
 	auto right = binary->right;
 
 	switch (binary->op) {
 	case TokenT::CAST: {
-		return generateCast(state, binary);
+		return generateCast(function, binary);
 	}
 	case TOKEN('['): {
-		u32 address = loadAddressOf(state, binary);
+		u32 address = loadAddressOf(function, binary);
 
 		if (isStoredByPointer(binary->type)) {
 			return address;
 		}
 		else {
-			return memop(state, IrOp::READ, allocateRegister(state), address, binary->type->size);
+			return memop(function, IrOp::READ, allocateRegister(function), address, binary->type->size);
 		}
 	}
 	case TokenT::EQUAL:
 	case TokenT::NOT_EQUAL: {
 		assert(left->type == right->type);
 
-		return generateEquals(state, generateIr(state, binary->left), binary->right, binary->op == TokenT::EQUAL);
+		return generateEquals(function, generateIr(function, binary->left), binary->right, binary->op == TokenT::EQUAL);
 	}
 	case TokenT::GREATER_EQUAL:
 	case TokenT::LESS_EQUAL:
@@ -977,23 +979,23 @@ u32 generateBinary(IrState *state, ExprBinaryOperator *binary) {
 	case TOKEN('%'): {
 		assert(right->type == left->type);
 
-		return generateMathBinaryOp(state, binary);
+		return generateMathBinaryOp(function, binary);
 	}
 	case TOKEN('+'):
 	case TOKEN('-'): {
 		if (left->type->flavor == TypeFlavor::POINTER) {
 			auto pointer = static_cast<TypePointer *>(left->type);
 
-			u32 result = allocateRegister(state);
+			u32 result = allocateRegister(function);
 
-			u32 leftReg = generateIr(state, left);
+			u32 leftReg = generateIr(function, left);
 
 
-			u32 rightReg = generateIr(state, right);
+			u32 rightReg = generateIr(function, right);
 
 			if (right->type->flavor == TypeFlavor::POINTER) {
 				assert(binary->op == TOKEN('-'));
-				Ir &sub = state->ir.add();
+				Ir &sub = function->state.ir.add();
 				sub.op = IrOp::SUB;
 				sub.dest = result;
 				sub.a = leftReg;
@@ -1001,7 +1003,7 @@ u32 generateBinary(IrState *state, ExprBinaryOperator *binary) {
 				sub.opSize = 8;
 
 				if (pointer->pointerTo->size) {
-					Ir &div = state->ir.add();
+					Ir &div = function->state.ir.add();
 					div.op = IrOp::DIVIDE_BY_CONSTANT;
 					div.dest = result;
 					div.a = result;
@@ -1014,9 +1016,9 @@ u32 generateBinary(IrState *state, ExprBinaryOperator *binary) {
 				u32 offset = rightReg;
 
 				if (pointer->pointerTo->size != 1) {
-					u32 mulReg = allocateRegister(state);
+					u32 mulReg = allocateRegister(function);
 
-					Ir &mul = state->ir.add();
+					Ir &mul = function->state.ir.add();
 
 					mul.op = IrOp::MUL_BY_CONSTANT;
 					mul.dest = mulReg;
@@ -1027,7 +1029,7 @@ u32 generateBinary(IrState *state, ExprBinaryOperator *binary) {
 					offset = mulReg;
 				}
 
-				Ir &add = state->ir.add();
+				Ir &add = function->state.ir.add();
 				add.op = binary->op == TOKEN('+') ? IrOp::ADD : IrOp::SUB;
 				add.dest = result;
 				add.a = leftReg;
@@ -1038,7 +1040,7 @@ u32 generateBinary(IrState *state, ExprBinaryOperator *binary) {
 			return result;
 		}
 		else {
-			return generateMathBinaryOp(state, binary);
+			return generateMathBinaryOp(function, binary);
 		}
 	}
 	case TOKEN('='): {
@@ -1046,28 +1048,28 @@ u32 generateBinary(IrState *state, ExprBinaryOperator *binary) {
 			auto identifier = static_cast<ExprIdentifier *>(left);
 
 			if (!identifier->structAccess && !declarationIsStoredByPointer(identifier->declaration)) {
-				u32 value = generateIr(state, right);
-				set(state, identifier->declaration->registerOfStorage, value, identifier->type->size);
+				u32 value = generateIr(function, right);
+				set(function, identifier->declaration->registerOfStorage, value, identifier->type->size);
 				
 				return 0;
 			}
 		}
 
-		u32 address = loadAddressOf(state, left);
-		copyOrWrite(state, address, generateIr(state, right), left->type);
+		u32 address = loadAddressOf(function, left);
+		copyOrWrite(function, address, generateIr(function, right), left->type);
 		return 0;
 	}
 	case TokenT::PLUS_EQUALS: {
 		if (left->type->flavor == TypeFlavor::POINTER) {
 			auto pointer = static_cast<TypePointer *>(left->type);
 
-			RMWInfo registers = readForRMW(state, left);
-			u32 offset = generateIr(state, right);
+			RMWInfo registers = readForRMW(function, left);
+			u32 offset = generateIr(function, right);
 
 			if (pointer->pointerTo->size != 1) {
-				u32 mulReg = allocateRegister(state);
+				u32 mulReg = allocateRegister(function);
 
-				Ir &mul = state->ir.add();
+				Ir &mul = function->state.ir.add();
 
 				mul.op = IrOp::MUL_BY_CONSTANT;
 				mul.dest = mulReg;
@@ -1078,41 +1080,41 @@ u32 generateBinary(IrState *state, ExprBinaryOperator *binary) {
 				offset = mulReg;
 			}
 
-			Ir &add = state->ir.add();
+			Ir &add = function->state.ir.add();
 			add.op = IrOp::ADD;
 			add.dest = registers.value;
 			add.a = registers.value;
 			add.b = offset;
 			add.opSize = 8;
 
-			writeForRMW(state, left, registers);
+			writeForRMW(function, left, registers);
 			return 0;
 		}
 		else {
-			generateAssignBinaryOp(state, binary);
+			generateAssignBinaryOp(function, binary);
 			return 0;
 		}
 	}
 	case TokenT::LOGIC_AND:
 	case TokenT::LOGIC_OR: {
-		u32 result = allocateRegister(state);
+		u32 result = allocateRegister(function);
 
 
-		u32 leftReg = generateIr(state, left);
-		set(state, result, leftReg, 1);
+		u32 leftReg = generateIr(function, left);
+		set(function, result, leftReg, 1);
 
-		u32 patch = state->ir.count;
+		u32 patch = function->state.ir.count;
 
-		Ir &branch = state->ir.add();
+		Ir &branch = function->state.ir.add();
 		branch.op = binary->op == TokenT::LOGIC_AND ? IrOp::IF_Z_GOTO : IrOp::IF_NZ_GOTO;
 		branch.a = result;
 		branch.opSize = 1;
 
-		//addLineMarker(state, right);
-		u32 rightReg = generateIr(state, right);
-		set(state, result, rightReg, 1);
+		//addLineMarker(function, right);
+		u32 rightReg = generateIr(function, right);
+		set(function, result, rightReg, 1);
 
-		state->ir[patch].b = state->ir.count;
+		function->state.ir[patch].b = function->state.ir.count;
 
 		return result;
 	}
@@ -1125,7 +1127,7 @@ u32 generateBinary(IrState *state, ExprBinaryOperator *binary) {
 	case TokenT::TIMES_EQUALS:
 	case TokenT::DIVIDE_EQUALS:
 	case TokenT::MOD_EQUALS: {
-		generateAssignBinaryOp(state, binary);
+		generateAssignBinaryOp(function, binary);
 		return 0;
 	}
 	default:
@@ -1134,29 +1136,29 @@ u32 generateBinary(IrState *state, ExprBinaryOperator *binary) {
 	}
 }
 
-void generateBlock(IrState *state, ExprBlock *block) {
-	auto &enter = state->ir.add();
+void generateBlock(ExprFunction *function, ExprBlock *block) {
+	auto &enter = function->state.ir.add();
 	enter.op = IrOp::BLOCK;
 	enter.data = &block->declarations;
 
 	for (auto declaration : block->declarations.declarations) {
 		if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING))) {
 			if (declarationIsStoredByPointer(declaration)) {
-				declaration->physicalStorage = allocateStackSpace(state, getDeclarationType(declaration));
-				declaration->registerOfStorage = loadStackAddress(state, declaration->physicalStorage);
+				declaration->physicalStorage = allocateStackSpace(function, getDeclarationType(declaration));
+				declaration->registerOfStorage = loadStackAddress(function, declaration->physicalStorage);
 			}
 			else {
-				declaration->registerOfStorage = allocateRegister(state);
+				declaration->registerOfStorage = allocateRegister(function);
 			}
 		}
 	}
 
 	for (auto subExpr : block->exprs) {
-		addLineMarker(state, subExpr);
-		generateIr(state, subExpr);
+		addLineMarker(function, subExpr);
+		generateIr(function, subExpr);
 	}
 
-	exitBlock(state, &block->declarations, false);
+	exitBlock(function, &block->declarations, false);
 
 	while (deferStack.count) {
 		auto expr = deferStack[deferStack.count - 1];
@@ -1172,42 +1174,42 @@ void generateBlock(IrState *state, ExprBlock *block) {
 		deferStack.pop();
 	}
 
-	auto &exit = state->ir.add();
+	auto &exit = function->state.ir.add();
 	exit.op = IrOp::BLOCK;
 	exit.data = nullptr;
 }
 
-void generateBreak(IrState *state, ExprBreakOrContinue *break_) {
+void generateBreak(ExprFunction *function, ExprBreakOrContinue *break_) {
 	for (u32 i = loopCount; i-- != 0;) {
 
 		if (loopStack[i].loop == break_->refersTo) {
-			exitBlock(state, &loopStack[i].loop->iteratorBlock, true);
-			loopStack[i].endPatches.add(state->ir.count);
+			exitBlock(function, &loopStack[i].loop->iteratorBlock, true);
+			loopStack[i].endPatches.add(function->state.ir.count);
 			break;
 		}
 	}
 
-	Ir &jump = state->ir.add();
+	Ir &jump = function->state.ir.add();
 	jump.op = IrOp::GOTO;
 }
 
-void generateContinue(IrState *state, ExprBreakOrContinue *continue_) {
+void generateContinue(ExprFunction *function, ExprBreakOrContinue *continue_) {
 	u32 begin = 0;
 
 	for (u32 i = loopCount; i-- != 0;) {
 		if (loopStack[i].loop == continue_->refersTo) {
-			exitBlock(state, &loopStack[i].loop->iteratorBlock, false);
+			exitBlock(function, &loopStack[i].loop->iteratorBlock, false);
 			begin = loopStack[i].start;
 			break;
 		}
 	}
 
-	Ir &jump = state->ir.add();
+	Ir &jump = function->state.ir.add();
 	jump.op = IrOp::GOTO;
 	jump.b = begin;
 }
 
-void generateRemove(IrState *state, ExprBreakOrContinue *remove) {
+void generateRemove(ExprFunction *function, ExprBreakOrContinue *remove) {
 	if (!removeFunction || !removeFunction->type) {
 		reportError(remove, "Internal Compiler Error: Removing something before __remove is declared");
 		assert(false);
@@ -1217,28 +1219,28 @@ void generateRemove(IrState *state, ExprBreakOrContinue *remove) {
 	assert(remove->refersTo->forBegin->type->flavor == TypeFlavor::ARRAY);
 	assert(!(remove->refersTo->forBegin->type->flags & TYPE_ARRAY_IS_FIXED));
 
-	u32 returnValue = allocateStackSpaceAndLoadAddress(state, 8, 8);
-	u32 function = generateIr(state, removeFunction);
+	u32 returnValue = allocateStackSpaceAndLoadAddress(function, 8, 8);
+	u32 functionRegister = generateIr(function, removeFunction);
 
-	FunctionCall *argumentInfo = static_cast<FunctionCall *>(state->allocator.allocate(sizeof(FunctionCall) + sizeof(u32) * 3));
+	FunctionCall *argumentInfo = static_cast<FunctionCall *>(function->state.allocator.allocate(sizeof(FunctionCall) + sizeof(u32) * 3));
 
-	u32 sizeReg = constant(state, allocateRegister(state), 8, static_cast<TypeArray *>(remove->refersTo->forBegin->type)->arrayOf->size);
+	u32 sizeReg = constant(function, allocateRegister(function), 8, static_cast<TypeArray *>(remove->refersTo->forBegin->type)->arrayOf->size);
 
 	argumentInfo->arguments[0] = remove->refersTo->arrayPointer;
 	argumentInfo->arguments[1] = remove->refersTo->irPointer;
 	argumentInfo->arguments[2] = sizeReg;
 	argumentInfo->function = static_cast<TypeFunction *>(removeFunction->type);
 
-	Ir &ir = state->ir.add();
+	Ir &ir = function->state.ir.add();
 	ir.op = IrOp::CALL;
-	ir.a = function;
+	ir.a = functionRegister;
 	ir.data = argumentInfo;
 	ir.dest = returnValue;
 	ir.opSize = 3;
 
-	memop(state, IrOp::READ, remove->refersTo->irPointer, returnValue, 8);
+	memop(function, IrOp::READ, remove->refersTo->irPointer, returnValue, 8);
 
-	Ir &sub = state->ir.add();
+	Ir &sub = function->state.ir.add();
 	sub.op = IrOp::ADD_CONSTANT;
 	sub.dest = remove->refersTo->iteratorBlock.declarations[1]->registerOfStorage;
 	sub.a = remove->refersTo->iteratorBlock.declarations[1]->registerOfStorage;
@@ -1246,31 +1248,31 @@ void generateRemove(IrState *state, ExprBreakOrContinue *remove) {
 	sub.opSize = 8;
 }
 
-void generateFor(IrState *state, ExprLoop *loop) {
+void generateFor(ExprFunction *function, ExprLoop *loop) {
 	auto it = loop->iteratorBlock.declarations[0];
 	auto it_index = loop->iteratorBlock.declarations[1];
 
-	auto &enter = state->ir.add();
+	auto &enter = function->state.ir.add();
 	enter.op = IrOp::BLOCK;
 	enter.data = &loop->iteratorBlock;
 
 	if (isStoredByPointer(getDeclarationType(it))) {
-		it->physicalStorage = allocateStackSpace(state, getDeclarationType(it));
-		it->registerOfStorage = loadStackAddress(state, it->physicalStorage);
+		it->physicalStorage = allocateStackSpace(function, getDeclarationType(it));
+		it->registerOfStorage = loadStackAddress(function, it->physicalStorage);
 	}
 	else {
-		it->registerOfStorage = allocateRegister(state);
+		it->registerOfStorage = allocateRegister(function);
 	}
 
 	assert(getDeclarationType(it_index) == &TYPE_U64);
-	it_index->registerOfStorage = allocateRegister(state);
+	it_index->registerOfStorage = allocateRegister(function);
 
 	u32 itReg = it->registerOfStorage;
 	u32 it_indexReg = it_index->registerOfStorage;
 
 
 	if ((loop->forBegin->type->flavor != TypeFlavor::INTEGER) && !(loop->flags & EXPR_FOR_BY_POINTER)) {
-		loop->irPointer = allocateRegister(state);
+		loop->irPointer = allocateRegister(function);
 	}
 	else {
 		loop->irPointer = itReg;
@@ -1279,44 +1281,44 @@ void generateFor(IrState *state, ExprLoop *loop) {
 	if (loop->forBegin->type->flavor == TypeFlavor::ARRAY || loop->forBegin->type == &TYPE_STRING) {
 		auto begin = loop->forBegin;
 
-		loop->arrayPointer = loadAddressOf(state, begin);
+		loop->arrayPointer = loadAddressOf(function, begin);
 
 		if (loop->forBegin->type->flags & TYPE_ARRAY_IS_FIXED) {
-			set(state, loop->irPointer, loop->arrayPointer, 8);
+			set(function, loop->irPointer, loop->arrayPointer, 8);
 		}
 		else {
-			memop(state, IrOp::READ, loop->irPointer, loop->arrayPointer, 8);
+			memop(function, IrOp::READ, loop->irPointer, loop->arrayPointer, 8);
 		}
 	}
 	else {
-		u32 reg = generateIr(state, loop->forBegin);
-		set(state, loop->irPointer, reg, 8);
+		u32 reg = generateIr(function, loop->forBegin);
+		set(function, loop->irPointer, reg, 8);
 	}
 
-	constant(state, it_indexReg, 8, 0);
+	constant(function, it_indexReg, 8, 0);
 
 	u32 irEnd = 0;
 
 	if (loop->forEnd) {
-		irEnd = generateIr(state, loop->forEnd);
+		irEnd = generateIr(function, loop->forEnd);
 	}
 
-	pushLoop(state, loop);
-	addLineMarker(state, loop);
+	pushLoop(function, loop);
+	addLineMarker(function, loop);
 
 	u32 compareDest;
 
-	compareDest = allocateRegister(state);
+	compareDest = allocateRegister(function);
 
 	if (loop->forBegin->type->flavor == TypeFlavor::ARRAY || loop->forBegin->type->flavor == TypeFlavor::STRING) {
 		if (loop->forBegin->type->flags & TYPE_ARRAY_IS_FIXED) {
-			constant(state, compareDest, 8, static_cast<TypeArray *>(loop->forBegin->type)->count);
+			constant(function, compareDest, 8, static_cast<TypeArray *>(loop->forBegin->type)->count);
 		}
 		else {
-			memop(state, IrOp::READ, compareDest, loop->arrayPointer, 8, 8);
+			memop(function, IrOp::READ, compareDest, loop->arrayPointer, 8, 8);
 		}
 
-		Ir &compare = state->ir.add();
+		Ir &compare = function->state.ir.add();
 		compare.op = IrOp::LESS;
 		compare.a = it_index->registerOfStorage;
 		compare.b = compareDest;
@@ -1324,7 +1326,7 @@ void generateFor(IrState *state, ExprLoop *loop) {
 		compare.opSize = 8;
 	}
 	else {
-		Ir &compare = state->ir.add();
+		Ir &compare = function->state.ir.add();
 		compare.op = IrOp::LESS;
 		compare.a = loop->irPointer;
 		compare.b = irEnd;
@@ -1335,49 +1337,49 @@ void generateFor(IrState *state, ExprLoop *loop) {
 			compare.flags |= IR_SIGNED_OP;
 	}
 
-	u32 patch = state->ir.count; // Patch this manually so it doesn't skip the completed block if it exists
+	u32 patch = function->state.ir.count; // Patch this manually so it doesn't skip the completed block if it exists
 
-	Ir &branch = state->ir.add();
+	Ir &branch = function->state.ir.add();
 	branch.op = IrOp::IF_Z_GOTO;
 	branch.a = compareDest;
 	branch.opSize = 1;
 
 	if (!(loop->flags & EXPR_FOR_BY_POINTER)) {
 		if (loop->forBegin->type->flavor == TypeFlavor::ARRAY || loop->forBegin->type->flavor == TypeFlavor::POINTER || loop->forBegin->type == &TYPE_STRING) {
-			copyOrRead(state, it->registerOfStorage, loop->irPointer, getDeclarationType(it));
+			copyOrRead(function, it->registerOfStorage, loop->irPointer, getDeclarationType(it));
 		}
 	}
 
 	deferStack.add(loop);
 
 	if (loop->body) {
-		addLineMarker(state, loop->body);
-		generateIr(state, loop->body);
+		addLineMarker(function, loop->body);
+		generateIr(function, loop->body);
 	}
 
-	exitBlock(state, &loop->iteratorBlock, false);
+	exitBlock(function, &loop->iteratorBlock, false);
 
 	Expr *inc = deferStack.pop();
 	(void)inc;
 	assert(inc == loop);
 
-	Ir &jump = state->ir.add();
+	Ir &jump = function->state.ir.add();
 	jump.op = IrOp::GOTO;
 	jump.b = loopStack[loopCount - 1].start;
 
-	state->ir[patch].b = state->ir.count;
+	function->state.ir[patch].b = function->state.ir.count;
 
 
-	auto &exit = state->ir.add();
+	auto &exit = function->state.ir.add();
 	exit.op = IrOp::BLOCK;
 	exit.data = nullptr;
 
 	if (loop->completedBody) {
-		addLineMarker(state, loop->completedBody);
-		generateIr(state, loop->completedBody);
+		addLineMarker(function, loop->completedBody);
+		generateIr(function, loop->completedBody);
 	}
 
-	popLoop(state);
+	popLoop(function);
 }
 
 bool returnsViaPointer(TypeFunction *function) {
@@ -1512,9 +1514,9 @@ u32 requiredStackSpaceForCallingConvention(TypeFunction *function) {
 #endif
 }
 
-u32 generateCall(IrState *state, ExprFunctionCall *call, ExprCommaAssignment *comma = nullptr) {
+u32 generateCall(ExprFunction *function, ExprFunctionCall *call, ExprCommaAssignment *comma = nullptr) {
 	if ((call->flags & EXPR_FUNCTION_CALL_IS_STATEMENT_LEVEL) || comma) {
-		addLineMarker(state, call);
+		addLineMarker(function, call);
 	}
 
 	auto type = static_cast<TypeFunction *>(call->function->type);
@@ -1528,11 +1530,11 @@ u32 generateCall(IrState *state, ExprFunctionCall *call, ExprCommaAssignment *co
 				return 0;
 			}
 
-			u32 argument = generateIr(state, call->arguments.values[0]);
+			u32 argument = generateIr(function, call->arguments.values[0]);
 
-			u32 result = allocateRegister(state);
+			u32 result = allocateRegister(function);
 
-			auto &ir = state->ir.add();
+			auto &ir = function->state.ir.add();
 			ir.op = IrOp::POP_COUNT;
 			ir.opSize = argumentType->size;
 			ir.dest = result;
@@ -1548,12 +1550,12 @@ u32 generateCall(IrState *state, ExprFunctionCall *call, ExprCommaAssignment *co
 				return 0;
 			}
 
-			u32 argument = generateIr(state, call->arguments.values[0]);
+			u32 argument = generateIr(function, call->arguments.values[0]);
 
-			u32 resultIndex = allocateRegister(state);
-			u32 resultZero = allocateRegister(state);
+			u32 resultIndex = allocateRegister(function);
+			u32 resultZero = allocateRegister(function);
 
-			auto &ir = state->ir.add();
+			auto &ir = function->state.ir.add();
 			if (call->function->valueOfDeclaration->name == "bit_scan_forward") {
 				ir.op = IrOp::BIT_SCAN_FORWARD;
 			}
@@ -1571,14 +1573,14 @@ u32 generateCall(IrState *state, ExprFunctionCall *call, ExprCommaAssignment *co
 				if (left->flavor == ExprFlavor::IDENTIFIER) {
 					auto identifier = static_cast<ExprIdentifier *>(left);
 					if (!declarationIsStoredByPointer(static_cast<ExprIdentifier *>(left)->declaration)) {
-						set(state, identifier->declaration->registerOfStorage, resultIndex, argumentType->size);
+						set(function, identifier->declaration->registerOfStorage, resultIndex, argumentType->size);
 					}
 					else {
-						memop(state, IrOp::WRITE, loadAddressOf(state, left), resultIndex, argumentType->size);
+						memop(function, IrOp::WRITE, loadAddressOf(function, left), resultIndex, argumentType->size);
 					}
 				}
 				else {
-					memop(state, IrOp::WRITE, loadAddressOf(state, left), resultIndex, argumentType->size);
+					memop(function, IrOp::WRITE, loadAddressOf(function, left), resultIndex, argumentType->size);
 				}
 
 				assert(comma->exprCount >= 2); 
@@ -1588,14 +1590,14 @@ u32 generateCall(IrState *state, ExprFunctionCall *call, ExprCommaAssignment *co
 				if (left->flavor == ExprFlavor::IDENTIFIER) {
 					auto identifier = static_cast<ExprIdentifier *>(left);
 					if (!declarationIsStoredByPointer(static_cast<ExprIdentifier *>(left)->declaration)) {
-						set(state, identifier->declaration->registerOfStorage, resultZero, 1);
+						set(function, identifier->declaration->registerOfStorage, resultZero, 1);
 					}
 					else {
-						memop(state, IrOp::WRITE, loadAddressOf(state, left), resultZero, 1);
+						memop(function, IrOp::WRITE, loadAddressOf(function, left), resultZero, 1);
 					}
 				}
 				else {
-					memop(state, IrOp::WRITE, loadAddressOf(state, left), resultZero, 1);
+					memop(function, IrOp::WRITE, loadAddressOf(function, left), resultZero, 1);
 				}
 			}
 
@@ -1607,7 +1609,7 @@ u32 generateCall(IrState *state, ExprFunctionCall *call, ExprCommaAssignment *co
 		}
 	}
 
-	state->stackSpaceForCallingConvention = my_max(state->stackSpaceForCallingConvention, requiredStackSpaceForCallingConvention(type));
+	function->state.stackSpaceForCallingConvention = my_max(function->state.stackSpaceForCallingConvention, requiredStackSpaceForCallingConvention(type));
 
 	bool hasReturns = type->returnTypes[0] != &TYPE_VOID;
 	bool hasContext = !(type->flags & TYPE_FUNCTION_IS_C_CALL);
@@ -1626,29 +1628,64 @@ u32 generateCall(IrState *state, ExprFunctionCall *call, ExprCommaAssignment *co
 		}
 
 		if (stackSpaceForReturn)
-			returnStorage = allocateStackSpaceAndLoadAddress(state, stackSpaceForReturn, alignmentForReturn);
+			returnStorage = allocateStackSpaceAndLoadAddress(function, stackSpaceForReturn, alignmentForReturn);
 	}
 
-	u32 function = generateIr(state, call->function);
+	u32 functionReg = generateIr(function, call->function);
 
 	u32 argumentCount = hasContext + type->argumentCount;
-	FunctionCall *callArguments = static_cast<FunctionCall *>(state->allocator.allocate(sizeof(FunctionCall) + argumentCount * sizeof(u32)));
+	FunctionCall *callArguments = static_cast<FunctionCall *>(function->state.allocator.allocate(sizeof(FunctionCall) + argumentCount * sizeof(u32)));
 	callArguments->function = type;
 
 	if (hasContext) {
-		callArguments->arguments[0] = state->contextRegister;
+		callArguments->arguments[0] = function->state.contextRegister;
 	}
 
 	for (u32 i = 0; i < call->arguments.count; i++) {
-		callArguments->arguments[hasContext + i] = generateIr(state, call->arguments.values[i]);
+		callArguments->arguments[hasContext + i] = generateIr(function, call->arguments.values[i]);
 	}
 
-	Ir &ir = state->ir.add();
+	u32 stackTraceNode = INVALID_REGISTER;
+	if (buildOptions.enable_stack_trace && function->state.contextRegister != INVALID_REGISTER) {
+		stackTraceNode = allocateStackSpaceAndLoadAddress(function, 16, 8);
+
+		// @Layout: Relies on stack_trace being the first member of Context
+		memop(function, IrOp::COPY_SRC_OFFSET, stackTraceNode, function->state.contextRegister, 8);
+		memop(function, IrOp::WRITE, function->state.contextRegister, stackTraceNode, 8);
+
+		Ir &ir = function->state.ir.add();
+		ir.op = IrOp::STACK_TRACE;
+	
+		StackTrace *stackTrace = static_cast<StackTrace *>(function->state.allocator.allocate(sizeof(StackTrace)));
+		if (function->valueOfDeclaration) {
+			stackTrace->function.data = reinterpret_cast<u8 *>(function->valueOfDeclaration->name.characters);
+			stackTrace->function.count = function->valueOfDeclaration->name.length;
+		}
+		else {
+			stackTrace->function.data = nullptr;
+			stackTrace->function.count = 0;
+		}
+
+		stackTrace->filename.data = reinterpret_cast<u8 *>(compilerFiles[call->start.fileUid]->name.characters);
+		stackTrace->filename.count = compilerFiles[call->start.fileUid]->name.length;
+		stackTrace->line = call->start.line;
+
+		ir.data = stackTrace;
+		ir.dest = allocateRegister(function);
+		
+		memop(function, IrOp::WRITE, stackTraceNode, ir.dest, 8, 8);
+	}
+
+	Ir &ir = function->state.ir.add();
 	ir.op = IrOp::CALL;
 	ir.dest = returnStorage;
-	ir.a = function;
+	ir.a = functionReg;
 	ir.data = callArguments;
 	ir.opSize = argumentCount;
+
+	if (stackTraceNode != INVALID_REGISTER) {
+		memop(function, IrOp::COPY_SRC_OFFSET, function->state.contextRegister, stackTraceNode, 8);
+	}
 
 	if (comma) {
 		u32 returnOffset = 0;
@@ -1660,14 +1697,14 @@ u32 generateCall(IrState *state, ExprFunctionCall *call, ExprCommaAssignment *co
 			if (left->flavor == ExprFlavor::IDENTIFIER) {
 				auto identifier = static_cast<ExprIdentifier *>(left);
 				if (!declarationIsStoredByPointer(static_cast<ExprIdentifier *>(left)->declaration)) {
-					memop(state, IrOp::READ, identifier->declaration->registerOfStorage, returnStorage, type->returnTypes[i]->size, returnOffset);
+					memop(function, IrOp::READ, identifier->declaration->registerOfStorage, returnStorage, type->returnTypes[i]->size, returnOffset);
 				}
 				else {
-					memop(state, IrOp::COPY_SRC_OFFSET, loadAddressOf(state, left), returnStorage, type->returnTypes[i]->size, returnOffset);
+					memop(function, IrOp::COPY_SRC_OFFSET, loadAddressOf(function, left), returnStorage, type->returnTypes[i]->size, returnOffset);
 				}
 			}
 			else {
-				memop(state, IrOp::COPY_SRC_OFFSET, loadAddressOf(state, left), returnStorage, type->returnTypes[i]->size, returnOffset);
+				memop(function, IrOp::COPY_SRC_OFFSET, loadAddressOf(function, left), returnStorage, type->returnTypes[i]->size, returnOffset);
 			}
 
 			returnOffset += type->returnTypes[i]->size;
@@ -1682,48 +1719,48 @@ u32 generateCall(IrState *state, ExprFunctionCall *call, ExprCommaAssignment *co
 		return returnStorage;
 	}
 	else {
-		return memop(state, IrOp::READ, allocateRegister(state), returnStorage, type->returnTypes[0]->size);
+		return memop(function, IrOp::READ, allocateRegister(function), returnStorage, type->returnTypes[0]->size);
 	}
 }
 
-u32 generateArrayLiteral(IrState *state, ExprArrayLiteral *array) {
+u32 generateArrayLiteral(ExprFunction *function, ExprArrayLiteral *array) {
 	auto arrayType = static_cast<TypeArray *>(array->type);
 	u32 arrayCount = (arrayType->flags & TYPE_ARRAY_IS_FIXED) ? arrayType->count : array->count;
 
-	u32 addressReg = allocateStackSpaceAndLoadAddress(state, arrayType->arrayOf->size * arrayCount, arrayType->arrayOf->alignment);
+	u32 addressReg = allocateStackSpaceAndLoadAddress(function, arrayType->arrayOf->size * arrayCount, arrayType->arrayOf->alignment);
 
 	for (u32 i = 0; i < arrayCount; i++) {
 		if (i + 1 == array->count && arrayCount > array->count) {
-			u32 countReg = constant(state, allocateRegister(state), 8, arrayCount - i);
+			u32 countReg = constant(function, allocateRegister(function), 8, arrayCount - i);
 
-			Ir &address = state->ir.add();
+			Ir &address = function->state.ir.add();
 			address.op = IrOp::ADD_CONSTANT;
 			address.dest = addressReg;
 			address.a = addressReg;
 			address.immediate = i * arrayType->arrayOf->size;
 			address.opSize = 8;
 
-			u32 value = generateIr(state, array->values[i]);
+			u32 value = generateIr(function, array->values[i]);
 
-			u32 patch = state->ir.count;
+			u32 patch = function->state.ir.count;
 
-			copyOrWrite(state, addressReg, value, arrayType->arrayOf);
+			copyOrWrite(function, addressReg, value, arrayType->arrayOf);
 
-			Ir &add = state->ir.add();
+			Ir &add = function->state.ir.add();
 			add.op = IrOp::ADD_CONSTANT;
 			add.dest = addressReg;
 			add.a = addressReg;
 			add.immediate = arrayType->arrayOf->size;
 			add.opSize = 8;
 
-			Ir &dec = state->ir.add();
+			Ir &dec = function->state.ir.add();
 			dec.op = IrOp::ADD_CONSTANT;
 			dec.dest = countReg;
 			dec.a = countReg;
 			dec.immediate = static_cast<u64>(-1LL);
 			dec.opSize = 8;
 
-			Ir &branch = state->ir.add();
+			Ir &branch = function->state.ir.add();
 			branch.op = IrOp::IF_NZ_GOTO;
 			branch.a = countReg;
 			branch.b = patch;
@@ -1732,26 +1769,26 @@ u32 generateArrayLiteral(IrState *state, ExprArrayLiteral *array) {
 			break;
 		}
 		else {
-			u32 value = generateIr(state, array->values[i]);
-			copyOrWrite(state, addressReg, value, arrayType->arrayOf, i * arrayType->arrayOf->size);
+			u32 value = generateIr(function, array->values[i]);
+			copyOrWrite(function, addressReg, value, arrayType->arrayOf, i * arrayType->arrayOf->size);
 		}
 	}
 
 	return addressReg;
 }
 
-u32 generateIr(IrState *state, Expr *expr) {
+u32 generateIr(ExprFunction *function, Expr *expr) {
 	PROFILE_FUNC();
 
 	switch (expr->flavor) {
 	case ExprFlavor::SLICE: {
-		return generateSlice(state, static_cast<ExprSlice *>(expr));
+		return generateSlice(function, static_cast<ExprSlice *>(expr));
 	}
 	case ExprFlavor::BINARY_OPERATOR: {
-		return generateBinary(state, static_cast<ExprBinaryOperator *>(expr));
+		return generateBinary(function, static_cast<ExprBinaryOperator *>(expr));
 	}
 	case ExprFlavor::BLOCK: {
-		generateBlock(state, static_cast<ExprBlock *>(expr));
+		generateBlock(function, static_cast<ExprBlock *>(expr));
 
 		return 0;
 	}
@@ -1761,17 +1798,17 @@ u32 generateIr(IrState *state, Expr *expr) {
 		return 0;
 	}
 	case ExprFlavor::BREAK: {
-		generateBreak(state, static_cast<ExprBreakOrContinue *>(expr));
+		generateBreak(function, static_cast<ExprBreakOrContinue *>(expr));
 
 		return 0;
 	}
 	case ExprFlavor::CONTINUE: {
-		generateContinue(state, static_cast<ExprBreakOrContinue *>(expr));
+		generateContinue(function, static_cast<ExprBreakOrContinue *>(expr));
 
 		return 0;
 	}
 	case ExprFlavor::REMOVE: {
-		generateRemove(state, static_cast<ExprBreakOrContinue *>(expr));		
+		generateRemove(function, static_cast<ExprBreakOrContinue *>(expr));		
 
 		return 0;
 	}
@@ -1779,12 +1816,12 @@ u32 generateIr(IrState *state, Expr *expr) {
 		auto literal = static_cast<ExprLiteral *>(expr);
 
 		if (literal->unsignedValue == 0 && isStoredByPointer(literal->type)) {
-			return memop(state, IrOp::ZERO_MEMORY, allocateStackSpaceAndLoadAddress(state, literal->type), 0, literal->type->size);
+			return memop(function, IrOp::ZERO_MEMORY, allocateStackSpaceAndLoadAddress(function, literal->type), 0, literal->type->size);
 		}
 
 		assert(literal->type->size);
 
-		return constant(state, allocateRegister(state), literal->type->size, literal->unsignedValue);
+		return constant(function, allocateRegister(function), literal->type->size, literal->unsignedValue);
 	}
 	case ExprFlavor::FLOAT_LITERAL: {
 		auto literal = static_cast<ExprLiteral *>(expr);
@@ -1799,17 +1836,17 @@ u32 generateIr(IrState *state, Expr *expr) {
 			value &= 0xFFFF'FFFFULL;
 		}
 
-		return constant(state, allocateRegister(state), literal->type->size, value);
+		return constant(function, allocateRegister(function), literal->type->size, value);
 	}
 	case ExprFlavor::FOR: {
-		generateFor(state, static_cast<ExprLoop *>(expr));
+		generateFor(function, static_cast<ExprLoop *>(expr));
 
 		return 0;
 	}
 	case ExprFlavor::FUNCTION: {
-		u32 result = allocateRegister(state);
+		u32 result = allocateRegister(function);
 
-		Ir &address = state->ir.add();
+		Ir &address = function->state.ir.add();
 		address.dest = result;
 		address.opSize = 8;
 		address.op = IrOp::FUNCTION;
@@ -1818,51 +1855,51 @@ u32 generateIr(IrState *state, Expr *expr) {
 		return result;
 	}
 	case ExprFlavor::STRING_LITERAL: {
-		u32 result = allocateStackSpaceAndLoadAddress(state, &TYPE_STRING);
+		u32 result = allocateStackSpaceAndLoadAddress(function, &TYPE_STRING);
 
-		u32 temp = allocateRegister(state);
+		u32 temp = allocateRegister(function);
 
-		Ir &address = state->ir.add();
+		Ir &address = function->state.ir.add();
 		address.op = IrOp::STRING;
 		address.dest = temp;
 		address.data = static_cast<ExprStringLiteral *>(expr);
 		
-		memop(state, IrOp::WRITE, result, temp, 8);
+		memop(function, IrOp::WRITE, result, temp, 8);
 
-		constant(state, temp, 8, static_cast<ExprStringLiteral *>(expr)->string.length);
+		constant(function, temp, 8, static_cast<ExprStringLiteral *>(expr)->string.length);
 
-		memop(state, IrOp::WRITE, result, temp, 8, 8);
+		memop(function, IrOp::WRITE, result, temp, 8, 8);
 
 		return result;
 	}
 	case ExprFlavor::FUNCTION_CALL: {
 		auto call = static_cast<ExprFunctionCall *>(expr);
 
-		return generateCall(state, call);
+		return generateCall(function, call);
 	}
 	case ExprFlavor::IDENTIFIER: {
 		auto identifier = static_cast<ExprIdentifier *>(expr);
 
 
 		if (identifier->structAccess) {
-			u32 address = loadAddressOf(state, expr);
+			u32 address = loadAddressOf(function, expr);
 
 			if (isStoredByPointer(identifier->type)) {
 				return address;
 			}
 			else {
-				return memop(state, IrOp::READ, allocateRegister(state), address, identifier->type->size);
+				return memop(function, IrOp::READ, allocateRegister(function), address, identifier->type->size);
 			}
 		}
 		else {
 			if (declarationIsStoredByPointer(identifier->declaration)) {
-				u32 address = loadAddressOf(state, expr);
+				u32 address = loadAddressOf(function, expr);
 
 				if (isStoredByPointer(identifier->type)) {
 					return address;
 				}
 				else {
-					return memop(state, IrOp::READ, allocateRegister(state), address, identifier->type->size);
+					return memop(function, IrOp::READ, allocateRegister(function), address, identifier->type->size);
 				}
 			}
 			else {
@@ -1875,7 +1912,7 @@ u32 generateIr(IrState *state, Expr *expr) {
 	case ExprFlavor::SWITCH: {
 		auto switch_ = static_cast<ExprSwitch *>(expr);
 
-		u32 value = generateIr(state, switch_->condition);
+		u32 value = generateIr(function, switch_->condition);
 
 		ExprSwitch::Case *else_ = nullptr;
 
@@ -1885,11 +1922,11 @@ u32 generateIr(IrState *state, Expr *expr) {
 
 				assert(condition->type == switch_->condition->type);
 
-				u32 result = generateEquals(state, value, condition, true);
+				u32 result = generateEquals(function, value, condition, true);
 
-				case_.irBranch = state->ir.count;
+				case_.irBranch = function->state.ir.count;
 
-				Ir &branch = state->ir.add();
+				Ir &branch = function->state.ir.add();
 
 				branch.op = IrOp::IF_NZ_GOTO;
 				branch.a = result;
@@ -1900,9 +1937,9 @@ u32 generateIr(IrState *state, Expr *expr) {
 			}
 		}
 
-		u32 finalPatch = state->ir.count;
+		u32 finalPatch = function->state.ir.count;
 
-		Ir & final = state->ir.add();
+		Ir & final = function->state.ir.add();
 		final.op = IrOp::GOTO;
 
 		if (else_) {
@@ -1910,27 +1947,27 @@ u32 generateIr(IrState *state, Expr *expr) {
 		}
 
 		for (auto &case_ : switch_->cases) {
-			state->ir[case_.irBranch].b = state->ir.count;
+			function->state.ir[case_.irBranch].b = function->state.ir.count;
 
-			generateIr(state, case_.block);
+			generateIr(function, case_.block);
 
 			if (!case_.fallsThrough && &case_ + 1 != switch_->cases.end()) {
-				case_.irSkip = state->ir.count;
+				case_.irSkip = function->state.ir.count;
 
-				Ir &skip = state->ir.add();
+				Ir &skip = function->state.ir.add();
 				skip.op = IrOp::GOTO;
 			}
 		}
 
 		if (!else_) {
-			state->ir[finalPatch].b = state->ir.count;
+			function->state.ir[finalPatch].b = function->state.ir.count;
 		}
 
 		for (u32 i = 0; i + 1 < switch_->cases.count; i++) {
 			auto &case_ = switch_->cases[i];
 
 			if (!case_.fallsThrough)
-				state->ir[case_.irSkip].b = state->ir.count;
+				function->state.ir[case_.irSkip].b = function->state.ir.count;
 		}
 
 		return 0;
@@ -1938,59 +1975,59 @@ u32 generateIr(IrState *state, Expr *expr) {
 	case ExprFlavor::IF: {
 		auto ifElse = static_cast<ExprIf *>(expr);
 
-		u32 conditionReg = generateIr(state, ifElse->condition);
+		u32 conditionReg = generateIr(function, ifElse->condition);
 
 		if (ifElse->ifBody && ifElse->elseBody) {
-			u32 patchIfZ = state->ir.count;
-			Ir &ifZ = state->ir.add();
+			u32 patchIfZ = function->state.ir.count;
+			Ir &ifZ = function->state.ir.add();
 			ifZ.op = IrOp::IF_Z_GOTO;
 			ifZ.a = conditionReg;
 			ifZ.opSize = 1;
 
-			addLineMarker(state, ifElse->ifBody);
-			generateIr(state, ifElse->ifBody);
+			addLineMarker(function, ifElse->ifBody);
+			generateIr(function, ifElse->ifBody);
 
-			u32 patchJump = state->ir.count;
-			Ir &jump = state->ir.add();
+			u32 patchJump = function->state.ir.count;
+			Ir &jump = function->state.ir.add();
 			jump.op = IrOp::GOTO;
 
-			state->ir[patchIfZ].b = state->ir.count;
+			function->state.ir[patchIfZ].b = function->state.ir.count;
 
-			addLineMarker(state, ifElse->elseBody);
-			generateIr(state, ifElse->elseBody);
+			addLineMarker(function, ifElse->elseBody);
+			generateIr(function, ifElse->elseBody);
 
-			state->ir[patchJump].b = state->ir.count;
+			function->state.ir[patchJump].b = function->state.ir.count;
 		}
 		else if (ifElse->ifBody) {
-			u32 patchIfZ = state->ir.count;
-			Ir &ifZ = state->ir.add();
+			u32 patchIfZ = function->state.ir.count;
+			Ir &ifZ = function->state.ir.add();
 			ifZ.op = IrOp::IF_Z_GOTO;
 			ifZ.a = conditionReg;
 			ifZ.opSize = 1;
 
-			addLineMarker(state, ifElse->ifBody);
-			generateIr(state, ifElse->ifBody);
+			addLineMarker(function, ifElse->ifBody);
+			generateIr(function, ifElse->ifBody);
 
-			state->ir[patchIfZ].b = state->ir.count;
+			function->state.ir[patchIfZ].b = function->state.ir.count;
 		}
 		else if (ifElse->elseBody) {
-			u32 patchIfNZ = state->ir.count;
-			Ir &ifNZ = state->ir.add();
+			u32 patchIfNZ = function->state.ir.count;
+			Ir &ifNZ = function->state.ir.add();
 			ifNZ.op = IrOp::IF_NZ_GOTO;
 			ifNZ.a = conditionReg;
 			ifNZ.opSize = 1;
 
-			addLineMarker(state, ifElse->elseBody);
-			generateIr(state, ifElse->elseBody);
+			addLineMarker(function, ifElse->elseBody);
+			generateIr(function, ifElse->elseBody);
 
-			state->ir[patchIfNZ].b = state->ir.count;
+			function->state.ir[patchIfNZ].b = function->state.ir.count;
 		}
 
 		return 0;
 	}
 	case ExprFlavor::COMMA_ASSIGNMENT: {
 		auto comma = static_cast<ExprCommaAssignment *>(expr);
-		generateCall(state, static_cast<ExprFunctionCall *>(comma->call), comma);
+		generateCall(function, static_cast<ExprFunctionCall *>(comma->call), comma);
 		return 0;
 	}
 	case ExprFlavor::RETURN: {
@@ -2003,17 +2040,17 @@ u32 generateIr(IrState *state, Expr *expr) {
 				for (u32 i = 0; i < return_->returns.count; i++) {
 					auto value = return_->returns.values[i];
 					offset = AlignPO2(offset, value->type->alignment);
-					copyOrWrite(state, state->returnPointerRegister, generateIr(state, value), value->type, offset);
+					copyOrWrite(function, function->state.returnPointerRegister, generateIr(function, value), value->type, offset);
 					offset += value->type->size;
 				}
 
-				exitBlock(state, nullptr, true);
+				exitBlock(function, nullptr, true);
 				
 
-				Ir &ir = state->ir.add();
+				Ir &ir = function->state.ir.add();
 				ir.op = IrOp::RETURN;
 				ir.opSize = static_cast<u32>(SystemVCallingType::MEMORY);
-				ir.a = state->contextRegister;
+				ir.a = function->state.contextRegister;
 				ir.data = TYPE_VOID_POINTER;
 			}
 			else {
@@ -2021,11 +2058,11 @@ u32 generateIr(IrState *state, Expr *expr) {
 
 				auto returnType = functionType->returnTypes[0];
 
-				auto value = generateIr(state, return_->returns.values[0]);
+				auto value = generateIr(function, return_->returns.values[0]);
 
-				exitBlock(state, nullptr, true);
+				exitBlock(function, nullptr, true);
 
-				Ir &ir = state->ir.add();
+				Ir &ir = function->state.ir.add();
 				ir.op = IrOp::RETURN;
 				ir.opSize = static_cast<u32>(getSystemVCallingType(returnType));
 				ir.a = value;
@@ -2033,9 +2070,9 @@ u32 generateIr(IrState *state, Expr *expr) {
 			}
 		}
 		else {
-			exitBlock(state, nullptr, true);
+			exitBlock(function, nullptr, true);
 
-			Ir &ir = state->ir.add();
+			Ir &ir = function->state.ir.add();
 			ir.op = IrOp::RETURN;
 			ir.opSize = static_cast<u32>(SystemVCallingType::EMPTY);
 			ir.data = &TYPE_VOID;
@@ -2048,9 +2085,9 @@ u32 generateIr(IrState *state, Expr *expr) {
 		auto literal = static_cast<ExprStructLiteral *>(expr);
 		if (structIsLiteral(literal)) {
 
-			u32 result = allocateRegister(state);
+			u32 result = allocateRegister(function);
 
-			Ir &address = state->ir.add();
+			Ir &address = function->state.ir.add();
 			address.op = IrOp::STRUCT_LITERAL;
 			address.dest = result;
 			address.data = literal;
@@ -2059,13 +2096,13 @@ u32 generateIr(IrState *state, Expr *expr) {
 		}
 		else {
 
-			u32 address = allocateStackSpaceAndLoadAddress(state, literal->type);
+			u32 address = allocateStackSpaceAndLoadAddress(function, literal->type);
 
 			for (u32 i = 0; i < literal->initializers.count; i++) {
 				auto offset = literal->initializers.declarations[i]->physicalStorage;
 				auto value = literal->initializers.values[i];
 
-				copyOrWrite(state, address, generateIr(state, value), value->type, offset);
+				copyOrWrite(function, address, generateIr(function, value), value->type, offset);
 			}
 
 			return address;
@@ -2084,9 +2121,9 @@ u32 generateIr(IrState *state, Expr *expr) {
 			return 0;
 		}
 
-		u32 result = allocateRegister(state);
+		u32 result = allocateRegister(function);
 
-		Ir &ir = state->ir.add();
+		Ir &ir = function->state.ir.add();
 		ir.op = IrOp::TYPE;
 		ir.dest = result;
 		ir.data = type;
@@ -2098,14 +2135,14 @@ u32 generateIr(IrState *state, Expr *expr) {
 
 		switch (unary->op) {
 		case TOKEN('*'): {
-			return loadAddressOf(state, unary->value);
+			return loadAddressOf(function, unary->value);
 		}
 		case TOKEN('-'): {
-			u32 result = allocateRegister(state);
+			u32 result = allocateRegister(function);
 
-			u32 toNegate = generateIr(state, unary->value);
+			u32 toNegate = generateIr(function, unary->value);
 
-			Ir &negate = state->ir.add();
+			Ir &negate = function->state.ir.add();
 			negate.op = IrOp::NEG;
 			negate.a = toNegate;
 			negate.opSize = unary->value->type->size;
@@ -2118,11 +2155,11 @@ u32 generateIr(IrState *state, Expr *expr) {
 			return result;
 		}
 		case TOKEN('~'): {
-			u32 result = allocateRegister(state);
+			u32 result = allocateRegister(function);
 
-			u32 toInvert = generateIr(state, unary->value);
+			u32 toInvert = generateIr(function, unary->value);
 
-			Ir &invert = state->ir.add();
+			Ir &invert = function->state.ir.add();
 			invert.op = IrOp::NOT;
 			invert.a = toInvert;
 			invert.opSize = unary->value->type->size;
@@ -2131,13 +2168,13 @@ u32 generateIr(IrState *state, Expr *expr) {
 			return result;
 		}
 		case TOKEN('!'): {
-			u32 result = allocateRegister(state);
+			u32 result = allocateRegister(function);
 
-			u32 zero = constant(state, allocateRegister(state), unary->value->type->size, 0);
+			u32 zero = constant(function, allocateRegister(function), unary->value->type->size, 0);
 
-			u32 toInvert = generateIr(state, unary->value);
+			u32 toInvert = generateIr(function, unary->value);
 
-			Ir &invert = state->ir.add();
+			Ir &invert = function->state.ir.add();
 			invert.op = IrOp::EQUAL;
 			invert.a = toInvert;
 			invert.b = zero;
@@ -2147,21 +2184,21 @@ u32 generateIr(IrState *state, Expr *expr) {
 			return result;
 		}
 		case TokenT::SHIFT_LEFT: {
-			u32 addressReg = generateIr(state, unary->value);
+			u32 addressReg = generateIr(function, unary->value);
 
 			if (isStoredByPointer(unary->type)) {
 				return addressReg;
 			}
 			else {
-				return memop(state, IrOp::READ, allocateRegister(state), addressReg, unary->type->size);
+				return memop(function, IrOp::READ, allocateRegister(function), addressReg, unary->type->size);
 			}
 		}
 		case TokenT::TYPE_INFO: {
-			u32 value = generateIr(state, unary->value);
+			u32 value = generateIr(function, unary->value);
 
-			u32 result = allocateRegister(state);
+			u32 result = allocateRegister(function);
 
-			Ir &ir = state->ir.add();
+			Ir &ir = function->state.ir.add();
 			ir.op = IrOp::TYPE_INFO;
 			ir.a = value;
 			ir.dest = result;
@@ -2176,34 +2213,34 @@ u32 generateIr(IrState *state, Expr *expr) {
 	case ExprFlavor::WHILE: {
 		ExprLoop *loop = static_cast<ExprLoop *>(expr);
 
-		pushLoop(state, loop);
+		pushLoop(function, loop);
 
-		u32 conditionReg = generateIr(state, loop->whileCondition);
+		u32 conditionReg = generateIr(function, loop->whileCondition);
 
-		u32 patch = state->ir.count; // Patch this manually so it doesn't skip the completed block if it exists
+		u32 patch = function->state.ir.count; // Patch this manually so it doesn't skip the completed block if it exists
 
-		Ir &ifZ = state->ir.add();
+		Ir &ifZ = function->state.ir.add();
 		ifZ.op = IrOp::IF_Z_GOTO;
 		ifZ.a = conditionReg;
 		ifZ.opSize = 1;
 
 		if (loop->body) {
-			addLineMarker(state, loop->body);
-			generateIr(state, loop->body);
+			addLineMarker(function, loop->body);
+			generateIr(function, loop->body);
 		}
 
-		Ir &jump = state->ir.add();
+		Ir &jump = function->state.ir.add();
 		jump.op = IrOp::GOTO;
 		jump.b = loopStack[loopCount - 1].start;
 
-		state->ir[patch].b = state->ir.count;
+		function->state.ir[patch].b = function->state.ir.count;
 
 		if (loop->completedBody) {
-			addLineMarker(state, loop->completedBody);
-			generateIr(state, loop->completedBody);
+			addLineMarker(function, loop->completedBody);
+			generateIr(function, loop->completedBody);
 		}
 
-		popLoop(state);
+		popLoop(function);
 
 		return 0;
 	}
@@ -2212,9 +2249,9 @@ u32 generateIr(IrState *state, Expr *expr) {
 
 		if (arrayIsLiteral(array)) {
 
-			u32 result = allocateRegister(state);
+			u32 result = allocateRegister(function);
 
-			Ir &address = state->ir.add();
+			Ir &address = function->state.ir.add();
 			address.op = IrOp::ARRAY_LITERAL;
 			address.dest = result;
 			address.data = array;
@@ -2222,36 +2259,36 @@ u32 generateIr(IrState *state, Expr *expr) {
 			return result;
 		}
 		else {
-			u32 data = generateArrayLiteral(state, array);
+			u32 data = generateArrayLiteral(function, array);
 
 			if (array->type->flags & TYPE_ARRAY_IS_FIXED) {
 				return data;
 			}
 			else {				
-				u32 value = allocateStackSpaceAndLoadAddress(state, array->type);
-				memop(state, IrOp::WRITE, value, data, 8);
+				u32 value = allocateStackSpaceAndLoadAddress(function, array->type);
+				memop(function, IrOp::WRITE, value, data, 8);
 
-				u32 count = constant(state, allocateRegister(state), 8, array->count);
-				memop(state, IrOp::WRITE, value, count, 8, 8);
+				u32 count = constant(function, allocateRegister(function), 8, array->count);
+				memop(function, IrOp::WRITE, value, count, 8, 8);
 
 				return value;
 			}
 		}
 	}
 	case ExprFlavor::CONTEXT: {
-		return state->contextRegister;
+		return function->state.contextRegister;
 	}
 	case ExprFlavor::PUSH_CONTEXT: {
 		auto pushContext = static_cast<ExprBinaryOperator *>(expr);
 
-		auto oldContext = state->contextRegister;
+		auto oldContext = function->state.contextRegister;
 
-		state->contextRegister = generateIr(state, pushContext->left);
+		function->state.contextRegister = generateIr(function, pushContext->left);
 
-		addLineMarker(state, pushContext->right);
-		generateIr(state, pushContext->right);
+		addLineMarker(function, pushContext->right);
+		generateIr(function, pushContext->right);
 
-		state->contextRegister = oldContext;
+		function->state.contextRegister = oldContext;
 		return 0;
 	}
 	case ExprFlavor::RUN: // Statement level runs are not removed from the ast but shouldn't generate code
@@ -2270,11 +2307,14 @@ bool generateIrForFunction(ExprFunction *function) {
 
 	auto functionType = static_cast<TypeFunction *>(function->type);
 	if (returnsViaPointer(functionType)) {
-		function->state.returnPointerRegister = allocateRegister(&function->state);
+		function->state.returnPointerRegister = allocateRegister(function);
 	}
 	
 	if (!(function->flags & EXPR_FUNCTION_IS_C_CALL)) {
-		function->state.contextRegister = allocateRegister(&function->state);
+		function->state.contextRegister = allocateRegister(function);
+	}
+	else {
+		function->state.contextRegister = INVALID_REGISTER;
 	}
 
 	SystemVCallingState callingState = initSystemVCallingState(functionType);
@@ -2283,7 +2323,7 @@ bool generateIrForFunction(ExprFunction *function) {
 		auto declaration = function->arguments.declarations[i];
 		auto type = getDeclarationType(declaration);
 
-		declaration->registerOfStorage = allocateRegister(&function->state);
+		declaration->registerOfStorage = allocateRegister(function);
 
 #if BUILD_WINDOWS
 		auto passedInMemory = !isStandardSize(type->size) || declaration->registerOfStorage >= 4;
@@ -2291,7 +2331,7 @@ bool generateIrForFunction(ExprFunction *function) {
 		auto passedInMemory = passSystemVParameter(&callingState, type) == SystemVCallingType::MEMORY;
 #endif
 		if (isStoredByPointer(type) && !passedInMemory) {
-			declaration->physicalStorage = allocateStackSpace(&function->state, getDeclarationType(declaration));
+			declaration->physicalStorage = allocateStackSpace(function, getDeclarationType(declaration));
 		}
 	}
 
@@ -2301,7 +2341,7 @@ bool generateIrForFunction(ExprFunction *function) {
 		declaration->registerOfStorage = function->state.nextRegister++;
 	}
 
-	generateIr(&function->state, function->body);
+	generateIr(function, function->body);
 
 	if (hadError) {
 		return false;

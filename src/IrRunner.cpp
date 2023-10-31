@@ -928,6 +928,10 @@ if (op.flags & IR_FLOAT_OP) {\
 			}
 			break;
 		}
+		case IrOp::STACK_TRACE: {
+			stack[op.dest] = reinterpret_cast<u64>(op.data);
+			break;
+		}
 		case IrOp::STRING: {
 			stack[op.dest] = reinterpret_cast<u64>(static_cast<ExprStringLiteral *>(op.data)->string.characters);
 			break;
@@ -1231,6 +1235,7 @@ Expr *runFunctionRoot(VMState *state, ExprRun *directive) {
 	auto contextPointer = malloc(TYPE_CONTEXT.size);
 	assert(TYPE_CONTEXT.defaultValue);
 	createRuntimeValue(TYPE_CONTEXT.defaultValue, contextPointer);
+
 	arguments->arguments[0] = 1;
 	argumentData[1] = reinterpret_cast<u64>(contextPointer);
 
