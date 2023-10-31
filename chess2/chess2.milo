@@ -208,7 +208,7 @@ main :: () {
 	array_reserve(*moves, 200)
 	
 	while poll_events(window) {		
-		for window.events {
+		for get_window_events(window) {
 			if it.kind != .MOUSE
 				continue;
 
@@ -217,13 +217,13 @@ main :: () {
 			if !down
 				continue;
 
-			if button == .RIGHT {
+			if button == .RIGHT_MOUSE {
 				if !making_ai_move && (!black_ai || !white_ai) && undo_list.count {
 					undo_move()
 				
 					if player_is_ai() undo_move()
 				}
-			} else if button == .LEFT {
+			} else if button == .LEFT_MOUSE {
 				file := x / 100
 				rank := y /  100
 				

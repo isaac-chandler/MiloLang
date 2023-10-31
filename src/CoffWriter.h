@@ -2,9 +2,9 @@
 
 #include "Ast.h"
 #include "WorkQueue.h"
-#include <elf.h>
 
 #if !BUILD_WINDOWS
+#include <elf.h>
 #define IMAGE_SYM_TYPE_NULL      0
 #define IMAGE_SYM_CLASS_EXTERNAL 2
 #define IMAGE_SYM_CLASS_STATIC   3
@@ -40,6 +40,8 @@ union Symbol {
 };
 
 #pragma pack(pop)
+
+void setSymbolName(Symbol *symbol, String name, u32 id);
 #else
 using Symbol = Elf64_Sym;
 using Relocation = Elf64_Rela;

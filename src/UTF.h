@@ -102,3 +102,4 @@ u32 getSingleUtf32FromUtf8(String string, String *newString);
 void appendUtf32ToUtf8(Array<u8> &string, u32 c);
 
 wchar_t *utf8ToWString(String filename);
+char *wStringToUtf8(const wchar_t *filename);

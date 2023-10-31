@@ -171,18 +171,32 @@ Module *getModule(String name) {
 	return module;
 }
 
-void chopFinalDir(char *path) {
-	char *lastSlash = strrchr(path, '/');
+char *lastSlash(char *path) {
+	char *last = nullptr;
+	
+	while (*path) {
+		path++;
 
-	if (lastSlash)
-		*lastSlash = 0;
+		if (*path == '/' || *path == '\\') {
+			last = path;
+		}
+	}
+
+	return last;
+}
+
+void chopFinalDir(char *path) {
+	auto slash = lastSlash(path);
+
+	if (slash)
+		*slash = 0;
 }
 
 char *getFileName(char *path) {
-	char *lastSlash = strrchr(path, '/');
+	char *slash = lastSlash(path);
 
-	if (lastSlash)
-		return lastSlash + 1;
+	if (slash)
+		return slash + 1;
 	else
 		return path;
 }
@@ -226,11 +240,11 @@ int main(int argc, char *argv[]) {
 
 	int firstBuildArgument = argc;
 
-	modulePath = exePath();
-	chopFinalDir(modulePath);
-	chopFinalDir(modulePath);
+	char *installPath = exePath();
+	chopFinalDir(installPath);
+	chopFinalDir(installPath);
 
-	modulePath = mprintf("%s/modules", modulePath);
+	modulePath = mprintf("%s/modules", installPath);
 
 	for (int i = 1; i < argc; i++) {
 		if (strcmp("-llvm", argv[i]) == 0) {
@@ -321,7 +335,7 @@ int main(int argc, char *argv[]) {
 		input = getFileName(initialFilePath);
 
 		chopFinalDir(initialFilePath);
-		chdir(initialFilePath);
+		set_working_directory(initialFilePath);
 
 		char *lastDot = strrchr(input, '.');
 
@@ -469,29 +483,39 @@ int main(int argc, char *argv[]) {
 		auto linkerStart = high_resolution_clock::now();
 
 #if BUILD_WINDOWS
-		wchar_t *linkerCommand;
+		char *linkerCommand;
 
-		wchar_t *linkerPath;
-		wchar_t *windowsLibPath;
-		wchar_t *windowsSdkPath;
-		wchar_t *crtLibPath;
-		wchar_t *ucrtLibPath;
+		char *linkerPath;
+		char *windowsLibPath;
+		char *windowsSdkPath;
+		char *crtLibPath;
+		char *ucrtLibPath;
 
 
 		{
-			wchar_t name[1024]; // @Robustness
-			GetModuleFileNameW(NULL, name, sizeof(name));
+			char *name = exePath();
+			
+			char *lastBackslash = strrchr(name, '\\');
+			if (lastBackslash)
+				*lastBackslash = 0;
 
-			stompLastBackslash(name);
-
-			wchar_t *cacheFile = mprintf(L"%s\\%s", name, L"linker.cache");
+			char *cacheFile = mprintf("%s\\%s", name, "linker.cache");
 
 			bool linkerFindFailed = false;
 
-			if (FILE *cache = _wfopen(cacheFile, L"rb")) {
-				u16 length;
+			if (FILE *cache = fopen_utf8(cacheFile, "rb")) {
+				u8 magic[3];
 
 #define read(dest, count) ((count) == fread(dest, sizeof(*(dest)), count, cache))
+
+				if (!read(magic, sizeof(magic)) || magic[0] != 'l' || magic[1] != 'p' || magic[2] != 1) {
+					reportInfo("Failed to read linker cache");
+					fclose(cache);
+					goto linkerCacheFail;
+				}
+
+				u16 length;
+
 
 				if (!read(&length, 1)) {
 					reportInfo("Failed to read linker cache");
@@ -499,7 +523,7 @@ int main(int argc, char *argv[]) {
 					goto linkerCacheFail;
 				}
 
-				linkerPath = new wchar_t[length];
+				linkerPath = new char[length];
 
 				if (!read(linkerPath, length)) {
 					reportInfo("Failed to read linker cache");
@@ -513,7 +537,7 @@ int main(int argc, char *argv[]) {
 					goto linkerCacheFail;
 				}
 
-				windowsLibPath = new wchar_t[length];
+				windowsLibPath = new char[length];
 
 				if (!read(windowsLibPath, length)) {
 					reportInfo("Failed to read linker cache");
@@ -527,7 +551,7 @@ int main(int argc, char *argv[]) {
 					goto linkerCacheFail;
 				}
 
-				crtLibPath = new wchar_t[length];
+				crtLibPath = new char[length];
 
 				if (!read(crtLibPath, length)) {
 					reportInfo("Failed to read linker cache");
@@ -541,7 +565,7 @@ int main(int argc, char *argv[]) {
 					goto linkerCacheFail;
 				}
 
-				ucrtLibPath = new wchar_t[length];
+				ucrtLibPath = new char[length];
 
 				if (!read(ucrtLibPath, length)) {
 					reportInfo("Failed to read linker cache");
@@ -555,7 +579,7 @@ int main(int argc, char *argv[]) {
 					goto linkerCacheFail;
 				}
 
-				windowsSdkPath = new wchar_t[length];
+				windowsSdkPath = new char[length];
 
 				if (!read(windowsSdkPath, length)) {
 					reportInfo("Failed to read linker cache");
@@ -617,40 +641,42 @@ int main(int argc, char *argv[]) {
 					return 1;
 				}
 
-				linkerPath = mprintf(L"%s\\%s", result.vs_exe_path, L"link.exe");
-				windowsLibPath = result.windows_sdk_um_library_path;
-				crtLibPath = result.vs_library_path;
-				ucrtLibPath = result.windows_sdk_ucrt_library_path;
-				windowsSdkPath = result.windows_sdk_bin;
+				linkerPath = mprintf("%s\\%s", wStringToUtf8(result.vs_exe_path), "link.exe");
+				windowsLibPath = wStringToUtf8(result.windows_sdk_um_library_path);
+				crtLibPath = wStringToUtf8(result.vs_library_path);
+				ucrtLibPath = wStringToUtf8(result.windows_sdk_ucrt_library_path);
+				windowsSdkPath = wStringToUtf8(result.windows_sdk_bin);
 
-				if (FILE *cache = _wfopen(cacheFile, L"wb")) {
-					u16 length = lstrlenW(linkerPath) + 1;
+				if (FILE *cache = fopen_utf8(cacheFile, "wb")) {
+					u16 length = strlen(linkerPath) + 1;
 
 #define write(src, count) fwrite(src, sizeof(*(src)), count, cache)
+
+					write("lp\1", 3);
 
 					write(&length, 1);
 					write(linkerPath, length);
 
 
-					length = lstrlenW(windowsLibPath) + 1;
+					length = strlen(windowsLibPath) + 1;
 
 					write(&length, 1);
 					write(windowsLibPath, length);
 
 
-					length = lstrlenW(crtLibPath) + 1;
+					length = strlen(crtLibPath) + 1;
 
 					write(&length, 1);
 					write(crtLibPath, length);
 
 
-					length = lstrlenW(ucrtLibPath) + 1;
+					length = strlen(ucrtLibPath) + 1;
 
 					write(&length, 1);
 					write(ucrtLibPath, length);
 
 
-					length = lstrlenW(windowsSdkPath) + 1;
+					length = strlen(windowsSdkPath) + 1;
 
 					write(&length, 1);
 					write(windowsSdkPath, length);
@@ -688,16 +714,16 @@ int main(int argc, char *argv[]) {
 				fprintf(iconFile, "MAINICON ICON %.*s\r\n", buildOptions.icon_name.count, buildOptions.icon_name.data);
 				fclose(iconFile);
 
-				auto rcCommand = mprintf(L"\"%s\\rc.exe\" /nologo icon.rc", windowsSdkPath);
+				auto rcCommand = mprintf("\"%s\\rc.exe\" /nologo icon.rc", windowsSdkPath);
 
-				fwprintf(stdout, L"RC command: %s\n", rcCommand);
+				printf("RC command: %s\n", rcCommand);
 
 				STARTUPINFOW startup = {};
 				startup.cb = sizeof(STARTUPINFOW);
 
 				PROCESS_INFORMATION info;
 
-				if (!CreateProcessW(NULL, rcCommand, NULL, NULL, false, 0, NULL, NULL, &startup, &info)) {
+				if (!CreateProcessW(NULL, utf8ToWString(rcCommand), NULL, NULL, false, 0, NULL, NULL, &startup, &info)) {
 					reportInfo("Failed to run rc command");
 				}
 
@@ -716,30 +742,30 @@ int main(int argc, char *argv[]) {
 				}
 			}
 
-			linkerCommand = mprintf(L"\"%s\" %S -nodefaultlib -out:%.*S /debug %S %S%s \"-libpath:%s\"  \"-libpath:%s\" \"-libpath:%s\" -incremental:no -nologo -natvis:%Smilo.natvis -SUBSYSTEM:%s%s",
+			linkerCommand = mprintf("\"%s\" %s -nodefaultlib -out:%.*s /debug %s %s\\%s \"-libpath:%s\"  \"-libpath:%s\" \"-libpath:%s\" -incremental:no -nologo -natvis:%s\\milo.natvis -SUBSYSTEM:%s%s",
 				linkerPath, 
 				objectFileName, 
 				STRING_PRINTF(outputFileName), 
 				libBuffer, 
-				modulePath,
-				linkLibC ? L"__milo_cmain.obj" :  L"__milo_chkstk.obj -entry:__program_start", 
+				installPath,
+				linkLibC ? "__milo_cmain.obj" :  "__milo_chkstk.obj -entry:__program_start", 
 				windowsLibPath, 
 				crtLibPath,
 				ucrtLibPath, 
-				modulePath, 
-				buildOptions.show_console ? L"CONSOLE" : L"WINDOWS", 
-				buildOptions.icon_name.count ? L" icon.res" : L"");
+				installPath,
+				buildOptions.show_console ? "CONSOLE" : "WINDOWS", 
+				buildOptions.icon_name.count ? " icon.res" : "");
 		}
 
 		{
-			fwprintf(stdout, L"Linker command: %s\n", linkerCommand);
+			printf("Linker command: %s\n", linkerCommand);
 
 			STARTUPINFOW startup = {};
 			startup.cb = sizeof(STARTUPINFOW);
 
 			PROCESS_INFORMATION info;
 
-			if (!CreateProcessW(NULL, linkerCommand, NULL, NULL, false, 0, NULL, NULL, &startup, &info)) {
+			if (!CreateProcessW(NULL, utf8ToWString(linkerCommand), NULL, NULL, false, 0, NULL, NULL, &startup, &info)) {
 				reportInfo("Failed to run linker command");
 			}
 

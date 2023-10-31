@@ -2,14 +2,59 @@
 
 #include "Basic.h"
 
+bool fileExists(const char *file);
+bool directoryExists(const char *file);
+FILE *fopen_utf8(const char *filename, const char *mode);
+void yieldThread();
+char *exePath();
+char *fullPath(const char *filename);
+void setThreadName(std::thread &thread, const char *name);
+char *findLibrary(char *path, const char *name);
+void *open_library(const char *name);
+void *library_find(void *library, const char *symbol);
+void set_working_directory(char *directory);
+
 #if BUILD_WINDOWS
 
+
 template <typename T>
-bool CompareExchangePointers(T *volatile *dest, T *value, T *compare) {
-	reinterpret_cast<T *>(_InterlockedCompareExchange64(reinterpret_cast<volatile s64 *>(dest), reinterpret_cast<s64>(value), reinterpret_cast<s64>(compare))) == compare;
+bool CompareExchange(volatile T *dest, T value, T compare) {
+	return reinterpret_cast<T>(_InterlockedCompareExchange64(reinterpret_cast<volatile s64 *>(dest), reinterpret_cast<s64>(value), reinterpret_cast<s64>(compare))) == compare;
+}
+
+template<>
+inline bool CompareExchange<u32>(volatile u32 *dest, u32 value, u32 compare) {
+	return _InterlockedCompareExchange((volatile unsigned long *) dest, value, compare) == compare;
 }
 
 #define read_write_barrier() _ReadWriteBarrier()
+
+inline u32 bitScanReverse(u32 val) {
+	u32 result;
+	BitScanReverse((unsigned long *) &result, val);
+	return result;
+}
+inline u64 bitScanForward64(u64 val) {
+	u32 result;
+	BitScanForward64((unsigned long *) &result, val);
+	return result;
+}
+
+inline s64 atomicFetchAdd(volatile s64 *target, s64 value) {
+	return InterlockedExchangeAdd64(target, value);
+}
+
+inline u64 performance_time() {
+	u64 time;
+	QueryPerformanceCounter((LARGE_INTEGER *) &time);
+	return time;
+}
+
+inline u64 performance_frequency() {
+	u64 frequency;
+	QueryPerformanceFrequency((LARGE_INTEGER *) &frequency);
+	return frequency;
+}
 
 #elif BUILD_LINUX
 
@@ -20,6 +65,12 @@ bool CompareExchangePointers(T *volatile *dest, T *value, T *compare) {
 #include <dlfcn.h>
 #include <dirent.h>
 #include <deque>
+
+bool fileExists(const char *file);
+
+bool directoryExists(const char *file);
+
+FILE *fopen_utf8(const char *filename, const char *mode);
 
 inline u32 bitScanReverse(u32 val) {
     return 31 - (u32)__builtin_clz(val);
@@ -39,9 +90,6 @@ inline s64 atomicFetchAdd(volatile s64 *target, s64 value) {
 
 #define read_write_barrier() asm volatile("": : :"memory")
 
-inline void yieldThread() {
-	sched_yield();
-}
 
 inline u64 performance_time() {
 	timespec tp;
@@ -53,147 +101,6 @@ inline u64 performance_time() {
 
 inline u64 performance_frequency() {
 	return 1'000'000'000ULL;
-}
-
-inline bool fileExists(const char *file) {
-	struct stat buf;
-
-	if (stat(file, &buf) == 0) {
-		return S_ISREG(buf.st_mode);
-	}
-
-	return false;
-}
-
-inline bool directoryExists(const char *file) {
-	struct stat buf;
-
-	if (stat(file, &buf) == 0) {
-		return S_ISDIR(buf.st_mode);
-	}
-
-	return false;
-}
-
-inline char *exePath() {
-	char *buffer = nullptr;
-
-	for (int buf_size = 256;; buf_size *= 2) {
-		buffer = static_cast<char *>(realloc(buffer, buf_size));
-
-		int result = readlink("/proc/self/exe", buffer, buf_size);
-
-		if (result < 0)
-			return nullptr;
-		if (result < buf_size || buffer[buf_size - 1] == 0)
-			return buffer;
-	}
-}
-
-inline char *fullPath(const char *filename) {
-	return realpath(filename, nullptr);
-}
-
-inline void setThreadName(std::thread &thread, const char *name) {
-	pthread_setname_np(thread.native_handle(), name);
-}
-
-inline FILE *fopen_utf8(const char *filename, const char *mode) {
-	return fopen(filename, mode);
-}
-
-
-
-inline char *findLibrary(char *path, const char *name) {
-	extern char *mprintf(const char *format, ...);
-
-	u64 nameLen = strlen(name);
-
-	std::deque<char *> searchDirs;
-
-	searchDirs.push_back(path);
-
-	while (!searchDirs.empty()) {
-		auto currentPath = searchDirs.front();
-		searchDirs.pop_front();
-
-		auto dir = opendir(currentPath);
-
-		if (dir) {
-			struct dirent *entry;
-
-			while (entry = readdir(dir)) {
-				if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) {
-					continue;
-				}
-
-				if (entry->d_type == DT_DIR) {
-					searchDirs.push_back(mprintf("%s/%s", currentPath, entry->d_name));
-				} else {
-					if (!strcmp(entry->d_name, name)) {
-						closedir(dir);
-
-						auto result =  mprintf("%s/%s", currentPath, entry->d_name);
-
-						free(currentPath);
-
-						for (auto dir : searchDirs) {
-							free(dir);
-						}
-
-						return result;
-					}
-
-					if (!strncmp(entry->d_name, "lib", 3) && !strncmp(entry->d_name + 3, name, nameLen) && !strncmp(entry->d_name + 3 + nameLen, ".so.", 4)) {
-						closedir(dir);
-
-						auto result =  mprintf("%s/%s", currentPath, entry->d_name);
-
-						free(currentPath);
-
-						for (auto dir : searchDirs) {
-							free(dir);
-						}
-
-						return result;
-					}
-				}
-			}
-			
-
-			closedir(dir);
-		}
-
-		free(currentPath);
-	}
-
-	for (auto dir : searchDirs) {
-		free(dir);
-	}
-	
-	return nullptr;
-}
-
-inline void *open_library(const char *name) {
-	extern char *copyString(const char*);
-
-	auto path = findLibrary(copyString("/lib"), name);
-
-	if (!path)
-		path = findLibrary(copyString("/usr/lib"), name);
-
-	if (!path)
-		return nullptr;
-
-	auto result = dlopen(path, RTLD_LAZY);
-
-	free(path);
-
-	return result;
-}
-
-inline void *library_find(void *library, const char *symbol) {
-	return dlsym(library, symbol);
 }
 
 #endif

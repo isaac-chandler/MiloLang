@@ -56,7 +56,7 @@ void emitFunctionPushRsi(EmitFunctionInfo *info);
 void emitFunctionPreambleEnd(EmitFunctionInfo *info);
 void emitFunctionPostambleStart(EmitFunctionInfo *info);
 void emitFunctionEnd(EmitFunctionInfo *info);
-void addLineInfo(CodeLocation start, EndLocation end);
+void addLineInfo(EmitFunctionInfo *info, CodeLocation start, EndLocation end);
 
 void emitBlockStart(EmitFunctionInfo *info);
 void emitBlockEnd(EmitFunctionInfo *info);

@@ -42,7 +42,7 @@ enum class IrOp : u8 {
 	READ,
 	WRITE,
 	ZERO_MEMORY, 
-	COPY, 
+	COPY_SRC_OFFSET, 
 	SET,
 	GOTO,
 	IF_Z_GOTO,

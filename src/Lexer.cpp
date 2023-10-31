@@ -1902,6 +1902,7 @@ bool LexerFile::open(FileInfo *file) {
 			file->path = msprintf("%s/%.*s/%.*s", modulePath, STRING_PRINTF(file->module->name), STRING_PRINTF(file->path));
 		}
 		else {
+			
 			if (directoryExists(mprintf("%s/%.*s", modulePath, STRING_PRINTF(file->module->name)))) {
 				file->path = msprintf("%s/%.*s/module.milo", modulePath, STRING_PRINTF(file->module->name));
 				file->name = "module.milo";

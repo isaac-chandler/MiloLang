@@ -7,6 +7,14 @@
 #if BUILD_WINDOWS
 #include <Windows.h>
 #include <Shlwapi.h>
+
+#undef small
+#undef min
+#undef max
+#undef CONST
+#undef TRUE
+#undef FALSE
+#undef VOID
 #endif
 
 #if !BUILD_NO_LLVM
@@ -61,15 +69,6 @@ namespace llvm {
 #include <cinttypes>
 #include <stdarg.h>
 #include <immintrin.h>
-
-
-#undef small
-#undef min
-#undef max
-#undef CONST
-#undef TRUE
-#undef FALSE
-#undef VOID
 
 // Magic color names for chrome://tracing
 #define PROFILE_BLUE "vsync_highlight_color"

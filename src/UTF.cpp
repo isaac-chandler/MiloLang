@@ -249,4 +249,17 @@ wchar_t *utf8ToWString(const char *filename) {
 
 	return reinterpret_cast<wchar_t *>(utf16);
 }
+
+// For now I am lazy so we use the win32 UTF16->UTF8 conversion
+char *wStringToUtf8(const wchar_t *filename) {
+	static_assert(sizeof(wchar_t) == sizeof(u16), "wchar_t should be UTF16");
+
+	int length = lstrlenW(filename);
+
+	char *result = (char *) malloc(length * 4 + 1);
+	WideCharToMultiByte(CP_UTF8, 0, filename, length + 1, result, length * 4 + 1, nullptr, nullptr);
+
+	return result;
+}
+
 #endif

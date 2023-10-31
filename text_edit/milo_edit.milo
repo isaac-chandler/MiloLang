@@ -268,14 +268,13 @@ load :: (filename_: string) -> *Tab {
     using result := new(Tab)
     set_editor_text(*command_editor, "")
     set_editor_text(*file_editor, "")
-
+    filename = filename_
+    
     new_text, success := read_entire_file(filename_)
     defer free_array(new_text)
     
     if !success 
         return result
-        
-    filename = filename_
     
     normalised := normalise_text(cast() new_text)
     defer array_free(normalised)

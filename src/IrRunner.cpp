@@ -734,6 +734,8 @@ if (op.flags & IR_FLOAT_OP) {\
 
 				bool pointerReturn = returnsViaPointer(arguments->function);
 				DCaggr *aggrReturn = nullptr;
+
+				dcReset(state->dc);
 				
 				if (pointerReturn) {
 					dcArgPointer(state->dc, (DCpointer)stack[op.dest]);
@@ -898,8 +900,8 @@ if (op.flags & IR_FLOAT_OP) {\
 			memcpy(reinterpret_cast<u8 *>(stack[op.dest]) + op.immediate, stack + op.a, op.opSize);
 			break;
 		}
-		case IrOp::COPY: {
-			memcpy(reinterpret_cast<u8 *>(stack[op.dest]) + op.immediate, reinterpret_cast<void *>(stack[op.a]), op.opSize);
+		case IrOp::COPY_SRC_OFFSET: {
+			memcpy(reinterpret_cast<u8 *>(stack[op.dest]), reinterpret_cast<void *>(stack[op.a] + op.immediate), op.opSize);
 			break;
 		}
 		case IrOp::ZERO_MEMORY: {
@@ -1221,14 +1223,18 @@ Expr *runFunctionRoot(VMState *state, ExprRun *directive) {
 	FunctionCall *arguments = reinterpret_cast<FunctionCall *>(argumentsStore);
 	arguments->function = static_cast<TypeFunction *>(function->type);
 
+	auto returnType = getDeclarationType(function->returns.declarations[0]);
+	void *returnPointer = malloc(returnType->size);
+
+	argumentData[0] = reinterpret_cast<u64>(returnPointer);
+
 	auto contextPointer = malloc(TYPE_CONTEXT.size);
 	assert(TYPE_CONTEXT.defaultValue);
 	createRuntimeValue(TYPE_CONTEXT.defaultValue, contextPointer);
 	arguments->arguments[0] = 1;
 	argumentData[1] = reinterpret_cast<u64>(contextPointer);
 
-	auto returnType = getDeclarationType(function->returns.declarations[0]);	
-	void *returnPointer = malloc(returnType->size);
+
 	dummyOp.data = arguments;
 	dummyOp.dest = 0;
 

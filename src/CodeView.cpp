@@ -208,21 +208,21 @@ u32 createFunctionIDType(ExprFunction *function) {
 }
 
 
-void addStructUniqueNumber(u32 name = debugTypeId) {
+void addStructUniqueNumber(Section *section, u32 name = debugTypeId) {
 	char buffer[32];
 
 	snprintf(buffer, sizeof(buffer), "%x", static_cast<int>(name - 0x1000));
 
-	debugTypes->addNullTerminatedString(buffer);
+	section->addString(buffer);
 }
 
-bool appendCoffName(Type *type) {
+bool appendCoffName(Section *section, Type *type) {
 	if (type->flavor == TypeFlavor::STRUCT || type->flavor == TypeFlavor::ENUM) {
 		auto structure = static_cast<TypeStruct *>(type);
 
 		if (structure->enclosingScope->flavor == BlockFlavor::STRUCT) {
-			appendCoffName(CAST_FROM_SUBSTRUCT(TypeStruct, members, structure->enclosingScope));
-			debugSymbols->addString("::");
+			appendCoffName(section, CAST_FROM_SUBSTRUCT(TypeStruct, members, structure->enclosingScope));
+			section->addString("::");
 		}
 	}
 
@@ -230,43 +230,49 @@ bool appendCoffName(Type *type) {
 		auto array = static_cast<TypeArray *>(type);
 
 		if (array->flags & TYPE_ARRAY_IS_FIXED) {
-			appendCoffName(array->arrayOf);
-			debugSymbols->addString(" [");
+			appendCoffName(section, array->arrayOf);
+			section->addString(" [");
 
 			char buffer[32];
 			snprintf(buffer, sizeof(buffer), "%u", array->count);
 
-			debugSymbols->addString(buffer);
-			debugSymbols->add1(']');
+			section->addString(buffer);
+			section->add1(']');
 		}
 		else if (array->flags & TYPE_ARRAY_IS_DYNAMIC) {
-			debugSymbols->addString("Dynamic_Array<");
-			if (appendCoffName(array->arrayOf)) {
-				debugSymbols->add1(' ');
+			section->addString("Dynamic_Array<");
+			if (appendCoffName(section, array->arrayOf)) {
+				section->add1(' ');
 			}
 
-			debugSymbols->add1('>');
+			section->add1('>');
 			return true;
 		}
 		else {
-			debugSymbols->addString("Array<");
-			if (appendCoffName(array->arrayOf)) {
-				debugSymbols->add1(' ');
+			section->addString("Array<");
+			if (appendCoffName(section, array->arrayOf)) {
+				section->add1(' ');
 			}
 
-			debugSymbols->add1('>');
+			section->add1('>');
 			return true;
 		}
 	}
 	else if (type->flags & TYPE_IS_ANONYMOUS) {
-		debugSymbols->addString("<unnamed-");
-		debugSymbols->addString(type->name);
-		debugSymbols->add1('-');
-		addStructUniqueNumber(getCoffTypeIndex(type));
-		debugSymbols->add1('>');
+		section->addString("<unnamed-");
+		section->addString(type->name);
+		section->add1('-');
+		addStructUniqueNumber(section, getCoffTypeIndex(type));
+		section->add1('>');
+	}
+	else if (type->flavor == TypeFlavor::POINTER) {
+		auto pointer = static_cast<TypePointer *>(type);
+		
+		appendCoffName(section, pointer->pointerTo);
+		section->add1('*');
 	}
 	else {
-		debugSymbols->addString(type->name);
+		section->addString(type->name);
 	}
 
 	return false;
@@ -362,7 +368,8 @@ u32 createTypeImpl(Type *type, CodeViewTypeInfo *codeView) {
 			debugTypes->add2Unchecked(16);
 			debugTypes->addNullTerminatedString("string");
 			debugTypes->add1('@');
-			addStructUniqueNumber();
+			addStructUniqueNumber(debugTypes);
+			debugTypes->add1(0);
 		};
 	}
 	else if (type->flavor == TypeFlavor::ARRAY) {
@@ -423,10 +430,11 @@ u32 createTypeImpl(Type *type, CodeViewTypeInfo *codeView) {
 				debugTypes->add4Unchecked(0); // super class
 				debugTypes->add4Unchecked(0); // vtable
 				debugTypes->add2Unchecked(array->size);
-				appendCoffName(array);
+				appendCoffName(debugTypes, array);
 				debugTypes->add1(0);
 				debugTypes->add1('@');
-				addStructUniqueNumber();
+				addStructUniqueNumber(debugTypes);
+				debugTypes->add1(0);
 			};
 		}
 	}
@@ -565,10 +573,11 @@ u32 createTypeImpl(Type *type, CodeViewTypeInfo *codeView) {
 				debugTypes->add4Unchecked(0); // super class
 				debugTypes->add4Unchecked(0); // vtable
 				debugTypes->add2Unchecked(enumeration->size);
-				appendCoffName(enumeration);
+				appendCoffName(debugTypes, enumeration);
 				debugTypes->add1(0);
 				debugTypes->add1('@');
-				addStructUniqueNumber();
+				addStructUniqueNumber(debugTypes);
+				debugTypes->add1(0);
 			};
 		}
 		else {
@@ -602,10 +611,11 @@ u32 createTypeImpl(Type *type, CodeViewTypeInfo *codeView) {
 				debugTypes->add2Unchecked(0x200); // Has a unique name
 				debugTypes->add4Unchecked(integerType);
 				debugTypes->add4Unchecked(fieldList);
-				appendCoffName(enumeration);
+				appendCoffName(debugTypes, enumeration);
 				debugTypes->add1(0);
 				debugTypes->add1('@');
-				addStructUniqueNumber();
+				addStructUniqueNumber(debugTypes);
+				debugTypes->add1(0);
 			};
 		}
 	}
@@ -632,7 +642,8 @@ u32 createTypeImpl(Type *type, CodeViewTypeInfo *codeView) {
 			debugTypes->add2Unchecked(8);
 			debugTypes->addNullTerminatedString("type");
 			debugTypes->add1('@');
-			addStructUniqueNumber();
+			addStructUniqueNumber(debugTypes);
+			debugTypes->add1(0);
 		};
 	}
 	else if (type->flavor == TypeFlavor::STRUCT) {
@@ -675,20 +686,21 @@ u32 createTypeImpl(Type *type, CodeViewTypeInfo *codeView) {
 					auto nestType = static_cast<ExprLiteral *>(member->initialValue)->typeValue;
 
 					alignDebugTypes();
-					debugTypes->ensure(6);
-					debugTypes->add2(LF_NESTTYPE);
-					debugTypes->add2(0);
-					debugTypes->add4(getCoffTypeIndex(nestType));
+					debugTypes->ensure(8);
+					debugTypes->add2Unchecked(LF_NESTTYPE);
+					debugTypes->add2Unchecked(0);
+					debugTypes->add4Unchecked(getCoffTypeIndex(nestType));
 					debugTypes->addNullTerminatedString(member->name);
 					memberCount++;
 				}
 				else {
 					alignDebugTypes();
-					debugTypes->ensure(10);
+					debugTypes->ensure(14);
 					debugTypes->add2Unchecked(LF_MEMBER);
 					debugTypes->add2Unchecked(0x3); // public
 					debugTypes->add4Unchecked(getCoffTypeIndex(type));
-					debugTypes->add2Unchecked(member->physicalStorage); // offset
+					debugTypes->add2Unchecked(LF_ULONG);
+					debugTypes->add4Unchecked(member->physicalStorage); // offset
 					debugTypes->addNullTerminatedString(member->name);
 					memberCount++;
 
@@ -714,10 +726,11 @@ u32 createTypeImpl(Type *type, CodeViewTypeInfo *codeView) {
 			debugTypes->add4Unchecked(0); // super class
 			debugTypes->add4Unchecked(0); // vtable
 			debugTypes->add2Unchecked(structure->size);
-			appendCoffName(structure);
+			appendCoffName(debugTypes, structure);
 			debugTypes->add1(0);
 			debugTypes->add1('@');
-			addStructUniqueNumber(codeView->id);
+			addStructUniqueNumber(debugTypes, codeView->id);
+			debugTypes->add1(0);
 		};
 	}
 
@@ -770,10 +783,11 @@ u32 createTypeOrForwardDeclaration(Type *type, CodeViewTypeInfo *codeView) {
 		debugTypes->add4Unchecked(0); // super class
 		debugTypes->add4Unchecked(0); // vtable
 		debugTypes->add2Unchecked(0); // size
-		appendCoffName(structure);
+		appendCoffName(debugTypes, structure);
 		debugTypes->add1(0);
 		debugTypes->add1('@');
-		addStructUniqueNumber();
+		addStructUniqueNumber(debugTypes);
+		debugTypes->add1(0);
 	};
 
 	codeView->forwardDeclaration = true;
@@ -813,7 +827,7 @@ void emitUDT(Type *type) {
 	debugSymbols->add2Unchecked(S_UDT);
 	auto patch = debugSymbols->add4Unchecked(0);
 	coffTypePatches.add({ patch, type });
-	appendCoffName(type);
+	appendCoffName(debugSymbols, type);
 	debugSymbols->add1(0);
 	*size = static_cast<u16>(debugSymbols->totalSize - start);
 }
@@ -959,11 +973,12 @@ void emitFunctionEnd(EmitFunctionInfo *info) {
 	
 	pdata->ensure(12);
 
+	pdata->addAddr32NBRelocation(info->function->physicalStorage);
 	pdata->addAddr32NBRelocation(info->function->physicalStorage, code->totalSize - info->functionStart);
 	pdata->addAddr32NBRelocation(symbols.count());
 
 	Symbol xdataSymbol;
-	setSymbolName(&xdataSymbol.name, symbols.count());
+	setSymbolName(&xdataSymbol, "", symbols.count());
 	xdataSymbol.value = xdata->totalSize;
 	xdataSymbol.type = 0;
 	xdataSymbol.sectionNumber = xdata->sectionNumber;
@@ -972,7 +987,7 @@ void emitFunctionEnd(EmitFunctionInfo *info) {
 
 	symbols.add(xdataSymbol);
 
-	xdata->ensure(11);
+	xdata->ensure(12);
 	xdata->add1Unchecked(1);
 	xdata->add1Unchecked(*info->preambleEndPatch);
 	xdata->add1Unchecked(4);
@@ -980,7 +995,7 @@ void emitFunctionEnd(EmitFunctionInfo *info) {
 
 	xdata->add1Unchecked(*info->preambleEndPatch);
 	xdata->add1Unchecked(0x01);
-	xdata->add2Unchecked(info->stackSpace);
+	xdata->add2Unchecked(info->stackSpace / 8);
 	xdata->add1Unchecked(info->pushRdiOffset);
 	xdata->add1Unchecked(0x70);
 	xdata->add1Unchecked(info->pushRsiOffset);
@@ -1013,7 +1028,7 @@ void emitBlockEnd(EmitFunctionInfo *info) {
 }
 
 
-void addLineInfo(CodeLocation start, EndLocation end) {
+void addLineInfo(EmitFunctionInfo *info, CodeLocation start, EndLocation end) {
 	s64 delta = end.line - start.line;
 
 	if (delta < 0) {
@@ -1022,7 +1037,7 @@ void addLineInfo(CodeLocation start, EndLocation end) {
 
 	auto &line = lineInfo.add();
 
-	line.offset = code->totalSize;
+	line.offset = code->totalSize - info->functionStart;
 	line.line = (start.line & 0xFFF) | ((delta & 0x7F) << 24) | (1 << 31);
 
 
@@ -1033,22 +1048,9 @@ void addLineInfo(CodeLocation start, EndLocation end) {
 }
 
 void emitCodeViewEpilogue() {
-
 	exportTypeTableToDebugTSection();
 
-	{
-		PROFILE_ZONE("Patch debug types");
-		for (auto patch : coffTypePatches) {
-			*patch.location = getCoffTypeIndex(patch.type);
-		}
-
-		for (auto patch : coffFunctionIdTypePatches) {
-			*patch.location = createFunctionIDType(patch.function);
-		}
-	}
-
-	debugSymbols->ensure(8);
-
+	debugSymbols->align(4);
 	debugSymbols->add4Unchecked(0xF1);
 	u32 *subsectionSizePatch = debugSymbols->add4(0);
 	u32 previousSize = debugSymbols->totalSize;
@@ -1068,10 +1070,20 @@ void emitCodeViewEpilogue() {
 		}
 	}
 
-	*subsectionSizePatch = debugSymbols->totalSize - previousSize;
-	debugSymbols->align(4);
+	{
+		PROFILE_ZONE("Patch debug types");
+		for (auto patch : coffTypePatches) {
+			*patch.location = getCoffTypeIndex(patch.type);
+		}
 
-	
+		for (auto patch : coffFunctionIdTypePatches) {
+			*patch.location = createFunctionIDType(patch.function);
+		}
+	}
+
+	*subsectionSizePatch = debugSymbols->totalSize - previousSize;
+
+	debugSymbols->align(4);
 	debugSymbols->add4(0xF3);
 
 	u32 *sizePointer = debugSymbols->add4(0);
@@ -1081,7 +1093,7 @@ void emitCodeViewEpilogue() {
 	for (auto file : compilerFiles) {
 		file->offsetInStringTable = totalSize;
 
-		char *filepath = fullPath(toCString(file->path) /* @Leak */);
+		char *filepath = fullPath(toCString(file->path));
 
 		u32 len = static_cast<u32>(strlen(filepath));
 		totalSize += len + 1;
@@ -1382,9 +1394,8 @@ void emitFunctionEnd(EmitFunctionInfo *info) {
 	(void)info;
 }
 
-void addLineInfo(CodeLocation start, EndLocation end) {
-	(void)start;
-	(void)end;
+void addLineInfo(EmitFunctionInfo *info, CodeLocation start, EndLocation end) {
+	(void)info;
 
 	debugLines->ensure(32);
 

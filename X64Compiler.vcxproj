@@ -136,7 +136,7 @@
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>Basic.h</PrecompiledHeaderFile>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
-      <PreprocessorDefinitions>BUILD_WINDOWS=1;_CRT_SECURE_NO_WARNINGS;_MBCS;%(PreprocessorDefinitions);LITTLE_ENDIAN=1;BIG_ENDIAN=0;BUILD_DEBUG=1</PreprocessorDefinitions>
+      <PreprocessorDefinitions>BUILD_WINDOWS=1;_CRT_SECURE_NO_WARNINGS;_MBCS;%(PreprocessorDefinitions);LITTLE_ENDIAN=1;BIG_ENDIAN=0;BUILD_DEBUG=1;BUILD_LINUX=0</PreprocessorDefinitions>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <ExceptionHandling>false</ExceptionHandling>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -145,7 +145,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <AdditionalDependencies>Shlwapi.lib;libdyncallback_s.lib;libdyncall_s.lib;LLVMDebug.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>Shlwapi.lib;dyncallback_s_d.lib;dyncall_s_d.lib;LLVMDebug.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/IGNORE:4099 %(AdditionalOptions)</AdditionalOptions>
     </Link>
   </ItemDefinitionGroup>
@@ -157,7 +157,7 @@
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>Basic.h</PrecompiledHeaderFile>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
-      <PreprocessorDefinitions>BUILD_NO_LLVM;BUILD_WINDOWS=1;_CRT_SECURE_NO_WARNINGS;_MBCS;%(PreprocessorDefinitions);LITTLE_ENDIAN=1;BIG_ENDIAN=0;BUILD_DEBUG=1</PreprocessorDefinitions>
+      <PreprocessorDefinitions>BUILD_NO_LLVM;BUILD_WINDOWS=1;_CRT_SECURE_NO_WARNINGS;_MBCS;%(PreprocessorDefinitions);LITTLE_ENDIAN=1;BIG_ENDIAN=0;BUILD_DEBUG=1;BUILD_LINUX=0</PreprocessorDefinitions>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <ExceptionHandling>false</ExceptionHandling>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -166,7 +166,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <AdditionalDependencies>Shlwapi.lib;libdyncallback_s.lib;libdyncall_s.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>Shlwapi.lib;dyncallback_s_d.lib;dyncall_s_d.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/IGNORE:4099 %(AdditionalOptions)</AdditionalOptions>
     </Link>
   </ItemDefinitionGroup>
@@ -186,7 +186,7 @@
       <ExceptionHandling>false</ExceptionHandling>
       <BufferSecurityCheck>false</BufferSecurityCheck>
       <RuntimeTypeInfo>false</RuntimeTypeInfo>
-      <PreprocessorDefinitions>BUILD_WINDOWS=1;_CRT_SECURE_NO_WARNINGS;_MBCS;%(PreprocessorDefinitions);LITTLE_ENDIAN=1;NDEBUG</PreprocessorDefinitions>
+      <PreprocessorDefinitions>BUILD_WINDOWS=1;_CRT_SECURE_NO_WARNINGS;_MBCS;%(PreprocessorDefinitions);LITTLE_ENDIAN=1;NDEBUG;BUILD_LINUX=0</PreprocessorDefinitions>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
@@ -194,7 +194,7 @@
       <SubSystem>Console</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>Shlwapi.lib;libdyncallback_s.lib;libdyncall_s.lib;LLVMRelease.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>Shlwapi.lib;dyncallback_s.lib;dyncall_s.lib;LLVMRelease.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='ReleaseNoLLVM|x64'">
@@ -213,7 +213,7 @@
       <ExceptionHandling>false</ExceptionHandling>
       <BufferSecurityCheck>false</BufferSecurityCheck>
       <RuntimeTypeInfo>false</RuntimeTypeInfo>
-      <PreprocessorDefinitions>BUILD_NO_LLVM;BUILD_WINDOWS=1;_CRT_SECURE_NO_WARNINGS;_MBCS;%(PreprocessorDefinitions);LITTLE_ENDIAN=1;NDEBUG</PreprocessorDefinitions>
+      <PreprocessorDefinitions>BUILD_NO_LLVM;BUILD_WINDOWS=1;_CRT_SECURE_NO_WARNINGS;_MBCS;%(PreprocessorDefinitions);LITTLE_ENDIAN=1;NDEBUG;BUILD_LINUX=0</PreprocessorDefinitions>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
@@ -221,7 +221,7 @@
       <SubSystem>Console</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>Shlwapi.lib;libdyncallback_s.lib;libdyncall_s.lib;LLVMRelease.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>Shlwapi.lib;dyncallback_s.lib;dyncall_s.lib;LLVMRelease.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Profiling|x64'">
@@ -240,7 +240,7 @@
       <ExceptionHandling>false</ExceptionHandling>
       <BufferSecurityCheck>false</BufferSecurityCheck>
       <RuntimeTypeInfo>false</RuntimeTypeInfo>
-      <PreprocessorDefinitions>BUILD_PROFILE=1;BUILD_WINDOWS=1;_CRT_SECURE_NO_WARNINGS;_MBCS;%(PreprocessorDefinitions);LITTLE_ENDIAN=1;NDEBUG</PreprocessorDefinitions>
+      <PreprocessorDefinitions>BUILD_PROFILE=1;BUILD_WINDOWS=1;_CRT_SECURE_NO_WARNINGS;_MBCS;%(PreprocessorDefinitions);LITTLE_ENDIAN=1;NDEBUG;BUILD_LINUX=0</PreprocessorDefinitions>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
@@ -248,7 +248,7 @@
       <SubSystem>Console</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>Shlwapi.lib;libdyncallback_s.lib;libdyncall_s.lib;LLVMRelease.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>Shlwapi.lib;dyncallback_s.lib;dyncall_s.lib;LLVMRelease.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='ProfilingNoLLVM|x64'">
@@ -267,7 +267,7 @@
       <ExceptionHandling>false</ExceptionHandling>
       <BufferSecurityCheck>false</BufferSecurityCheck>
       <RuntimeTypeInfo>false</RuntimeTypeInfo>
-      <PreprocessorDefinitions>BUILD_NO_LLVM;BUILD_PROFILE=1;BUILD_WINDOWS=1;_CRT_SECURE_NO_WARNINGS;_MBCS;%(PreprocessorDefinitions);LITTLE_ENDIAN=1;NDEBUG</PreprocessorDefinitions>
+      <PreprocessorDefinitions>BUILD_NO_LLVM;BUILD_PROFILE=1;BUILD_WINDOWS=1;_CRT_SECURE_NO_WARNINGS;_MBCS;%(PreprocessorDefinitions);LITTLE_ENDIAN=1;NDEBUG;BUILD_LINUX=0</PreprocessorDefinitions>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
@@ -275,7 +275,7 @@
       <SubSystem>Console</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>Shlwapi.lib;libdyncallback_s.lib;libdyncall_s.lib;LLVMRelease.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>Shlwapi.lib;dyncallback_s.lib;dyncall_s.lib;LLVMRelease.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -295,6 +295,7 @@
     <ClInclude Include="src\IrGenerator.h" />
     <ClInclude Include="src\IrRunner.h" />
     <ClInclude Include="src\Lexer.h" />
+    <ClInclude Include="src\OS.h" />
     <ClInclude Include="src\Parser.h" />
     <ClInclude Include="src\Polymorph.h" />
     <ClInclude Include="src\String.h" />
@@ -324,6 +325,7 @@
     <ClCompile Include="src\IrRunner.cpp" />
     <ClCompile Include="src\Lexer.cpp" />
     <ClCompile Include="src\LlvmIr.cpp" />
+    <ClCompile Include="src\OS.cpp" />
     <ClCompile Include="src\Parser.cpp" />
     <ClCompile Include="src\Polymorph.cpp" />
     <ClCompile Include="src\String.cpp" />
@@ -332,6 +334,9 @@
   </ItemGroup>
   <ItemGroup>
     <Natvis Include="NatvisFile.natvis" />
+  </ItemGroup>
+  <ItemGroup>
+    <Library Include="C:\Users\Isaac\Downloads\dyncall-1.4 (1)\dyncall-1.4\dyncall\Release\dyncall_s.lib" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

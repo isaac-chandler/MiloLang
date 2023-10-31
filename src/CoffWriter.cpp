@@ -56,6 +56,127 @@ struct SectionHeader {
 #define SECTION_INITIALIZED 0x10
 #define SECTION_RELOCATIONS 0x20
 
+#if BUILD_WINDOWS
+void setSymbolAddress(void *symbol, u32 offset) {
+	((Symbol *) symbol)->value = offset;
+}
+
+void setSymbolSection(void *symbol, u32 section) {
+	((Symbol *) symbol)->sectionNumber = section;
+}
+
+void setSymbolSize(void *symbol, u32 size) {
+	// Doesn't exist in COFF
+}
+#else
+void setSymbolAddress(void *symbol, u32 offset) {
+	((Symbol *) symbol)->st_value = offset;
+}
+
+void setSymbolSection(void *symbol, u32 section) {
+	((Symbol *) symbol)->st_shndx = section;
+}
+
+void setSymbolSize(void *symbol, u32 size) {
+	((Symbol *) symbol)->st_size = size;
+}
+#endif
+
+
+#if BUILD_WINDOWS
+
+void setSymbolName(Symbol *symbol, String name) {
+	memset(symbol->name.name, 0, sizeof(symbol->name.name));
+	if (name.length > sizeof(symbol->name.name)) {
+		symbol->name.namePointer = stringTable.totalSize + 4;
+		stringTable.addNullTerminatedString(name);
+	}
+	else {
+		memcpy(symbol->name.name, name.characters, name.length);
+	}
+}
+
+void setSymbolName(Symbol *symbol, String name, u32 id) {
+	memset(symbol->name.name, 0, sizeof(symbol->name.name));
+
+	char idBuffer[8];
+
+	char *idName = idBuffer;
+
+	while (id) {
+		*idName = "0123456789ABCDEF"[id & 0xF];
+		idName++;
+		id >>= 4;
+	}
+
+	u32 idLen = idName - idBuffer;
+
+	if (name.length + 1 + idLen > sizeof(symbol->name.name)) {
+		symbol->name.namePointer = stringTable.totalSize + 4;
+		stringTable.ensure(name.length + 2 + idLen);
+		stringTable.addUnchecked(name.characters, name.length);
+		stringTable.add1Unchecked('@');
+		stringTable.addUnchecked(idBuffer, idLen);
+		stringTable.add1Unchecked(0);
+	}
+	else {
+		memcpy(symbol->name.name, name.characters, name.length);
+		symbol->name.name[name.length] = '@';
+		memcpy(symbol->name.name + name.length + 1, idBuffer, idLen);
+	}
+}
+
+u32 createExternalSymbol(String name, void **symbolReturn) {
+	u32 symbolIndex = symbols.count();
+
+	Symbol symbol;
+	setSymbolName(&symbol, name);
+	symbol.value = 0;
+	symbol.sectionNumber = 0;
+	symbol.type = IMAGE_SYM_DTYPE_FUNCTION;
+	symbol.storageClass = IMAGE_SYM_CLASS_EXTERNAL;
+	symbol.numberOfAuxSymbols = 0;
+
+	auto address = symbols.add(symbol);
+
+	if (symbolReturn) *symbolReturn = address;
+
+	return symbolIndex;
+}
+
+void createEntryPointSymbol() {
+	Symbol *entryPointSymbol = (Symbol *) programStart->symbol;
+
+	Symbol symbol;
+	setSymbolName(&symbol, programStart->valueOfDeclaration->name);
+	symbol.value = entryPointSymbol->value;
+	symbol.sectionNumber = entryPointSymbol->sectionNumber;
+	symbol.type = IMAGE_SYM_DTYPE_FUNCTION;
+	symbol.storageClass = IMAGE_SYM_CLASS_EXTERNAL;
+	symbol.numberOfAuxSymbols = 0;
+
+	symbols.add(symbol);
+}
+
+u32 createSymbol(Section *section, String name = "", bool function = false, void **symbolReturn = nullptr) {
+	u32 symbolIndex = symbols.count();
+
+	Symbol symbol;
+	setSymbolName(&symbol, name, symbolIndex);
+	symbol.value = section->totalSize;
+	symbol.sectionNumber = section->sectionNumber;
+	symbol.type = function ? IMAGE_SYM_DTYPE_FUNCTION : IMAGE_SYM_DTYPE_NULL;
+	symbol.storageClass = IMAGE_SYM_CLASS_STATIC;
+	symbol.numberOfAuxSymbols = 0;
+
+	auto address = symbols.add(symbol);
+
+	if (symbolReturn) *symbolReturn = address;
+
+	return symbolIndex;
+}
+
+#else
 u32 createExternalSymbol(String name, void **symbolReturn) {
 	u32 symbolIndex = symbols.count();
 	
@@ -122,6 +243,7 @@ u32 createSymbol(Section *section, String name = "", bool function = false, void
 
 	return symbolIndex;
 }
+#endif
 
 u32 createSymbolForExternalFunction(ExprFunction *function) {
 	assert(function->flags & EXPR_FUNCTION_IS_EXTERNAL);
@@ -140,6 +262,7 @@ u32 createSymbolForFunction(ExprFunction *function) {
 	if (!(function->flags & EXPR_HAS_STORAGE)) {
 		function->flags |= EXPR_HAS_STORAGE;
 		function->physicalStorage = createSymbol(code, function->valueOfDeclaration? function->valueOfDeclaration->name : "", true, &function->symbol);
+		setSymbolSection(function->symbol, code->sectionNumber);
 	}
 
 	return function->physicalStorage;
@@ -148,11 +271,17 @@ u32 createSymbolForFunction(ExprFunction *function) {
 #if BUILD_WINDOWS
 void Section::addRel32Relocation(u32 symbolTableIndex, s64 addend) {
 	relocations.add(Relocation{ totalSize, symbolTableIndex, IMAGE_REL_AMD64_REL32 });
-	addUnchecked(addend);
+	add4Unchecked(addend);
 }
 
 void Section::addFunctionRel32Relocation(ExprFunction *function) {
-	addRel32Relocation(createSymbolForFunction(function));
+	if (function->flags & EXPR_FUNCTION_IS_EXTERNAL) {
+		addRel32Relocation(createSymbolForExternalFunction(function));
+		
+	}
+	else {
+		addRel32Relocation(createSymbolForFunction(function));
+	}
 }
 
 void Section::addPointerRelocation(u32 symbolTableIndex) {
@@ -523,6 +652,25 @@ void writeIntegerPrefixR(u64 size, u8 *rReg) {
 	if (*rReg >= 8) {
 		rex |= REX_R;
 		*rReg -= 8;
+	}
+
+	if (rex)
+		code->add1Unchecked(rex);
+}
+
+void writeIntegerPrefixB(u64 size, u8 *bReg) {
+	u8 rex = 0;
+
+	if (size == 1 && (*bReg > 4))
+		rex |= REX;
+	else if (size == 8)
+		rex |= REX_W;
+	else if (size == 2)
+		code->add1Unchecked(OPERAND_SIZE_OVERRIDE);
+
+	if (*bReg >= 8) {
+		rex |= REX_B;
+		*bReg -= 8;
 	}
 
 	if (rex)
@@ -962,18 +1110,6 @@ void storeWeirdSizeFromRegister(u32 size, u8 addressRegister, u8 srcRegister) {
 	}
 }
 
-void setSymbolAddress(void *symbol, u32 offset) {
-	((Symbol *)symbol)->st_value = offset;
-}
-
-void setSymbolSection(void *symbol, u32 section) {
-	((Symbol *)symbol)->st_shndx = section;
-}
-
-void setSymbolSize(void *symbol, u32 size) {
-	((Symbol *)symbol)->st_size = size;
-}
-
 u32 createSymbolForString(ExprStringLiteral *string) {
 	if (string->string.length == 0) {
 		if (emptyStringSymbolIndex == -1) {
@@ -1323,12 +1459,12 @@ void runCoffWriter() {
 
 			u32 functionStart = code->totalSize;
 
-			addLineInfo(function->start, function->end);
-			setSymbolAddress(function->symbol, functionStart);
-
 			u32 spaceToAllocate = getSpaceToAllocate(function);
 
 			EmitFunctionInfo emitInfo = emitFunctionBegin(function, spaceToAllocate);
+			addLineInfo(&emitInfo, function->start, function->end);
+			setSymbolAddress(function->symbol, functionStart);
+
 
 			code->ensure(256);
 
@@ -1347,7 +1483,7 @@ void runCoffWriter() {
 					chkstkSymbolIndex = symbols.count();
 
 					Symbol chkstk;
-					setSymbolName(&chkstk.name, "__chkstk");
+					setSymbolName(&chkstk, "__chkstk");
 					chkstk.value = 0;
 					chkstk.sectionNumber = 0;
 					chkstk.type = 0x20;
@@ -1411,6 +1547,7 @@ void runCoffWriter() {
 							writeIntegerPrefix(8);
 							code->add1Unchecked(LEA);
 							writeRSPOffsetByte(RAX, getStackSpaceOffset(function) + argument->physicalStorage);
+							storeFromIntRegister(function, 8, argument->registerOfStorage, RAX);
 
 							u8 reg = intRegisters[argumentIndex];
 							writeIntegerPrefixR(type->size, &reg);
@@ -1440,6 +1577,7 @@ void runCoffWriter() {
 							debugOffset = location;
 						}
 						else {
+							writeIntegerPrefix(8);
 							sizedIntInstruction(8, MOV_REG_MEM_BASE);
 							writeRSPOffsetByte(RAX, location);
 							storeFromIntRegister(function, 8, argument->registerOfStorage, RAX);
@@ -1447,6 +1585,7 @@ void runCoffWriter() {
 						}
 					}
 					else {
+						writeIntegerPrefix(type->size);
 						sizedIntInstruction(type->size, MOV_REG_MEM_BASE);
 						writeRSPOffsetByte(RAX, location);
 						storeFromIntRegister(function, type->size, argument->registerOfStorage, RAX);
@@ -2064,15 +2203,25 @@ void runCoffWriter() {
 						code->add4Unchecked(static_cast<u32>(ir.immediate));
 					}
 				} break;
-				case IrOp::COPY: {
-					assert(!ir.immediate);
+				case IrOp::COPY_SRC_OFFSET: {
 					if (isStandardSize(ir.opSize)) {
 						loadIntoIntRegister(function, 8, RAX, ir.a);
 						loadIntoIntRegister(function, 8, RCX, ir.dest);
 
 						writeIntegerPrefix(ir.opSize);
 						sizedIntInstruction(ir.opSize, MOV_REG_MEM_BASE);
-						writeModRM(MODRM_MOD_INDIRECT, RAX, RAX);
+
+						if (!ir.immediate) {
+							writeModRM(MODRM_MOD_INDIRECT, RAX, RAX);
+						}
+						else if (ir.immediate <= 0x7f) {
+							writeModRM(MODRM_MOD_INDIRECT_OFFSET_8, RAX, RAX);
+							code->add1Unchecked(static_cast<u8>(ir.immediate));
+						}
+						else {
+							writeModRM(MODRM_MOD_INDIRECT_OFFSET_32, RAX, RAX);
+							code->add4Unchecked(static_cast<u32>(ir.immediate));
+						}
 
 						writeIntegerPrefix(ir.opSize);
 						sizedIntInstruction(ir.opSize, MOV_MEM_REG_BASE);
@@ -2081,6 +2230,21 @@ void runCoffWriter() {
 					else {
 						loadIntoIntRegister(function, 8, RDI, ir.dest);
 						loadIntoIntRegister(function, 8, RSI, ir.a);
+
+						if (ir.immediate) {
+							writeIntegerPrefix(8);
+							if (ir.immediate <= 0x7f) {
+								sizedIntInstruction(8, INT_OP_MEM_IMM_8_MODRM_X);
+								writeModRM(MODRM_MOD_DIRECT, INT_OP_MODRM_ADD, RSI);
+								code->add1Unchecked(ir.immediate);
+							}
+							else {
+								sizedIntInstruction(8, INT_OP_MEM_IMM_32_MODRM_X);
+								writeModRM(MODRM_MOD_DIRECT, INT_OP_MODRM_ADD, RSI);
+								code->add4Unchecked(ir.immediate);
+							}
+						}
+
 						loadImmediateIntoIntRegister64(RCX, ir.opSize);
 
 						code->add1Unchecked(REP_PREFIX);
@@ -2579,7 +2743,7 @@ void runCoffWriter() {
 					u32 argumentIndex = 0;
 
 					if (pointerReturn) {
-						loadIntoIntRegister(function, 8, intRegisters[argumentIndex++], function->state.returnPointerRegister);
+						loadIntoIntRegister(function, 8, intRegisters[argumentIndex++], ir.dest);
 					}
 
 					if (!cCall) {
@@ -2590,6 +2754,33 @@ void runCoffWriter() {
 
 					u32 parameterOffset = getParameterSpaceForCallOffset(function);
 					u32 offsetForCCallLargeValueCopies = AlignPO2(parameterOffset + argumentCount * 8, 16);
+
+					// Need to do this prior to other setup because it clobbers rcx
+					if (cCall) {
+						for (u8 i = 0; i < arguments->function->argumentCount; i++) {
+							auto type = arguments->function->argumentTypes[i];
+
+							if (isStandardSize(type->size))
+								continue;
+
+							auto number = arguments->arguments[i + !cCall];
+
+							loadIntoIntRegister(function, 8, RSI, number);
+
+							writeIntegerPrefix(8);
+							code->add1Unchecked(LEA);
+							writeRSPOffsetByte(RDI, offsetForCCallLargeValueCopies);
+
+							loadImmediateIntoIntRegister64(RCX, type->size);
+
+							code->add1Unchecked(REP_PREFIX);
+							sizedIntInstruction(1, MOVS_BASE);
+
+							offsetForCCallLargeValueCopies += AlignPO2(type->size, 16);
+						}
+
+						offsetForCCallLargeValueCopies = AlignPO2(parameterOffset + argumentCount * 8, 16);
+					}
 
 					for (u8 i = 0; i < arguments->function->argumentCount; i++) {
 						code->ensure(32);
@@ -2604,23 +2795,17 @@ void runCoffWriter() {
 								if (isStandardSize(type->size)) {
 									loadIntoIntRegister(function, 8, RAX, number);
 
+									u8 intRegister = intRegisters[argumentIndex];
+									writeIntegerPrefixR(type->size, &intRegister);
 									sizedIntInstruction(type->size, MOV_REG_MEM_BASE);
-									writeModRM(MODRM_MOD_INDIRECT, intRegisters[argumentIndex], RAX);
+									writeModRM(MODRM_MOD_INDIRECT, intRegister, RAX);
 								}
 								else {
 									if (cCall) {
-										loadIntoIntRegister(function, 8, RSI, number);
-
-										writeIntegerPrefix(8);
+										u8 reg = intRegisters[argumentIndex];
+										writeIntegerPrefixR(8, &reg);
 										code->add1Unchecked(LEA);
-										writeRSPOffsetByte(RDI, offsetForCCallLargeValueCopies);
-										loadImmediateIntoIntRegister64(RCX, type->size);
-
-										sizedIntInstruction(8, MOV_REG_MEM_BASE);
-										writeModRM(MODRM_MOD_DIRECT, intRegisters[argumentIndex], RDI);
-
-										code->add1Unchecked(REP_PREFIX);
-										sizedIntInstruction(1, MOVS_BASE);
+										writeRSPOffsetByte(reg, offsetForCCallLargeValueCopies);
 										
 										offsetForCCallLargeValueCopies += AlignPO2(type->size, 16);
 									}
@@ -2641,33 +2826,29 @@ void runCoffWriter() {
 								if (isStandardSize(type->size)) {
 									loadIntoIntRegister(function, 8, RAX, number);
 									
+									writeIntegerPrefix(type->size);
 									sizedIntInstruction(type->size, MOV_REG_MEM_BASE);
 									writeModRM(MODRM_MOD_INDIRECT, RAX, RAX);
 
+									writeIntegerPrefix(type->size);
 									sizedIntInstruction(type->size, MOV_MEM_REG_BASE);
 									writeRSPOffsetByte(RAX, location);
 								}
 								else {
 									if (cCall) {
-										loadIntoIntRegister(function, 8, RSI, number);
-										
 										writeIntegerPrefix(8);
 										code->add1Unchecked(LEA);
-										writeRSPOffsetByte(RDI, offsetForCCallLargeValueCopies);
-										loadImmediateIntoIntRegister64(RCX, type->size);
-										
+										writeRSPOffsetByte(RAX, offsetForCCallLargeValueCopies);
 
 										sizedIntInstruction(8, MOV_REG_MEM_BASE);
-										writeRSPOffsetByte(RDI, location);
-
-										code->add1Unchecked(REP_PREFIX);
-										sizedIntInstruction(1, MOVS_BASE);
+										writeRSPOffsetByte(RAX, location);
 										
 										offsetForCCallLargeValueCopies += AlignPO2(type->size, 16);
 									}
 									else {
 										loadIntoIntRegister(function, 8, RAX, number);
 
+										writeIntegerPrefix(8);
 										sizedIntInstruction(8, MOV_MEM_REG_BASE);
 										writeRSPOffsetByte(RAX, location);
 									}
@@ -2677,6 +2858,7 @@ void runCoffWriter() {
 								assert(isStandardSize(type->size));
 								loadIntoIntRegister(function, type->size, RAX, number);
 
+								writeIntegerPrefix(type->size);
 								sizedIntInstruction(type->size, MOV_MEM_REG_BASE);
 								writeRSPOffsetByte(RAX, location);
 							}
@@ -2731,7 +2913,7 @@ void runCoffWriter() {
 					u32 floatRegisterIndex = 0;
 
 					if (pointerReturn) {
-						loadIntoIntRegister(function, 8, intRegisters[intRegisterIndex++], function->state.returnPointerRegister);
+						loadIntoIntRegister(function, 8, intRegisters[intRegisterIndex++], op.dest);
 					}
 
 					if (!cCall) {
@@ -2852,6 +3034,7 @@ void runCoffWriter() {
 							writeModRM(MODRM_MOD_INDIRECT, 0, RCX);
 						}
 						else {
+							writeIntegerPrefix(returnType->size);
 							sizedIntInstruction(returnType->size, MOV_MEM_REG_BASE);
 							writeModRM(MODRM_MOD_INDIRECT, RAX, RCX);
 						}
@@ -2948,7 +3131,7 @@ void runCoffWriter() {
 					storeFromIntRegister(function, 8, ir.dest, RAX);
 				} break;
 				case IrOp::LINE_MARKER: {
-					addLineInfo(ir.location.start, ir.location.end);
+					addLineInfo(&emitInfo, ir.location.start, ir.location.end);
 				} break;
 				case IrOp::BLOCK: {
 					auto block = static_cast<Block *>(ir.data);
@@ -3441,8 +3624,8 @@ void runCoffWriter() {
 		relocation.section->relocations.add({ relocation.offset, ELF64_R_INFO(createSymbolForExternalFunction(relocation.function), R_X86_64_64), 0 });
 	}
 
-	createEntryPointSymbol();
 	#endif
+	createEntryPointSymbol();
 
 	{
 		PROFILE_ZONE("Write output");
@@ -3490,7 +3673,7 @@ void runCoffWriter() {
 
 		for (auto section : sections) {
 			auto &header = sectionHeaders.add();
-			setSectionName(header.name, sizeof(header.name), section->name);
+			setSectionName(header.name, sizeof(header.name), toCString(section->name));
 
 			if (section->flags & SECTION_READ)
 				header.characteristics |= IMAGE_SCN_MEM_READ;

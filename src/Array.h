@@ -69,8 +69,11 @@ struct ArrayAllocator {
 		freeBlocks[powerOf2] = block;
 	}
 
-	static inline thread_local ArrayAllocator instance;
+	static thread_local ArrayAllocator instance;
 };
+
+template<u32 itemSize>
+inline thread_local ArrayAllocator<itemSize> ArrayAllocator<itemSize>::instance;
 
 template <typename T>
 class Array {

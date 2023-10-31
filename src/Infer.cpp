@@ -2946,7 +2946,7 @@ Conversion getConversionCost(SubJob *job, Type *correct, Expr *given, bool *yiel
 		case TypeFlavor::INTEGER: {
 			if ((correct->flags & TYPE_INTEGER_IS_SIGNED) == (given->type->flags & TYPE_INTEGER_IS_SIGNED)) {
 				if (given->type == &TYPE_UNSIGNED_INT_LITERAL || given->type == &TYPE_SIGNED_INT_LITERAL) {
-					if (!boundsCheckImplicitConversion(nullptr, correct, static_cast<ExprLiteral *>(given)))
+					if (!boundsCheckImplicitConversion(nullptr, correct, static_cast<ExprLiteral *>(given), true))
 						return ConversionCost::CANNOT_CONVERT;
 				}
 				else if (correct->size < given->type->size) {
@@ -2957,7 +2957,7 @@ Conversion getConversionCost(SubJob *job, Type *correct, Expr *given, bool *yiel
 				if (given->type != &TYPE_UNSIGNED_INT_LITERAL)
 					return ConversionCost::CANNOT_CONVERT;
 
-				if (!boundsCheckImplicitConversion(nullptr, correct, static_cast<ExprLiteral *>(given)))
+				if (!boundsCheckImplicitConversion(nullptr, correct, static_cast<ExprLiteral *>(given), true))
 					return ConversionCost::CANNOT_CONVERT;
 			}
 
@@ -8292,7 +8292,7 @@ void fillTypeInfo(Type *type) {
 	}
 }
 
-void createAllTypeInfos(ArraySet<Type *> types) {
+void createAllTypeInfos(const ArraySet<Type *> &types) {
 	for (auto needed : types) {
 		createTypeInfo(needed);
 	}

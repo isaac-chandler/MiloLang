@@ -123,11 +123,11 @@ __remove :: (array: *[]u8, value: *u8, size: u64) -> *u8 #c_call {
 // The function called when the == operator is used on two string types
 // The __strings_equal function is marked #c_call so string == can be used from #c_call functions without
 // requiring a push_context
-__strings_equal :: (a: string, b: string) -> bool #c_call {
+__strings_equal :: (a: *string, b: *string) -> bool #c_call {
     if a.count != b.count return false
     
 
-    for a if it != b[it_index] return false
+    for <<a if it != (<<b)[it_index] return false
 
     return true
 }

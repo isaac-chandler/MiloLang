@@ -44,8 +44,6 @@ u32 allocateStackSpaceAndLoadAddress(IrState *state, Type *type) {
 }
 
 u32 memop(IrState *state, IrOp op, u32 dest, u32 src, u32 size, u32 offset = 0) {
-	assert(op != IrOp::COPY || offset == 0);
-
 	Ir &memop = state->ir.add();
 	memop.op = op;
 	memop.dest = dest;
@@ -70,7 +68,7 @@ u32 copyOrWrite(IrState *state, u32 dest, u32 src, Type *type, u32 offset = 0) {
 		}
 		
 
-		return memop(state, IrOp::COPY, dest, src, type->size);
+		return memop(state, IrOp::COPY_SRC_OFFSET, dest, src, type->size);
 	}
 	else {
 		return memop(state, IrOp::WRITE, dest, src, type->size, offset);
@@ -91,7 +89,7 @@ u32 copyOrRead(IrState *state, u32 dest, u32 src, Type *type, u32 offset = 0) {
 			src = add.dest;
 		}
 
-		return memop(state, IrOp::COPY, dest, src, type->size);
+		return memop(state, IrOp::COPY_SRC_OFFSET, dest, src, type->size);
 	}
 	else {
 		return memop(state, IrOp::READ, dest, src, type->size, offset);
@@ -630,7 +628,7 @@ u32 generateCast(IrState *state, ExprBinaryOperator *binary) {
 		u32 pointerReg = memop(state, IrOp::READ, allocateRegister(state), rightReg, 8);
 
 		if (isStoredByPointer(castTo)) {
-			return memop(state, IrOp::COPY, allocateStackSpaceAndLoadAddress(state, castTo), pointerReg, castTo->size);
+			return memop(state, IrOp::COPY_SRC_OFFSET, allocateStackSpaceAndLoadAddress(state, castTo), pointerReg, castTo->size);
 		}
 		else {
 			return memop(state, IrOp::READ, pointerReg, pointerReg, castTo->size);
@@ -911,6 +909,7 @@ u32 generateEquals(IrState *state, u32 leftReg, Expr *right, bool equals) {
 		call.dest = returnValue;
 		call.a = function;
 		call.data = arguments;
+		call.opSize = 2;
 
 		memop(state, IrOp::READ, result, returnValue, 1);
 
@@ -1218,7 +1217,7 @@ void generateRemove(IrState *state, ExprBreakOrContinue *remove) {
 	assert(remove->refersTo->forBegin->type->flavor == TypeFlavor::ARRAY);
 	assert(!(remove->refersTo->forBegin->type->flags & TYPE_ARRAY_IS_FIXED));
 
-	u32 returnValue = allocateStackSpaceAndLoadAddress(state, 8, 8 );
+	u32 returnValue = allocateStackSpaceAndLoadAddress(state, 8, 8);
 	u32 function = generateIr(state, removeFunction);
 
 	FunctionCall *argumentInfo = static_cast<FunctionCall *>(state->allocator.allocate(sizeof(FunctionCall) + sizeof(u32) * 3));
@@ -1235,6 +1234,7 @@ void generateRemove(IrState *state, ExprBreakOrContinue *remove) {
 	ir.a = function;
 	ir.data = argumentInfo;
 	ir.dest = returnValue;
+	ir.opSize = 3;
 
 	memop(state, IrOp::READ, remove->refersTo->irPointer, returnValue, 8);
 
@@ -1565,10 +1565,38 @@ u32 generateCall(IrState *state, ExprFunctionCall *call, ExprCommaAssignment *co
 			ir.b = resultZero;
 			ir.a = argument;
 
-			if (comma && comma->exprCount >= 2) {
-				u32 zeroAddress = loadAddressOf(state, comma->left[1]);
+			if (comma) {
+				auto left = comma->left[0];
 
-				memop(state, IrOp::WRITE, zeroAddress, resultZero, TYPE_BOOL.size);
+				if (left->flavor == ExprFlavor::IDENTIFIER) {
+					auto identifier = static_cast<ExprIdentifier *>(left);
+					if (!declarationIsStoredByPointer(static_cast<ExprIdentifier *>(left)->declaration)) {
+						set(state, identifier->declaration->registerOfStorage, resultIndex, argumentType->size);
+					}
+					else {
+						memop(state, IrOp::WRITE, loadAddressOf(state, left), resultIndex, argumentType->size);
+					}
+				}
+				else {
+					memop(state, IrOp::WRITE, loadAddressOf(state, left), resultIndex, argumentType->size);
+				}
+
+				assert(comma->exprCount >= 2); 
+				
+				left = comma->left[1];
+
+				if (left->flavor == ExprFlavor::IDENTIFIER) {
+					auto identifier = static_cast<ExprIdentifier *>(left);
+					if (!declarationIsStoredByPointer(static_cast<ExprIdentifier *>(left)->declaration)) {
+						set(state, identifier->declaration->registerOfStorage, resultZero, 1);
+					}
+					else {
+						memop(state, IrOp::WRITE, loadAddressOf(state, left), resultZero, 1);
+					}
+				}
+				else {
+					memop(state, IrOp::WRITE, loadAddressOf(state, left), resultZero, 1);
+				}
 			}
 
 			return resultIndex;
@@ -1598,7 +1626,7 @@ u32 generateCall(IrState *state, ExprFunctionCall *call, ExprCommaAssignment *co
 		}
 
 		if (stackSpaceForReturn)
-			returnStorage = allocateStackSpace(state, stackSpaceForReturn, alignmentForReturn);
+			returnStorage = allocateStackSpaceAndLoadAddress(state, stackSpaceForReturn, alignmentForReturn);
 	}
 
 	u32 function = generateIr(state, call->function);
@@ -1635,11 +1663,11 @@ u32 generateCall(IrState *state, ExprFunctionCall *call, ExprCommaAssignment *co
 					memop(state, IrOp::READ, identifier->declaration->registerOfStorage, returnStorage, type->returnTypes[i]->size, returnOffset);
 				}
 				else {
-					memop(state, IrOp::COPY, loadAddressOf(state, left), returnStorage, type->returnTypes[i]->size, returnOffset);
+					memop(state, IrOp::COPY_SRC_OFFSET, loadAddressOf(state, left), returnStorage, type->returnTypes[i]->size, returnOffset);
 				}
 			}
 			else {
-				memop(state, IrOp::COPY, loadAddressOf(state, left), returnStorage, type->returnTypes[i]->size, returnOffset);
+				memop(state, IrOp::COPY_SRC_OFFSET, loadAddressOf(state, left), returnStorage, type->returnTypes[i]->size, returnOffset);
 			}
 
 			returnOffset += type->returnTypes[i]->size;
@@ -2244,7 +2272,7 @@ bool generateIrForFunction(ExprFunction *function) {
 	if (returnsViaPointer(functionType)) {
 		function->state.returnPointerRegister = allocateRegister(&function->state);
 	}
-
+	
 	if (!(function->flags & EXPR_FUNCTION_IS_C_CALL)) {
 		function->state.contextRegister = allocateRegister(&function->state);
 	}
@@ -2258,7 +2286,7 @@ bool generateIrForFunction(ExprFunction *function) {
 		declaration->registerOfStorage = allocateRegister(&function->state);
 
 #if BUILD_WINDOWS
-		auto passedInMemory = !isStandardSize(type) || declaration->registerOfStorage >= 4;
+		auto passedInMemory = !isStandardSize(type->size) || declaration->registerOfStorage >= 4;
 #else
 		auto passedInMemory = passSystemVParameter(&callingState, type) == SystemVCallingType::MEMORY;
 #endif

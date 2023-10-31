@@ -23,6 +23,7 @@
     <ClInclude Include="src\Polymorph.h" />
     <ClInclude Include="src\CodeView.h" />
     <ClInclude Include="src\Identifier.h" />
+    <ClInclude Include="src\OS.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\CompilerMain.cpp" />
@@ -44,8 +45,12 @@
     <ClCompile Include="src\Polymorph.cpp" />
     <ClCompile Include="src\CodeView.cpp" />
     <ClCompile Include="src\Identifier.cpp" />
+    <ClCompile Include="src\OS.cpp" />
   </ItemGroup>
   <ItemGroup>
     <Natvis Include="NatvisFile.natvis" />
+  </ItemGroup>
+  <ItemGroup>
+    <Library Include="C:\Users\Isaac\Downloads\dyncall-1.4 (1)\dyncall-1.4\dyncall\Release\dyncall_s.lib" />
   </ItemGroup>
 </Project>

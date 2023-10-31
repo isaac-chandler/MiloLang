@@ -149,6 +149,7 @@ public:
 	}
 
 	ArraySet(const ArraySet<T> &other) : array(other.array.count) {
+		array.count = other.array.count;
 		memcpy(array.storage, other.array.storage, sizeof(T) * array.count);
 	}
 
