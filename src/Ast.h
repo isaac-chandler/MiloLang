@@ -74,8 +74,7 @@ enum class IrOp : u8 {
 	BLOCK, 
 	POP_COUNT, 
 	BIT_SCAN_FORWARD, 
-	BIT_SCAN_REVERSE, 
-	STACK_TRACE
+	BIT_SCAN_REVERSE
 };
 
 #define IR_SIGNED_OP 0x1
@@ -98,15 +97,16 @@ inline bool isSystemVOneRegisterValue(u64 size) {
 	return size <= 8;
 }
 
-struct FunctionCall {
-	TypeFunction *function;
-	u32 arguments[];
-};
-
 struct StackTrace {
 	MiloString function;
 	MiloString filename;
 	u64 line;
+};
+
+struct FunctionCall {
+	TypeFunction *function;
+	StackTrace stackTrace;
+	u32 arguments[];
 };
 
 struct Ir {

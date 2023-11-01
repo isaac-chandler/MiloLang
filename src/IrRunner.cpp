@@ -792,7 +792,17 @@ if (op.flags & IR_FLOAT_OP) {\
 				}
 			}
 			else {
+				void **context = reinterpret_cast<void **>(stack[arguments->arguments[0]]);
+
+				void *node[2];
+				node[0] = *context;
+				node[1] = static_cast<void *>(&arguments->stackTrace);
+
+				*context = node;
+
 				runFunction(state, reinterpret_cast<ExprFunction *>(stack[op.a]), &op, nullptr, stack);
+
+				*context = node[0];
 			}
 			break;
 		}
@@ -926,10 +936,6 @@ if (op.flags & IR_FLOAT_OP) {\
 			else {
 				stack[op.dest] = reinterpret_cast<u64>(function);
 			}
-			break;
-		}
-		case IrOp::STACK_TRACE: {
-			stack[op.dest] = reinterpret_cast<u64>(op.data);
 			break;
 		}
 		case IrOp::STRING: {

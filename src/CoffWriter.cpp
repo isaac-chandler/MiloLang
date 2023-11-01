@@ -389,9 +389,14 @@ u32 getParameterSpaceForCallOffset(ExprFunction *function) {
 	return 0;
 }
 
-u32 getStackSpaceOffset(ExprFunction *function) {
+u32 getStacktraceNodeOffset(ExprFunction *function) {
 	return getParameterSpaceForCallOffset(function) + function->state.stackSpaceForCallingConvention;
 }
+
+u32 getStackSpaceOffset(ExprFunction *function) {
+	return getStacktraceNodeOffset(function) + (buildOptions.enable_stack_trace ? 16 : 0);
+}
+
 
 u32 getRegisterOffset(ExprFunction *function) {
 	return getStackSpaceOffset(function) + AlignPO2(function->state.stackSpace, 8);
@@ -1787,30 +1792,6 @@ void runCoffWriter() {
 
 					storeFromIntRegister(function, 8, ir.dest, RAX);
 				} break;
-				case IrOp::STACK_TRACE: {
-					auto stackTrace = static_cast<StackTrace *>(ir.data);
-
-					u32 functionSymbol = createSymbol(rdata);
-					rdata->addNullTerminatedString(stackTrace->function);
-					u32 filenameSymbol = createSymbol(rdata);
-					rdata->addNullTerminatedString(stackTrace->filename);
-
-					Section *section = BUILD_LINUX ? data : rdata;
-					section->ensure(40);
-					u32 symbolIndex = createSymbol(section, "");
-					section->addPointerRelocation(functionSymbol);
-					section->add8Unchecked(stackTrace->function.count);
-					section->addPointerRelocation(filenameSymbol);
-					section->add8Unchecked(stackTrace->filename.count);
-					section->add8Unchecked(stackTrace->line);
-
-					writeIntegerPrefix(8);
-					code->add1Unchecked(LEA);
-					writeModRM(MODRM_MOD_INDIRECT, RAX, MODRM_RM_RIP_OFFSET_32);
-					code->addRel32Relocation(symbolIndex);
-
-					storeFromIntRegister(function, 8, ir.dest, RAX);
-				} break;
 				case IrOp::ADD: {
 					if (ir.flags & IR_FLOAT_OP) {
 						loadIntoFloatRegister(function, ir.opSize, 0, ir.a);
@@ -2762,6 +2743,53 @@ void runCoffWriter() {
 					bool pointerReturn = returnsViaPointer(arguments->function);
 					bool cCall = arguments->function->flags & TYPE_FUNCTION_IS_C_CALL;
 
+					if (!cCall && buildOptions.enable_stack_trace) {
+						writeIntegerPrefix(8);
+						sizedIntInstruction(8, MOV_REG_MEM_BASE);
+						writeRSPRegisterByte(function, RAX, arguments->arguments[0]);
+
+						writeIntegerPrefix(8);
+						sizedIntInstruction(8, MOV_REG_MEM_BASE);
+						writeModRM(MODRM_MOD_INDIRECT, RCX, RAX);
+
+						writeIntegerPrefix(8);
+						code->add1Unchecked(LEA);
+						writeRSPOffsetByte(RDX, getStacktraceNodeOffset(function));
+
+						writeIntegerPrefix(8);
+						sizedIntInstruction(8, MOV_MEM_REG_BASE);
+						writeModRM(MODRM_MOD_INDIRECT, RDX, RAX);
+
+						writeIntegerPrefix(8);
+						sizedIntInstruction(8, MOV_MEM_REG_BASE);
+						writeModRM(MODRM_MOD_INDIRECT, RCX, RDX);
+
+
+						u32 functionSymbol = createSymbol(rdata);
+						rdata->addNullTerminatedString(arguments->stackTrace.function);
+						u32 filenameSymbol = createSymbol(rdata);
+						rdata->addNullTerminatedString(arguments->stackTrace.filename);
+
+						Section *section = BUILD_LINUX ? data : rdata;
+						section->ensure(40);
+						u32 symbolIndex = createSymbol(section, "");
+						section->addPointerRelocation(functionSymbol);
+						section->add8Unchecked(arguments->stackTrace.function.count);
+						section->addPointerRelocation(filenameSymbol);
+						section->add8Unchecked(arguments->stackTrace.filename.count);
+						section->add8Unchecked(arguments->stackTrace.line);
+
+						writeIntegerPrefix(8);
+						code->add1Unchecked(LEA);
+						writeModRM(MODRM_MOD_INDIRECT, RAX, MODRM_RM_RIP_OFFSET_32);
+						code->addRel32Relocation(symbolIndex);
+
+						writeIntegerPrefix(8);
+						sizedIntInstruction(8, MOV_MEM_REG_BASE);
+						writeModRM(MODRM_MOD_INDIRECT_OFFSET_8, RAX, RDX);
+						code->add1Unchecked(8);
+					}
+
 #if BUILD_WINDOWS
 					constexpr int intRegisters[4] = { RCX, RDX, 8, 9 };
 					u32 argumentIndex = 0;
@@ -2787,6 +2815,8 @@ void runCoffWriter() {
 							if (isStandardSize(type->size))
 								continue;
 
+							code->ensure(32);
+
 							auto number = arguments->arguments[i + !cCall];
 
 							loadIntoIntRegister(function, 8, RSI, number);
@@ -2807,7 +2837,7 @@ void runCoffWriter() {
 					}
 
 					for (u8 i = 0; i < arguments->function->argumentCount; i++) {
-						code->ensure(32);
+						code->ensure(64);
 						auto type = arguments->function->argumentTypes[i];
 						auto number = arguments->arguments[i + !cCall];
 
@@ -2905,6 +2935,7 @@ void runCoffWriter() {
 
 						if (passSystemVParameter(&callingState, type) != SystemVCallingType::MEMORY)
 							continue;
+						code->ensure(32);
 
 						if (isStoredByPointer(type)) {
 							loadIntoIntRegister(function, 8, RSI, number);
@@ -2947,6 +2978,7 @@ void runCoffWriter() {
 					for (u32 i = 0; i < arguments->function->argumentCount; i++) {
 						auto type = arguments->function->argumentTypes[i];
 						auto number = arguments->arguments[!cCall + i];
+						code->ensure(64);
 
 						switch (passSystemVParameter(&callingState, type)) {
 							case SystemVCallingType::EMPTY: [[fallthrough]];
@@ -3044,6 +3076,7 @@ void runCoffWriter() {
 
 #endif
 
+					code->ensure(64);
 					code->add1Unchecked(CALL_INDIRECT_MODRM_2);
 					writeRSPRegisterByte(function, 2, ir.a);
 
@@ -3062,6 +3095,20 @@ void runCoffWriter() {
 							sizedIntInstruction(returnType->size, MOV_MEM_REG_BASE);
 							writeModRM(MODRM_MOD_INDIRECT, RAX, RCX);
 						}
+					}
+
+					if (!cCall && buildOptions.enable_stack_trace) {
+						writeIntegerPrefix(8);
+						sizedIntInstruction(8, MOV_REG_MEM_BASE);
+						writeRSPRegisterByte(function, RAX, arguments->arguments[0]);
+
+						writeIntegerPrefix(8);
+						sizedIntInstruction(8, MOV_REG_MEM_BASE);
+						writeRSPOffsetByte(RCX, getStacktraceNodeOffset(function));
+
+						writeIntegerPrefix(8);
+						sizedIntInstruction(8, MOV_MEM_REG_BASE);
+						writeModRM(MODRM_MOD_INDIRECT, RCX, RAX);
 					}
 				} break;
 				case IrOp::NEG: {

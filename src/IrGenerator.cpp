@@ -1645,36 +1645,18 @@ u32 generateCall(ExprFunction *function, ExprFunctionCall *call, ExprCommaAssign
 		callArguments->arguments[hasContext + i] = generateIr(function, call->arguments.values[i]);
 	}
 
-	u32 stackTraceNode = INVALID_REGISTER;
-	if (buildOptions.enable_stack_trace && function->state.contextRegister != INVALID_REGISTER) {
-		stackTraceNode = allocateStackSpaceAndLoadAddress(function, 16, 8);
-
-		// @Layout: Relies on stack_trace being the first member of Context
-		memop(function, IrOp::COPY_SRC_OFFSET, stackTraceNode, function->state.contextRegister, 8);
-		memop(function, IrOp::WRITE, function->state.contextRegister, stackTraceNode, 8);
-
-		Ir &ir = function->state.ir.add();
-		ir.op = IrOp::STACK_TRACE;
-	
-		StackTrace *stackTrace = static_cast<StackTrace *>(function->state.allocator.allocate(sizeof(StackTrace)));
-		if (function->valueOfDeclaration) {
-			stackTrace->function.data = reinterpret_cast<u8 *>(function->valueOfDeclaration->name.characters);
-			stackTrace->function.count = function->valueOfDeclaration->name.length;
-		}
-		else {
-			stackTrace->function.data = nullptr;
-			stackTrace->function.count = 0;
-		}
-
-		stackTrace->filename.data = reinterpret_cast<u8 *>(compilerFiles[call->start.fileUid]->name.characters);
-		stackTrace->filename.count = compilerFiles[call->start.fileUid]->name.length;
-		stackTrace->line = call->start.line;
-
-		ir.data = stackTrace;
-		ir.dest = allocateRegister(function);
-		
-		memop(function, IrOp::WRITE, stackTraceNode, ir.dest, 8, 8);
+	if (function->valueOfDeclaration) {
+		callArguments->stackTrace.function.data = reinterpret_cast<u8 *>(function->valueOfDeclaration->name.characters);
+		callArguments->stackTrace.function.count = function->valueOfDeclaration->name.length;
 	}
+	else {
+		callArguments->stackTrace.function.data = nullptr;
+		callArguments->stackTrace.function.count = 0;
+	}
+
+	callArguments->stackTrace.filename.data = reinterpret_cast<u8 *>(compilerFiles[call->start.fileUid]->path.characters);
+	callArguments->stackTrace.filename.count = compilerFiles[call->start.fileUid]->path.length;
+	callArguments->stackTrace.line = call->start.line;
 
 	Ir &ir = function->state.ir.add();
 	ir.op = IrOp::CALL;
@@ -1682,10 +1664,6 @@ u32 generateCall(ExprFunction *function, ExprFunctionCall *call, ExprCommaAssign
 	ir.a = functionReg;
 	ir.data = callArguments;
 	ir.opSize = argumentCount;
-
-	if (stackTraceNode != INVALID_REGISTER) {
-		memop(function, IrOp::COPY_SRC_OFFSET, function->state.contextRegister, stackTraceNode, 8);
-	}
 
 	if (comma) {
 		u32 returnOffset = 0;

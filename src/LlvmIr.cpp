@@ -208,6 +208,9 @@ struct State {
 	llvm::Function *function;
 	llvm::BasicBlock *entryBlock;
 	llvm::Value *contextValue;
+	llvm::Value *stackTraceNode;
+	llvm::Type *stackTraceType;
+	ExprFunction *functionNode;
 	Array<llvm::Metadata *> debugScopeStack;
 };
 
@@ -1225,9 +1228,42 @@ static llvm::Value *generateLlvmCall(State *state, ExprFunctionCall *call, ExprC
 		arguments[paramOffset++] = state->contextValue;
 	}
 
+	llvm::Value *currentStackTracePointer = nullptr;
+
+	if (buildOptions.enable_stack_trace && !(function->flags & TYPE_FUNCTION_IS_C_CALL)) {
+		currentStackTracePointer = state->builder.CreateStructGEP(state->builder.CreateStructGEP(state->contextValue, 0), 0);
+
+		state->builder.CreateStore(state->builder.CreateLoad(currentStackTracePointer), state->builder.CreateStructGEP(state->stackTraceNode, 0));
+		state->builder.CreateStore(state->stackTraceNode, currentStackTracePointer);
+
+		auto infoType = static_cast<llvm::StructType *>(state->stackTraceType->getStructElementType(1)->getPointerElementType());
+		auto locationType = static_cast<llvm::StructType *>(infoType->getStructElementType(1));
+
+		String functionName = state->functionNode->valueOfDeclaration ? state->functionNode->valueOfDeclaration->name : "(anonymous)";
+		String filename = compilerFiles[call->start.fileUid]->path;
+		u64 line = call->start.line;
+
+		auto info = createUnnnamedConstant(state, infoType);
+		info->setInitializer(llvm::ConstantStruct::get(
+			infoType,
+			createLlvmString(state, functionName),
+			llvm::ConstantStruct::get(
+				locationType,
+				createLlvmString(state, filename),
+				llvm::ConstantInt::get(llvm::Type::getInt64Ty(state->context), line)
+			)));
+
+		state->builder.CreateStore(info, state->builder.CreateStructGEP(state->stackTraceNode, 1));
+	}
+
+
 	auto ir = state->builder.CreateCall(static_cast<llvm::FunctionType *>(functionIr->getType()->getPointerElementType()), 
 		functionIr, llvm::ArrayRef(arguments, count));
 	ir->setCallingConv(llvm::CallingConv::Win64);
+
+	if (currentStackTracePointer) {
+		state->builder.CreateStore(state->builder.CreateLoad(state->builder.CreateStructGEP(state->stackTraceNode, 0)), currentStackTracePointer);
+	}
 
 	if (!isStandardSize(return_->size)) {
 		return arguments[0];
@@ -2649,6 +2685,7 @@ void runLlvm() {
 	{
 		llvmModule.setDataLayout(targetMachine->createDataLayout());
 
+		state.stackTraceType = getLlvmType(state.context, &TYPE_CONTEXT)->getStructElementType(0)->getStructElementType(0)->getPointerElementType();
 	
 		while (true) {
 			auto job = coffWriterQueue.take();
@@ -2664,6 +2701,7 @@ void runLlvm() {
 
 					auto llvmFile = getDebugFile(function->start);
 
+					state.functionNode = function;
 					auto llvmFunction = createLlvmFunction(&state, function);
 					auto functionType = static_cast<llvm::FunctionType *>(llvmFunction->getType()->getPointerElementType());
 					auto debugType = static_cast<llvm::DISubroutineType *>(static_cast<llvm::DIDerivedType *>(getLlvmDebugType(function->type))->getBaseType());
@@ -2688,7 +2726,14 @@ void runLlvm() {
 					state.function = llvmFunction;
 					state.entryBlock = entry;
 
-					u32 paramOffset = 0; 
+					u32 paramOffset = 0;
+
+					if (buildOptions.enable_stack_trace) {
+						state.stackTraceNode = builder.CreateAlloca(state.stackTraceType);
+					}
+					else {
+						state.stackTraceNode = nullptr;
+					}
 					
 					if (!isStandardSize(getDeclarationType(function->returns.declarations[0])->size)) {
 						function->returns.declarations[0]->llvmStorage = llvmFunction->getArg(paramOffset++);
