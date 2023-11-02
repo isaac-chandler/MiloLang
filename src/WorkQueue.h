@@ -47,7 +47,7 @@ struct alignas(64) SPSCWorkQueue {
 
 				Buffer *newFree = newInput->next;
 
-				if (CompareExchange(&free, newFree, newInput))
+				if (CompareExchange((volatile u64 *)&free, (u64)newFree, (u64)newInput) == (u64)newInput)
 					break;
 				_mm_pause();
 			}
@@ -93,7 +93,7 @@ struct alignas(64) SPSCWorkQueue {
 				auto oldFree = free;
 				output->next = oldFree;
 
-				if (CompareExchange(&free, output, oldFree)) {
+				if (CompareExchange((volatile u64 *)&free, (u64)output, (u64)oldFree) == (u64)oldFree) {
 					break;
 				}
 			}
@@ -160,7 +160,7 @@ struct alignas(64) MPMCWorkQueue {
 
 				Buffer *newFree = newInput->next;
 
-				if (CompareExchange(&free, newFree, newInput))
+				if (CompareExchange((volatile u64 *)&free, (u64) newFree, (u64)newInput) == (u64)newInput)
 					break;
 				_mm_pause();
 			}
@@ -221,7 +221,7 @@ struct alignas(64) MPMCWorkQueue {
 				auto oldFree = free;
 				output->next = oldFree;
 
-				if (CompareExchange(&free, output, oldFree)) {
+				if (CompareExchange((volatile u64 *)&free, (u64) output, (u64) oldFree) == (u64)oldFree) {
 					break;
 				}
 			}

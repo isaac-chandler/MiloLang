@@ -18,13 +18,16 @@ void set_working_directory(char *directory);
 
 
 template <typename T>
-bool CompareExchange(volatile T *dest, T value, T compare) {
-	return reinterpret_cast<T>(_InterlockedCompareExchange64(reinterpret_cast<volatile s64 *>(dest), reinterpret_cast<s64>(value), reinterpret_cast<s64>(compare))) == compare;
+T CompareExchange(volatile T *dest, T value, T compare);
+
+template<>
+inline u32 CompareExchange<u32>(volatile u32 *dest, u32 value, u32 compare) {
+	return _InterlockedCompareExchange((volatile unsigned long *)dest, value, compare);
 }
 
 template<>
-inline bool CompareExchange<u32>(volatile u32 *dest, u32 value, u32 compare) {
-	return _InterlockedCompareExchange((volatile unsigned long *) dest, value, compare) == compare;
+inline u64 CompareExchange<u64>(volatile u64 *dest, u64 value, u64 compare) {
+	return (u64)_InterlockedCompareExchange64((volatile long long *) dest, (long long)value, (long long)compare);
 }
 
 #define read_write_barrier() _ReadWriteBarrier()
@@ -81,7 +84,8 @@ inline u64 bitScanForward64(u64 val) {
 
 template <typename T>
 bool CompareExchange(T volatile *dest, T value, T compare) {
-	return __atomic_compare_exchange_n(dest, &value, compare, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+	__atomic_compare_exchange_n(dest, &compare, value, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+	return compare;
 }
 
 inline s64 atomicFetchAdd(volatile s64 *target, s64 value) {

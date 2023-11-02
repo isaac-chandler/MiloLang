@@ -61,10 +61,10 @@ void addToTable(Block *block, Declaration *declaration, Declaration **availableS
 			// declaration array so we do not need to insert it again
 			rehash(block);
 		} 
-		else if (availableSlot) {
+		/*else if (availableSlot) {
 			assert(!*availableSlot);
 			*availableSlot = declaration;
-		}
+		}*/
 		else {
 			insert(block, declaration);
 		}

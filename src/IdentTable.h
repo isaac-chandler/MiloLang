@@ -11,6 +11,8 @@ struct Identifier {
 Identifier *getIdentifier(String name);
 void initIdentTable();
 
+void dumpIdentTable();
+
 inline Identifier *identIt;
 inline Identifier *identItIndex;
 inline Identifier *identData;

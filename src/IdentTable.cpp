@@ -3,19 +3,16 @@
 #include "BucketedArenaAllocator.h"
 #include "OS.h"
 
+alignas(64) static volatile u64 identTableLock;
 
-alignas(64) static volatile s64 identTableReadCount;
-alignas(64) static volatile u32 identTableReadLock;
-alignas(64) static volatile u32 identTableWriteLock;
-
-#define lock(x) while (!CompareExchange(&(x), (u32) 1, (u32) 0))
-#define unlock(x) (x) = 0
+#define STATE_WRITING (1ULL << 32)
+#define READ_COUNT_MASK 0xFFFF'FFFF
 
 static BucketedArenaAllocator allocator(65536);
 
 static Identifier **identTable;
 static u64 identTableMask;
-static u64 identTableCount;
+static volatile u64 identTableCount;
 
 
 // Modified from original
@@ -103,41 +100,56 @@ static void rehash() {
 Identifier *getIdentifier(String name) {
 	PROFILE_FUNC();
 
-
-
 	u64 hash = doHash(name);
-	
+
 	{
-		lock(identTableReadLock);
-		++identTableReadCount;
-		if (identTableReadCount == 1) {
-			lock(identTableWriteLock);
+		while (true) {
+			u64 value = identTableLock;
+			if (value != STATE_WRITING && CompareExchange(&identTableLock, (value + 1) | STATE_WRITING, value) == value)
+				break;
+			_mm_pause();
 		}
-		unlock(identTableReadLock);
+		read_write_barrier();
 		
 		at_exit{
-			lock(identTableReadLock);
-			if (identTableReadCount == 1) {
-				unlock(identTableWriteLock);
+			read_write_barrier();
+			while (true) {
+				u64 value = identTableLock;
+				if (value == (STATE_WRITING | 1)) {
+					if (CompareExchange(&identTableLock, 0ULL, value) == value) {
+						break;
+					}
+				}
+				else if (CompareExchange(&identTableLock, value - 1, value) == value) {
+					break;
+				}
+				_mm_pause();
 			}
-			--identTableReadCount;
-			unlock(identTableReadLock);
 		};
-
 
 		u64 slot = hash & identTableMask;
 
 		while (identTable[slot]) {
 			// Maybe duplicate hash and name inline in the hashtable to avoid extra indirection?
 			if (identTable[slot]->hash == hash && identTable[slot]->name == name) {
-				return identTable[slot];
+				Identifier *identifier = identTable[slot];
+				return identifier;
 			}
 			++slot;
 			slot &= identTableMask;
 		}
 	}
 
-	lock(identTableWriteLock);
+	while (CompareExchange(&identTableLock, STATE_WRITING, 0ULL) != 0) {
+		_mm_pause();
+	}
+	read_write_barrier();
+
+	at_exit{
+		read_write_barrier();
+		identTableLock = 0;
+	};
+
 	Identifier *identifier = static_cast<Identifier *>(allocator.allocate(sizeof(Identifier)));
 	identifier->hash = hash;
 	identifier->name = name;
@@ -146,18 +158,24 @@ Identifier *getIdentifier(String name) {
 		rehash();
 	}
 
-	// Another thread may have sniped the write lock from under us
-	// so we cannot use the previously found slot as it may have
-	// been stolen are we may have rehashed
+	// Another thread may have taken the write lock between us
+	// releasing the read lock and taking the write lock so we cannot 
+	// use the previously found slot as it may have been stolen or we 
+	// may have rehashed
 	u64 slot = hash & identTableMask;
 	
 	while (identTable[slot]) {
+		// Another thread may have inserted this identifier between releasing the read lock
+		// and taking the write lock
+		if (identTable[slot]->hash == hash && identTable[slot]->name == name) {
+			return identTable[slot];
+		}
 		++slot;
 		slot &= identTableMask;
 	}
 
+	++identTableCount;
 	identTable[slot] = identifier;
-	unlock(identTableWriteLock);
 
 	return identifier;
 }
@@ -172,4 +190,12 @@ void initIdentTable() {
 	identCount = getIdentifier("count");
 	identCapacity = getIdentifier("capacity");
 	identInteger = getIdentifier("integer");
+}
+
+void dumpIdentTable() {
+	for (u64 i = 0; i <= identTableMask; i++) {
+		if (identTable[i]) {
+			printf("%.*s\n", STRING_PRINTF(identTable[i]->name));
+		}
+	}
 }

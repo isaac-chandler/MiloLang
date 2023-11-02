@@ -8883,6 +8883,7 @@ outer:
 		}*/
 
 		reportError("Internal Compiler Error: Inference got stuck but no undeclared identifiers or circular dependencies were detected");
+		dumpIdentTable();
 
 		for (auto job = sizeJobs; job; job = job->next) {
 			auto type = job->type;
