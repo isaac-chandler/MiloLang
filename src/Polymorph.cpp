@@ -51,7 +51,7 @@ Declaration *copyDeclarationReference(Declaration *src) {
 	for (auto block : copyingBlocks) {
 		if (block.src != src->enclosingScope) continue;
 
-		if (src->name.length) {
+		if (src->name) {
 			auto declaration = findDeclarationNoYield(block.dest, src->name);
 			assert(declaration);
 			return declaration;
@@ -503,7 +503,7 @@ void copyBlock(Block *dest, Block *src) {
 	for (auto declaration : src->declarations) {
 		auto destDeclaration = POLYMORPH_NEW(Declaration);
 
-		addDeclarationToBlockUnchecked(dest, destDeclaration, nullptr, declaration->serial);
+		addDeclarationToBlockUnchecked(dest, destDeclaration, nullptr, declaration->serial, nullptr);
 
 		copyDeclaration(destDeclaration, declaration);
 
@@ -511,7 +511,7 @@ void copyBlock(Block *dest, Block *src) {
 		while (overload = overload->nextOverload) {
 			auto destOverload = POLYMORPH_NEW(Declaration);
 
-			addDeclarationToBlockUnchecked(dest, destOverload, destDeclaration, overload->serial);
+			addDeclarationToBlockUnchecked(dest, destOverload, destDeclaration, overload->serial, nullptr);
 
 			copyDeclaration(destOverload, overload);
 		}
@@ -542,7 +542,7 @@ ExprFunction *polymorphFunction(ExprFunction *src) {
 				// they can't be found and won't shadow the constants block delcarations
 				// In reality this should never matter since the hash table is only created if there are a large number of declartions in the
 				// block and there will probably never be a function with this many arguments
-				argument->name = "";
+				argument->name = nullptr;
 			}
 		}
 		else {
@@ -569,7 +569,7 @@ TypeStruct *polymorphStruct(TypeStruct *struct_, Arguments *arguments) {
 		dest->constants.declarations[i]->initialValue = arguments->values[i];
 		dest->constants.declarations[i]->flags |= DECLARATION_VALUE_IS_READY | DECLARATION_TYPE_IS_READY;
 
-		addDeclarationToBlockUnchecked(&dest->members, dest->constants.declarations[i], nullptr, dest->constants.declarations[i]->serial);
+		addDeclarationToBlockUnchecked(&dest->members, dest->constants.declarations[i], nullptr, dest->constants.declarations[i]->serial, nullptr);
 	}
 
 	dest->flags &= ~TYPE_IS_POLYMORPHIC;

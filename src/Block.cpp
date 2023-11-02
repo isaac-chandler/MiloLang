@@ -4,76 +4,14 @@
 #include "Ast.h"
 #include "Error.h"
 
-// Modified from original
-u64 MurmurHash64A(const void *key, u64 len, u64 seed) {
-	static_assert(sizeof(u64) == 8);
-	constexpr static u64 multiplier = 0xc6a4a7935bd1e995;
-	constexpr static u64 shift = 47;
 
-	u64 hash = seed ^ (len * multiplier);
-
-	const u64 *data = (const u64 *) key;
-	const u64 *end = data + (len / sizeof(u64));
-
-	for (u64 block = *data; data != end; ++data) {
-
-		block *= multiplier;
-		block ^= block >> shift;
-		block *= multiplier;
-
-		hash ^= block;
-		hash *= multiplier;
-	}
-
-	const u8 *data2 = reinterpret_cast<const u8 *>(data);
-
-	switch (len & 7) {
-		case 7: hash ^= static_cast<u64>(data2[6]) << 48; [[fallthrough]];
-		case 6: hash ^= static_cast<u64>(data2[5]) << 40; [[fallthrough]];
-		case 5: hash ^= static_cast<u64>(data2[4]) << 32; [[fallthrough]];
-		case 4: hash ^= static_cast<u64>(data2[3]) << 24; [[fallthrough]];
-		case 3: hash ^= static_cast<u64>(data2[2]) << 16; [[fallthrough]];
-		case 2: hash ^= static_cast<u64>(data2[1]) << 8; [[fallthrough]];
-		case 1: hash ^= static_cast<u64>(data2[0]);
-		hash *= multiplier;
-	};
-
-	hash ^= hash >> shift;
-	hash *= multiplier;
-	hash ^= hash >> shift;
-
-	return hash;
-}
-
-struct BlockEntry {
-	Declaration *declaration = nullptr;
-	u64 hash;
-};
-
-u64 doHash(String string) {
-	/*
-	u64 hash = 0;
-
-	for (u32 i = 0; i < string.length; i++) {
-		hash *= 251;
-		hash += string.characters[i];
-	}
-	*/
-
-	u64 hash = MurmurHash64A(string.characters, string.length, 0);
-
-	if (hash == 0) hash = 1;
-
-	return hash;
-}
-
-void insert(Block *block, BlockEntry entry) {
+void insert(Block *block, Declaration *entry) {
 	PROFILE_FUNC();
-	u64 slot = entry.hash & (block->tableCapacity - 1);
+	u64 slot = entry->name->hash & (block->tableCapacity - 1);
 
 	u64 dist = 1;
 
-	while (block->table[slot].declaration) {
+	while (block->table[slot]) {
 		slot += dist++;
 		slot &= block->tableCapacity - 1;
 	}
@@ -81,21 +19,21 @@ void insert(Block *block, BlockEntry entry) {
 	block->table[slot] = entry;
 }
 
-Declaration *findInBlock(Block *block, String name) {
-	u64 hash = doHash(name);
+Declaration **findInBlock(Block *block, Identifier *name) {
+	u64 hash = name->hash;
 	u64 slot = hash & (block->tableCapacity - 1);
 
 	u64 dist = 1;
 
-	while (block->table[slot].declaration) {
-		if (block->table[slot].hash == hash && block->table[slot].declaration->name == name) {
-			return block->table[slot].declaration;
+	while (block->table[slot]) {
+		if (block->table[slot]->name == name) {
+			return &block->table[slot];
 		}
 		slot += dist++;
 		slot &= block->tableCapacity - 1;
 	}
 
-	return nullptr;
+	return &block->table[slot];
 }
 
 void rehash(Block *block) {
@@ -105,10 +43,11 @@ void rehash(Block *block) {
 	auto oldCapacity = block->tableCapacity;
 
 	block->tableCapacity *= 2;
-	block->table = new BlockEntry[block->tableCapacity];
+	block->table = new Declaration * [block->tableCapacity];
+	memset(block->table, 0, sizeof(Declaration *) * block->tableCapacity);
 
 	for (u64 i = 0; i < oldCapacity; i++) {
-		if (oldTable[i].declaration) {
+		if (oldTable[i]) {
 			insert(block, oldTable[i]);
 		}
 	}
@@ -116,16 +55,20 @@ void rehash(Block *block) {
 	delete[] oldTable;
 }
 
-void addToTable(Block *block, Declaration *declaration) {
+void addToTable(Block *block, Declaration *declaration, Declaration **availableSlot) {
 	PROFILE_FUNC();
-	if (declaration->name.length) {
-		u64 hash = doHash(declaration->name);
+	if (declaration->name) {
+		if (availableSlot) {
+			assert(!*availableSlot);
+			*availableSlot = declaration;
+		}
+		else {
+			insert(block, declaration);
+		}
 
 		if (block->declarations.count * 10 > block->tableCapacity * 7) {
 			rehash(block);
 		}
-
-		insert(block, { declaration, hash });
 	}
 }
 
@@ -133,11 +76,12 @@ void initTable(Block *block) {
 	PROFILE_FUNC();
 
 	block->tableCapacity = BLOCK_HASHTABLE_MIN_COUNT * 2;
-	block->table = new BlockEntry[block->tableCapacity];
+	block->table = new Declaration * [block->tableCapacity];
+	memset(block->table, 0, sizeof(Declaration *) * block->tableCapacity);
 
 	for (auto declaration : block->declarations) {
-		if (declaration->name.length) {
-			insert(block, { declaration, doHash(declaration->name) });
+		if (declaration->name) {
+			insert(block, declaration);
 		}
 	}
 }
@@ -162,79 +106,95 @@ void addToOverloads(Declaration *overload, Declaration *add) {
 	overload->nextOverload = add;
 }
 
-bool checkForRedeclaration(Block *block, Declaration *declaration, Declaration **potentialOverloadSet, Expr *using_) {
+bool checkForRedeclaration(Block *block, Declaration *declaration, Declaration **potentialOverloadSet, Expr *using_, Declaration ***availableSlot) {
 	PROFILE_FUNC();
 	assert(block);
 	assert(declaration);
 
 	*potentialOverloadSet = nullptr;
 
-	if (declaration->name.length) { // Multiple zero length names are used in the arguments block for function prototypes with unnamed 
-		auto previous = findDeclarationNoYield(block, declaration->name);
+	if (!declaration->name) // Multiple zero length names are used in the arguments block for function prototypes with unnamed 
+		return true;
 
-		if (previous) {
-			if (block->flavor != BlockFlavor::CONSTANTS &&                               // Polymorph variables cannot be overloaded
-				(previous->flags & declaration->flags & DECLARATION_IS_CONSTANT) &&      // Declarations must be a constant
-				!((previous->flags | declaration->flags) & DECLARATION_IS_ENUM_VALUE)) { // Enums use putDeclarationInBlock
-				if (previous->flags & DECLARATION_OVERLOADS_LOCKED) {
-					if (using_) {
-						reportError(declaration, "Error: Cannot import an overload into an overload set that has already been used", STRING_PRINTF(declaration->name));
-						reportError(using_, "   ..: Here is the import location");
-					}
-					else {
-						reportError(declaration, "Error: Cannot add an overload to an overload set that has already been used", STRING_PRINTF(declaration->name));
-					}
+	Declaration *previous = nullptr;
 
-					if (previous->nextOverload) {
-						reportError("   ..: Here are the other overloads");
-					}
-					else {
-						reportError("   ..: Here is the other overload");
-					}
-
-					do {
-						reportError(previous, "");
-					} while (previous = previous->nextOverload);
-
-					return false;
-				}
-
-				*potentialOverloadSet = previous;
-
-				return true;
+	if (block->table) {
+		PROFILE_ZONE("checkForRedeclaration table");
+		*availableSlot = findInBlock(block, declaration->name);
+		previous = **availableSlot;
+	}
+	else {
+		PROFILE_ZONE("checkForRedeclaration array");
+		for (auto existingDeclaration : block->declarations) {
+			if (declaration->name == existingDeclaration->name) {
+				previous = existingDeclaration;
+				break;
 			}
-
-			if (using_) {
-				reportError(using_, "Error: Cannot import variable '%.*s' into scope, it already exists there", STRING_PRINTF(declaration->name));
-				reportError(previous, "   ..: Here is the location it was declared");
-				reportError(declaration, "   ..: Here is the location it was imported from");
-			}
-			else {
-				reportError(declaration, "Error: Cannot redeclare variable '%.*s' within the same scope", STRING_PRINTF(declaration->name));
-				reportError(previous, "   ..: Here is the location it was declared");
-			}
-			return false;
 		}
+	}
 
+	if (!previous) {
 		for (auto import : block->implicitImports) {
 			if (import->name == declaration->name) {
 				if (using_) {
-					reportError(using_, "Error: Cannot import variable '%.*s' into a scope, where a variable of the same name was previously used", 
-						STRING_PRINTF(declaration->name));
+					reportError(using_, "Error: Cannot import variable '%.*s' into a scope, where a variable of the same name was previously used",
+						STRING_PRINTF(declaration->name->name));
 					reportError(import, "   ..: Here is the location it was used");
 					reportError(import->declaration, "   ..: Here is the location it was declared");
 					reportError(declaration, "   ..: Here is the location it was imported from");
 				}
 				else {
-					reportError(declaration, "Error: Cannot declare variable '%.*s' in a scope where a variable of the same name was previously used", 
-						STRING_PRINTF(declaration->name));
+					reportError(declaration, "Error: Cannot declare variable '%.*s' in a scope where a variable of the same name was previously used",
+						STRING_PRINTF(declaration->name->name));
 					reportError(import, "   ..: Here is the location it was used");
 					reportError(previous, "   ..: Here is the location it was declared");
 				}
 				return false;
 			}
 		}
+
+		return true;
 	}
 
-	return true;
+	if (block->flavor != BlockFlavor::CONSTANTS &&                               // Polymorph variables cannot be overloaded
+		(previous->flags & declaration->flags & DECLARATION_IS_CONSTANT) &&      // Declarations must be a constant
+		!((previous->flags | declaration->flags) & DECLARATION_IS_ENUM_VALUE)) { // Enums use putDeclarationInBlock
+		if (previous->flags & DECLARATION_OVERLOADS_LOCKED) {
+			if (using_) {
+				reportError(declaration, "Error: Cannot import an overload into an overload set that has already been used", STRING_PRINTF(declaration->name->name));
+				reportError(using_, "   ..: Here is the import location");
+			}
+			else {
+				reportError(declaration, "Error: Cannot add an overload to an overload set that has already been used", STRING_PRINTF(declaration->name->name));
+			}
+
+			if (previous->nextOverload) {
+				reportError("   ..: Here are the other overloads");
+			}
+			else {
+				reportError("   ..: Here is the other overload");
+			}
+
+			do {
+				reportError(previous, "");
+			} while (previous = previous->nextOverload);
+
+			return false;
+		}
+
+		*potentialOverloadSet = previous;
+
+		return true;
+	}
+
+	if (using_) {
+		reportError(using_, "Error: Cannot import variable '%.*s' into scope, it already exists there", STRING_PRINTF(declaration->name->name));
+		reportError(previous, "   ..: Here is the location it was declared");
+		reportError(declaration, "   ..: Here is the location it was imported from");
+	}
+	else {
+		reportError(declaration, "Error: Cannot redeclare variable '%.*s' within the same scope", STRING_PRINTF(declaration->name->name));
+		reportError(previous, "   ..: Here is the location it was declared");
+	}
+	return false;
 }

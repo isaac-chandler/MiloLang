@@ -148,7 +148,7 @@ void createEntryPointSymbol() {
 	Symbol *entryPointSymbol = (Symbol *) programStart->symbol;
 
 	Symbol symbol;
-	setSymbolName(&symbol, programStart->valueOfDeclaration->name);
+	setSymbolName(&symbol, programStart->valueOfDeclaration->name->name);
 	symbol.value = entryPointSymbol->value;
 	symbol.sectionNumber = entryPointSymbol->sectionNumber;
 	symbol.type = IMAGE_SYM_DTYPE_FUNCTION;
@@ -208,7 +208,7 @@ void createEntryPointSymbol() {
 	symbol.st_other = STV_DEFAULT;
 	symbol.st_shndx = entryPointSymbol->st_shndx;
 
-	stringTable.addNullTerminatedString(programStart->valueOfDeclaration->name);
+	stringTable.addNullTerminatedString(programStart->valueOfDeclaration->name->name);
 	
 	symbols.add(symbol);
 }
@@ -250,7 +250,7 @@ u32 createSymbolForExternalFunction(ExprFunction *function) {
 	if (!(function->flags & EXPR_HAS_STORAGE)) {
 		function->flags |= EXPR_HAS_STORAGE;
  
-		function->physicalStorage = createExternalSymbol(function->valueOfDeclaration->name, &function->symbol);
+		function->physicalStorage = createExternalSymbol(function->valueOfDeclaration->name->name, &function->symbol);
 	}
 
 	return function->physicalStorage;
@@ -261,7 +261,7 @@ u32 createSymbolForFunction(ExprFunction *function) {
 
 	if (!(function->flags & EXPR_HAS_STORAGE)) {
 		function->flags |= EXPR_HAS_STORAGE;
-		function->physicalStorage = createSymbol(code, function->valueOfDeclaration? function->valueOfDeclaration->name : "", true, &function->symbol);
+		function->physicalStorage = createSymbol(code, function->valueOfDeclaration? function->valueOfDeclaration->name->name : "", true, &function->symbol);
 		setSymbolSection(function->symbol, code->sectionNumber);
 	}
 
@@ -1245,7 +1245,7 @@ u32 createSymbolForDeclaration(Declaration *declaration) {
 	if (!(declaration->flags & DECLARATION_HAS_STORAGE)) {
 		declaration->flags |= DECLARATION_HAS_STORAGE;
 
-		declaration->physicalStorage = createSymbol(data, declaration->name, false, &declaration->symbol);
+		declaration->physicalStorage = createSymbol(data, declaration->name->name, false, &declaration->symbol);
 	}
 
 	return static_cast<u32>(declaration->physicalStorage);
@@ -1599,7 +1599,7 @@ void runCoffWriter() {
 				}
 
 				argumentIndex++;
-				emitLocalDeclaration(argument->name, getDeclarationType(argument), debugOffset);
+				emitLocalDeclaration(argument->name->name, getDeclarationType(argument), debugOffset);
 			}
 #else
 			
@@ -3222,7 +3222,7 @@ void runCoffWriter() {
 								offset = getRegisterOffset(function, declaration->registerOfStorage);
 							}
 
-							emitLocalDeclaration(declaration->name, getDeclarationType(declaration), offset);
+							emitLocalDeclaration(declaration->name->name, getDeclarationType(declaration), offset);
 						}
 					}
 					else {
@@ -3525,7 +3525,7 @@ void runCoffWriter() {
 
 
 						createSymbol(rdata);
-						rdata->addNullTerminatedString(member->name);
+						rdata->addNullTerminatedString(member->name->name);
 					}
 
 					// :NotUsingRdata
@@ -3564,7 +3564,7 @@ void runCoffWriter() {
 
 						Type_Info_Struct::Member data;
 
-						data.name = { nullptr, member->name.length };
+						data.name = { nullptr, member->name->name.length };
 						data.offset = (member->flags & DECLARATION_IS_CONSTANT) ? 0 : member->physicalStorage;
 						data.member_type = nullptr;
 						data.initial_value = nullptr;
@@ -3630,7 +3630,7 @@ void runCoffWriter() {
 						if (!(member->flags & DECLARATION_IS_ENUM_VALUE))
 							continue;
 						createSymbol(rdata);
-						rdata->addNullTerminatedString(member->name);
+						rdata->addNullTerminatedString(member->name->name);
 					}
 
 					// :NotUsingRdata
@@ -3645,7 +3645,7 @@ void runCoffWriter() {
 
 						Type_Info_Enum::Value data;
 
-						data.name = { nullptr, member->name.length };
+						data.name = { nullptr, member->name->name.length };
 						data.value = static_cast<ExprLiteral *>(member->initialValue)->unsignedValue;
 
 						section->addPointerRelocation(names + i, section->totalSize + offsetof(decltype(data), name.data));

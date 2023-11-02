@@ -22,8 +22,8 @@
     <ClInclude Include="src\Error.h" />
     <ClInclude Include="src\Polymorph.h" />
     <ClInclude Include="src\CodeView.h" />
-    <ClInclude Include="src\Identifier.h" />
     <ClInclude Include="src\OS.h" />
+    <ClInclude Include="src\IdentTable.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\CompilerMain.cpp" />
@@ -44,8 +44,8 @@
     <ClCompile Include="src\Error.cpp" />
     <ClCompile Include="src\Polymorph.cpp" />
     <ClCompile Include="src\CodeView.cpp" />
-    <ClCompile Include="src\Identifier.cpp" />
     <ClCompile Include="src\OS.cpp" />
+    <ClCompile Include="src\IdentTable.cpp" />
   </ItemGroup>
   <ItemGroup>
     <Natvis Include="NatvisFile.natvis" />

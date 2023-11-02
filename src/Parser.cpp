@@ -120,7 +120,7 @@ ExprBinaryOperator *makeBinaryOperator(LexerFile *lexer, CodeLocation &start, En
 	return expr;
 }
 
-Declaration *makeIterator(LexerFile *lexer, CodeLocation &start, EndLocation &end, String name) {
+Declaration *makeIterator(LexerFile *lexer, CodeLocation &start, EndLocation &end, Identifier *name) {
 	Declaration *declaration = PARSER_NEW(Declaration);
 	declaration->start = start;
 	declaration->end = end;
@@ -450,6 +450,7 @@ Importer *parseLoadOrImport(LexerFile *lexer) {
 }
 
 Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
+	PROFILE_FUNC();
 	if (lexer->token.type == TokenT::FOR) {
 		ExprLoop *loop = PARSER_NEW(ExprLoop);
 		loop->flavor = ExprFlavor::FOR;
@@ -473,7 +474,7 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 
 			lexer->peekTokenTypes(1, &peek); // Check if this identifier is an it declaration, an it, it_index declaration or an identifier
 			if (peek == TOKEN(':') || peek == TOKEN(',')) {
-				it = makeIterator(lexer, lexer->token.start, lexer->token.end, lexer->token.text);
+				it = makeIterator(lexer, lexer->token.start, lexer->token.end, lexer->token.identifier);
 				lexer->advance();
 
 
@@ -483,7 +484,7 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 						return nullptr;
 					}
 
-					it_index = makeIterator(lexer, lexer->token.start, lexer->token.end, lexer->token.text);
+					it_index = makeIterator(lexer, lexer->token.start, lexer->token.end, lexer->token.identifier);
 
 					lexer->advance();
 
@@ -500,11 +501,11 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 		}
 
 		if (!it) {
-			it = makeIterator(lexer, loop->start, end, "it");
+			it = makeIterator(lexer, loop->start, end, identIt);
 		}
 
 		if (!it_index) {
-			it_index = makeIterator(lexer, loop->start, end, "it_index");
+			it_index = makeIterator(lexer, loop->start, end, identItIndex);
 		}
 
 		it->flags |= DECLARATION_IS_ITERATOR;
@@ -610,7 +611,7 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 
 			lexer->peekTokenTypes(1, &peek); // Check if this identifier is an it declaration, an it, it_index declaration or an identifier
 			if (peek == TOKEN(':')) {
-				Declaration *it = makeIterator(lexer, lexer->token.start, lexer->token.end, lexer->token.text);
+				Declaration *it = makeIterator(lexer, lexer->token.start, lexer->token.end, lexer->token.identifier);
 				it->flags |= DECLARATION_IS_ITERATOR;
 
 				if (!addDeclarationToBlock(&loop->iteratorBlock, it, lexer->identifierSerial++)) {
@@ -849,7 +850,7 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 
 
 		if (lexer->token.type == TokenT::IDENTIFIER) {
-			continue_->label = lexer->token.text;
+			continue_->label = lexer->token.identifier;
 
 			continue_->end = lexer->token.end;
 
@@ -857,7 +858,7 @@ Expr *parseStatement(LexerFile *lexer, bool allowDeclarations) {
 			return continue_;
 		}
 		else {
-			continue_->label = { nullptr, (u32)0 };
+			continue_->label = nullptr;
 			continue_->end = lexer->previousTokenEnd;
 
 			return continue_;
@@ -1149,7 +1150,7 @@ Declaration *createAnonymousDeclaration(LexerFile *lexer, Expr *type) {
 	declaration->type = type;
 	declaration->start = type->start;
 	declaration->end = type->end;
-	declaration->name = String(nullptr, 0u);
+	declaration->name = nullptr;
 	declaration->initialValue = nullptr;
 
 	return declaration;
@@ -1439,7 +1440,7 @@ ExprFunction *parseFunctionOrFunctionType(LexerFile *lexer, CodeLocation start, 
 		}
 
 
-		if (function->arguments.declarations.count && function->arguments.declarations[0]->name.length == 0) {
+		if (function->arguments.declarations.count && !function->arguments.declarations[0]->name) {
 			reportError(function->arguments.declarations[0], "Error: Non-external functions cannot have anonymous parameters");
 			return nullptr;
 		}
@@ -1648,16 +1649,16 @@ Expr *parseFunctionOrParentheses(LexerFile *lexer, CodeLocation start) {
 
 bool parseArguments(LexerFile *lexer, Arguments *args) {
 	Array<Expr *> arguments;
-	Array<String> names;
+	Array<Identifier *> names;
 
 	do {
-		String name = { nullptr, 0u };
+		Identifier *name = nullptr;
 
 		TokenT peek;
 		lexer->peekTokenTypes(1, &peek);
 
 		if (lexer->token.type == TokenT::IDENTIFIER && peek == TOKEN('=')) {
-			name = lexer->token.text;
+			name = lexer->token.identifier;
 
 			lexer->advance();
 
@@ -1679,9 +1680,9 @@ bool parseArguments(LexerFile *lexer, Arguments *args) {
 
 		arguments.add(argument);
 
-		if (name.length || names.count) {
+		if (name || names.count) {
 			for (u64 i = names.count + 1; i < arguments.count; i++) {
-				names.add("");
+				names.add(nullptr);
 			}
 
 			names.add(name);
@@ -1728,17 +1729,17 @@ bool parseArrayLiteral(LexerFile *lexer, ExprArrayLiteral *literal) {
 
 bool parseStructLiteral(LexerFile *lexer, ExprStructLiteral *literal) {
 	Array<Expr *> initializers;
-	Array<String> names;
+	Array<Identifier *> names;
 
 	if (lexer->token.type != TOKEN('}')) {
 		do {
-			String name = { nullptr, 0u };
+			Identifier *name = nullptr;
 
 			TokenT peek;
 			lexer->peekTokenTypes(1, &peek);
 
 			if (lexer->token.type == TokenT::IDENTIFIER && peek == TOKEN('=')) {
-				name = lexer->token.text;
+				name = lexer->token.identifier;
 
 				lexer->advance();
 
@@ -1767,9 +1768,9 @@ bool parseStructLiteral(LexerFile *lexer, ExprStructLiteral *literal) {
 
 			initializers.add(argument);
 
-			if (name.length) {
+			if (name) {
 				for (u64 i = names.count + 1; i < initializers.count; i++) {
-					names.add("");
+					names.add(nullptr);
 				}
 
 				names.add(name);
@@ -1831,7 +1832,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 			ExprIdentifier *identifier = PARSER_NEW(ExprIdentifier);
 			identifier->start = start;
 			identifier->end = lexer->token.end;
-			identifier->name = lexer->token.text;
+			identifier->name = lexer->token.identifier;
 			identifier->flavor = ExprFlavor::IDENTIFIER;
 
 
@@ -1862,7 +1863,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		declaration->type = parserMakeTypeLiteral(lexer, start, lexer->token.end, &TYPE_TYPE);
 		declaration->flags |= DECLARATION_IS_CONSTANT | DECLARATION_TYPE_POLYMORPHIC;
 		declaration->start = start;
-		declaration->name = lexer->token.text;
+		declaration->name = lexer->token.identifier;
 		declaration->end = lexer->token.end;
 		declaration->initialValue = parserMakeTypeLiteral(lexer, start, lexer->token.end, nullptr);
 
@@ -1887,7 +1888,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		ExprIdentifier *identifier = PARSER_NEW(ExprIdentifier);
 		identifier->start = start;
 		identifier->end = end;
-		identifier->name = lexer->token.text;
+		identifier->name = lexer->token.identifier;
 		identifier->flavor = ExprFlavor::IDENTIFIER;
 		identifier->resolveFrom = lexer->currentBlock;
 		identifier->module = lexer->module;
@@ -1911,7 +1912,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		ExprIdentifier *identifier = PARSER_NEW(ExprIdentifier);
 		identifier->start = start;
 		identifier->end = end;
-		identifier->name = lexer->token.text;
+		identifier->name = lexer->token.identifier;
 		identifier->flavor = ExprFlavor::IDENTIFIER;
 		identifier->resolveFrom = lexer->currentBlock;
 		identifier->module = lexer->module;
@@ -2128,7 +2129,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 				auto constant = findDeclarationNoYield(&type->constants, declaration->name);
 
 				if (constant) {
-					reportError(declaration, "Error: Cannot redeclare struct argument %.*s as a struct member", STRING_PRINTF(declaration->name));
+					reportError(declaration, "Error: Cannot redeclare struct argument %.*s as a struct member", STRING_PRINTF(declaration->name->name));
 					reportError(constant, "   ..: Here is the argument declaration");
 					return nullptr;
 				}
@@ -2236,14 +2237,14 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 			}
 			else if (lexer->token.type == TokenT::IDENTIFIER) {
 				auto declaration = PARSER_NEW(Declaration);
-				declaration->name = lexer->token.text;
+				declaration->name = lexer->token.identifier;
 				declaration->start = lexer->token.start;
 				declaration->type = typeLiteral;
 				declaration->inferJob = nullptr;
 				declaration->flags |= DECLARATION_IS_CONSTANT | DECLARATION_IS_ENUM_VALUE;
 
-				if (declaration->name == "integer") {
-					reportError(&lexer->token, "Error: enum name conflicts with enum data declaration '%.*s'", STRING_PRINTF(declaration->name));
+				if (declaration->name == identInteger) {
+					reportError(&lexer->token, "Error: enum name conflicts with enum data declaration '%.*s'", STRING_PRINTF(declaration->name->name));
 					return nullptr;
 				}
 
@@ -2297,7 +2298,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 
 
 		auto integer = PARSER_NEW(Declaration);
-		integer->name = "integer";
+		integer->name = identInteger;
 		integer->start = integerType->start;
 		integer->end = integerType->end;
 		integer->type = nullptr;
@@ -2484,7 +2485,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 				}
 
 				access->end = lexer->token.end;
-				access->name = lexer->token.text;
+				access->name = lexer->token.identifier;
 				lexer->advance();
 				expr = access;
 			}
@@ -2613,7 +2614,7 @@ Expr *parsePrefixExpr(LexerFile *lexer, CodeLocation plusStart) {
 		returnType->flags |= DECLARATION_IS_RETURN | DECLARATION_IS_RUN_RETURN;
 		returnType->type = type;
 		returnType->initialValue = returnValue;
-		returnType->name = "";
+		returnType->name = nullptr;
 
 		addDeclarationToBlock(&function->returns, returnType, function->returns.declarations.count);
 
@@ -2632,11 +2633,11 @@ Expr *parsePrefixExpr(LexerFile *lexer, CodeLocation plusStart) {
 				return nullptr;
 			}
 
-			if (lexer->token.text == "bit") {
+			if (lexer->token.identifier->name == "bit") {
 				expr->flags |= EXPR_CAST_IS_BITWISE;
 			}
 			else {
-				reportError(&lexer->token, "Error: Unkown modifier for cast: '%.*s'", STRING_PRINTF(lexer->token.text));
+				reportError(&lexer->token, "Error: Unkown modifier for cast: '%.*s'", STRING_PRINTF(lexer->token.identifier->name));
 				return nullptr;
 			}
 
@@ -2865,6 +2866,7 @@ Expr *parseBinaryOperator(LexerFile *lexer) {
 
 // @Incomplete: punting on ternary operator for now because I don't know whether we should actually support it
 Expr *parseExpr(LexerFile *lexer) {
+	PROFILE_FUNC();
 	return parseBinaryOperator(lexer);
 }
 
@@ -2887,7 +2889,7 @@ Declaration *parseDeclaration(LexerFile *lexer) {
 		declaration->flags |= DECLARATION_VALUE_POLYMORPHIC;
 	}
 
-	declaration->name = lexer->token.text;
+	declaration->name = lexer->token.identifier;
 
 	if (lexer->token.type != TokenT::IDENTIFIER) {
 		reportExpectedError(&lexer->token, "Error: Expected declaration name");
@@ -3072,7 +3074,6 @@ void runParser() {
 	LexerFile *lexer = &lexer_;
 
 	while (true) {
-		PROFILE_ZONE("parseFile");
 		FileInfo *file = parserQueue.take();
 
 		if (!file) {
@@ -3086,6 +3087,7 @@ void runParser() {
 			break;
 		}
 
+		PROFILE_ZONE(mprintf("Parse %.*s", STRING_PRINTF(file->path)));
 		lexer->advance();
 
 		while (!hadError) {

@@ -183,13 +183,15 @@ struct ScopeLock {
 };
 
 #if BUILD_PROFILE
+#include "OS.h"
+
 struct Profile {
 	const char *name;
 	const char *color;
 	u64 time;
 };
 
-#define PROFILER_THREADS 10
+#define PROFILER_THREADS 16
 
 
 inline Profile *volatile profiles[PROFILER_THREADS];

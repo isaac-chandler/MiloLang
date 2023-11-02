@@ -132,11 +132,15 @@ __strings_equal :: (a: *string, b: *string) -> bool #c_call {
     return true
 }
 
+// The compiler relies on the layout of this structure to
+// store the stack trace
 Source_Location :: struct {
     filename: string
     line: u64
 }
 
+// The compiler relies on the layout of this structure to
+// store the stack trace
 Stack_Trace :: struct {
     caller: *Stack_Trace
     using info: *struct {
@@ -160,9 +164,13 @@ __program_start :: () -> s32 #c_call {
 
 
 Context_Base :: struct {
+    // The compiler relies on this member being at offset 0
+    // in the Context
     stack_trace: *Stack_Trace
     
     assertion_failed_handler: (location: Source_Location) -> void
 }
 
+// The compiler relies on this member being at offset 0
+// in the Context
 #add_context using base: Context_Base

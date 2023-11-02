@@ -1522,7 +1522,7 @@ u32 generateCall(ExprFunction *function, ExprFunctionCall *call, ExprCommaAssign
 	auto type = static_cast<TypeFunction *>(call->function->type);
 
 	if (call->function->flags & EXPR_FUNCTION_IS_INSTRINSIC) {
-		if (call->function->valueOfDeclaration->name == "pop_count") {
+		if (call->function->valueOfDeclaration->name->name == "pop_count") {
 			auto argumentType = type->argumentTypes[0];
 
 			if (argumentType->flavor != TypeFlavor::INTEGER && argumentType->flavor != TypeFlavor::ENUM) {
@@ -1542,7 +1542,7 @@ u32 generateCall(ExprFunction *function, ExprFunctionCall *call, ExprCommaAssign
 			
 			return result;
 		}
-		else if (call->function->valueOfDeclaration->name == "bit_scan_forward" || call->function->valueOfDeclaration->name == "bit_scan_reverse") {
+		else if (call->function->valueOfDeclaration->name->name == "bit_scan_forward" || call->function->valueOfDeclaration->name->name == "bit_scan_reverse") {
 			auto argumentType = type->argumentTypes[0];
 
 			if (argumentType->flavor != TypeFlavor::INTEGER && argumentType->flavor != TypeFlavor::ENUM) {
@@ -1556,7 +1556,7 @@ u32 generateCall(ExprFunction *function, ExprFunctionCall *call, ExprCommaAssign
 			u32 resultZero = allocateRegister(function);
 
 			auto &ir = function->state.ir.add();
-			if (call->function->valueOfDeclaration->name == "bit_scan_forward") {
+			if (call->function->valueOfDeclaration->name->name == "bit_scan_forward") {
 				ir.op = IrOp::BIT_SCAN_FORWARD;
 			}
 			else {
@@ -1604,7 +1604,7 @@ u32 generateCall(ExprFunction *function, ExprFunctionCall *call, ExprCommaAssign
 			return resultIndex;
 		}
 		else {
-			reportError(call, "Error: Call to unknown intrinsic function: %.*s", STRING_PRINTF(call->function->valueOfDeclaration->name));
+			reportError(call, "Error: Call to unknown intrinsic function: %.*s", STRING_PRINTF(call->function->valueOfDeclaration->name->name));
 			return 0;
 		}
 	}
@@ -1646,16 +1646,19 @@ u32 generateCall(ExprFunction *function, ExprFunctionCall *call, ExprCommaAssign
 	}
 
 	if (function->valueOfDeclaration) {
-		callArguments->stackTrace.function.data = reinterpret_cast<u8 *>(function->valueOfDeclaration->name.characters);
-		callArguments->stackTrace.function.count = function->valueOfDeclaration->name.length;
+		String name = function->valueOfDeclaration->name->name;
+		callArguments->stackTrace.function.data = reinterpret_cast<u8 *>(name.characters);
+		callArguments->stackTrace.function.count = name.length;
 	}
 	else {
 		callArguments->stackTrace.function.data = nullptr;
 		callArguments->stackTrace.function.count = 0;
 	}
 
-	callArguments->stackTrace.filename.data = reinterpret_cast<u8 *>(compilerFiles[call->start.fileUid]->path.characters);
-	callArguments->stackTrace.filename.count = compilerFiles[call->start.fileUid]->path.length;
+	auto filepath = getFileInfoByUid(call->start.fileUid)->path;
+
+	callArguments->stackTrace.filename.data = reinterpret_cast<u8 *>(filepath.characters);
+	callArguments->stackTrace.filename.count = filepath.length;
 	callArguments->stackTrace.line = call->start.line;
 
 	Ir &ir = function->state.ir.add();

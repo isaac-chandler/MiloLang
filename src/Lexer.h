@@ -5,6 +5,7 @@
 #include "CompilerMain.h"
 #include "Block.h"
 #include "BucketedArenaAllocator.h"
+#include "IdentTable.h"
 
 #define LITERAL_IS_DECIMAL 0x1
 #define LITERAL_IS_HEX 0x2
@@ -140,7 +141,7 @@ struct Token {
 
 		u64 unsignedValue;
 		double floatValue;
-
+		Identifier *identifier;
 	};
 	u8 flags = 0;
 

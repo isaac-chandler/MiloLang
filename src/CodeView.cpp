@@ -193,7 +193,7 @@ void alignDebugTypes() {
 #define DEBUG_LEAF DebugLeaf() + [&]()
 
 u32 createFunctionIDType(ExprFunction *function) {
-	auto name = function->valueOfDeclaration ? function->valueOfDeclaration->name : "__unnamed";
+	auto name = function->valueOfDeclaration ? function->valueOfDeclaration->name->name : "__unnamed";
 
 	// @Volatile: This relies on the LF_PROCEDURE node being directly before the LF_POINTER node that defines the function pointer type
 	u32 funcType = getCoffTypeIndex(function->type) - 1;
@@ -555,7 +555,7 @@ u32 createTypeImpl(Type *type, CodeViewTypeInfo *codeView) {
 						debugTypes->add2Unchecked(0x3); // public
 						debugTypes->add4Unchecked(firstFlag + flagCount++);
 						debugTypes->add2Unchecked(0); // offset 0
-						debugTypes->addNullTerminatedString(declaration->name);
+						debugTypes->addNullTerminatedString(declaration->name->name);
 					}
 				}
 			};
@@ -593,7 +593,7 @@ u32 createTypeImpl(Type *type, CodeViewTypeInfo *codeView) {
 					debugTypes->add2Unchecked(0x3); // Public
 					debugTypes->add2Unchecked(LF_UQUADWORD);
 					debugTypes->add8Unchecked(static_cast<ExprLiteral *>(declaration->initialValue)->unsignedValue);
-					debugTypes->addNullTerminatedString(declaration->name);
+					debugTypes->addNullTerminatedString(declaration->name->name);
 				}
 			};
 
@@ -682,7 +682,7 @@ u32 createTypeImpl(Type *type, CodeViewTypeInfo *codeView) {
 					debugTypes->add2Unchecked(LF_NESTTYPE);
 					debugTypes->add2Unchecked(0);
 					debugTypes->add4Unchecked(getCoffTypeIndex(nestType));
-					debugTypes->addNullTerminatedString(member->name);
+					debugTypes->addNullTerminatedString(member->name->name);
 					memberCount++;
 				}
 				else {
@@ -693,7 +693,7 @@ u32 createTypeImpl(Type *type, CodeViewTypeInfo *codeView) {
 					debugTypes->add4Unchecked(getCoffTypeIndex(type));
 					debugTypes->add2Unchecked(LF_ULONG);
 					debugTypes->add4Unchecked(member->physicalStorage); // offset
-					debugTypes->addNullTerminatedString(member->name);
+					debugTypes->addNullTerminatedString(member->name->name);
 					memberCount++;
 
 				}
@@ -839,7 +839,7 @@ void emitGlobalDeclaration(Declaration *declaration) {
 	auto subsectionSizePatch = debugSymbols->add4Unchecked(0);
 	u32 subsectionOffset = debugSymbols->totalSize;
 
-	debugSymbols->add2Unchecked(static_cast<u16>(sizeof(DATASYM32) + declaration->name.length - 1));
+	debugSymbols->add2Unchecked(static_cast<u16>(sizeof(DATASYM32) + declaration->name->name.length - 1));
 	debugSymbols->add2Unchecked(0x110d); // S_GDATA32
 
 	u32 *patch = debugSymbols->add4Unchecked(0);
@@ -847,7 +847,7 @@ void emitGlobalDeclaration(Declaration *declaration) {
 	
 	debugSymbols->addSectionRelocations(declaration->physicalStorage);
 
-	debugSymbols->addNullTerminatedString(declaration->name);
+	debugSymbols->addNullTerminatedString(declaration->name->name);
 
 	*subsectionSizePatch = debugSymbols->totalSize - subsectionOffset;
 
@@ -882,7 +882,7 @@ EmitFunctionInfo emitFunctionBegin(ExprFunction *function, u32 stackSpace) {
 	result.subsectionSizePatch = debugSymbols->add4Unchecked(0);
 	result.subsectionOffset = debugSymbols->totalSize;
 
-	auto name = function->valueOfDeclaration ? function->valueOfDeclaration->name : "__unnamed";
+	auto name = function->valueOfDeclaration ? function->valueOfDeclaration->name->name : "__unnamed";
 
 	debugSymbols->add2Unchecked(static_cast<u16>(sizeof(PROCSYM32) + name.length - 1));
 	debugSymbols->add2Unchecked(0x1147); // S_GPROC32_ID

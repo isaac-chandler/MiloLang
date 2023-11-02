@@ -7,6 +7,7 @@
 #if BUILD_WINDOWS
 
 void set_working_directory(char *directory) {
+	PROFILE_FUNC();
 	auto dir = utf8ToWString(directory);
 	SetCurrentDirectoryW(dir);
 	free(dir);
@@ -17,6 +18,7 @@ void yieldThread() {
 }
 
 bool fileExists(const char *file) {
+	PROFILE_FUNC();
 	wchar_t *filename = utf8ToWString(file);
 
 	u32 attributes = GetFileAttributesW(filename);
@@ -26,6 +28,7 @@ bool fileExists(const char *file) {
 }
 
 bool directoryExists(const char *file) {
+	PROFILE_FUNC();
 	wchar_t *filename = utf8ToWString(file);
 
 	u32 attributes = GetFileAttributesW(filename);
@@ -35,6 +38,7 @@ bool directoryExists(const char *file) {
 }
 
 char *exePath() {
+	PROFILE_FUNC();
 	u32 bufferSize = 256;
 
 	while (true) {
@@ -52,6 +56,7 @@ char *exePath() {
 }
 
 char *fullPath(const char *filename) {
+	PROFILE_FUNC();
 	wchar_t *wfilename = utf8ToWString(filename);
 
 	wchar_t dummy;
@@ -67,6 +72,7 @@ char *fullPath(const char *filename) {
 }
 
 FILE *fopen_utf8(const char *filename, const char *mode) {
+	PROFILE_FUNC();
 	wchar_t wmode[4];
 
 	int i = 0;
@@ -79,6 +85,7 @@ FILE *fopen_utf8(const char *filename, const char *mode) {
 	wchar_t *wfilename = utf8ToWString(filename);
 	FILE *file;
 
+
 	if (_wfopen_s(&file, wfilename, wmode)) {
 		free(wfilename);
 		return nullptr;
@@ -89,6 +96,7 @@ FILE *fopen_utf8(const char *filename, const char *mode) {
 }
 
 void *open_library(const char *name) {
+	PROFILE_FUNC();
 	wchar_t *wname = utf8ToWString(name);
 	HMODULE lib = LoadLibraryW(wname);
 
@@ -97,16 +105,12 @@ void *open_library(const char *name) {
 }
 
 void *library_find(void *library, const char *symbol) {
+	PROFILE_FUNC();
 	return GetProcAddress(static_cast<HMODULE>(library), symbol);
 }
 
-void set_working_directory(const char *directory) {
-	wchar_t *wname = utf8ToWString(directory);
-	SetCurrentDirectoryW(wname);
-	free(wname);
-}
-
 void setThreadName(std::thread &thread, const char *name) {
+	PROFILE_FUNC();
 	SetThreadDescription(thread.native_handle(), utf8ToWString(name));
 }
 

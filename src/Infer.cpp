@@ -92,7 +92,7 @@ struct SubJob {
 	Array<u32> indices;
 	u32 flattenedCount = 0;
 	u32 sleepCount = 0;
-	String sleepingOnName;
+	Identifier *sleepingOnName;
 
 	JobFlavor flavor;
 
@@ -111,7 +111,7 @@ Expr **getHalt(SubJob *job) {
 	return job->flatteneds[job->flattenedCount - 1][job->indices[job->flattenedCount - 1]];
 }
 
-void goToSleep(SubJob *job, Array<SubJob *> *sleepingOnMe, const char *reason, String name) {
+void goToSleep(SubJob *job, Array<SubJob *> *sleepingOnMe, const char *reason, Identifier *name) {
 	assert(job->sleepCount == 0 || job->sleepingOnName == name);
 	
 	job->sleepingOnName = name;
@@ -127,9 +127,9 @@ void goToSleep(SubJob *job, Array<SubJob *> *sleepingOnMe, const char *reason, S
 }
 
 void goToSleep(SubJob *job, Array<SubJob *> *sleepingOnMe, const char *reason) {
-	assert(job->sleepCount == 0 || job->sleepingOnName == "");
+	assert(job->sleepCount == 0 || !job->sleepingOnName);
 
-	job->sleepingOnName = { nullptr, 0u };
+	job->sleepingOnName = nullptr;
 
 	job->sleepCount++;
 
@@ -277,9 +277,9 @@ Array<OverloadWaitingForLock> overloadsWaitingForLock;
 void forceAddDeclaration(Declaration *declaration);
 bool addDeclaration(Declaration *declaration, Module *members);
 
-void wakeUpSleepers(Array<SubJob *> *sleepers, String name = String(nullptr, 0u)) {
+void wakeUpSleepers(Array<SubJob *> *sleepers, Identifier *name = nullptr) {
 
-	if (name.length == 0) {
+	if (!name) {
 		PROFILE_ZONE("Unnamed wakeUpSleepers");
 		for (auto sleeper : *sleepers) {
 			if (--sleeper->sleepCount == 0)
@@ -293,7 +293,7 @@ void wakeUpSleepers(Array<SubJob *> *sleepers, String name = String(nullptr, 0u)
 		for (u32 i = 0; i < sleepers->count; i++) {
 			auto sleeper = (*sleepers)[i];
 
-			if (sleeper->sleepingOnName.length == 0 || name == sleeper->sleepingOnName) {
+			if (!sleeper->sleepingOnName|| name == sleeper->sleepingOnName) {
 				if (--sleeper->sleepCount == 0) {
 					sleepers->unordered_remove(i--);
 					addSubJob(sleeper);
@@ -373,7 +373,7 @@ void addTypeBlock(Type *type, Declaration *valueOfDeclaration) {
 		bool already_added = (struct_->flags & TYPE_IS_POLYMORPHIC) ? struct_->constants.queued : struct_->members.queued;
 		if (!already_added) {
 			if (valueOfDeclaration && (valueOfDeclaration->flags & DECLARATION_IS_CONSTANT)) {
-				type->name = valueOfDeclaration->name;
+				type->name = valueOfDeclaration->name->name;
 				struct_->enclosingScope = valueOfDeclaration->enclosingScope;
 			}
 			else if (type != &TYPE_CONTEXT) { // The context is passed into addTypeBlock but does not have a declaration. It is already given a name so don't rename to anonymous
@@ -1383,7 +1383,7 @@ bool inferUnaryDot(SubJob *job, TypeEnum *enum_, Expr **exprPointer, bool *yield
 
 	if (!member) {
 		if (!silentCheck)
-			reportError(identifier, "Error: %.*s does not have member %.*s", STRING_PRINTF(enum_->name), STRING_PRINTF(identifier->name));
+			reportError(identifier, "Error: %.*s does not have member %.*s", STRING_PRINTF(enum_->name), STRING_PRINTF(identifier->name->name));
 		return false;
 	}
 	assert(member->flags & DECLARATION_IS_CONSTANT); // All enum members should be constants
@@ -2456,7 +2456,7 @@ bool inferOverloadSetForNonCall(SubJob *job, Type *correct, Expr *&given, bool *
 			if (getDeclarationType(current) == correct) {
 				if (!silentCheck && found) {
 					if (!reported) {
-						reportError(overload, "Error: Multiple overloads of %.*s match the type %.*s", STRING_PRINTF(overload->identifier->name), STRING_PRINTF(correct->name));
+						reportError(overload, "Error: Multiple overloads of %.*s match the type %.*s", STRING_PRINTF(overload->identifier->name->name), STRING_PRINTF(correct->name));
 						reportError(found, "");
 						reported = true;
 					}
@@ -2493,7 +2493,7 @@ bool inferOverloadSetForNonCall(SubJob *job, Type *correct, Expr *&given, bool *
 				reportError(given, "Error: Could not convert from %.*s to  %.*s", STRING_PRINTF(getDeclarationType(overloads[0])->name), STRING_PRINTF(correct->name));
 			}
 			else {
-				reportError(given, "Error: No overloads of %.*s match the type %.*s", STRING_PRINTF(overload->identifier->name), STRING_PRINTF(correct->name));
+				reportError(given, "Error: No overloads of %.*s match the type %.*s", STRING_PRINTF(overload->identifier->name->name), STRING_PRINTF(correct->name));
 
 				for (auto overload : overloads) {
 					reportError(overload, "");
@@ -2795,7 +2795,7 @@ bool assignOp(SubJob *job, Expr *location, Type *correct, Expr *&given, bool *yi
 				identifier->start = given->start;
 				identifier->end = given->end;
 				identifier->flavor = ExprFlavor::IDENTIFIER;
-				identifier->name = "data";
+				identifier->name = identData;
 				identifier->resolveFrom = nullptr;
 				identifier->enclosingScope = nullptr;
 				identifier->structAccess = given;
@@ -3100,7 +3100,7 @@ Conversion getConversionCost(SubJob *job, Type *correct, Expr *given, bool *yiel
 
 			if (literal->initializers.names) {
 				for (u32 i = 0; i < literal->initializers.count; i++) {
-					if (literal->initializers.names[i].length && !findDeclarationNoYield(block, literal->initializers.names[i]))
+					if (literal->initializers.names[i] && !findDeclarationNoYield(block, literal->initializers.names[i]))
 						return ConversionCost::CANNOT_CONVERT;
 				}
 			}
@@ -3159,7 +3159,7 @@ bool sortArguments(SubJob *job, Arguments *arguments, Block *block, const char *
 	String functionName = "function";
 
 	if (functionLocation->valueOfDeclaration) {
-		functionName = functionLocation->valueOfDeclaration->name;
+		functionName = functionLocation->valueOfDeclaration->name->name;
 	}
 
 
@@ -3195,12 +3195,12 @@ bool sortArguments(SubJob *job, Arguments *arguments, Block *block, const char *
 			Declaration *argument;
 
 			u32 argIndex = i;
-			if (arguments->names && arguments->names[i].length) {
+			if (arguments->names && arguments->names[i]) {
 				hadNamed = true;
 				argument = findDeclarationNoYield(block, arguments->names[i]);
 
 				if (!argument) {
-					reportError(arguments->values[i], "Error: %.*s does not have a %s called %.*s", STRING_PRINTF(functionName), message, STRING_PRINTF(arguments->names[i]));
+					reportError(arguments->values[i], "Error: %.*s does not have a %s called %.*s", STRING_PRINTF(functionName), message, STRING_PRINTF(arguments->names[i]->name));
 					return false;
 				}
 			}
@@ -3216,7 +3216,7 @@ bool sortArguments(SubJob *job, Arguments *arguments, Block *block, const char *
 			assert(!(argument->flags & DECLARATION_IMPORTED_BY_USING));
 
 			if (sortedArguments[argIndex]) {
-				reportError(arguments->values[i], "Error: %s %.*s was supplied twice", message, STRING_PRINTF(block->declarations[argIndex]->name));
+				reportError(arguments->values[i], "Error: %s %.*s was supplied twice", message, STRING_PRINTF(block->declarations[argIndex]->name->name));
 				reportError(sortedArguments[argIndex], "   ..: It was previously given here");
 				return false;
 			}
@@ -3231,7 +3231,7 @@ bool sortArguments(SubJob *job, Arguments *arguments, Block *block, const char *
 				array->typeValue = nullptr;
 
 				for (; i < arguments->count; i++) {
-					if (arguments->names && arguments->names[i].length) {
+					if (arguments->names && arguments->names[i]) {
 						i--;
 						break;
 					}
@@ -3280,7 +3280,7 @@ bool sortArguments(SubJob *job, Arguments *arguments, Block *block, const char *
 				}
 				else if (argument->flags & DECLARATION_IS_VARARGS) {
 					if (argument->flags & DECLARATION_TYPE_POLYMORPHIC) {
-						reportError(callLocation, "Error: Varargs argument '%.*s' of polymorphic type must have at least one value", STRING_PRINTF(argument->name));
+						reportError(callLocation, "Error: Varargs argument '%.*s' of polymorphic type must have at least one value", STRING_PRINTF(argument->name->name));
 						reportError(argument, "   ..: Here is the %s", message);
 						failed = true;
 					}
@@ -3290,7 +3290,7 @@ bool sortArguments(SubJob *job, Arguments *arguments, Block *block, const char *
 					sortedArguments[i] = literal;
 				}
 				else {
-					reportError(callLocation, "Error: Required %s '%.*s' was not given", message, STRING_PRINTF(argument->name));
+					reportError(callLocation, "Error: Required %s '%.*s' was not given", message, STRING_PRINTF(argument->name->name));
 					reportError(argument, "   ..: Here is the %s", message);
 					failed = true;
 				}
@@ -3359,7 +3359,7 @@ bool checkArgumentsForOverload(SubJob *job, Arguments *arguments, Block *block, 
 		Declaration *argument;
 
 		u32 argIndex = i;
-		if (arguments->names && arguments->names[i].length) {
+		if (arguments->names && arguments->names[i]) {
 			argument = findDeclarationNoYield(block, arguments->names[i]);
 		}
 		else {
@@ -3381,7 +3381,7 @@ bool checkArgumentsForOverload(SubJob *job, Arguments *arguments, Block *block, 
 			Type *varargsType = static_cast<TypeArray *>(getDeclarationType(argument))->arrayOf;
 
 			for (; i < arguments->count; i++) {
-				if (arguments->names && arguments->names[i].length) {
+				if (arguments->names && arguments->names[i]) {
 					i--; // i will be incremented in the outer loop
 					break;
 				}
@@ -3602,7 +3602,7 @@ bool matchPolymorphArgument(Expr *polymorphExpression, Type *type, Expr *locatio
 				if (!declaration) {
 					if (!silent) {
 						reportError(location, "Error: Could not match polymorph pattern, expected a struct argument called %.*s but given struct %.*s does not have it",
-							STRING_PRINTF(call->arguments.names[i]), STRING_PRINTF(struct_->name));
+							STRING_PRINTF(call->arguments.names[i]->name), STRING_PRINTF(struct_->name));
 						reportError(polymorphExpression, "   ..: Here is the polymorph argument");
 					}
 					return false;
@@ -4381,7 +4381,7 @@ bool inferFlattened(SubJob *job) {
 								return true;
 							}
 
-							reportError(identifier, "Error: %.*s does not have member %.*s", STRING_PRINTF(struct_->name), STRING_PRINTF(identifier->name));
+							reportError(identifier, "Error: %.*s does not have member %.*s", STRING_PRINTF(struct_->name), STRING_PRINTF(identifier->name->name));
 
 							return false;
 						}
@@ -4428,7 +4428,7 @@ bool inferFlattened(SubJob *job) {
 								break;
 							}
 
-							reportError(identifier, "Error: Cannot refer to variable '%.*s' before it was declared", STRING_PRINTF(identifier->name));
+							reportError(identifier, "Error: Cannot refer to variable '%.*s' before it was declared", STRING_PRINTF(identifier->name->name));
 							reportError(declaration, "   ..: Here is the location of the declaration");
 							return false;
 						}
@@ -4528,7 +4528,7 @@ bool inferFlattened(SubJob *job) {
 
 			if (unimportedDeclaration->flags & DECLARATION_IMPORTED_BY_USING) {
 				if (unimportedDeclaration->enclosingScope->flavor == BlockFlavor::IMPERATIVE && unimportedDeclaration->serial >= identifier->serial) {
-					reportError(identifier, "Error: Cannot refer to variable '%.*s' before it was declared", STRING_PRINTF(identifier->name));
+					reportError(identifier, "Error: Cannot refer to variable '%.*s' before it was declared", STRING_PRINTF(identifier->name->name));
 					reportError(unimportedDeclaration, "   ..: Here is the location of the declaration");
 					return false;
 				}
@@ -4774,11 +4774,11 @@ bool inferFlattened(SubJob *job) {
 
 					auto initializer = literal->initializers.values[i];
 
-					if (literal->initializers.names && literal->initializers.names[i].length) {
+					if (literal->initializers.names && literal->initializers.names[i]) {
 						member = findDeclarationNoYield(block, literal->initializers.names[i]);
 
 						if (!member) {
-							reportError(initializer, "Error: %.*s does not have member %.*s", STRING_PRINTF(literal->type->name), STRING_PRINTF(literal->initializers.names[i]));
+							reportError(initializer, "Error: %.*s does not have member %.*s", STRING_PRINTF(literal->type->name), STRING_PRINTF(literal->initializers.names[i]->name));
 							return false;
 						}
 
@@ -4811,7 +4811,7 @@ bool inferFlattened(SubJob *job) {
 
 					if (sortedInitializers) {
 						if (sortedInitializers[memberIndex]) {
-							reportError(initializer, "Error: Cannot initialize %.*s multiple times", STRING_PRINTF(member->name));
+							reportError(initializer, "Error: Cannot initialize %.*s multiple times", STRING_PRINTF(member->name->name));
 							reportError(sortedInitializers[memberIndex], "   ..: Here is the previous initialization");
 							return false;
 						}
@@ -5057,7 +5057,7 @@ bool inferFlattened(SubJob *job) {
 
 			if (!continue_->refersTo) {
 				if (continue_->label)
-					reportError(continue_, "Error: Could not resolve loop with iterator %.*s", STRING_PRINTF(continue_->label));
+					reportError(continue_, "Error: Could not resolve loop with iterator %.*s", STRING_PRINTF(continue_->label->name));
 				else
 					reportError(continue_, "Error: Cannot have a %s outside of a loop", continue_->flavor == ExprFlavor::CONTINUE ? "continue" :
 						(continue_->flavor == ExprFlavor::REMOVE ? "remove" : "break"));
@@ -5293,7 +5293,7 @@ bool inferFlattened(SubJob *job) {
 					reportError(switch_, "Error: Switch if that was marked as #complete does not handle all values");
 
 					for (auto member : uncheckedMembers) {
-						reportError(member, "   ..: %.*s is not handled", STRING_PRINTF(member->name));
+						reportError(member, "   ..: %.*s is not handled", STRING_PRINTF(member->name->name));
 					}
 
 					return false;
@@ -5695,7 +5695,7 @@ bool inferFlattened(SubJob *job) {
 				}
 			}
 
-			String functionName = call->function->valueOfDeclaration ? call->function->valueOfDeclaration->name : "function";
+			String functionName = call->function->valueOfDeclaration ? call->function->valueOfDeclaration->name->name : "function";
 
 			Block *argumentNames = nullptr;
 			Block *returnNames = nullptr;
@@ -6482,9 +6482,9 @@ bool checkForUndeclaredIdentifier(Expr *haltedOn) {
 		auto identifier = static_cast<ExprIdentifier *>(haltedOn);
 
 		if (!identifier->declaration) {
-			reportError(identifier, "Error: Could not find a declaration for '%.*s'", STRING_PRINTF(identifier->name));
+			reportError(identifier, "Error: Could not find a declaration for '%.*s'", STRING_PRINTF(identifier->name->name));
 
-			if (identifier->name == "float") {
+			if (identifier->name->name == "float") {
 				reportError(&identifier->start, "   ..: Did you mean 'f32'?");
 			}
 
@@ -6604,7 +6604,7 @@ void freeJob(ImporterJob *job) {
 }
 
 bool checkStructDeclaration(Declaration *declaration, Type *&value, String name) {
-	if (declaration->name == name) {
+	if (declaration->name->name == name) {
 		if (!(declaration->flags & DECLARATION_IS_CONSTANT)) {
 			reportError(declaration, "Internal Compiler Error: Declaration for %.*s must be a constant", STRING_PRINTF(name));
 			return false;
@@ -6620,50 +6620,13 @@ bool checkStructDeclaration(Declaration *declaration, Type *&value, String name)
 			reportError(declaration, "Internal Compiler Error: %.s must be a struct");
 			return false;
 		}
-
-		if (name == "Type_Info_Struct") {
-			auto member = findDeclarationNoYield(&static_cast<TypeStruct *>(value)->members, "Member");
-			if (!member) {
-				reportError(declaration, "Internal Compiler Error: Could not find decalration for Type_Info_Struct.Member");
-				return false;
-			}
-
-			if (!(member->flags & DECLARATION_IS_CONSTANT)) {
-				reportError(member, "Internal Compiler Error: Declaration for Type_Info_Struct.Member must be a constant", STRING_PRINTF(name));
-				return false;
-			}
-			else if (!member->initialValue || member->initialValue->flavor != ExprFlavor::TYPE_LITERAL) {
-				reportError(declaration, "Internal Compiler Error: Type_Info_Struct.Member must be a type");
-				return false;
-			}
-
-			TYPE_TYPE_INFO_STRUCT_MEMBER = static_cast<ExprLiteral *>(member->initialValue)->typeValue;
-		}
-		else if (name == "Type_Info_Enum") {
-			auto member = findDeclarationNoYield(&static_cast<TypeStruct *>(value)->members, "Value");
-			if (!member) {
-				reportError(declaration, "Internal Compiler Error: Could not find decalration for Type_Info_Enum.Value");
-				return false;
-			}
-
-			if (!(member->flags & DECLARATION_IS_CONSTANT)) {
-				reportError(member, "Internal Compiler Error: Declaration for Type_Info_Enum.Value must be a constant", STRING_PRINTF(name));
-				return false;
-			}
-			else if (!member->initialValue || member->initialValue->flavor != ExprFlavor::TYPE_LITERAL) {
-				reportError(declaration, "Internal Compiler Error: Type_Info_Enum.Value must be a type");
-				return false;
-			}
-
-			TYPE_TYPE_INFO_ENUM_VALUE = static_cast<ExprLiteral *>(member->initialValue)->typeValue;
-		}
 	}
 
 	return true;
 }
 
 bool checkFunctionDeclaration(Declaration *declaration, ExprFunction *&value, String name) {
-	if (declaration->name == name) {
+	if (declaration->name->name == name) {
 		if (value) {
 			reportError(declaration, "Internal Compiler Error: Cannot declare %.*s more than once", STRING_PRINTF(name));
 		}
@@ -6684,6 +6647,7 @@ bool checkFunctionDeclaration(Declaration *declaration, ExprFunction *&value, St
 }
 
 bool checkBuiltinDeclaration(Declaration *declaration) {
+	PROFILE_FUNC();
 
 #define FUNCTION_DECLARATION(value, name)		\
 else if (!checkFunctionDeclaration(declaration, value, name)) {	\
@@ -6704,9 +6668,7 @@ else if (!checkStructDeclaration(declaration, value, name)) {	\
 		STRUCT_DECLARATION(TYPE_TYPE_INFO_FUNCTION, "Type_Info_Function")
 		STRUCT_DECLARATION(TYPE_TYPE_INFO_ARRAY, "Type_Info_Array")
 		STRUCT_DECLARATION(TYPE_TYPE_INFO_STRUCT, "Type_Info_Struct")
-		STRUCT_DECLARATION(TYPE_TYPE_INFO_STRUCT_MEMBER, "Type_Info_Struct_Member")
 		STRUCT_DECLARATION(TYPE_TYPE_INFO_ENUM, "Type_Info_Enum")
-		STRUCT_DECLARATION(TYPE_TYPE_INFO_ENUM_VALUE, "Type_Info_Enum_Value")
 
 		return true;
 #undef STRUCT_DECLARATION
@@ -6739,7 +6701,8 @@ bool importDeclarationIntoModule(Block *module, Declaration *declaration, Expr *
 	assert(!(declaration->flags & DECLARATION_IS_MODULE_SCOPE));
 	Declaration *potentialOverloadSet;
 
-	if (!checkForRedeclaration(module, declaration, &potentialOverloadSet, using_))
+	Declaration **availableSlot;
+	if (!checkForRedeclaration(module, declaration, &potentialOverloadSet, using_, &availableSlot))
 		return false;
 
 	auto import = INFER_NEW(Declaration);
@@ -6759,7 +6722,7 @@ bool importDeclarationIntoModule(Block *module, Declaration *declaration, Expr *
 
 	import->flags |= DECLARATION_IMPORTED_BY_USING | DECLARATION_IS_MODULE_SCOPE;
 
-	addDeclarationToBlockUnchecked(module, import, potentialOverloadSet, 0);
+	addDeclarationToBlockUnchecked(module, import, potentialOverloadSet, 0, availableSlot);
 
 	wakeUpSleepers(&module->sleepingOnMe, declaration->name);
 
@@ -6877,7 +6840,7 @@ bool addDeclaration(Declaration *declaration, Module *module) {
 			return false;
 		}
 
-		if (declaration->name == "main") {
+		if (declaration->name->name == "main") {
 			if (entryPoint) {
 				reportError(declaration, "Error: Cannot define multiple entry points");
 				reportError(entryPoint, "   ..: Here is the previous declaration");
@@ -7116,10 +7079,11 @@ bool inferImporter(SubJob *subJob) {
 
 			for (auto member : block->declarations) {
 				Declaration *potentialOverloadSet;
-				if (!checkForRedeclaration(importer->enclosingScope, member, &potentialOverloadSet, importer->import))
+				Declaration **availableSlot;
+				if (!checkForRedeclaration(importer->enclosingScope, member, &potentialOverloadSet, importer->import, &availableSlot))
 					return false;
 				
-				addDeclarationToBlockUnchecked(importer->enclosingScope, member, potentialOverloadSet, member->serial);
+				addDeclarationToBlockUnchecked(importer->enclosingScope, member, potentialOverloadSet, member->serial, availableSlot);
 
 				if (importer->enclosingScope->flavor == BlockFlavor::STRUCT) {
 					if (!(member->flags & DECLARATION_IS_CONSTANT)) {
@@ -7182,8 +7146,8 @@ bool inferImporter(SubJob *subJob) {
 					continue;
 
 				Declaration *potentialOverloadSet;
-
-				if (!checkForRedeclaration(importer->enclosingScope, member, &potentialOverloadSet, importer->import))
+				Declaration **availableSlot;
+				if (!checkForRedeclaration(importer->enclosingScope, member, &potentialOverloadSet, importer->import, &availableSlot))
 					return false;
 
 				auto oldMember = member;
@@ -7216,9 +7180,11 @@ bool inferImporter(SubJob *subJob) {
 
 					import->flags |= DECLARATION_IMPORTED_BY_USING;
 
-					addDeclarationToBlockUnchecked(importer->enclosingScope, import, potentialOverloadSet, importer->serial);
+					addDeclarationToBlockUnchecked(importer->enclosingScope, import, potentialOverloadSet, importer->serial, availableSlot);
+					potentialOverloadSet = import;
+					availableSlot = nullptr;
 
-					assert(import->name.length);
+					assert(import->name);
 
 					if (importer->enclosingScope->module) {
 						auto module = CAST_FROM_SUBSTRUCT(Module, members, importer->enclosingScope);
@@ -7868,7 +7834,7 @@ bool inferSize(SubJob *subJob) {
 
 		assert(enum_->struct_.members.declarations.count >= ENUM_SPECIAL_MEMBER_COUNT);
 		auto integerType = enum_->struct_.members.declarations[enum_->struct_.members.declarations.count - 1];
-		assert(integerType->name == "integer");
+		assert(integerType->name->name == "integer");
 		
 
 		if (!(integerType->flags & DECLARATION_TYPE_IS_READY)) {
@@ -8181,7 +8147,8 @@ void fillTypeInfo(Type *type) {
 		enumInfo->values.data = INFER_NEW_ARRAY(Type_Info_Enum::Value, enumInfo->values.count);
 
 		for (u32 i = 0; i + ENUM_SPECIAL_MEMBER_COUNT < values->declarations.count; i++) {
-			enumInfo->values.data[i].name = { (u8 *)values->declarations[i]->name.characters, values->declarations[i]->name.length };
+			String name = values->declarations[i]->name->name;
+			enumInfo->values.data[i].name = { (u8 *)name.characters, name.length };
 			enumInfo->values.data[i].value = static_cast<ExprLiteral *>(values->declarations[i]->initialValue)->unsignedValue;
 		}
 
@@ -8262,7 +8229,8 @@ void fillTypeInfo(Type *type) {
 
 			auto &memberInfo = structInfo->members.data[count++];
 
-			memberInfo.name = { (u8 *)member->name.characters, member->name.length };
+			String name = member->name->name;
+			memberInfo.name = { (u8 *)name.characters, name.length };
 			memberInfo.offset = (member->flags & DECLARATION_IS_CONSTANT) ? 0 : member->physicalStorage;
 
 			auto memberType = getDeclarationType(member);
@@ -8450,10 +8418,10 @@ bool inferRun(SubJob *subJob) {
 					}
 				}
 
-				function->loadedFunctionPointer = library_find(lib->handle, toCString(function->valueOfDeclaration->name)); // @Leak
+				function->loadedFunctionPointer = library_find(lib->handle, toCString(function->valueOfDeclaration->name->name)); // @Leak
 				if (!function->loadedFunctionPointer) {
 					reportError(function->valueOfDeclaration, 
-						"Error: Could not find function %.*s in library %.*s", STRING_PRINTF(function->valueOfDeclaration->name), STRING_PRINTF(functionLibrary));
+						"Error: Could not find function %.*s in library %.*s", STRING_PRINTF(function->valueOfDeclaration->name->name), STRING_PRINTF(functionLibrary));
 					return false;
 				}
 
@@ -8553,7 +8521,7 @@ void createBasicDeclarations() {
 	targetWindows->enclosingScope = nullptr;
 	targetWindows->start = {};
 	targetWindows->end = {};
-	targetWindows->name = "TARGET_WINDOWS";
+	targetWindows->name = getIdentifier("TARGET_WINDOWS");
 
 	auto literal = createIntLiteral(targetWindows->start, targetWindows->end, &TYPE_BOOL, BUILD_WINDOWS);
 
@@ -8567,7 +8535,7 @@ void createBasicDeclarations() {
 	targetLinux->enclosingScope = nullptr;
 	targetLinux->start = {};
 	targetLinux->end = {};
-	targetLinux->name = "TARGET_LINUX";
+	targetLinux->name = getIdentifier("TARGET_LINUX");
 
 	literal = createIntLiteral(targetLinux->start, targetLinux->end, &TYPE_BOOL, BUILD_LINUX);
 
@@ -8946,7 +8914,7 @@ outer:
 		}
 
 		for (auto job = functionJobs; job; job = job->next) {
-			String name = (job->function->valueOfDeclaration ? job->function->valueOfDeclaration->name : "(function)");
+			String name = (job->function->valueOfDeclaration ? job->function->valueOfDeclaration->name->name : "(function)");
 
 			if (!isDone(&job->header)) {
 				auto haltedOn = *getHalt(&job->header);
@@ -9000,7 +8968,7 @@ outer:
 		}
 
 		for (auto job = declarationJobs; job; job = job->next) {
-			String name = job->declaration->name;
+			String name = job->declaration->name->name;
 
 			if (!isDone(&job->type)) {
 				auto haltedOn = *getHalt(&job->type);

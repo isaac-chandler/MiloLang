@@ -360,11 +360,11 @@ void runFunction(VMState *state, ExprFunction *expr, Ir *caller, DCArgs *dcArgs,
 		assert(expr->valueOfDeclaration);
 
 		if (std::this_thread::get_id() != mainThread) {
-			reportError(caller, "Error: Compiler functions can only be called from the initial thread", STRING_PRINTF(expr->valueOfDeclaration->name));
+			reportError(caller, "Error: Compiler functions can only be called from the initial thread", STRING_PRINTF(expr->valueOfDeclaration->name->name));
 			return;
 		}
 
-		if (expr->valueOfDeclaration->name == "add_build_file") {
+		if (expr->valueOfDeclaration->name->name == "add_build_file") {
 			
 			auto name = new ExprStringLiteral;
 			name->flavor = ExprFlavor::STRING_LITERAL;
@@ -385,7 +385,7 @@ void runFunction(VMState *state, ExprFunction *expr, Ir *caller, DCArgs *dcArgs,
 			
 			inferInput.add(InferQueueJob(import, runningDirective->module));
 		}
-		else if (expr->valueOfDeclaration->name == "set_build_options") {
+		else if (expr->valueOfDeclaration->name->name == "set_build_options") {
 			auto options = *reinterpret_cast<Build_Options *>(callerStack[callerArguments->arguments[1]]);
 
 			if (options.backend != Build_Options::Backend::X64 && options.backend != Build_Options::Backend::LLVM) {
@@ -433,14 +433,14 @@ void runFunction(VMState *state, ExprFunction *expr, Ir *caller, DCArgs *dcArgs,
 
 			buildOptions = options;
 		}
-		else if (expr->valueOfDeclaration->name == "get_build_options") {
+		else if (expr->valueOfDeclaration->name->name == "get_build_options") {
 			*reinterpret_cast<Build_Options *>(callerStack[caller->dest]) = buildOptions;
 		}
-		else if (expr->valueOfDeclaration->name == "get_build_arguments") {
+		else if (expr->valueOfDeclaration->name->name == "get_build_arguments") {
 			*reinterpret_cast<MiloArray<MiloString> *>(callerStack[caller->dest]) = buildArguments;
 		}
 		else {
-			reportError(caller,           "Error: Unknown compiler function: %.*s", STRING_PRINTF(expr->valueOfDeclaration->name));
+			reportError(caller,           "Error: Unknown compiler function: %.*s", STRING_PRINTF(expr->valueOfDeclaration->name->name));
 			reportError(runningDirective, "   ..: From #run directive");
 		}
 		return;

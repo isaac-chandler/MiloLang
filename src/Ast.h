@@ -369,7 +369,7 @@ struct ExprUnaryOperator : Expr {
 struct Block;
 
 struct ExprIdentifier : Expr {
-	String name;
+	Identifier *name;
 	u32 serial;
 	Block *resolveFrom;
 	Block *enclosingScope;
@@ -387,7 +387,7 @@ struct ExprEnumIncrement : Expr {
 
 struct Arguments {
 	Expr **values;
-	String *names;
+	Identifier **names;
 	Declaration **declarations = nullptr;
 	u32 count;
 
@@ -496,7 +496,7 @@ struct ExprLoop : Expr {
 };
 
 struct ExprBreakOrContinue : Expr {
-	String label;
+	Identifier *label;
 	Block *enclosingScope;
 	ExprLoop *refersTo;
 };

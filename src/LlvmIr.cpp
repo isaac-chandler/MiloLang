@@ -228,7 +228,7 @@ static llvm::DIType *getLlvmDebugType(Type *type) {
 static llvm::DIType *createMemberType(Declaration *declaration, llvm::DIScope *enclosing) {
 	auto type = getDeclarationType(declaration);
 
-	return dib->createMemberType(enclosing, stringRef(declaration->name), files[declaration->start.fileUid], declaration->start.line,
+	return dib->createMemberType(enclosing, stringRef(declaration->name->name), files[declaration->start.fileUid], declaration->start.line,
 		type->size * 8, type->alignment * 8, declaration->physicalStorage * 8, llvm::DINode::DIFlags::FlagZero, getLlvmDebugType(type));
 }
 
@@ -299,7 +299,7 @@ static llvm::DIType *createLlvmDebugType(Type *type) {
 
 					_BitScanForward64(&bit, value);
 
-					members.add(dib->createMemberType(structType, stringRef(declaration->name), files[declaration->start.fileUid], declaration->start.line,
+					members.add(dib->createMemberType(structType, stringRef(declaration->name->name), files[declaration->start.fileUid], declaration->start.line,
 						1, 1, bit, llvm::DINode::DIFlags::FlagBitField, integerType));
 				}
 			}
@@ -320,7 +320,7 @@ static llvm::DIType *createLlvmDebugType(Type *type) {
 
 				auto value = static_cast<ExprLiteral *>(declaration->initialValue)->unsignedValue;
 
-				members.add(dib->createEnumerator(stringRef(declaration->name), value, true));
+				members.add(dib->createEnumerator(stringRef(declaration->name->name), value, true));
 			}
 
 			auto enumType = dib->createEnumerationType(nullptr, stringRef(enum_->name), files[0], 0, enum_->size * 8, enum_->alignment * 8,
@@ -680,14 +680,14 @@ static llvm::Value *createLlvmGlobal(State *state, Declaration *declaration) {
 		auto llvmType = getLlvmType(state->context, getDeclarationType(declaration));
 
 		if (!declaration->initialValue) {
-			auto global = static_cast<llvm::GlobalVariable *>(state->module.getOrInsertGlobal(stringRef(declaration->name),
+			auto global = static_cast<llvm::GlobalVariable *>(state->module.getOrInsertGlobal(stringRef(declaration->name->name),
 				llvmType));
 			global->setInitializer(llvm::UndefValue::get(llvmType));
 			declaration->llvmStorage = global;
 		}
 		else {
 			auto constant = createConstant(state, declaration->initialValue);
-			auto global = static_cast<llvm::GlobalVariable *>(state->module.getOrInsertGlobal(stringRef(declaration->name),
+			auto global = static_cast<llvm::GlobalVariable *>(state->module.getOrInsertGlobal(stringRef(declaration->name->name),
 				constant->getType()));
 			global->setInitializer(constant);
 			declaration->llvmStorage = llvm::ConstantExpr::getBitCast(global, llvm::PointerType::getUnqual(llvmType));
@@ -892,7 +892,7 @@ static llvm::Function *createLlvmFunction(State *state, ExprFunction *function) 
 		auto name = llvm::StringRef("");
 
 		if (function->valueOfDeclaration) {
-			name = stringRef(function->valueOfDeclaration->name);
+			name = stringRef(function->valueOfDeclaration->name->name);
 		}
 
 		if (function == programStart || function->flags & EXPR_FUNCTION_IS_EXTERNAL) {
@@ -1113,7 +1113,7 @@ static llvm::Value *generateLlvmCall(State *state, ExprFunctionCall *call, ExprC
 	auto function = static_cast<TypeFunction *>(call->function->type);
 
 	if (call->function->flags & EXPR_FUNCTION_IS_INSTRINSIC) {
-		if (call->function->valueOfDeclaration->name == "pop_count") {
+		if (call->function->valueOfDeclaration->name->name == "pop_count") {
 			auto argumentType = function->argumentTypes[0];
 
 			if (argumentType->flavor != TypeFlavor::INTEGER && argumentType->flavor != TypeFlavor::ENUM) {
@@ -1125,7 +1125,7 @@ static llvm::Value *generateLlvmCall(State *state, ExprFunctionCall *call, ExprC
 
 			return state->builder.CreateIntrinsic(llvm::Intrinsic::ctpop, arrayRef({ getLlvmType(state->context, argumentType) }), arrayRef({ argument }));
 		}
-		else if (call->function->valueOfDeclaration->name == "bit_scan_forward") {
+		else if (call->function->valueOfDeclaration->name->name == "bit_scan_forward") {
 			auto argumentType = function->argumentTypes[0];
 
 			if (argumentType->flavor != TypeFlavor::INTEGER && argumentType->flavor != TypeFlavor::ENUM) {
@@ -1144,7 +1144,7 @@ static llvm::Value *generateLlvmCall(State *state, ExprFunctionCall *call, ExprC
 
 			return resultIndex;
 		}
-		else if (call->function->valueOfDeclaration->name == "bit_scan_reverse") {
+		else if (call->function->valueOfDeclaration->name->name == "bit_scan_reverse") {
 			auto argumentType = function->argumentTypes[0];
 
 			if (argumentType->flavor != TypeFlavor::INTEGER && argumentType->flavor != TypeFlavor::ENUM) {
@@ -1167,7 +1167,7 @@ static llvm::Value *generateLlvmCall(State *state, ExprFunctionCall *call, ExprC
 			return resultIndex;
 		}
 		else {
-			reportError(call, "Error: Call to unknown intrinsic function: %.*s", STRING_PRINTF(call->function->valueOfDeclaration->name));
+			reportError(call, "Error: Call to unknown intrinsic function: %.*s", STRING_PRINTF(call->function->valueOfDeclaration->name->name));
 			return 0;
 		}
 	}
@@ -1239,8 +1239,8 @@ static llvm::Value *generateLlvmCall(State *state, ExprFunctionCall *call, ExprC
 		auto infoType = static_cast<llvm::StructType *>(state->stackTraceType->getStructElementType(1)->getPointerElementType());
 		auto locationType = static_cast<llvm::StructType *>(infoType->getStructElementType(1));
 
-		String functionName = state->functionNode->valueOfDeclaration ? state->functionNode->valueOfDeclaration->name : "(anonymous)";
-		String filename = compilerFiles[call->start.fileUid]->path;
+		String functionName = state->functionNode->valueOfDeclaration ? state->functionNode->valueOfDeclaration->name->name : "(anonymous)";
+		String filename = getFileInfoByUid(call->start.fileUid)->path;
 		u64 line = call->start.line;
 
 		auto info = createUnnnamedConstant(state, infoType);
@@ -1881,7 +1881,7 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 
 		for (auto declaration : block->declarations.declarations) {
 			if (!(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IMPORTED_BY_USING))) {				
-				declaration->llvmStorage = allocateType(state, getDeclarationType(declaration), declaration->name);
+				declaration->llvmStorage = allocateType(state, getDeclarationType(declaration), declaration->name->name);
 			}
 		}
 
@@ -1998,9 +1998,9 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 		auto it = loop->iteratorBlock.declarations[0];
 		auto it_index = loop->iteratorBlock.declarations[1];
 
-		it->llvmStorage = allocateType(state, getDeclarationType(it), it->name);
+		it->llvmStorage = allocateType(state, getDeclarationType(it), it->name->name);
 
-		it_index->llvmStorage = allocateType(state, getDeclarationType(it_index), it_index->name);
+		it_index->llvmStorage = allocateType(state, getDeclarationType(it_index), it_index->name->name);
 
 		state->builder.CreateStore(llvm::ConstantInt::get(llvm::Type::getInt64Ty(state->context), 0), it_index->llvmStorage);
 
@@ -2706,7 +2706,7 @@ void runLlvm() {
 					auto functionType = static_cast<llvm::FunctionType *>(llvmFunction->getType()->getPointerElementType());
 					auto debugType = static_cast<llvm::DISubroutineType *>(static_cast<llvm::DIDerivedType *>(getLlvmDebugType(function->type))->getBaseType());
 
-					auto debugFunction = dib->createFunction(nullptr, function->valueOfDeclaration ? stringRef(function->valueOfDeclaration->name) : "(function)",
+					auto debugFunction = dib->createFunction(nullptr, function->valueOfDeclaration ? stringRef(function->valueOfDeclaration->name->name) : "(function)",
 						llvmFunction->getName(), llvmFile, function->start.line, debugType, 
 						function->start.line, llvm::DINode::DIFlags::FlagPrototyped, llvm::DISubprogram::DISPFlags::SPFlagDefinition);
 
@@ -2760,10 +2760,10 @@ void runLlvm() {
 
 							builder.CreateStore(llvmArg, alloc);
 
-							argument->llvmStorage = builder.CreateBitCast(alloc, llvm::PointerType::getUnqual(getLlvmType(context, argType)), stringRef(argument->name));
+							argument->llvmStorage = builder.CreateBitCast(alloc, llvm::PointerType::getUnqual(getLlvmType(context, argType)), stringRef(argument->name->name));
 						}
 						else {
-							argument->llvmStorage = allocateType(&state, getDeclarationType(argument), argument->name);
+							argument->llvmStorage = allocateType(&state, getDeclarationType(argument), argument->name->name);
 
 							
 
@@ -2797,7 +2797,7 @@ void runLlvm() {
 					if (llvm::verifyFunction(*llvmFunction, &verifyStream)) {
 						verifyStream.flush();
 
-						reportError("LLVM Error in %s: %s", function->valueOfDeclaration ? toCString(function->valueOfDeclaration->name) : "(function)", verifyOutput.c_str());
+						reportError("LLVM Error in %s: %s", function->valueOfDeclaration ? toCString(function->valueOfDeclaration->name->name) : "(function)", verifyOutput.c_str());
 						llvmModule.dump();
 
 						return;
@@ -2988,11 +2988,13 @@ void runLlvm() {
 							++count;
 						}
 
-						auto structMember = GET_STRUCT(TYPE_TYPE_INFO_STRUCT_MEMBER);
-						auto structMemberPtr = llvm::PointerType::getUnqual(structMember);
+						auto infoType = GET_STRUCT(TYPE_TYPE_INFO_STRUCT);
+						auto infoMember = static_cast<llvm::StructType *>(infoType->getStructElementType(2)->getStructElementType(0)->getPointerElementType());
+
+						auto structMemberPtr = llvm::PointerType::getUnqual(infoMember);
 
 
-						auto membersVariable = createUnnnamedConstant(&state, llvm::ArrayType::get(structMember, count));
+						auto membersVariable = createUnnnamedConstant(&state, llvm::ArrayType::get(infoMember, count));
 						auto members = new llvm::Constant * [count];
 
 						count = 0;
@@ -3012,7 +3014,7 @@ void runLlvm() {
 								initial_value = llvm::ConstantPointerNull::get(llvm::Type::getInt8PtrTy(context));
 							}
 
-							auto memberName = createLlvmString(&state, member->name);
+							auto memberName = createLlvmString(&state, member->name->name);
 							auto offset = llvm::ConstantInt::get(int64, member->physicalStorage);
 							auto member_type = TO_TYPE_INFO(getDeclarationType(member));
 
@@ -3024,7 +3026,7 @@ void runLlvm() {
 
 							auto flags = llvm::ConstantInt::get(int64, flags_int);
 
-							members[count++] = llvm::ConstantStruct::get(structMember, memberName, offset, member_type, initial_value, flags);
+							members[count++] = llvm::ConstantStruct::get(infoMember, memberName, offset, member_type, initial_value, flags);
 						}
 
 						auto typeMembersArray = llvm::StructType::get(structMemberPtr, int64);
@@ -3052,22 +3054,24 @@ void runLlvm() {
 					case Type_Info::Tag::ENUM: {
 						auto enum_ = static_cast<TypeEnum *>(type);
 
-						auto enumValue = GET_STRUCT(TYPE_TYPE_INFO_ENUM_VALUE);
-						auto enumValuePtr = llvm::PointerType::getUnqual(enumValue);
+
+						auto infoType = GET_STRUCT(TYPE_TYPE_INFO_ENUM);
+						auto infoValue = static_cast<llvm::StructType *>(infoType->getStructElementType(3)->getStructElementType(0)->getPointerElementType());
+						auto enumValuePtr = llvm::PointerType::getUnqual(infoValue);
 
 						const auto count = enum_->members.declarations.count - ENUM_SPECIAL_MEMBER_COUNT;
 
-						auto valuesVariable = createUnnnamedConstant(&state, llvm::ArrayType::get(enumValue, count));
+						auto valuesVariable = createUnnnamedConstant(&state, llvm::ArrayType::get(infoValue, count));
 						auto values = new llvm::Constant * [count];
 
 						for (u32 i = 0; i < count; i++) {
 							auto value = enum_->members.declarations[i];
 							assert(value->flags & DECLARATION_IS_ENUM_VALUE);
 								
-							auto valueName = createLlvmString(&state, value->name);
+							auto valueName = createLlvmString(&state, value->name->name);
 							auto valueValue = llvm::ConstantInt::get(int64, static_cast<ExprLiteral *>(value->initialValue)->unsignedValue);
 
-							values[i] = llvm::ConstantStruct::get(enumValue, valueName, valueValue);
+							values[i] = llvm::ConstantStruct::get(infoValue, valueName, valueValue);
 						}
 
 						auto typeValuesArray = llvm::StructType::get(enumValuePtr, int64);

@@ -869,6 +869,7 @@ void LexerFile::peekTokenTypes(u64 count, TokenT *buffer) {
 }
 
 void LexerFile::advance() {
+	PROFILE_FUNC();
 	bool endOfFile;
 	u32 c;
 
@@ -1677,6 +1678,7 @@ identifier:
 			return;
 		}
 
+		token.identifier = getIdentifier(token.text);
 		token.type = TokenT::IDENTIFIER;
 		return;
 	}
@@ -1902,7 +1904,6 @@ bool LexerFile::open(FileInfo *file) {
 			file->path = msprintf("%s/%.*s/%.*s", modulePath, STRING_PRINTF(file->module->name), STRING_PRINTF(file->path));
 		}
 		else {
-			
 			if (directoryExists(mprintf("%s/%.*s", modulePath, STRING_PRINTF(file->module->name)))) {
 				file->path = msprintf("%s/%.*s/module.milo", modulePath, STRING_PRINTF(file->module->name));
 				file->name = "module.milo";
@@ -1918,12 +1919,9 @@ bool LexerFile::open(FileInfo *file) {
 		file->directoryId = 0;
 	}
 
-	auto pathString = toCString(file->path);
+	PROFILE_ZONE(toCString(file->path));
 
-	if (!fileExists(pathString)) {
-		reportError("Error: Failed to open file: %.*s", STRING_PRINTF(file->path));
-		return false;
-	}
+	auto pathString = toCString(file->path);
 
 	auto handle = fopen_utf8(pathString, "rb");
 	free(pathString);
@@ -1933,20 +1931,29 @@ bool LexerFile::open(FileInfo *file) {
 		return false;
 	}
 
-	fseek(handle, 0, SEEK_END);
-	s64 size = ftell(handle);
-	fseek(handle, 0, SEEK_SET);
+	s64 size;
+	{
+		PROFILE_ZONE("fseek");
+		fseek(handle, 0, SEEK_END);
+		size = ftell(handle);
+		fseek(handle, 0, SEEK_SET);
+	}
 
 
 	text = static_cast<char *>(malloc(size));
 	file->data = text;
 	
-	int readCount = fread(file->data, size, 1, handle);
+	{
+		PROFILE_ZONE("fread");
+		int readCount = fread(file->data, size, 1, handle);
 
-	if (readCount != 1) {
-		reportError("Error: Failed to read file: %.*s", STRING_PRINTF(file->path));
-		return false;
+		if (readCount != 1) {
+			fclose(handle);
+			reportError("Error: Failed to read file: %.*s", STRING_PRINTF(file->path));
+			return false;
+		}
 	}
+
 
 	fclose(handle);
 

@@ -11,6 +11,7 @@
 #include "TypeTable.h"
 #include "Error.h"
 #include "Find.h"
+#include "IdentTable.h"
 
 #define NUM_PARSE_THREADS 4
 
@@ -363,26 +364,29 @@ int main(int argc, char *argv[]) {
 	mainModule = getModule("");
 
 	if (!hadError && runtimeModule && mainModule) {
+		initIdentTable();
 		setupTypeTable();
 
+		{
+			PROFILE_ZONE("Create threads");
+			for (u32 i = 0; i < (noThreads ? 1 : NUM_PARSE_THREADS); i++) {
+				char name[] = "Parser  ";
 
-		for (u32 i = 0; i < (noThreads ? 1 : NUM_PARSE_THREADS); i++) {
-			char name[] = "Parser  ";
+				name[7] = i + '1';
 
-			name[7] = i + '1';
+				std::thread parserThread(runParser);
+				setThreadName(parserThread, name);
 
-			std::thread parserThread(runParser);
-			setThreadName(parserThread, name);
-			
-			parserThread.detach();
+				parserThread.detach();
+			}
+			std::thread irGenerator(runIrGenerator);
+
+			mainThread = std::this_thread::get_id();
+
+			setThreadName(irGenerator, "Ir Generator");
+
+			irGenerator.detach();
 		}
-		std::thread irGenerator(runIrGenerator);
-
-		mainThread = std::this_thread::get_id();
-
-		setThreadName(irGenerator, "Ir Generator");
-
-		irGenerator.detach();
 
 		runInfer(input);
 
@@ -841,7 +845,17 @@ int main(int argc, char *argv[]) {
 				out << "{\"cat\":\"function\",\"pid\":0,\"tid\":" << j << ",\"ts\":" << ((p.time - startTsc) * tscFactor);
 
 				if (p.name) {
-					out << ",\"ph\":\"B\",\"name\":\"" << p.name;
+					out << ",\"ph\":\"B\",\"name\":\"";
+
+					for (const char *name = p.name; *name; name++) {
+						if (*name == '\\')
+							out << "\\\\";
+						else if (*name == '\"')
+							out << "\\";
+						else
+							out << *name;
+						
+					}
 
 					if (p.color) {
 						out << "\",\"cname\":\"" << p.color;

@@ -3,6 +3,7 @@
 #include "Basic.h"
 #include "Array.h"
 #include "String.h"
+#include "IdentTable.h"
 
 #define DECLARATION_IS_CONSTANT         0x0'0001
 #define DECLARATION_IS_UNINITIALIZED    0x0'0002
@@ -60,7 +61,7 @@ struct Declaration {
 	CodeLocation start;
 	EndLocation end;
 	u32 flags = 0;
-	String name;
+	Identifier *name;
 	union {
 		struct Expr *type;
 		Declaration *import;
@@ -118,7 +119,7 @@ struct Block {
 	Array<Importer *> importers;
 	Array<struct ExprIdentifier *> implicitImports;
 
-	struct BlockEntry *table = nullptr;
+	Declaration **table = nullptr;
 	u32 tableCapacity;
 	u32 serial;
 
@@ -139,17 +140,20 @@ struct Module {
 	Array<struct Importer *> imports;
 };
 
-Declaration *findInBlock(Block *block, String name);
+Declaration **findInBlock(Block *block, Identifier *name);
 
-inline Declaration *findDeclarationNoYield(Block *block, String name) {
+inline Declaration *findDeclarationNoYield(Block *block, Identifier *name) {
 	PROFILE_FUNC();
 	if (block->table) {
-		return findInBlock(block, name);
+		PROFILE_ZONE("findDeclaration table");
+		return *findInBlock(block, name);
 	}
 	else {
+		PROFILE_ZONE("findDeclaration array");
 		for (auto declaration : block->declarations) {
 			if (declaration->name == name) {
 				return declaration;
+
 			}
 		}
 	}
@@ -159,9 +163,9 @@ inline Declaration *findDeclarationNoYield(Block *block, String name) {
 
 void addImplicitImport(Block *block, struct ExprIdentifier *identifier);
 
-bool checkForRedeclaration(Block *block, Declaration *declaration, Declaration **potentialOverloadSet, struct Expr *using_);
+bool checkForRedeclaration(Block *block, Declaration *declaration, Declaration **potentialOverloadSet, struct Expr *using_, Declaration ***availableSlot);
 
-void addToTable(Block *block, Declaration *declaration);
+void addToTable(Block *block, Declaration *declaration, Declaration **availableSlot);
 void initTable(Block *block);
 
 inline void addImporterToBlock(Block *block, Importer *importer, u32 serial) {
@@ -173,12 +177,12 @@ inline void addImporterToBlock(Block *block, Importer *importer, u32 serial) {
 	block->importers.add(importer);
 }
 
-inline void putDeclarationInBlock(Block *block, Declaration *declaration) {
+inline void putDeclarationInBlock(Block *block, Declaration *declaration, Declaration **availableSlot) {
 	PROFILE_FUNC();
 	block->declarations.add(declaration);
 
 	if (block->table) {
-		addToTable(block, declaration);
+		addToTable(block, declaration, availableSlot);
 	}
 	else if (block->declarations.count == BLOCK_HASHTABLE_MIN_COUNT) {
 		initTable(block);
@@ -187,8 +191,9 @@ inline void putDeclarationInBlock(Block *block, Declaration *declaration) {
 
 void addToOverloads(Declaration *overload, Declaration *add);
 
-inline void addDeclarationToBlockUnchecked(Block *block, Declaration *declaration, Declaration *overloadSet, u32 serial) {
-	assert(checkForRedeclaration(block, declaration, &overloadSet, nullptr));
+inline void addDeclarationToBlockUnchecked(Block *block, Declaration *declaration, Declaration *overloadSet, u32 serial, Declaration **availableSlot) {
+	Declaration **slot;
+	assert(checkForRedeclaration(block, declaration, &overloadSet, nullptr, &slot));
 
 	declaration->serial = serial;
 
@@ -198,22 +203,23 @@ inline void addDeclarationToBlockUnchecked(Block *block, Declaration *declaratio
 		addToOverloads(overloadSet, declaration);
 	}
 	else {
-		putDeclarationInBlock(block, declaration);
+		putDeclarationInBlock(block, declaration, availableSlot);
 	}
 }
 
 inline bool addDeclarationToBlock(Block *block, Declaration *declaration, u32 serial) {
 	Declaration *potentialOverloadSet;
-	if (!checkForRedeclaration(block, declaration, &potentialOverloadSet, nullptr)) {
+	Declaration **availableSlot;
+	if (!checkForRedeclaration(block, declaration, &potentialOverloadSet, nullptr, &availableSlot)) {
 		return false;
 	}
 
-	addDeclarationToBlockUnchecked(block, declaration, potentialOverloadSet, serial);
+	addDeclarationToBlockUnchecked(block, declaration, potentialOverloadSet, serial, availableSlot);
 
 	return true;
 }
 
-inline Declaration *findDeclaration(Block *block, String name, bool *yield, u32 usingYieldLimit = UINT32_MAX) {
+inline Declaration *findDeclaration(Block *block, Identifier *name, bool *yield, u32 usingYieldLimit = UINT32_MAX) {
 	PROFILE_FUNC();
 
 	*yield = false;
