@@ -4,6 +4,7 @@
 #include "OS.h"
 
 alignas(64) static volatile u64 identTableLock;
+alignas(64) static volatile s64 tryingToWrite;
 
 #define STATE_WRITING (1ULL << 32)
 #define READ_COUNT_MASK 0xFFFF'FFFF
@@ -105,7 +106,7 @@ Identifier *getIdentifier(String name) {
 	{
 		while (true) {
 			u64 value = identTableLock;
-			if (value != STATE_WRITING && CompareExchange(&identTableLock, (value + 1) | STATE_WRITING, value) == value)
+			if (value != STATE_WRITING && !tryingToWrite && CompareExchange(&identTableLock, (value + 1) | STATE_WRITING, value) == value)
 				break;
 			_mm_pause();
 		}
@@ -140,6 +141,7 @@ Identifier *getIdentifier(String name) {
 		}
 	}
 
+	atomicFetchAdd(&tryingToWrite, 1);
 	while (CompareExchange(&identTableLock, STATE_WRITING, 0ULL) != 0) {
 		_mm_pause();
 	}
@@ -148,6 +150,7 @@ Identifier *getIdentifier(String name) {
 	at_exit{
 		read_write_barrier();
 		identTableLock = 0;
+		atomicFetchAdd(&tryingToWrite, -1);
 	};
 
 	Identifier *identifier = static_cast<Identifier *>(allocator.allocate(sizeof(Identifier)));
