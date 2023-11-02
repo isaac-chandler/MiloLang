@@ -39,35 +39,34 @@ Declaration **findInBlock(Block *block, Identifier *name) {
 void rehash(Block *block) {
 	PROFILE_FUNC();
 
-	auto oldTable = block->table;
-	auto oldCapacity = block->tableCapacity;
+	delete[] block->table;
 
 	block->tableCapacity *= 2;
 	block->table = new Declaration * [block->tableCapacity];
 	memset(block->table, 0, sizeof(Declaration *) * block->tableCapacity);
 
-	for (u64 i = 0; i < oldCapacity; i++) {
-		if (oldTable[i]) {
-			insert(block, oldTable[i]);
+	for (auto declaration : block->declarations) {
+		if (declaration->name) {
+			insert(block, declaration);
 		}
 	}
-
-	delete[] oldTable;
 }
 
 void addToTable(Block *block, Declaration *declaration, Declaration **availableSlot) {
 	PROFILE_FUNC();
 	if (declaration->name) {
-		if (availableSlot) {
+		if (block->declarations.count * 10 > block->tableCapacity * 7) {
+			// Rehashing will take values from the declarations array, 
+			// prior to addToTable a declaration is already added to the 
+			// declaration array so we do not need to insert it again
+			rehash(block);
+		} 
+		else if (availableSlot) {
 			assert(!*availableSlot);
 			*availableSlot = declaration;
 		}
 		else {
 			insert(block, declaration);
-		}
-
-		if (block->declarations.count * 10 > block->tableCapacity * 7) {
-			rehash(block);
 		}
 	}
 }
