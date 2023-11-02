@@ -14,14 +14,8 @@
 
 BucketedArenaAllocator inferArena(1024 * 1024);
 
-#if 1
 #define INFER_NEW(T) new (static_cast<T *>(inferArena.allocate(sizeof(T)))) T
 #define INFER_NEW_ARRAY(T, C) new (static_cast<T *>(inferArena.allocate((C) * sizeof(T)))) T[C]
-
-#else
-#define PARSER_NEW(T) new T
-#define PARSER_NEW_ARRAY(T, C) new T[C]
-#endif
 
 enum class JobFlavor : u8 {
 	SIZE,

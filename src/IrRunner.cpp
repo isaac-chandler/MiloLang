@@ -11,6 +11,11 @@
 #include "dyncall_args.h"
 #include <math.h>
 
+BucketedArenaAllocator irRunnerArena(1024 * 1024);
+
+#define IR_RUNNER_NEW(T) new (static_cast<T *>(irRunnerArena.allocate(sizeof(T)))) T
+#define IR_RUNNER_NEW_ARRAY(T, C) new (static_cast<T *>(irRunnerArena.allocate((C) * sizeof(T)))) T[C]
+
 struct StackNode {
 	StackNode *next;
 	StackNode *previous;
@@ -366,21 +371,21 @@ void runFunction(VMState *state, ExprFunction *expr, Ir *caller, DCArgs *dcArgs,
 
 		if (expr->valueOfDeclaration->name->name == "add_build_file") {
 			
-			auto name = new ExprStringLiteral;
+			auto name = IR_RUNNER_NEW(ExprStringLiteral);
 			name->flavor = ExprFlavor::STRING_LITERAL;
 			name->start = {};
 			name->end = {};
 			name->string = *reinterpret_cast<String *>(callerStack[callerArguments->arguments[1]]);
 			name->type = &TYPE_STRING;
 
-			auto load = new ExprLoad;
+			auto load = IR_RUNNER_NEW(ExprLoad);
 			load->flavor = ExprFlavor::LOAD;
 			load->start = {};
 			load->end = {};
 			load->file = name;
 			load->module = runningDirective->module;
 
-			auto import = new Importer;
+			auto import = IR_RUNNER_NEW(Importer);
 			import->import = load;
 			
 			inferInput.add(InferQueueJob(import, runningDirective->module));
@@ -397,14 +402,14 @@ void runFunction(VMState *state, ExprFunction *expr, Ir *caller, DCArgs *dcArgs,
 			if (options.llvm_options.count) {
 				MiloArray<MiloString> llvmOptionsCopy;
 				llvmOptionsCopy.count = options.llvm_options.count;
-				llvmOptionsCopy.data = new MiloString[llvmOptionsCopy.count];
+				llvmOptionsCopy.data = IR_RUNNER_NEW_ARRAY(MiloString, llvmOptionsCopy.count);
 
 				for (u64 i = 0; i < llvmOptionsCopy.count; i++) {
 					auto count = options.llvm_options.data[i].count;
 					llvmOptionsCopy.data[i].count = count;
 
 					if (count) {
-						llvmOptionsCopy.data[i].data = new u8[count];
+						llvmOptionsCopy.data[i].data = IR_RUNNER_NEW_ARRAY(u8, count);
 						memcpy(llvmOptionsCopy.data[i].data, options.llvm_options.data[i].data, count);
 					}
 					else {
@@ -418,7 +423,7 @@ void runFunction(VMState *state, ExprFunction *expr, Ir *caller, DCArgs *dcArgs,
 			if (options.output_name.count) {
 				MiloString outputNameCopy;
 				outputNameCopy.count = options.output_name.count;
-				outputNameCopy.data = new u8[outputNameCopy.count];
+				outputNameCopy.data = IR_RUNNER_NEW_ARRAY(u8, outputNameCopy.count);
 				memcpy(outputNameCopy.data, options.output_name.data, outputNameCopy.count);
 				options.output_name = outputNameCopy;
 			}
@@ -426,7 +431,7 @@ void runFunction(VMState *state, ExprFunction *expr, Ir *caller, DCArgs *dcArgs,
 			if (options.icon_name.count) {
 				MiloString iconNameCopy;
 				iconNameCopy.count = options.icon_name.count;
-				iconNameCopy.data = new u8[iconNameCopy.count];
+				iconNameCopy.data = IR_RUNNER_NEW_ARRAY(u8, iconNameCopy.count);
 				memcpy(iconNameCopy.data, options.icon_name.data, iconNameCopy.count);
 				options.icon_name = iconNameCopy;
 			}
@@ -993,12 +998,13 @@ if (op.flags & IR_FLOAT_OP) {\
 }
 
 Expr *getReturnValueFromBytes(CodeLocation start, EndLocation end, Type *type, void *bytes) {
+	PROFILE_FUNC();
 	switch (type->flavor) {
 	case TypeFlavor::ARRAY: {
 		assert(!(type->flags & TYPE_ARRAY_IS_DYNAMIC));
 		auto arrayType = static_cast<TypeArray *>(type);
 
-		auto array = new ExprArrayLiteral;
+		auto array = IR_RUNNER_NEW(ExprArrayLiteral);
 		array->flavor = ExprFlavor::ARRAY_LITERAL;
 		array->start = start;
 		array->end = end;
@@ -1016,7 +1022,7 @@ Expr *getReturnValueFromBytes(CodeLocation start, EndLocation end, Type *type, v
 			array->count = arrayData->count;
 		}
 
-		array->values = new Expr * [array->count];
+		array->values = IR_RUNNER_NEW_ARRAY(Expr * , array->count);
 
 		for (u64 i = 0; i < array->count; i++) {
 			array->values[i] = getReturnValueFromBytes(start, end, arrayType->arrayOf, storage);
@@ -1029,7 +1035,7 @@ Expr *getReturnValueFromBytes(CodeLocation start, EndLocation end, Type *type, v
 	case TypeFlavor::BOOL: {
 		auto value = *static_cast<u8 *>(bytes);
 
-		auto literal = new ExprLiteral;
+		auto literal = IR_RUNNER_NEW(ExprLiteral);
 		literal->flavor = ExprFlavor::INT_LITERAL;
 		literal->start = start;
 		literal->end = end;
@@ -1068,7 +1074,7 @@ Expr *getReturnValueFromBytes(CodeLocation start, EndLocation end, Type *type, v
 			value = *static_cast<s64 *>(bytes);
 		}
 
-		auto literal = new ExprLiteral;
+		auto literal = IR_RUNNER_NEW(ExprLiteral);
 		literal->flavor = ExprFlavor::INT_LITERAL;
 		literal->start = start;
 		literal->end = end;
@@ -1087,7 +1093,7 @@ Expr *getReturnValueFromBytes(CodeLocation start, EndLocation end, Type *type, v
 			value = *static_cast<double *>(bytes);
 		}
 
-		auto literal = new ExprLiteral;
+		auto literal = IR_RUNNER_NEW(ExprLiteral);
 		literal->flavor = ExprFlavor::FLOAT_LITERAL;
 		literal->start = start;
 		literal->end = end;
@@ -1132,7 +1138,7 @@ Expr *getReturnValueFromBytes(CodeLocation start, EndLocation end, Type *type, v
 			value = *static_cast<s64 *>(bytes);
 		}
 
-		auto literal = new ExprLiteral;
+		auto literal = IR_RUNNER_NEW(ExprLiteral);
 		literal->flavor = ExprFlavor::INT_LITERAL;
 		literal->start = start;
 		literal->end = end;
@@ -1145,7 +1151,7 @@ Expr *getReturnValueFromBytes(CodeLocation start, EndLocation end, Type *type, v
 	case TypeFlavor::POINTER: {
 		auto value = *static_cast<u64 *>(bytes);
 
-		auto literal = new ExprLiteral;
+		auto literal = IR_RUNNER_NEW(ExprLiteral);
 		literal->flavor = ExprFlavor::INT_LITERAL;
 		literal->start = start;
 		literal->end = end;
@@ -1157,7 +1163,7 @@ Expr *getReturnValueFromBytes(CodeLocation start, EndLocation end, Type *type, v
 	case TypeFlavor::STRING: {
 		auto value = *static_cast<String *>(bytes);
 
-		auto literal = new ExprStringLiteral;
+		auto literal = IR_RUNNER_NEW(ExprStringLiteral);
 		literal->flavor = ExprFlavor::STRING_LITERAL;
 		literal->start = start;
 		literal->end = end;
@@ -1172,7 +1178,7 @@ Expr *getReturnValueFromBytes(CodeLocation start, EndLocation end, Type *type, v
 
 		auto struct_ = static_cast<TypeStruct *>(type);
 
-		auto literal = new ExprStructLiteral;
+		auto literal = IR_RUNNER_NEW(ExprStructLiteral);
 		literal->flavor = ExprFlavor::STRUCT_LITERAL;
 		literal->start = start;
 		literal->end = end;
@@ -1201,7 +1207,7 @@ Expr *getReturnValueFromBytes(CodeLocation start, EndLocation end, Type *type, v
 	case TypeFlavor::TYPE: {
 		auto value = *static_cast<Type **>(bytes);
 
-		auto literal = new ExprLiteral;
+		auto literal = IR_RUNNER_NEW(ExprLiteral);
 		literal->flavor = ExprFlavor::TYPE_LITERAL;
 		literal->start = start;
 		literal->end = end;
