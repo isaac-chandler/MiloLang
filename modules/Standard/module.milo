@@ -319,6 +319,10 @@ array_peek :: (using array: []$T) -> T {
     return array[count - 1]
 }
 
+array_last :: (using array: []$T) -> *T {
+    return *array[count - 1]
+}
+
 array_copy :: (using array: []$T) -> []T {
     if !array return .{}
 
@@ -800,7 +804,7 @@ swap :: (a: *$T, b: *T) {
     <<b = temp
 }
 
-insertion_sort :: (array: []$T, less := (a: T, b: T) -> bool { return a < b }) {
+insertion_sort :: (array: []$T, less := #run less_comparator(T)) {
     for 1 .. array.count {
         i := it
 
@@ -812,5 +816,41 @@ insertion_sort :: (array: []$T, less := (a: T, b: T) -> bool { return a < b }) {
 
             i -= 1
         }
+    }
+}
+
+quick_sort :: (array: []$T, less := #run less_comparator(T)) {
+    // TODO: Tune this constant
+    if array.count < 8 {
+        insertion_sort(array, less)
+        return;
+    }
+    
+    // Use middle element as pivot to avoid worst-case performance
+    // on nearly sorted data
+    swap(*array[array.count / 2], *array[array.count - 1])
+    
+    pivot := *array[array.count - 1]
+    
+    less_than_pivot := 0
+    
+    for * array[..array.count - 1] {
+        if less(<<it, <<pivot) {
+            swap(*array[less_than_pivot], it)
+            less_than_pivot += 1
+        }
+    }
+    swap(*array[less_than_pivot], pivot)
+    
+    quick_sort(array[..less_than_pivot], less)
+    quick_sort(array[less_than_pivot + 1..], less)
+}
+
+#scope_module
+less_comparator :: ($T: type) -> (T, T) -> bool {
+    #if #run type_info(T).tag == .FLOAT || type_info(T).tag == .INTEGER {
+        return (a: T, b: T) -> bool { return a < b }
+    } else {
+        return null
     }
 }

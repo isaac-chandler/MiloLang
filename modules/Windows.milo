@@ -1072,6 +1072,7 @@ DisconnectNamedPipe :: (hNamedPipe: HANDLE, lpOverlapped: *OVERLAPPED) -> s32 #e
 
 CreateEventA :: (lpEventAttributes: *SECURITY_ATTRIBUTES = null, bManualReset: s32 = 0, bInitalState: s32 = 0, lpName: *u8 = null) -> HANDLE #external "kernel32"
 
+ScreenToClient :: (hWnd: HWND, lpPoint: *POINT) -> s32 #external "user32"
 GetCursorPos :: (lpPoint: *POINT) -> s32 #external "kernel32"
 SetCursorPos :: (X: s32, Y: s32) -> s32 #external "kernel32"
 

@@ -17,28 +17,38 @@ Table :: struct(Key: type, Value: type, load_factor := 0.7, hash_func := null, e
     used_slots: u64    
 }
 
-// TODO hash better
 hash :: (key: $T) -> u64 {
-    #if T == type {
-        return cast() type_info(T)  
-    } else if #run use_u64_hash(T) {
-        return cast(u64) cast(*void) key
+    #if T == string {
+        return hash_string(key)
+    } else if T == bool || 
+               #run type_info(T).tag == .INTEGER || 
+                    type_info(T).tag == .POINTER || 
+                    type_info(T).tag == .ENUM {
+        return hash_u64(cast() key)
+    } else if T == type || #run type_info(T).tag == .FUNCTION {
+        return hash_u64(cast,bit(u64) key)
     } else {
-        // Actually hash strings, floats, arrays (probably not structs?)
+        // The default hash function doesn't accept floats because we don't know how the
+        // user wants to deal with weird float stuff like -0 and NaN
+    
+        // Cannot hash structs/arrays/floats
+        #run assert(false)
         return 0
     }
 }
 
 table_insert :: (using table: *Table($K, $V), key: K, value: V) -> bool {
     maybe_rehash(table)
-    
     slot, match, hashed := find_slot(<<table, key)
     
     if !match {
+        ensure_initted(table)
+    
         slot.hash = hashed
         slot.key = key
         used_slots += 1
         count += 1
+        
     }
     
     slot.value = value
@@ -55,6 +65,22 @@ table_find :: (table: Table($K, $V), key: K) -> *V {
         return null
 }
 
+table_find_or_insert :: (using table: *Table($K, $V), key: K, value: V = ..) -> *V {
+    maybe_rehash(table)
+    slot, match, hashed := find_slot(<<table, key)
+    
+    if !match {
+        slot.hash = hashed
+        slot.key = key
+        slot.value = value
+        used_slots += 1
+        count += 1
+        
+    }
+    
+    return *slot.value
+}
+
 table_remove :: (using table: *Table($K, $V), key: K) -> bool {
     if !table.count return false  
     slot, match := find_slot(<<table, key)
@@ -65,6 +91,13 @@ table_remove :: (using table: *Table($K, $V), key: K) -> bool {
         return true
     } else
         return false
+}
+
+table_slot :: (table: Table($K, $V), slot: u64) -> *Table(K, V).Slot {
+    if table.slots[slot].hash < MIN_VALID_HASH
+        return null
+    else
+        return *table.slots[slot]
 }
 
 free_table :: (table: Table($K, $V)) {
@@ -133,17 +166,30 @@ maybe_rehash :: (using table: *Table($K, $V)) {
             } 
         }
         
-        table.used_slots = count
-        free_array(table.slots)
+        used_slots = count
+        free_array(slots)
         table.slots = new_slots
     }
 }
 
-use_u64_hash :: (T: type) -> bool {
-    if type_info(T).tag == {
-        case .INTEGER #through
-        case .POINTER #through
-        case .FUNCTION return true
-        else return false
+// https://stackoverflow.com/questions/664014/what-integer-hash-function-are-good-that-accepts-an-integer-hash-key
+// TODO: More performant hash function, this one has long dependency chains with multiplies
+hash_u64 :: (val: u64) -> u64 {
+    x := val
+    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9
+    x = (x ^ (x >> 27)) * 0x94d049bb133111eb
+    x = (x ^ (x >> 31))
+    return x
+}
+
+// https://stackoverflow.com/questions/7666509/hash-function-for-string
+// TODO: More performant hash function, (operate on multiple characters per iteration)
+hash_string :: (s: string) -> u64 {
+    hash: u64 = 5381
+    
+    for s {
+        hash = (hash * 33) ^ it
     }
+    
+    return hash
 }
