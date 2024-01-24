@@ -1,0 +1,334 @@
+#import "Standard"
+#import "GL"
+#import "Window"
+#import "File"
+#import "stb_truetype"
+#import "Table"
+
+#load "graphics.milo"
+
+gl_context: GL_Context
+
+Profile_Entry :: struct {
+    zone:    string
+    time_ns: s64
+}
+
+Mprof_File :: struct {
+    magic := u8.['m', 'p', 'r', 'o', 'f', 0]
+    version: u16 = 1
+    threads: [][]Profile_Entry
+}
+
+read_mprof_file :: (filename: string) -> (#must [][]Profile_Entry, #must bool) {
+    contents, success := read_entire_file(filename)
+    
+    if !success
+        return .{}, false
+    
+    if contents.count < size_of(Mprof_File) {
+        free_array(contents)
+        return .{}, false
+    }
+    
+    using mprof := cast(*Mprof_File) contents.data
+    
+    
+    
+    if cast(string) cast([]u8) magic != cast(string) cast([]u8) Mprof_File.{}.magic || version != Mprof_File.{}.version {
+        free_array(contents)
+        return .{}, false
+    }
+    
+    checked_patch :: (contents: []u8, buffer: *$T) -> bool {
+        buffer.data = cast() (contents.data + cast(u64) buffer.data)
+        
+        return cast(u64) *buffer[0]            >= cast() *contents[0] && 
+               cast(u64) *buffer[buffer.count] <= cast() *contents[contents.count]
+    }
+    
+    if !checked_patch(contents, *threads) {
+        free_array(contents)
+        return .{}, false
+    }
+    
+    for * thread : threads {
+        if !checked_patch(contents, thread) {
+            free_array(contents)
+            return .{}, false
+        }
+        
+        for * <<thread {
+            if !it.zone.count  continue;
+            
+            if !checked_patch(contents, *it.zone) {
+                free_array(contents)
+                return .{}, false
+                
+            }
+        }
+    }
+    
+    return threads, true
+}
+
+Zone_Time :: struct {
+    name: string
+    inclusive: s64
+    self:      s64
+    count:     s64
+}
+
+Zone :: struct {
+    name:  string
+    begin: s64
+    end:   s64
+    first_child: u64
+    last_child:  u64
+}
+
+main :: () {
+    defer exit(0)
+    
+    args := get_command_line_arguments()
+
+    if args.count != 2 {
+        print("Usage: % <filename>", args[0])
+        exit(1)
+    }
+    
+    threads, success := read_mprof_file(args[1])
+    
+    if !success {
+        print("Failed to read mprof file\n")
+        exit(1)
+    }
+    
+    window := create_window("Milo Profiler", 1280, 720)
+    
+    if !window {
+        print("Failed to create window\n")
+        exit(1)
+    }
+    
+    defer free(window)
+    
+    gl_context: GL_Context
+    success, gl_context = create_gl(window, depth_bits = 0)
+    
+    if !success {
+        print("Failed to create gl context")
+        exit(1)
+    }
+    
+    defer {
+        glFinish()
+        free_gl(gl_context)
+    }
+    make_context_current(gl_context)
+
+    load_gl_extensions()
+    set_swap_interval(1)
+    glClearColor(0, 0, 0, 1)
+    
+    if !load_font() {
+        print("Failed to load font\n")
+        exit(1)
+    }
+    
+    
+    thread_zones := new_array([..][..]Zone, threads.count)
+    
+    for thread : threads {
+        zone_depth: u64 = 0
+        zone_stack: [..][..]Zone
+        
+        for thread {
+            if it.zone {
+                if zone_stack.count <= zone_depth {
+                    array_push(*zone_stack)
+                }
+                
+                zone: Zone
+                zone.name        = it.zone
+                zone.begin       = it.time_ns
+                
+                if zone_depth + 1 < zone_stack.count {
+                    zone.first_child = zone_stack[zone_depth + 1].count    
+                }
+                
+                array_add(*zone_stack[zone_depth], zone)
+                zone_depth += 1
+            } else {
+                zone_depth -= 1
+                
+                zone := array_last(zone_stack[zone_depth])
+                
+                zone.end = it.time_ns
+                
+                if zone_depth + 1 < zone_stack.count {
+                    zone.last_child = zone_stack[zone_depth + 1].count
+                }
+            }
+        }
+        
+        thread_zones[it_index] = zone_stack
+    }
+    
+    max_time := array_last(thread_zones[0][0]).end
+    for thread_zones[1..]
+        max_time = max(array_last(it[0]).begin, max_time)
+    
+    show_window(window)
+    
+    
+    zone_thickness: f32 = 20
+    
+    glEnable(GL_TEXTURE_2D)
+    
+    glEnable(GL_BLEND)
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+    
+    glEnableClientState(GL_VERTEX_ARRAY)
+    glEnableClientState(GL_COLOR_ARRAY)
+    
+    scale := cast(f64) window.width / cast(f64) max_time
+    scroll_x: f64 = 0
+    scroll_y: f32 = 0
+    
+    while poll_events(window) {
+        for get_window_events(window) {
+            if it.kind == {
+                case .SCROLL
+                    if it.scroll.modifiers == {
+                        case 0
+                            scroll_y -= cast() it.scroll.scroll_y
+                            scroll_x -= cast() it.scroll.scroll_x
+                        case .SHIFT
+                            scroll_x -= cast() it.scroll.scroll_y
+                            scroll_y -= cast() it.scroll.scroll_x
+                            
+                        case .CONTROL
+                            ratio: f64 = 1
+                        
+                            if it.scroll.scroll_y > 0 {
+                                for _: it.scroll.scroll_y {
+                                    ratio *= 1.005
+                                }
+                            } else {
+                                for _: -it.scroll.scroll_y {
+                                    ratio /= 1.005
+                                }
+                            }
+                            
+                            scroll_x += (cast() it.scroll.mouse_x + scroll_x) * (ratio - 1)                            
+                            scale *= ratio
+                    }
+            }
+        }
+        
+        glClear(GL_COLOR_BUFFER_BIT)
+        glViewport(0, 0, window.width, window.height)
+        glMatrixMode(GL_PROJECTION)
+        glLoadIdentity()
+        glOrtho(0, cast() window.width, cast() window.height, 0, -1, 1)
+        glMatrixMode(GL_MODELVIEW)
+        glLoadIdentity()
+        
+        
+        begin_draw(textured = false)
+        y := -scroll_y        
+        
+        for thread : thread_zones {
+            for depth : thread {
+                
+                last_x_pixel := -1000
+                    
+                for zone : depth {
+                    rect: Rectangle
+                    rect.left   = cast() (cast() zone.begin * scale - scroll_x)
+                    rect.right  = cast() (cast() zone.end   * scale - scroll_x)
+                    rect.top    = y
+                    rect.bottom = y + zone_thickness
+                    
+                    if rect.right < 0{
+                        continue;
+                    }
+                    
+                    if rect.left >= cast() window.width {
+                        break;
+                    }
+                    
+                    
+                    if rect.right - rect.left < 1 {
+                        if cast() rect.left == last_x_pixel {
+                            continue;
+                        }
+                        last_x_pixel = cast() rect.left
+                        rect.right += 1
+                    }
+                    
+                    draw_untextured(rect, .[1, 0, 0])
+                }
+                
+                y += zone_thickness
+            }
+            
+            y += zone_thickness
+        }
+        
+        end_draw(textured = false)
+        
+        begin_draw(textured = true)
+        y = -scroll_y
+        
+        for thread : thread_zones {
+            for depth : thread {
+                for zone : depth {
+                    left := max(cast() zone.begin * scale - scroll_x, 0)
+                    right := cast() zone.end * scale - scroll_x
+                    
+                    if right < 0 {
+                        continue;
+                    }
+                    
+                    if left >= cast() window.width {
+                        break;
+                    }
+                    
+                    width := right - left
+                    
+                    char_count := min(cast(u64) (width / cast() font.width), zone.name.count)
+                    
+                    draw_text(cast() left, y + zone_thickness * 0.5 + font.height * 0.5, zone.name[..char_count])
+                }
+                
+                y += zone_thickness
+            }
+            
+            y += zone_thickness
+        }
+        
+        end_draw(textured = true)
+        
+        swap_buffers(gl_context)
+    }
+}
+
+#import "Compiler"
+
+#run {
+    build_options := get_build_options()
+    
+    build_options.c_runtime_library = Build_Options.C_Runtime_Library.DYNAMIC | .FORCED
+    
+    arguments := get_build_arguments()
+    if arguments.count && arguments[0] == "-release" {
+        build_options.backend = .LLVM
+        build_options.llvm_options = .["-O3"]
+        build_options.show_console = false
+        build_options.enable_stack_trace = false
+    }
+    
+    set_build_options(build_options)
+}

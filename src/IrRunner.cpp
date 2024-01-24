@@ -1105,10 +1105,27 @@ Expr *getReturnValueFromBytes(CodeLocation start, EndLocation end, Type *type, v
 	}
 	case TypeFlavor::FUNCTION: {
 		if (type->flags & TYPE_FUNCTION_IS_C_CALL) {
+			//TODO: Attempt a reverse lookup?
 			assert(false);
 		}
 
-		return *static_cast<ExprFunction **>(bytes);
+		ExprFunction *function = *static_cast<ExprFunction **>(bytes);
+
+		if (!function) {
+			auto value = *static_cast<u64 *>(bytes);
+
+			auto literal = IR_RUNNER_NEW(ExprLiteral);
+			literal->flavor = ExprFlavor::INT_LITERAL;
+			literal->start = start;
+			literal->end = end;
+			literal->unsignedValue = 0;
+			literal->type = type;
+
+			return literal;
+		}
+		else {
+			return function;
+		}
 	}
 	case TypeFlavor::INTEGER: {
 		u64 value = 0;

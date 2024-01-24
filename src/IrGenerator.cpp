@@ -2346,6 +2346,7 @@ bool generateIrForFunction(ExprFunction *function) {
 }
 
 void runIrGenerator() {
+	profiler_register_this_thread();
 	PROFILE_FUNC();
 	while (true) {
 

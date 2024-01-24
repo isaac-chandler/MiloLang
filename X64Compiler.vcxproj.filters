@@ -24,6 +24,7 @@
     <ClInclude Include="src\CodeView.h" />
     <ClInclude Include="src\OS.h" />
     <ClInclude Include="src\IdentTable.h" />
+    <ClInclude Include="src\Profiler.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\CompilerMain.cpp" />
@@ -46,6 +47,7 @@
     <ClCompile Include="src\CodeView.cpp" />
     <ClCompile Include="src\OS.cpp" />
     <ClCompile Include="src\IdentTable.cpp" />
+    <ClCompile Include="src\Profiler.cpp" />
   </ItemGroup>
   <ItemGroup>
     <Natvis Include="NatvisFile.natvis" />

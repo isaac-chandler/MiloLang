@@ -315,6 +315,8 @@ struct ExprDefer : Expr {
 
 #define EXPR_LOOP_HAS_BREAK   0x4000'0000
 
+#define EXPR_FUNCTION_IS_RUN_EXPRESSION 0x8000'0000
+
 #define ENUM_SPECIAL_MEMBER_COUNT 1
 
 struct ExprLoad : Expr {

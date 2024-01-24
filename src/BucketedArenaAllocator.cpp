@@ -158,3 +158,15 @@ ArenaAllocatorBucket *makeBucket(u32 size) {
 
 	return result;
 }
+
+bool BucketedArenaAllocator::writeToFile(FILE *file) {
+	for (auto bucket = first; bucket; bucket = bucket->next) {
+		u32 count = (bucket->size - bucket->remaining);
+
+		if (fwrite(bucket->memory - count, count, 1, file) != 1) {
+			return false;
+		}
+	}
+
+	return true;
+}

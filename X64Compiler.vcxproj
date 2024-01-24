@@ -298,6 +298,7 @@
     <ClInclude Include="src\OS.h" />
     <ClInclude Include="src\Parser.h" />
     <ClInclude Include="src\Polymorph.h" />
+    <ClInclude Include="src\Profiler.h" />
     <ClInclude Include="src\String.h" />
     <ClInclude Include="src\TypeTable.h" />
     <ClInclude Include="src\UTF.h" />
@@ -328,6 +329,7 @@
     <ClCompile Include="src\OS.cpp" />
     <ClCompile Include="src\Parser.cpp" />
     <ClCompile Include="src\Polymorph.cpp" />
+    <ClCompile Include="src\Profiler.cpp" />
     <ClCompile Include="src\String.cpp" />
     <ClCompile Include="src\TypeTable.cpp" />
     <ClCompile Include="src\UTF.cpp" />

@@ -1079,21 +1079,14 @@ ExprBlock *parseBlock(LexerFile *lexer, bool isCase, ExprBlock *block) {
 			continue;
 		}
 		else if (lexer->token.type == TokenT::RUN) {
-			if (block->declarations.flavor == BlockFlavor::GLOBAL) {
-				auto run = parseExpr(lexer);
+			auto run = parseExpr(lexer);
 
-				if (run->flavor != ExprFlavor::RUN) {
-					reportError(run, "Error: Expected run directive at top level");
-					return nullptr;
-				}
-
-				block->exprs.add(run);
-			}
-			else {
-				reportError(&lexer->token, "Error: Can only have #run statements at the top level");
-
+			if (run->flavor != ExprFlavor::RUN) {
+				reportError(run, "Error: Expected run directive");
 				return nullptr;
 			}
+
+			block->exprs.add(run);
 
 			continue;
 		}
@@ -2585,7 +2578,16 @@ Expr *parsePrefixExpr(LexerFile *lexer, CodeLocation plusStart) {
 			auto block = PARSER_NEW(ExprBlock);
 			block->flavor = ExprFlavor::BLOCK;
 			block->declarations.flavor = BlockFlavor::IMPERATIVE;
-			pushBlock(lexer, &block->declarations);
+			insertBlock(lexer, &block->declarations);
+
+			// Due to the run expression return declaration hack the run expression
+			// will be the initialValue field of the return declaration.
+			// So instead of setting the enclosingScope of the return expression to the block
+			// imperative scope, make sure it is the return scope. If this isn't done it will
+			// cause problems when polymorphing since the returns block is copied prior to the 
+			// imperative block which means any references to the imperative scope would not be
+			// patched to the new imperative block, i.e. identifier->resolveFrom
+			pushBlock(lexer, &function->returns);
 
 			returnValue = parseExpr(lexer);
 			if (!returnValue)
@@ -2595,7 +2597,8 @@ Expr *parsePrefixExpr(LexerFile *lexer, CodeLocation plusStart) {
 			block->end = returnValue->end;
 			run->end = lexer->previousTokenEnd;
 
-			popBlock(lexer, &block->declarations);
+
+			popBlock(lexer, &function->returns);
 
 			function->body = block;
 		}
@@ -3069,6 +3072,7 @@ Declaration *parseDeclaration(LexerFile *lexer) {
 }
 
 void runParser() {
+	profiler_register_this_thread();
 	PROFILE_FUNC();
 	LexerFile lexer_;
 	LexerFile *lexer = &lexer_;

@@ -56,6 +56,8 @@ struct BucketedArenaAllocator {
 	void ensure(u32 size);
 
 	void align(u64 alignment);
+
+	bool writeToFile(FILE *file);
 };
 
 template<typename T, u32 bucketSize = 1024>

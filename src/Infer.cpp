@@ -4331,6 +4331,11 @@ bool inferFlattened(SubJob *job) {
 				return yield;
 			}
 
+			if (!isAddressable(pushContext->left)) {
+				reportError(pushContext->left, "Error: The context passed to push_context must not be a temporary value");
+				return false;
+			}
+
 			break;
 		}
 		case ExprFlavor::IDENTIFIER: {
@@ -8877,8 +8882,7 @@ outer:
 		}*/
 
 		reportError("Internal Compiler Error: Inference got stuck but no undeclared identifiers or circular dependencies were detected");
-		dumpIdentTable();
-
+		
 		for (auto job = sizeJobs; job; job = job->next) {
 			auto type = job->type;
 
