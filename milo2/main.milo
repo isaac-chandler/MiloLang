@@ -1,0 +1,271 @@
+#import "Standard"
+#import "File"
+#import "String"
+#import "Table"
+
+#load "ast.milo"
+#load "lexer.milo"
+#load "identifier.milo"
+#load "parser.milo"
+#load "types.milo"
+#load "type_check.milo"
+
+Location :: struct {
+    file_id:      s32
+    start_offset: s32
+    end_offset:   s32
+}
+
+
+Workspace :: struct {
+    build_files: [..]Load
+    had_error  := false
+    
+    runtime_module: *Module
+    main_module:    *Module
+    
+    
+    modules: Table(string, *Module)
+}
+
+#add_context using current_workspace: *Workspace
+
+console_colors := false
+
+set_start :: (location: *Location, start: Location) {
+    location.file_id = start.file_id
+    location.start_offset = start.start_offset
+}
+
+set_end :: (location: *Location, end: Location) {
+    location.end_offset = end.end_offset
+}
+
+set_location :: (location: *Location, start: Location, end: Location) {
+    set_start(location, start)
+    set_end(location, end)
+}
+
+Module :: struct {
+    name:  string
+    using block := Block.{tag = .GLOBAL}
+}
+
+get_or_add_module :: (module_name: string, load_location: Location) -> *Module {
+    module_pointer := table_find(context.modules, module_name)
+    
+    if module_pointer
+        return <<module_pointer
+        
+    module := new(Module)
+    module.name = module_name
+    
+    table_insert(*context.modules, module_name, module)
+    
+    array_add(*context.build_files, .{module = module, file = "", load_location = load_location})
+    
+    return module
+}
+
+add_build_file :: (module: *Module, file: string, load_location: Location) {
+    array_add(*context.build_files, .{module = module, file = file, load_location = load_location})
+}
+
+Load :: struct {
+    using load_location: Location
+    module: *Module
+    file: string
+}
+
+
+report_error :: (location: Location, message: string, format: any..) {
+    if location.file_id < 0 {
+        report_error(message, ..format)
+        return
+    }
+    
+    filename := context.build_files[location.file_id].file
+    file_content, success := read_entire_file(filename)
+    defer free_array(file_content)
+    
+    start_line := 1
+    start_column := 1
+    
+    if !success {
+        print("Internal Compiler Error: Could not read file '%' to display error location\n", filename)
+    } else {
+        offset := 0
+        
+        for file_content[..location.start_offset] {
+            start_column += 1
+            
+            if it == '\r' {
+                if it_index + 1 >= file_content.count || file_content[it_index + 1] != '\n' {
+                    start_line += 1
+                    start_column = 1
+                }
+            } else if it == '\n' {
+                start_line += 1
+                start_column = 1
+            }
+        }
+        
+        print("%:%,% ", filename, start_line, start_column)
+    }
+    
+    report_error(message, ..format)
+    
+    if success {
+        start_offset := location.start_offset
+        
+        while start_offset {
+            if file_content[start_offset - 1] == {
+                case '\r'
+                case '\n'
+                    break
+            }
+            start_offset -= 1
+        }
+        
+        end_offset := location.end_offset
+        
+        while cast() end_offset < file_content.count {
+            if file_content[end_offset] == {
+                case '\r'
+                case '\n'
+                    break
+            }
+            end_offset += 1
+        }
+        
+        if console_colors {
+            print("%\e[91m%\e[0m%\n", 
+                cast(string) file_content[start_offset..location.start_offset], 
+                cast(string) file_content[location.start_offset..location.end_offset], 
+                cast(string) file_content[location.end_offset .. end_offset])
+        } else {
+            print("%\n", cast(string) file_content[start_offset..end_offset])
+        }
+    }
+}
+
+report_error :: (message: string, format: any..) {
+    context.had_error = true
+    
+    print("Error: ")
+    print(message, ..format)
+    print("\n")
+}
+
+main :: () {
+    defer {
+        if context.current_workspace && context.had_error exit(1)
+    }
+    
+        
+    console_colors = enable_console_colors()
+    init_identifier_table()
+    init_keywords()
+    init_types()
+    
+    arguments := get_command_line_arguments()
+    defer free_array(arguments)
+    
+    context.current_workspace = new(Workspace)
+    
+    if arguments.count == 0 {
+        report_error("Usage: milo <file>")
+        return
+    }
+    
+    if arguments.count != 2 {
+        report_error("Usage: % <file>", arguments[0])
+        return
+    }
+    
+    initial_file := arguments[1]
+    if !path_exists(initial_file) {
+        report_error("Could not find file %", initial_file)
+        return
+    }
+    
+    if !path_is_file(initial_file) {
+        report_error("% is not a file", initial_file)
+        return
+    }
+    
+    
+    set_working_directory(remove_final_path_name(initial_file))
+    initial_file_name := get_final_path_name(initial_file)
+    
+    system_module_path := get_path_relative_to_executable("../../modules")
+    
+    // Must be parsed first!    
+    context.runtime_module = get_or_add_module("Runtime", load_location = .{file_id = -1})
+    
+    context.main_module = new(Module)
+    table_insert(*context.modules, "", context.main_module)
+    array_add(*context.build_files, .{module = context.main_module, file = initial_file_name, load_location = .{file_id = -1}})
+    
+    i: u64 = 0
+    
+    while i < context.build_files.count {
+        build_file := *context.build_files[i]
+        
+        if build_file.module != context.main_module {
+            module_directory := join_paths(system_module_path, build_file.module.name)
+            defer free_string(module_directory)
+            
+            if build_file.file
+                build_file.file = join_paths(module_directory, build_file.file)
+            else if path_is_directory(module_directory)
+                build_file.file = join_paths(module_directory, "module.milo")
+            else
+                build_file.file = sprint("%%%.milo", system_module_path, PATH_SEPARATOR, build_file.module.name)
+        }
+        
+        if !path_exists(build_file.file) {
+            report_error(build_file, "Could not find '%'", build_file.file)
+            return;
+        }
+        
+        if !path_is_file(build_file.file) {
+            report_error(build_file, "'%' is not a file", build_file.file)
+            return;
+        }
+        
+        content, success := read_entire_file(build_file.file)
+        defer free_array(content)
+        
+        if !success {
+            report_error(build_file, "Failed to read file %", build_file.file)
+            return;
+        }
+                
+        tokens: [..]Token
+        success, tokens = lex_string(cast() i, cast() content)
+        defer array_free(tokens)
+        
+        if success
+            success = parse(build_file.module, tokens)
+        
+        if !success && !context.had_error {
+            report_error(.{file_id = cast() i}, "Internal compiler error: Compilation failed but no error was reported")
+            return;
+        }
+        
+        if !success
+            break;
+        
+        i += 1
+    }
+}
+
+#import "Compiler"
+#run {
+    options := get_build_options()
+    
+    options.output_name = "bin/milo"
+    
+    set_build_options(options)
+}

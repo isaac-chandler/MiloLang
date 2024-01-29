@@ -1,0 +1,1593 @@
+Parser :: struct {
+    tokens:        []Token
+    module:        *Module
+    current_block: *Block
+    current_unit:  *Unit
+    
+    Scope :: enum u8 {
+        EXPORT
+        MODULE
+        FILE
+    }
+    
+    scope := Scope.EXPORT
+}
+
+push_block :: (using parser: *Parser, block: *Block) -> *Block {
+    old_block := current_block
+    block.parent = current_block
+    current_block = block
+    
+    return old_block
+}
+
+pop_block :: (using parser: *Parser) {
+    current_block = current_block.parent
+}
+
+push_unit :: (using parser: *Parser) -> *Unit {
+    old_unit := current_unit
+    
+    current_unit = new(Unit)
+    current_unit.parent = old_unit
+    
+    return current_unit
+}
+
+pop_unit :: (using parser: *Parser) {    
+    current_unit.root = cast() current_unit.nodes.count
+    array_add(*current_unit.nodes, .{tag = .INFER_DONE})
+    
+    current_unit = current_unit.parent
+    
+}
+
+parser_todo :: (using parser: *Parser) {
+    report_error(tokens[0], "Internal Error: Parsing not implemented")
+    assert(false)
+}
+
+check_and_consume :: (using parser: *Parser, token: u8) -> bool {
+    if tokens[0].tag == cast() token {
+        tokens = tokens[1..]
+        return true
+    }
+    
+    return false
+}
+
+check_and_consume :: (using parser: *Parser, token: Token.Tag) -> bool {
+    if tokens[0].tag == token {
+        tokens = tokens[1..]
+        return true
+    }
+    
+    return false
+}
+
+parse :: (module: *Module, tokens: []Token) -> bool {
+    parser := Parser.{tokens = tokens, module = module}
+    
+    _ := push_block(*parser, *module.block)
+    
+    while tokens {
+        if parser.tokens[0].tag == .END_OF_FILE {
+            break
+        }
+        
+        statement, success := parse_statement(*parser)
+        
+        if !success
+            return false
+        
+        if exists(statement)    
+            array_add(*units_to_typecheck, statement.unit)
+    } or {
+        report_error("Internal Error: Ran out of tokens without encountering an end of file")
+        return false
+    }
+    
+    return true
+}
+
+Parse_Data_Binary :: struct {
+    left:     Node_Index
+    right:    Node_Index
+    operator: Token.Tag
+}
+
+parse_statement :: (using parser: *Parser) -> (node: Node_Reference, #must success: bool) {
+    if check_and_consume(parser, ';') {
+        return .{}, true
+    } else if looks_like_declaration(tokens) {
+        if current_block.tag == .GLOBAL {
+            push_unit(parser)
+        }
+        
+        defer if current_block.tag == .GLOBAL {
+            pop_unit(parser)
+        }
+        
+        node := parse_declaration(parser)
+        if !node {
+            return .{}, false
+        }
+        
+        result := Node_Reference.{current_unit, node}
+        
+        return result, true
+    } else if tokens[0].tag == .STATIC_IF {
+        if current_block.tag == .GLOBAL {
+            push_unit(parser)
+        }
+        
+        defer if current_block.tag == .GLOBAL {
+            pop_unit(parser)
+        }
+        
+        node := parse_static_if(parser)
+        if !node {
+            return .{}, false
+        }
+        
+        result := Node_Reference.{current_unit, node}
+        
+        return result, true
+    } else if tokens[0].tag == .ADD_CONTEXT {
+        if current_block.tag != .GLOBAL {
+            report_error(tokens[0], "#add_context may only be used at global scope")
+            return .{}, false
+        }
+        
+        push_unit(parser)
+        defer pop_unit(parser)
+        
+        node := make_basic_node(parser, .ADD_CONTEXT)
+        tokens = tokens[1..]
+        
+        declaration := parse_declaration(parser)
+        if !declaration
+            return .{}, false
+        
+        node.parse_data = cast() cast(u64) declaration
+        set_end(*node, get_node(current_unit, declaration))
+        
+        
+        result := Node_Reference.{current_unit, add_node(parser, node)}
+        
+        return result, true
+    } else if tokens[0].tag == .IMPORT {
+        if current_block.tag != .GLOBAL {
+            report_error(tokens[0], "#import may only be used at global scope")
+            return .{}, false
+        }
+        
+        push_unit(parser)
+        defer pop_unit(parser)
+        
+        node, data := make_node(parser, .IMPORT, string)
+        tokens = tokens[1..]
+        
+        if tokens[0].tag != .STRING_LITERAL {
+            report_error(tokens[0], "Expected module name after '#import'")
+            return .{}, false
+        }
+        
+        <<data = tokens[0].string_value
+        set_end(*node, tokens[0])
+        tokens = tokens[1..]
+        
+        result := Node_Reference.{current_unit, add_node(parser, node)}
+        
+        return result, true
+    } else if tokens[0].tag == .LOAD {
+        if current_block.tag != .GLOBAL {
+            report_error(tokens[0], "#load may only be used at global scope")
+            return .{}, false
+        }
+        
+        push_unit(parser)
+        defer pop_unit(parser)
+        
+        node, data := make_node(parser, .LOAD, string)
+        tokens = tokens[1..]
+        
+        if tokens[0].tag != .STRING_LITERAL {
+            report_error(tokens[0], "Expected file name after '#load'")
+            return .{}, false
+        }
+        
+        <<data = tokens[0].string_value
+        set_end(*node, tokens[0])
+        tokens = tokens[1..]
+        
+        result := Node_Reference.{current_unit, add_node(parser, node)}
+        
+        return result, true
+    } else if tokens[0].tag == .IF {
+        if current_block.tag != .IMPERATIVE {
+            report_error(tokens[0], "Can only have an if in a function body")
+            return .{}, false
+        }
+        
+        result := parse_if(parser)
+        if !result
+            return .{}, false
+            
+        return .{current_unit, result}, true
+    } else if tokens[0].tag == cast() '{' {
+        if current_block.tag != .IMPERATIVE {
+            report_error(tokens[0], "Can only have a block in a function body")
+            return .{}, false
+        }
+        
+        result := parse_block(parser)
+        if !result
+            return .{}, false
+            
+        return .{current_unit, result}, true
+    } else if tokens[0].tag == .FOR {
+        if current_block.tag != .IMPERATIVE {
+            report_error(tokens[0], "Can only have a for in a function body")
+            return .{}, false
+        }
+        
+        result := parse_for(parser)
+        if !result
+            return .{}, false
+            
+        return .{current_unit, result}, true
+    } else if tokens[0].tag == .RETURN {
+        if current_block.tag != .IMPERATIVE {
+            report_error(tokens[0], "Can only have a return in a function body")
+            return .{}, false
+        }
+        
+        result := parse_return(parser)
+        if !result
+            return .{}, false
+            
+        return .{current_unit, result}, true
+    } else if tokens[0].tag == .PUSH_CONTEXT {
+        if current_block.tag != .IMPERATIVE {
+            report_error(tokens[0], "Can only have a push_context in a function body")
+            return .{}, false
+        }
+        
+        result := parse_push_context(parser)
+        if !result
+            return .{}, false
+            
+        return .{current_unit, result}, true
+    } else {
+        if current_block.tag == .GLOBAL {
+            report_error(tokens[0], "Expected a top level statement")
+            return .{}, false
+        }
+        
+        expression := parse_expression(parser)
+        if !expression {
+            return .{}, false
+        }
+        
+        if tokens[0].tag == {
+            case cast() '=' #through
+            case .MINUS_EQUAL
+                node, data := make_node(parser, .BINARY, Parse_Data_Binary)
+                data.left = expression
+                data.operator = tokens[0].tag
+                tokens = tokens[1..]
+                
+                data.right = parse_expression(parser)
+                if !data.right
+                    return .{}, false
+                    
+                set_location(*node, get_node(current_unit, data.left), get_node(current_unit, data.right))
+                
+                return .{current_unit, add_node(parser, node)}, true
+            case ','
+                parse_multi_assignment(parser)
+            else
+                node := get_node(current_unit, expression)
+                if node.tag != .CALL {
+                    report_error(node, "Expression with no side effects cannot be a statement")
+                    return .{}, false
+                } else {
+                    (cast(*Parse_Data_Call) node.parse_data).flags |= .STATEMENT
+                }
+                
+                return .{current_unit, expression}, true
+        }
+    }
+}
+
+make_node :: (using parser: *Parser, tag: Node.Tag, $Parse_Data: type) -> (Node, #must *Parse_Data) {
+    result := Node.{parse_data = new(Parse_Data), enclosing_block = current_block, location = tokens[0].location, tag = tag}
+    return result, result.parse_data
+}
+
+make_basic_node :: (using parser: *Parser, tag: Node.Tag) -> Node {
+    return .{enclosing_block = current_block, location = tokens[0].location, tag = tag}
+}
+
+add_node :: (using parser: *Parser, node: Node) -> Node_Index {
+    array_add(*current_unit.nodes, node)
+    return cast() current_unit.nodes.count
+}
+
+Parse_Data_Declaration :: struct {
+    name:             *Identifier
+    type_expression:  Node_Index
+    value_expression: Node_Index
+    
+    Flags :: enum_flags u32 {
+        CONSTANT
+        UNINITIALIZED
+        EXPLICIT_DEFAULT
+        USING
+        VARARGS
+    }
+    
+    flags: Flags
+}
+
+looks_like_declaration :: (tokens: []Token) -> bool {
+    look_at := tokens
+    
+    if look_at[0].tag == .USING {
+        look_at = look_at[1..]
+    }
+
+    return look_at[0].tag == .IDENTIFIER && look_at[1].tag == cast() ':'
+}
+
+parse_declaration :: (using parser: *Parser) -> Node_Index {
+    node, data := make_node(parser, .DECLARATION, Parse_Data_Declaration)
+    
+    if check_and_consume(parser, .USING) {
+        data.flags |= .USING
+    }
+    
+    if tokens[0].tag != .IDENTIFIER {
+        report_error(tokens[0], "Expected declaration name")
+        return 0
+    }
+    
+    data.name = tokens[0].identifier
+    tokens = tokens[1..]
+    
+    if !check_and_consume(parser, ':') {
+        report_error(tokens[1], "Expected ':' after declaration name")
+        return 0
+    }
+    
+    
+    if tokens[0].tag != cast() ':' && tokens[0].tag != cast() '=' {
+        data.type_expression = parse_expression(parser)
+        if !data.type_expression {
+            return 0
+        }
+        
+        if check_and_consume(parser, .DOUBLE_DOT) {
+            if current_block.tag != .ARGUMENTS {
+                report_error(tokens[-1], "Varargs specifiers may only be present on function arguments")
+                return 0
+            }
+            data.flags |= .VARARGS
+        }
+    }
+    
+    value_present := false
+    
+    if check_and_consume(parser, ':') {
+        data.flags |= .CONSTANT
+        
+        value_present = true
+    } else if check_and_consume(parser, '=') {
+        value_present = true
+        
+    }
+    
+    if value_present {
+        if tokens[0].tag == .DOUBLE_DOT {
+            set_end(*node, tokens[0])
+            data.flags |= .EXPLICIT_DEFAULT
+            
+            tokens = tokens[1..]
+            
+            if data.flags & .VARARGS {
+                report_error(node, "Varargs cannot have a default value")
+                return 0
+            }
+        } else if tokens[0].tag == .UNINITIALIZED {
+            set_end(*node, tokens[0])
+            
+            if data.flags & .CONSTANT {
+                report_error(node, "Constant declarations must be initialized")
+                return 0
+            } else {
+                data.flags |= .UNINITIALIZED
+            }
+            
+            tokens = tokens[1..]
+        } else {
+            data.value_expression = parse_expression(parser)
+            if !data.value_expression {
+                return 0
+            }
+            
+            set_end(*node, get_node(current_unit, data.value_expression))
+            
+            
+            if data.flags & .VARARGS {
+                report_error(node, "Varargs cannot have a default value")
+                return 0
+            }
+        }
+    } else {
+        assert(data.type_expression != 0)
+           
+        set_end(*node, get_node(current_unit, data.type_expression))
+    }
+    
+    
+    result := add_node(parser, node)
+    
+    if current_block.tag == {
+        case .ARGUMENTS
+            if data.flags & .CONSTANT {
+                report_error(node, "Arguments cannot be a constant")
+                return 0
+            } else if data.flags & .UNINITIALIZED {
+                report_error(node, "Arguments cannot be uninitialized")
+                return 0
+            }
+        case .RETURNS
+            if data.flags & .CONSTANT {
+                report_error(node, "Returns cannot be a constant")
+                return 0
+            } else if data.flags & .UNINITIALIZED {
+                report_error(node, "Returns cannot be uninitialized")
+                return 0
+            } else if data.flags & .USING {
+                report_error(node, "Returns cannot be marked as using")
+                return 0
+            }
+    }
+    
+    if current_block.tag != .GLOBAL {
+        if is_redeclaration(current_block, node)
+            return 0
+            
+        add_to_block_unchecked(current_block, .{current_unit, result})
+    }
+    
+    return result
+}
+
+parse_expression :: (using parser: *Parser, current_precedence := 1) -> Node_Index {
+    expression := parse_prefix_expression(parser)
+    if !expression
+        return 0
+    
+    while true {
+        precedence := token_precedence(tokens)
+        
+        if precedence < current_precedence {
+            break;
+        }
+        
+        node, data := make_node(parser, .BINARY, Parse_Data_Binary)
+        data.left = expression
+        data.operator = tokens[0].tag
+        tokens = tokens[1..]
+        
+        data.right = parse_expression(parser, precedence + 1)
+        set_location(*node, get_node(current_unit, data.left), get_node(current_unit, data.right))
+        expression = add_node(parser, node)
+    }
+    
+    return expression
+}
+
+token_precedence :: (tokens: []Token) -> s64 {
+    if tokens[0].tag == {
+        case .LOGIC_OR  #through
+        case .LOGIC_AND
+            return 1
+        case .EQUAL
+            if tokens[1].tag == cast() '{'
+                return 0
+            else
+                return 2
+        case .NOT_EQUAL     #through
+        case .LESS_EQUAL    #through
+        case .GREATER_EQUAL #through
+        case cast() '<'     #through
+        case cast() '>'
+            return 2
+        case cast() '|' #through
+        case cast() '&' #through
+        case cast() '^'
+            return 3
+        case cast() '+' #through
+        case cast() '-'
+            return 4
+        case cast() '*' #through
+        case cast() '/' #through
+        case cast() '%'
+            return 5
+            
+        else
+            return 0
+    }
+}
+
+pack_unary :: (value: Node_Index, operator: Token.Tag) -> *void {
+    return cast() (cast(u64) value | (cast(u64) operator << 32))
+}
+
+unpack_unary :: (parse_data: *void) -> (value: Node_Index, operator: Token.Tag) {
+    numeric := cast(u64) parse_data
+    
+    return cast() numeric, cast() (numeric >> 32)
+}
+
+parse_prefix_expression :: (using parser: *Parser) -> Node_Index {
+    if tokens[0].tag == {
+        case cast() '*' #through
+        case cast() '+' #through
+        case cast() '-' #through
+        case .SHIFT_LEFT
+            node := make_basic_node(parser, .UNARY)
+            
+            operator := tokens[0].tag
+            tokens = tokens[1..]
+            value := parse_prefix_expression(parser)
+            node.parse_data = pack_unary(value, operator)
+            set_end(*node, get_node(current_unit, value))
+            
+            return add_node(parser, node)
+        case cast() '['
+            node := make_basic_node(parser, .UNARY)
+            
+            tokens = tokens[1..]
+            
+            if check_and_consume(parser, .DOUBLE_DOT) {
+                if !check_and_consume(parser, ']') {
+                    report_error(tokens[0], "Expected ']' in dynamic array type expression")
+                    return 0
+                }
+                
+                value := parse_prefix_expression(parser)
+                node.parse_data = pack_unary(value, .DYNAMIC_ARRAY_OF)
+                set_end(*node, get_node(current_unit, value))
+            } else if check_and_consume(parser, ']') {
+                value := parse_prefix_expression(parser)
+                node.parse_data = pack_unary(value, .ARRAY_OF)
+                set_end(*node, get_node(current_unit, value))
+            } else {
+                parser_todo(parser)
+            }
+            
+            return add_node(parser, node)
+            
+        else
+            return parse_postfix_expression(parser)
+    }
+}
+
+Parse_Data_Struct_Access :: struct {
+    left: Node_Index
+    name: *Identifier
+}
+
+Parse_Data_Index :: struct {
+    array: Node_Index
+    index: Node_Index
+}
+
+Parse_Data_Slice :: struct {
+    array: Node_Index
+    begin: Node_Index
+    end:   Node_Index
+}
+
+parse_postfix_expression :: (using parser: *Parser) -> Node_Index {
+    expression := parse_primary_expression(parser)
+    if !expression
+        return 0
+    
+    while true {
+        if tokens[0].tag == cast() '.' {
+            expression = parse_dot_expression(parser, expression)
+        } else if check_and_consume(parser, '[') {
+            expression = parse_index_expression(parser, expression)
+        } else if check_and_consume(parser, '(') {
+            expression = parse_call(parser, expression)
+        } else {
+            break;
+        }
+    }
+    
+    return expression
+}
+
+Parse_Data_Array_Literal :: struct {
+    type_expression: Node_Index
+    values: [..]Node_Index
+}
+
+parse_dot_expression :: (using parser: *Parser, left: Node_Index) -> Node_Index {
+    assert(tokens[0].tag == cast() '.')
+    
+    start := tokens[0].location
+    if left {
+        start = get_node(current_unit, left).location
+    }
+    
+    tokens = tokens[1..]
+    
+    if tokens[0].tag == .IDENTIFIER {
+        node, data := make_node(parser, .STRUCT_ACCESS, Parse_Data_Struct_Access)
+        data.left = left
+        data.name = tokens[0].identifier
+        
+        set_start(*node, start)
+        
+        tokens = tokens[1..]
+        
+        return add_node(parser, node)
+    } else if check_and_consume(parser, '{') {
+        node, data := make_node(parser, .STRUCT_LITERAL, Parse_Data_Call)
+        data.function = left
+        
+        set_start(*node, start)
+        
+        if !check_and_consume(parser, '}') {
+            if !parse_named_arguments(parser, data)
+                return 0
+            
+            set_end(*node, tokens[0])
+            if !check_and_consume(parser, '}') {
+                report_error(tokens[0], "Expected ',' or '}' in struct literal")
+                return 0
+            }
+        }
+        
+        return add_node(parser, node)
+    } else if tokens[1].tag == cast() '[' {
+        node, data := make_node(parser, .ARRAY_LITERAL, Parse_Data_Array_Literal)
+        data.type_expression = left
+        
+        set_start(*node, start)
+        
+        if !check_and_consume(parser, ']') {
+            while true {
+                value := parse_expression(parser)
+                if !value
+                    return 0
+                
+                array_add(*data.values, value)
+                    
+                if !check_and_consume(parser, ',') {
+                    break
+                }
+            }
+        
+            set_end(*node, tokens[0])
+            if !check_and_consume(parser, ']') {
+                report_error(tokens[0], "Expected ',' or ']' in array literal")
+                return 0
+            }
+        }
+        
+        return add_node(parser, node)
+    } else {
+        report_error(tokens[0], "Expected identifier, '{' or '[' after '.'")
+        return 0
+    }
+}
+
+parse_index_expression :: (using parser: *Parser, array: Node_Index) -> Node_Index {
+    if check_and_consume(parser, .DOUBLE_DOT) {
+        node, data := make_node(parser, .SLICE, Parse_Data_Slice)
+        data.array = array
+        set_start(*node, get_node(current_unit, array))
+        
+        data.end = parse_expression(parser)
+        if !data.end
+            return 0
+        
+        set_end(*node, tokens[0])
+        if !check_and_consume(parser, ']') {
+            report_error(tokens[0], "Expected ']' after slice end")
+            return 0
+        }
+        
+        return add_node(parser, node)
+    } else {
+        index := parse_expression(parser)
+        if !index
+            return 0
+        
+        if check_and_consume(parser, .DOUBLE_DOT) {
+            node, data := make_node(parser, .SLICE, Parse_Data_Slice)
+            data.array = array
+            data.begin = index
+            set_start(*node, get_node(current_unit, array))
+            
+            if tokens[0].tag == cast() ']' {
+                set_end(*node, tokens[0])
+                tokens = tokens[1..]
+            } else {
+                data.end = parse_expression(parser)
+                if !data.end
+                    return 0
+                
+                set_end(*node, tokens[0])
+                if !check_and_consume(parser, ']') {
+                    report_error(tokens[0], "Expected ']' after slice end index")
+                    return 0
+                }
+                
+            }
+            
+            return add_node(parser, node)
+        } else {
+            node, data := make_node(parser, .INDEX, Parse_Data_Index)
+            data.array = array
+            data.index = index
+            set_location(*node, get_node(current_unit, array), tokens[0])
+            
+            if !check_and_consume(parser, ']') {
+                report_error(tokens[0], "Expected ']' or '..' after array index")
+                return 0
+            }
+            
+            return add_node(parser, node)
+        }
+    }
+}
+
+Parse_Data_Call :: struct {
+    function:  Node_Index
+    
+    Flags :: enum_flags u32 {
+        STATEMENT
+    }
+    
+    flags: Flags
+
+    names:  []*Identifier
+    values: []Node_Index
+}
+
+parse_call :: (using parser: *Parser, function: Node_Index) -> Node_Index {
+    node, data := make_node(parser, .CALL, Parse_Data_Call)
+    
+    set_start(*node, get_node(current_unit, function))
+    data.function = function
+    
+    if tokens[0].tag == cast() ')' {
+        set_end(*node, tokens[0])
+        tokens = tokens[1..]
+        return add_node(parser, node)
+    }
+    
+    if !parse_named_arguments(parser, data, allow_spread = true)
+        return 0
+        
+    set_end(*node, tokens[0])
+    
+    if !check_and_consume(parser, ')') {
+        report_error(tokens[0], "Expected ',' or ')' in call argument list")
+        return 0
+    }
+    
+    return add_node(parser, node)
+}
+
+parse_primary_expression :: (using parser: *Parser) -> Node_Index {
+    if tokens[0].tag == {
+        case .STRUCT #through
+        case .UNION
+            return parse_struct(parser)
+        case .ENUM #through
+        case .ENUM_FLAGS
+            return parse_enum(parser)
+        case .U8
+            return parse_primitive_type(parser, *TYPE_U8)
+        case .U16
+            return parse_primitive_type(parser, *TYPE_U16)
+        case .U32
+            return parse_primitive_type(parser, *TYPE_U32)
+        case .U64
+            return parse_primitive_type(parser, *TYPE_U64)
+        case .S8
+            return parse_primitive_type(parser, *TYPE_S8)
+        case .S16
+            return parse_primitive_type(parser, *TYPE_S16)
+        case .S32
+            return parse_primitive_type(parser, *TYPE_S32)
+        case .S64
+            return parse_primitive_type(parser, *TYPE_S64)
+        case .F32
+            return parse_primitive_type(parser, *TYPE_F32)
+        case .F64
+            return parse_primitive_type(parser, *TYPE_F64)
+        case .STRING
+            return parse_primitive_type(parser, *TYPE_STRING)
+        case .TYPE
+            return parse_primitive_type(parser, *TYPE_TYPE)
+        case .VOID
+            return parse_primitive_type(parser, *TYPE_VOID)
+        case .BOOL
+            return parse_primitive_type(parser, *TYPE_BOOL)
+        case .CONTEXT_TYPE
+            return parse_primitive_type(parser, *TYPE_CONTEXT)
+        case .INT_LITERAL
+            node := make_basic_node(parser, .INT_LITERAL)
+            node.parse_data = cast() tokens[0].integer_value
+            
+            tokens = tokens[1..]
+            return add_node(parser, node)
+        case .TRUE
+            node := make_basic_node(parser, .BOOL_LITERAL)
+            node.parse_data = cast() 1
+            
+            tokens = tokens[1..]
+            return add_node(parser, node)
+        case .FALSE
+            node := make_basic_node(parser, .BOOL_LITERAL)
+            node.parse_data = cast() 0
+            
+            tokens = tokens[1..]
+            return add_node(parser, node)
+        case .IDENTIFIER
+            node := make_basic_node(parser, .IDENTIFIER)
+            node.parse_data = cast() tokens[0].identifier
+            
+            tokens = tokens[1..]
+            return add_node(parser, node)
+        case .ENTRY_POINT
+            node := make_basic_node(parser, .ENTRY_POINT)
+            tokens = tokens[1..]
+            return add_node(parser, node)
+        case .CONTEXT
+            node := make_basic_node(parser, .CONTEXT)
+            tokens = tokens[1..]
+            return add_node(parser, node)
+        case cast() '('
+            if looks_like_function(tokens) {
+                return parse_function(parser)
+            } else {
+                tokens = tokens[1..]
+                
+                result := parse_expression(parser)
+                if !result
+                    return 0
+                    
+                if !check_and_consume(parser, ')') {
+                    report_error(tokens[0], "Expected ')'")
+                    return 0
+                }
+                
+                return result
+            }
+        case .STRING_LITERAL
+            node, data := make_node(parser, .STRING_LITERAL, string);
+            <<data = tokens[0].string_value
+            tokens = tokens[1..]
+            return add_node(parser, node)
+        case cast() '.'
+            return parse_dot_expression(parser, 0)
+        else
+            report_error(tokens[0], "Expected an expression")
+            return 0
+    }
+}
+
+Parse_Data_Struct :: struct {
+    body: *Unit
+    members: [..]Node_Index
+    members_block := Block.{tag = .STRUCT}
+    
+    Flags :: enum_flags u32 {
+        PACK
+        UNION
+    }
+    
+    flags: Flags
+}
+
+parse_struct :: (using parser: *Parser) -> Node_Index {
+    node, data := make_node(parser, .STRUCT, Parse_Data_Struct)
+    
+    if tokens[0].tag == .UNION {
+        data.flags |= .UNION
+    } else {
+        assert(tokens[0].tag == .STRUCT)
+    }
+    
+    tokens = tokens[1..]
+    
+    if check_and_consume(parser, '(') {
+        parser_todo(parser)
+        return 0
+    }
+    
+    if check_and_consume(parser, .PACK) {
+        data.flags |= .PACK
+    }
+    
+    if !check_and_consume(parser, '{') {
+        report_error(tokens[0], "Expected struct body")
+        return 0
+    }
+    
+    data.body = push_unit(parser)
+    
+    push_block(parser, *data.members_block)
+    
+    while true {
+        if tokens[0].tag == cast() '}' {
+            set_end(*node, tokens[0])
+            tokens = tokens[1..]
+            break;
+        }
+        
+        statement, success := parse_statement(parser)
+        if !success {
+            return 0
+        }
+        if !exists(statement)
+            continue;
+        
+        assert(statement.unit == data.body)
+        
+        array_add(*data.members, statement.index)
+    }
+    
+    pop_block(parser)
+    pop_unit(parser)    
+    return add_node(parser, node)
+}
+
+Parse_Data_Enum :: struct {
+    type_expression: Node_Index
+    members: [..]struct {
+        name: *Identifier
+        value: Node_Index
+    }
+    
+    Flags :: enum_flags u32 {
+        FLAGS
+    }
+    
+    flags: Flags
+}
+
+parse_enum :: (using parser: *Parser) -> Node_Index {
+    node, data := make_node(parser, .ENUM, Parse_Data_Enum)
+    
+    if tokens[0].tag == .ENUM_FLAGS {
+        data.flags |= .FLAGS
+    } else {
+        assert(tokens[0].tag == .ENUM)
+    }
+    
+    tokens = tokens[1..]
+    
+    if tokens[0].tag != cast() '{' {
+        data.type_expression = parse_expression(parser)
+        if !data.type_expression {
+            return 0
+        }
+    }
+    
+    if !check_and_consume(parser, '{') {
+        report_error(tokens[0], "Expected enum body")
+        return 0
+    }
+    
+    while true {
+        if check_and_consume(parser, ';') {
+            continue;
+        }
+        
+        if tokens[0].tag == cast() ',' {
+            report_error(tokens[0], "Cannot use ',' to delimit enums. You may use ';' instead but delimiters are optional")
+        }
+        
+        if tokens[0].tag == cast() '}' {
+            set_end(*node, tokens[0])
+            tokens = tokens[1..]
+            break;
+        }
+        
+        if tokens[0].tag != .IDENTIFIER {
+            report_error(tokens[0], "Expected enum member")
+            return 0
+        }
+        
+        member := array_push(*data.members)
+        member.name = tokens[0].identifier
+        
+        tokens = tokens[1..]
+        
+        if check_and_consume(parser, ':') {
+            if tokens[0].tag == cast() '=' {
+                report_error(tokens[0], "Enum members must be constant")
+                return 0
+            }
+            
+            if !check_and_consume(parser, ':') {
+                report_error(tokens[0], "Expected another ':' after enum declaration")
+                return 0
+            }
+            
+            member.value = parse_expression(parser)
+            if !member.value {
+                return 0
+            }
+        }
+    }
+    
+    return add_node(parser, node)
+}
+
+parse_primitive_type :: (using parser: *Parser, type_: *Type) -> Node_Index {
+    node := make_basic_node(parser, .TYPE)
+    node.parse_data = type_
+    
+    tokens = tokens[1..]
+    
+    return add_node(parser, node)
+}
+
+looks_like_function :: (tokens: []Token) -> bool {
+    if looks_like_declaration(tokens[1..]) {
+        return true
+    }
+
+    open_paren_count := 0
+
+    for tokens[..tokens.count - 1] {
+        if it.tag == cast() '(' {
+            open_paren_count += 1
+        } else if it.tag == cast() ')' {
+            open_paren_count -= 1
+            
+            if open_paren_count == 0 {
+                if tokens[it_index + 1].tag == {
+                    case .ARROW     #through
+                    case cast() '{' #through
+                    case .EXTERNAL  #through
+                    case .C_CALL    #through
+                    case .COMPILER  #through
+                    case .INTRINSIC
+                        return true
+                }
+                
+                return false
+            }
+        }
+    }
+    
+    return false
+}
+
+Parse_Data_Function :: struct {
+    header: *Unit
+    arguments := Block.{tag = .ARGUMENTS}
+    returns   := Block.{tag = .RETURNS}
+    
+    body:   *Unit
+    
+    Flags :: enum_flags u32 {
+        C_CALL
+    }
+    
+    flags: Flags
+}
+
+parse_single_argument_declaration :: (using parser: *Parser, named: bool) -> bool {
+    argument: Node_Index = --
+    
+    if named {
+        argument = parse_declaration(parser)
+    } else {
+        argument = parse_expression(parser)
+        if !argument {
+            return false
+        }
+        add_to_block_unchecked(current_block, .{current_unit, argument})
+    }
+    
+    return true
+}
+
+parse_argument_declaration_list :: (using parser: *Parser, description := "argument") -> (named: bool, success: bool) {
+    assert(tokens[0].tag == cast() '(')
+    
+    tokens = tokens[1..]
+    
+    named := true
+    
+    if !check_and_consume(parser, ')') {
+        named = looks_like_declaration(tokens)
+    
+        while true {
+            argument := parse_single_argument_declaration(parser, named)
+            if !argument
+                return named, false
+                            
+            if check_and_consume(parser, ')')
+                break;
+            
+            if !check_and_consume(parser, ',') {
+                report_error(tokens[0], "Expected ',' or ')' in % declarations", description)
+                return named, false
+            }
+        }
+    }
+    
+    return named, true
+}
+
+parse_function :: (using parser: *Parser) -> Node_Index {
+    
+    node, data := make_node(parser, .FUNCTION, Parse_Data_Function)
+    data.header = push_unit(parser)
+    
+    push_block(parser, *data.arguments)
+    
+    named, success := parse_argument_declaration_list(parser)
+    if !success {
+        return 0
+    }
+    
+    if check_and_consume(parser, .ARROW) {
+        push_block(parser, *data.returns)
+        if tokens[0].tag == cast() '(' {
+            _: bool = --
+            _, success = parse_argument_declaration_list(parser, "return")
+            
+            if !success {
+                return 0
+            }
+        } else if !parse_single_argument_declaration(parser, named = looks_like_declaration(tokens)) {
+            return 0
+        }
+        pop_block(parser)
+        
+    }
+    
+    if check_and_consume(parser, .C_CALL) {
+        data.flags |= .C_CALL
+    }
+    
+    set_end(*node, tokens.data[-1])
+    
+    if (data.flags & .C_CALL) && data.returns.members.count > 1 {
+        report_error(node, "#c_call functions cannot have multiple return values")
+        return 0
+    }
+    
+    if tokens[0].tag == cast() '{' {
+        if !named {
+            report_error(tokens[0], "Only function prototypes may have unnamed arguments")
+            return 0
+        }
+        
+        data.body = push_unit(parser)
+        if !parse_block(parser) {
+            return 0
+        }
+        pop_unit(parser)
+    }
+    
+    pop_block(parser)
+    pop_unit(parser)
+    return add_node(parser, node)
+}
+
+Parse_Data_Block :: struct {
+    members: [..]Node_Index
+    members_block := Block.{tag = .IMPERATIVE}
+}
+
+parse_block :: (using parser: *Parser) -> Node_Index {
+    assert(tokens[0].tag == cast() '{')
+    
+    node, data := make_node(parser, .BLOCK, Parse_Data_Block)
+    
+    push_block(parser, *data.members_block)
+    
+    tokens = tokens[1..]
+    
+    while tokens[0].tag != cast() '}' {
+        statement, success := parse_statement(parser)
+        if !success {
+            return 0
+        }
+        if !exists(statement)
+            continue;
+        
+        assert(statement.unit == current_unit)
+        array_add(*data.members, statement.index)
+    }
+    
+    set_end(*node, tokens[0])
+    tokens = tokens[1..]
+    
+    pop_block(parser)
+    
+    return add_node(parser, node)
+}
+
+Parse_Data_If :: struct {
+    condition: Node_Index
+    if_body:   Node_Index
+    else_body: Node_Index
+}
+
+parse_if :: (using parser: *Parser) -> Node_Index {
+    assert(tokens[0].tag == .IF)
+    
+    start := tokens[0].location
+    
+    tokens = tokens[1..]
+    
+    condition := parse_expression(parser)
+    if !condition
+        return 0
+        
+    if check_and_consume(parser, .EQUAL) {
+        parser_todo(parser)
+        return 0
+    } else {
+        node, data := make_node(parser, .IF, Parse_Data_If)
+        data.condition = condition
+        set_location(*node, start, get_node(current_unit, condition))
+        result := add_node(parser, node)
+    
+        body, success := parse_statement(parser)
+        if !success
+            return 0
+        
+        
+        if exists(body) {
+            assert(body.unit == current_unit)
+            data.if_body = body.index
+        }
+        
+        if check_and_consume(parser, .ELSE) {
+            body, success = parse_statement(parser)
+            if !success
+                return 0
+            
+            
+            if exists(body) {
+                assert(body.unit == current_unit)
+                data.else_body = body.index
+            }
+        }
+        
+        return result
+    }
+}
+
+Parse_Data_Static_If :: struct {
+    condition: Node_Index
+    if_body:   [..]Node_Reference
+    else_body: [..]Node_Reference
+}
+
+parse_static_if :: (using parser: *Parser) -> Node_Index {
+    assert(tokens[0].tag == .STATIC_IF)
+    
+    start := tokens[0].location
+    
+    tokens = tokens[1..]
+    
+    condition := parse_expression(parser)
+    if !condition
+        return 0
+        
+    node, data := make_node(parser, .STATIC_IF, Parse_Data_Static_If)
+    data.condition = condition
+    set_location(*node, start, get_node(current_unit, condition))
+    result := add_node(parser, node)
+    
+    parse_body :: (using parser: *Parser, statements: *[..]Node_Reference) -> bool {
+        if check_and_consume(parser, '{') {
+            while !check_and_consume(parser, '}') {
+                body, success := parse_statement(parser)
+                if !success
+                    return false
+                
+                if exists(body) {
+                    array_add(statements, body)
+                }
+            }
+        } else {
+            body, success := parse_statement(parser)
+            if !success
+                return false
+            
+            if exists(body) {
+                array_add(statements, body)
+            }
+        }
+        
+        return true
+    }
+    
+    if !parse_body(parser, *data.if_body)
+        return 0
+    
+    if check_and_consume(parser, .ELSE)
+        if !parse_body(parser, *data.else_body)
+            return 0
+    
+    return result
+}
+
+Parse_Data_For :: struct {
+    begin:    Node_Index
+    end:      Node_Index
+    it:       Node_Index
+    it_index: Node_Index
+    body:     Node_Index
+    or_body:  Node_Index
+    
+    Flags :: enum_flags u32 {
+        POINTER
+        REVERSE
+    }
+    
+    flags: Flags
+}
+
+parse_for :: (using parser: *Parser) -> Node_Index {
+    assert(tokens[0].tag == .FOR)
+    
+    node, data := make_node(parser, .FOR, Parse_Data_For)
+    
+    tokens = tokens[1..]
+    
+    if check_and_consume(parser, '<') {
+        data.flags |= .REVERSE
+        
+        if check_and_consume(parser, '*')
+            data.flags |= .POINTER
+    } else if check_and_consume(parser, '*') {
+        data.flags |= .POINTER
+        
+        if check_and_consume(parser, '<')
+            data.flags |= .REVERSE
+    }
+    
+    it, it_data := make_node(parser, .DECLARATION, Parse_Data_Declaration)
+    it_data.name = IDENTIFIER_IT
+    it_index, it_index_data := make_node(parser, .DECLARATION, Parse_Data_Declaration)
+    it_index_data.name = IDENTIFIER_IT_INDEX
+    
+    if check_and_consume(parser, .USING) {
+        it_data.flags |= .USING
+    }
+    
+    
+    if tokens[0].tag == .IDENTIFIER && (tokens[1].tag == cast() ':' || tokens[1].tag == cast() ',') {
+        it_data.name = tokens[0].identifier
+        it_index.location = tokens[0]
+        
+        tokens = tokens[1..]
+        
+        if check_and_consume(parser, ',') {
+            // Allow using on it_index for when we do used defined for loops
+            // (i.e. allow you to using a hash table key)
+            if check_and_consume(parser, .USING) {
+                it_index_data.flags |= .USING
+            }
+            
+            if tokens[0].tag != .IDENTIFIER {
+                report_error(tokens[0], "Expected iterator index name")
+                return 0
+            }
+            
+            it_index_data.name = tokens[0].identifier
+            it_index.location = tokens[0]
+            
+            tokens = tokens[1..]
+            
+            if !check_and_consume(parser, ':') {
+                report_error(tokens[0], "Expected ':' after iterator index name")
+                return 0
+            }
+        } else {
+            assert(tokens[0].tag == cast() ':')
+            tokens = tokens[1..]
+        }
+    }
+    
+    data.begin = parse_expression(parser)
+    if !data.begin
+        return 0
+    set_end(*node, get_node(current_unit, data.begin))
+        
+    if check_and_consume(parser, .DOUBLE_DOT) {
+        data.end = parse_expression(parser)
+        if !data.end
+            return 0
+        
+        set_end(*node, get_node(current_unit, data.end))
+    }
+    
+    result := add_node(parser, node)
+    
+    // Skip over inference of it and it_index declarations, these will be filled in by 
+    // inference of the for node
+    goto := make_basic_node(parser, .INFER_GOTO)
+    goto.parse_data = cast() cast(u64) (result + 3)
+    
+    add_node(parser, goto)
+    
+    data.it = add_node(parser, it)
+    data.it_index = add_node(parser, it_index)
+    
+    body, success := parse_statement(parser)
+    if !success
+        return 0
+        
+    if exists(body) {
+        assert(body.unit == current_unit)
+        data.body = body.index
+    }
+    
+    if check_and_consume(parser, .OR) {
+        body, success = parse_statement(parser)
+        if !success
+            return 0
+        
+        if exists(body) {
+            assert(body.unit == current_unit)
+            data.or_body = body.index
+        }
+    }
+    
+    return result
+}
+
+// Does not handle empty argument lists since it needs to work with return parsing which does not have
+// an explicit terminator. Empty lists must be handled by the caller
+parse_named_arguments :: (using parser: *Parser, arguments: *Parse_Data_Call, allow_spread := false) -> bool {
+    result_values: [..]Node_Index
+    result_names:  [..]*Identifier
+    
+    while true {
+        name: *Identifier
+        
+        if tokens[0].tag == .IDENTIFIER && tokens[1].tag == cast() '=' {
+            name = tokens[0].identifier
+            tokens = tokens[2..]
+        }
+        
+        spread_location := tokens[0].location
+        spread := allow_spread && check_and_consume(parser, .DOUBLE_DOT)
+        
+        expression := parse_expression(parser)
+        if !expression
+            return false
+        
+        if spread {
+            node := make_basic_node(parser, .SPREAD)
+            node.parse_data = cast() cast(u64) expression
+            set_location(*node, spread_location, get_node(current_unit, expression))
+            expression = add_node(parser, node)
+        }
+        
+        if name {
+            if !result_names {
+                array_reserve(*result_names, result_values.count + 1)
+                result_names.count = result_values.count
+                fill_array(result_names)
+            }
+            
+            array_add(*result_names, name)
+        }
+        
+        array_add(*result_values, expression)
+        
+        if !check_and_consume(parser, ',') {
+            break;
+        }
+    }
+    
+    return true
+}
+
+
+
+parse_return :: (using parser: *Parser) -> Node_Index {
+    assert(tokens[0].tag == .RETURN)
+    
+    node, data := make_node(parser, .RETURN, Parse_Data_Call)
+    
+    tokens = tokens[1..]
+    
+    // Used to reduce the number of places where a ';' is required to 
+    definitely_not_expression :: (tokens: []Token) -> bool {
+        if tokens[0].tag == {
+            case cast() ';'   #through
+            case cast() '}'   #through
+            case cast() ')'   #through
+            case cast() ']'   #through
+            case .IF          #through
+            case .STATIC_IF   #through
+            case .ELSE        #through
+            case .CASE        #through
+            case .THROUGH     #through
+            case .FOR         #through
+            case .WHILE       #through
+            case .OR          #through
+            case .BREAK       #through
+            case .RETURN      #through
+            case .CONTINUE    #through
+            case .REMOVE      #through
+            case .USING       #through
+            case .END_OF_FILE
+                return true
+            case .IDENTIFIER
+                return looks_like_declaration(tokens)
+            else
+                return false
+        }
+    }
+    
+    if definitely_not_expression(tokens)
+        return add_node(parser, node)
+    
+    if !parse_named_arguments(parser, data)
+        return 0
+    
+    return add_node(parser, node)
+}
+
+Parse_Data_Push_Context :: struct {
+    new_context: Node_Index
+    body:        Node_Index
+}
+
+parse_push_context :: (using parser: *Parser) -> Node_Index {
+    assert(tokens[0].tag == .PUSH_CONTEXT)
+    
+    node, data := make_node(parser, .PUSH_CONTEXT, Parse_Data_Push_Context)
+    tokens = tokens[1..]
+    
+    data.new_context = parse_expression(parser)
+    if !data.new_context
+        return 0
+        
+    body, success := parse_statement(parser)
+    if !success
+        return 0
+        
+    if exists(body) {
+        assert(body.unit == current_unit)
+        data.body = body.index
+    }
+    
+    return add_node(parser, node)
+}
+
+Parse_Data_Multi_Assignment :: struct {
+    names: []*Identifier
+    call:  Node_Index
+} 
+
+parse_multi_assignment :: (using parser: *Parser) -> Node_Index {
+    
+}

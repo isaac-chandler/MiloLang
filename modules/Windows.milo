@@ -963,6 +963,28 @@ ResumeThread :: (hThread: HANDLE) -> s32 #external "kernel32"
 CreateSemaphoreA :: (lpSemaphoreAttributes: *SECURITY_ATTRIBUTES = null, lInitialCount: s32 = 0, lMaximumCount: s32 = 0x7FFF_FFFF, lpName: *u8 = null) -> HANDLE #external "kernel32"
 ReleaseSemaphore :: (hSemaphore: HANDLE, lReleaseCount: s32 = 1, lpPreviousCount: *s32 = null) -> bool #external "kernel32"
 
+CRITICAL_SECTION :: struct {
+    DebugInfo: *void
+    
+    // Uses #pragma pack(push, 8) in C definition, we currently only support byte packing or default packing
+    // so manually inserting padding members
+    LockCount:      s32
+    _pad0:          s32
+    RecursionCount: s32
+    _pad1:          s32
+    
+    OwningThread:  HANDLE
+    LockSemaphore: HANDLE
+    SpinCount: u64
+}
+
+InitializeCriticalSection             :: (lpCriticalSection: *CRITICAL_SECTION)                   #external "kernel32"
+InitializeCriticalSectionAndSpinCount :: (lpCriticalSection: *CRITICAL_SECTION, dwSpinCount: u32) #external "kernel32"
+DeleteCriticalSection                 :: (lpCriticalSection: *CRITICAL_SECTION)                   #external "kernel32"
+EnterCriticalSection                  :: (lpCriticalSection: *CRITICAL_SECTION)                   #external "kernel32"
+TryEnterCriticalSection               :: (lpCriticalSection: *CRITICAL_SECTION) -> s32            #external "kernel32"
+LeaveCriticalSection                  :: (lpCriticalSection: *CRITICAL_SECTION)                   #external "kernel32"
+
 INFINITE :: 0xFFFF_FFFF
 
 using Wait_Result :: enum u32 {

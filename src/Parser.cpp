@@ -124,7 +124,7 @@ Declaration *makeIterator(LexerFile *lexer, CodeLocation &start, EndLocation &en
 	Declaration *declaration = PARSER_NEW(Declaration);
 	declaration->start = start;
 	declaration->end = end;
-	declaration->type = nullptr;
+	declaration->typeExpr = nullptr;
 	declaration->initialValue = nullptr;
 	declaration->name = name;
 
@@ -329,7 +329,7 @@ Expr *parseExprStatemenet(LexerFile *lexer, bool allowDeclarations) {
 				declaration->end = identifier->end;
 				declaration->name = identifier->name;
 				declaration->flags |= DECLARATION_IS_IN_COMPOUND;
-				declaration->type = nullptr;
+				declaration->typeExpr = nullptr;
 				declaration->initialValue = nullptr;
 				declaration->physicalStorage = 0;
 
@@ -1020,17 +1020,14 @@ ExprBlock *parseBlock(LexerFile *lexer, bool isCase, ExprBlock *block) {
 					addImporterToBlock(lexer->currentBlock, createImporterForUsing(lexer, declaration), lexer->identifierSerial++);
 				}
 
-				if (block->declarations.flavor == BlockFlavor::IMPERATIVE && !(declaration->flags & (DECLARATION_IS_CONSTANT | DECLARATION_IS_UNINITIALIZED))) { // If this declaration is constant or uninitialized don't add an initialization expression
-					ExprBinaryOperator *assign = PARSER_NEW(ExprBinaryOperator);
-					assign->start = declaration->start;
-					assign->end = declaration->end;
-					assign->flavor = ExprFlavor::BINARY_OPERATOR;
-					assign->op = TOKEN('=');
-					assign->left = makeIdentifier(lexer, declaration);
-					assign->right = nullptr;
-					assign->flags |= EXPR_ASSIGN_IS_IMPLICIT_INITIALIZER;
+				if (block->declarations.flavor == BlockFlavor::IMPERATIVE && !(declaration->flags & DECLARATION_IS_CONSTANT)) { // If this declaration is constant don't add an initialization expression
+					Expr *init = PARSER_NEW(Expr);
+					init->start = declaration->start;
+					init->end = declaration->end;
+					init->flavor = ExprFlavor::INIT_IMPERATIVE_DECLARATION;
+					init->valueOfDeclaration = declaration;
 
-					block->exprs.add(assign);
+					block->exprs.add(init);
 				}
 
 				continue;
@@ -1147,7 +1144,7 @@ ExprStringLiteral *makeStringLiteral(LexerFile *lexer, CodeLocation &start, EndL
 Declaration *createAnonymousDeclaration(LexerFile *lexer, Expr *type) {
 	auto declaration = PARSER_NEW(Declaration);
 
-	declaration->type = type;
+	declaration->typeExpr = type;
 	declaration->start = type->start;
 	declaration->end = type->end;
 	declaration->name = nullptr;
@@ -1325,11 +1322,11 @@ Declaration *parseSingleArgument(LexerFile *lexer, Expr *argumentHolder, bool ar
 			return nullptr;
 		}
 
-		auto arrayType = makeBinaryOperator(lexer, declaration->type->start, declaration->type->end, TokenT::ARRAY_TYPE, nullptr);
+		auto arrayType = makeBinaryOperator(lexer, declaration->typeExpr->start, declaration->typeExpr->end, TokenT::ARRAY_TYPE, nullptr);
 		arrayType->type = nullptr;
-		arrayType->right = declaration->type;
+		arrayType->right = declaration->typeExpr;
 
-		declaration->type = arrayType;
+		declaration->typeExpr = arrayType;
 
 		declaration->flags |= DECLARATION_IS_VARARGS;
 		argumentHolder->flags |= EXPR_FUNCTION_HAS_VARARGS;
@@ -1860,7 +1857,8 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		}
 
 		auto declaration = PARSER_NEW(Declaration);
-		declaration->type = parserMakeTypeLiteral(lexer, start, lexer->token.end, &TYPE_TYPE);
+		declaration->type_ = &TYPE_TYPE;
+		declaration->typeExpr = nullptr;
 		declaration->flags |= DECLARATION_IS_CONSTANT | DECLARATION_TYPE_POLYMORPHIC;
 		declaration->start = start;
 		declaration->name = lexer->token.identifier;
@@ -2239,7 +2237,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 				auto declaration = PARSER_NEW(Declaration);
 				declaration->name = lexer->token.identifier;
 				declaration->start = lexer->token.start;
-				declaration->type = typeLiteral;
+				declaration->typeExpr = typeLiteral;
 				declaration->inferJob = nullptr;
 				declaration->flags |= DECLARATION_IS_CONSTANT | DECLARATION_IS_ENUM_VALUE;
 
@@ -2301,7 +2299,7 @@ Expr *parsePrimaryExpr(LexerFile *lexer) {
 		integer->name = identInteger;
 		integer->start = integerType->start;
 		integer->end = integerType->end;
-		integer->type = nullptr;
+		integer->typeExpr = nullptr;
 		integer->initialValue = integerType;
 		integer->flags |= DECLARATION_IS_CONSTANT;
 		integer->inferJob = nullptr;
@@ -2612,7 +2610,7 @@ Expr *parsePrefixExpr(LexerFile *lexer, CodeLocation plusStart) {
 		returnType->start = function->start;
 		returnType->end = function->end;
 		returnType->flags |= DECLARATION_IS_RETURN | DECLARATION_IS_RUN_RETURN;
-		returnType->type = type;
+		returnType->typeExpr = type;
 		returnType->initialValue = returnValue;
 		returnType->name = nullptr;
 
@@ -2914,7 +2912,7 @@ Declaration *parseDeclaration(LexerFile *lexer) {
 		}
 
 		declaration->flags |= DECLARATION_IS_CONSTANT;
-		declaration->type = nullptr;
+		declaration->typeExpr = nullptr;
 
 		declaration->initialValue = parseExpr(lexer);
 
@@ -2928,7 +2926,7 @@ Declaration *parseDeclaration(LexerFile *lexer) {
 	}
 	else if (expectAndConsume(lexer, '=')) {
 		u32 initialPolymorphCount = getPolymorphCount(lexer);
-		declaration->type = nullptr;
+		declaration->typeExpr = nullptr;
 
 		if (lexer->token.type == TokenT::DOUBLE_DASH) {
 			reportError(&lexer->token, "Error: Cannot infer the type of an uninitialized value, please specify the type");
@@ -2958,8 +2956,8 @@ Declaration *parseDeclaration(LexerFile *lexer) {
 	}
 	else {
 		u32 initialPolymorphCount = getPolymorphCount(lexer);
-		declaration->type = parseExpr(lexer);
-		if (!declaration->type) {
+		declaration->typeExpr = parseExpr(lexer);
+		if (!declaration->typeExpr) {
 			return nullptr;
 		}
 
@@ -3053,7 +3051,7 @@ Declaration *parseDeclaration(LexerFile *lexer) {
 		auto function = lexer->currentFunctionHeader;
 
 		auto constant = PARSER_NEW(Declaration);
-		constant->type = declaration->type;
+		constant->typeExpr = declaration->typeExpr;
 		constant->flags |= DECLARATION_IS_CONSTANT | DECLARATION_VALUE_POLYMORPHIC;
 		constant->start = declaration->start;
 		constant->name = declaration->name;

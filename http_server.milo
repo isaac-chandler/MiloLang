@@ -1,0 +1,37 @@
+#import "Standard"
+#import "Socket"
+
+main :: () {
+    server, success := open_tcp_server(8000)
+    
+    if !success {
+        print("Failed to open TCP server")
+        exit(1)
+    }
+    
+    recv_buffer := new_array(u8, 1024)
+    defer free_array(recv_buffer)
+    
+    while true {
+        connection, success := accept_connection(server)
+        if !success {
+            continue;
+        }
+        print("Received connection\n")
+        
+        received: []u8
+        received, success = tcp_receive(connection, recv_buffer)
+        
+        tcp_send(connection, cast() "HTTP/1.1 404 Not found\r\n\r\n")
+        
+        if !success
+            continue;
+        
+        defer close_tcp_connection(connection)
+        
+        
+    }
+    
+    defer close_tcp_server(server)
+    
+}

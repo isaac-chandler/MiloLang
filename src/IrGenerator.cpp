@@ -785,8 +785,22 @@ u32 generateCast(ExprFunction *function, ExprBinaryOperator *binary) {
 	}
 	case TypeFlavor::POINTER:
 	case TypeFlavor::FUNCTION:
+		return rightReg;
 	case TypeFlavor::STRING: // []u8 -> string
-		return rightReg; // These casts should be a nop
+		assert(right->type->flavor == TypeFlavor::ARRAY);
+		assert(static_cast<TypeArray *>(right->type)->arrayOf == &TYPE_U8);
+		if (right->type->flags & TYPE_ARRAY_IS_FIXED) {
+			u32 result = allocateStackSpaceAndLoadAddress(function, castTo);
+
+			memop(function, IrOp::WRITE, result, rightReg, 8);
+			u32 count = constant(function, allocateRegister(function), 8, static_cast<TypeArray *>(right->type)->count);
+			memop(function, IrOp::WRITE, result, count, 8, 8);
+
+			return result;
+		}
+		else {
+			return rightReg;
+		}
 	case TypeFlavor::TYPE:
 	case TypeFlavor::VOID:
 		assert(false);
@@ -1767,6 +1781,23 @@ u32 generateIr(ExprFunction *function, Expr *expr) {
 	}
 	case ExprFlavor::BINARY_OPERATOR: {
 		return generateBinary(function, static_cast<ExprBinaryOperator *>(expr));
+	}
+	case ExprFlavor::INIT_IMPERATIVE_DECLARATION: {
+		Declaration *declaration = expr->valueOfDeclaration;
+		if (declaration->flags & DECLARATION_IS_UNINITIALIZED) {
+			return 0;
+		}
+
+		u32 value = generateIr(function, declaration->initialValue);
+		
+		if (declarationIsStoredByPointer(declaration)) {
+			copyOrWrite(function, declaration->registerOfStorage, value, declaration->type_);
+		} 
+		else {
+			set(function, declaration->registerOfStorage, value, declaration->type_->size);
+		}
+
+		return 0;
 	}
 	case ExprFlavor::BLOCK: {
 		generateBlock(function, static_cast<ExprBlock *>(expr));

@@ -3870,7 +3870,7 @@ void runCoffWriter() {
 			auto section = sections[i];
 
 			if (printDiagnostics) {
-				reportInfo("%s size: %u", section->name, section->totalSize);
+				reportInfo("%.*s size: %u", STRING_PRINTF(section->name), section->totalSize);
 			}
 
 			if (section->flags & SECTION_INITIALIZED) {
@@ -3881,7 +3881,7 @@ void runCoffWriter() {
 				u32 relocationCount = section->relocations.count();
 
 				if (printDiagnostics) {
-					reportInfo("%s relocations: %u", section->name, relocationCount);
+					reportInfo("%.*s relocations: %u", STRING_PRINTF(section->name), relocationCount);
 				}
 
 				if (relocationCount > UINT16_MAX) {

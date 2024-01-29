@@ -1,0 +1,166 @@
+Identifier :: struct {
+    name: string
+    hash: u32
+    keyword: Token.Tag
+}
+
+// There shouldn't be any reason to make this per-workspace, 
+// other than possibly reducing a bit of lock contention when
+// multi-threading. Sharing it between workspace should save
+// memory for common identifiers and might actually reduce
+// contention if we are using a reader-writer lock
+
+// Table size will always be a power of 2, and identifier_table.count
+// will store table size - 1 to avoid subtracting one when masking for
+// slot computations
+identifier_table: []*Identifier
+identifier_count: u64
+
+hash_identifier :: (name: string) -> u32 {
+    hash: u32 = 0
+    
+    for name {
+        hash = hash * 65599 + it
+    }
+    
+    return hash
+}
+
+get_or_add_identifier :: (name: string, keyword := Token.Tag.INVALID) -> *Identifier {
+    maybe_rehash :: () {
+        if identifier_count * 4 > identifier_table.count * 3 {
+            old_table := identifier_table
+            defer free_array(old_table)
+            
+            identifier_table = new_array(*Identifier, old_table.count * 2 + 2)
+            identifier_table.count -= 1
+            
+            for old_table {
+                hash := it.hash
+                slot := it.hash & identifier_table.count
+                
+                
+                if !identifier_table[slot] {
+                    identifier_table[slot] = it
+                    
+                    continue
+                }
+                            
+                probe_distance := (hash >> 16) & identifier_table.count
+                
+                while true {
+                    slot += probe_distance
+                    slot &= identifier_table.count
+                    probe_distance += 1
+                    
+                    if !identifier_table[slot] {
+                        identifier_table[slot] = it
+                        break
+                    }
+                }
+            }
+        }
+    }
+
+    hash := hash_identifier(name)
+    
+    slot := hash & identifier_table.count
+    
+    if !identifier_table[slot] {
+        result := new(Identifier, false)
+        result.hash = hash
+        result.name = copy_string(name)
+        result.keyword = keyword
+        
+        identifier_table[slot] = result
+        identifier_count += 1
+        maybe_rehash()
+        
+        return result
+    } else if identifier_table[slot].hash == hash && identifier_table[slot].name == name {
+        return identifier_table[slot]
+    }
+    
+    probe_distance := (hash >> 16) & identifier_table.count
+    
+    while true {
+        slot += probe_distance
+        slot &= identifier_table.count
+        probe_distance += 1
+        
+        if !identifier_table[slot] {
+            result := new(Identifier, false)
+            result.hash = hash
+            result.name = copy_string(name)
+            result.keyword = keyword
+            
+            identifier_table[slot] = result
+            identifier_count += 1
+            maybe_rehash()
+            
+            return result
+        } else if identifier_table[slot].hash == hash && identifier_table[slot].name == name {
+            return identifier_table[slot]
+        }
+    }
+}
+
+IDENTIFIER_IT:       *Identifier
+IDENTIFIER_IT_INDEX: *Identifier
+IDENTIFIER_DATA:     *Identifier
+IDENTIFIER_COUNT:    *Identifier
+IDENTIFIER_CAPACITY: *Identifier
+
+init_identifier_table :: () {
+    identifier_table = new_array(*Identifier, 16384)
+    identifier_table.count -= 1
+    
+    IDENTIFIER_IT       = get_or_add_identifier("it")
+    IDENTIFIER_IT_INDEX = get_or_add_identifier("it_index")
+    IDENTIFIER_DATA     = get_or_add_identifier("data")
+    IDENTIFIER_COUNT    = get_or_add_identifier("count")
+    IDENTIFIER_CAPACITY = get_or_add_identifier("capacity")
+}
+
+Block :: struct {
+    parent: *Block
+    
+    members: [..]Node_Reference // Maybe can be be Node_Index's and we store a single *Unit for the entire block?
+
+    tag: Tag
+
+    Tag :: enum u8 {
+        GLOBAL
+        STRUCT
+        ARGUMENTS
+        RETURNS
+        IMPERATIVE
+    }
+}
+
+is_redeclaration :: (using block: *Block, node: Node) -> bool {
+    if node.tag != .DECLARATION {
+        return false
+    }
+    
+    name := (cast(*Parse_Data_Declaration) node.parse_data).name
+    
+    // @Incomplete handle overloading, use a Table
+    for members {
+        if get_node_tag(it) == .DECLARATION {
+            it_name := node_data(it, Parse_Data_Declaration).name
+            
+            if name == it_name {
+                report_error(node, "Redeclaration of '%'", name.name)
+                report_error(get_node(it), "Here is the previous declaration")
+                return true
+            }
+        }
+    }
+    
+    return false
+}
+
+add_to_block_unchecked :: (using block: *Block, reference: Node_Reference) {
+    array_add(*members, reference)
+}

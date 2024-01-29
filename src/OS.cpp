@@ -95,10 +95,17 @@ FILE *fopen_utf8(const char *filename, const char *mode) {
 	return file;
 }
 
+void user_library_path(const char *path) {
+	PROFILE_FUNC();
+
+	wchar_t *wname = utf8ToWString(path);
+	AddDllDirectory(wname);
+}
+
 void *open_library(const char *name) {
 	PROFILE_FUNC();
 	wchar_t *wname = utf8ToWString(name);
-	HMODULE lib = LoadLibraryW(wname);
+	HMODULE lib = LoadLibraryExW(wname, NULL, LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_USER_DIRS);
 
 	free(wname);
 	return lib;

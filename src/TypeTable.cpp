@@ -150,12 +150,14 @@ SystemVCallingType getSystemVCallingType(Type *type) {
 
 u32 findInTypeTable(Type *type) {
 	u32 slot = type->hash & (typeTableCapacity - 1);
+	u32 dist = (type->hash >> 8) & (typeTableCapacity - 1);
 
 	while (typeTableEntries[slot].hash) {
 		if (typeTableEntries[slot].value == type)
 			break;
 
-		if (++slot == typeTableCapacity) slot = 0;
+		slot += dist++;
+		slot &= typeTableCapacity - 1;
 	}
 
 	assert(typeTableEntries[slot].value == type);
@@ -165,12 +167,14 @@ u32 findInTypeTable(Type *type) {
 
 u32 findSlotInTypeTable(Type *type) {
 	u32 slot = type->hash & (typeTableCapacity - 1);
+	u32 dist = (type->hash >> 8) & (typeTableCapacity - 1);
 
 	while (typeTableEntries[slot].hash) {
 		if (typeTableEntries[slot].value == type)
 			break;
 
-		if (++slot == typeTableCapacity) slot = 0;
+		slot += dist++;
+		slot &= typeTableCapacity - 1;
 	}
 
 	return slot;
@@ -240,13 +244,15 @@ TypePointer *getPointer(Type *type) {
 	if (hash == 0) hash = 1;
 
 	u32 slot = hash & (typeTableCapacity - 1);
+	u32 dist = (hash >> 8) & (typeTableCapacity - 1);
 
 	for (TypeTableEntry entry = typeTableEntries[slot]; entry.hash; entry = typeTableEntries[slot]) {
 		if (entry.hash == hash && entry.value->flavor == TypeFlavor::POINTER && static_cast<TypePointer *>(entry.value)->pointerTo == type) {
 			return static_cast<TypePointer *>(entry.value);
 		}
 
-		if (++slot == typeTableCapacity) slot = 0;
+		slot += dist++;
+		slot &= typeTableCapacity - 1;
 	}
 
 	auto result = TYPE_NEW(TypePointer);
@@ -275,28 +281,23 @@ Declaration *capacityDeclaration;
 Declaration *createDataDeclaration(Type *type) {
 	PROFILE_FUNC();
 
-	auto dataType = TYPE_NEW(ExprLiteral);
-	dataType->flavor = ExprFlavor::TYPE_LITERAL;
-	dataType->start = {};
-	dataType->end = {};
-	dataType->type = &TYPE_TYPE;
-	dataType->typeValue = getPointer(type);
+	auto dataType = getPointer(type);
 
 	auto pointerZero = TYPE_NEW(ExprLiteral);
 	pointerZero->flavor = ExprFlavor::INT_LITERAL;
 	pointerZero->start = {};
 	pointerZero->end = {};
 	pointerZero->unsignedValue = 0;
-	pointerZero->type = dataType->typeValue;
+	pointerZero->type = dataType;
 
 	auto dataDeclaration = TYPE_NEW(Declaration);
 	dataDeclaration->start = {};
 	dataDeclaration->end = {};
 	dataDeclaration->name = identData;
-	dataDeclaration->type = dataType;
+	dataDeclaration->type_ = dataType;
 	dataDeclaration->initialValue = pointerZero;
 	dataDeclaration->physicalStorage = 0;
-	dataDeclaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
+	dataDeclaration->flags |= DECLARATION_VALUE_IS_READY;
 
 	return dataDeclaration;
 }
@@ -307,6 +308,7 @@ TypeArray *getArray(Type *type) {
 	if (hash == 0) hash = 1;
 
 	u32 slot = hash & (typeTableCapacity - 1);
+	u32 dist = (hash >> 8) & (typeTableCapacity - 1);
 
 	for (TypeTableEntry entry = typeTableEntries[slot]; entry.hash; entry = typeTableEntries[slot]) {
 		if (entry.hash == hash && entry.value->flavor == TypeFlavor::ARRAY) {
@@ -317,7 +319,8 @@ TypeArray *getArray(Type *type) {
 			}
 		}
 
-		if (++slot == typeTableCapacity) slot = 0;
+		slot += dist++;
+		slot &= typeTableCapacity - 1;
 	}
 
 	auto result = TYPE_NEW(TypeArray);
@@ -351,6 +354,7 @@ TypeArray *getDynamicArray(Type *type) {
 	if (hash == 0) hash = 1;
 
 	u32 slot = hash & (typeTableCapacity - 1);
+	u32 dist = (hash >> 8) & (typeTableCapacity - 1);
 
 	for (TypeTableEntry entry = typeTableEntries[slot]; entry.hash; entry = typeTableEntries[slot]) {
 		if (entry.hash == hash && entry.value->flavor == TypeFlavor::ARRAY) {
@@ -361,7 +365,8 @@ TypeArray *getDynamicArray(Type *type) {
 			}
 		}
 
-		if (++slot == typeTableCapacity) slot = 0;
+		slot += dist++;
+		slot &= typeTableCapacity - 1;
 	}
 
 	auto result = TYPE_NEW(TypeArray);
@@ -399,6 +404,7 @@ TypeArray *getStaticArray(Type *type, u32 count) {
 	if (hash == 0) hash = 1;
 
 	u32 slot = hash & (typeTableCapacity - 1);
+	u32 dist = (hash >> 8) & (typeTableCapacity - 1);
 
 	for (TypeTableEntry entry = typeTableEntries[slot]; entry.hash; entry = typeTableEntries[slot]) {
 		if (entry.hash == hash && entry.value->flavor == TypeFlavor::ARRAY) {
@@ -409,7 +415,8 @@ TypeArray *getStaticArray(Type *type, u32 count) {
 			}
 		}
 
-		if (++slot == typeTableCapacity) slot = 0;
+		slot += dist++;
+		slot &= typeTableCapacity - 1;
 	}
 
 	auto result = TYPE_NEW(TypeArray);
@@ -436,12 +443,12 @@ TypeArray *getStaticArray(Type *type, u32 count) {
 	countDeclaration->start = {};
 	countDeclaration->end = {};
 	countDeclaration->name = identCount;
-	countDeclaration->type = unsignedLiteralType;
+	countDeclaration->type_ = &TYPE_UNSIGNED_INT_LITERAL;
 	countDeclaration->initialValue = countLiteral;
-	countDeclaration->flags |= DECLARATION_IS_CONSTANT | DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
+	countDeclaration->flags |= DECLARATION_IS_CONSTANT | DECLARATION_VALUE_IS_READY;
 	addDeclarationToBlockUnchecked(&result->members, countDeclaration, nullptr, 0, nullptr);
 
-	assert(countDeclaration->type);
+	assert(countDeclaration->typeExpr);
 
 	result->members.queued = true;
 	result->members.flavor = BlockFlavor::STRUCT;
@@ -591,6 +598,7 @@ TypeFunction *getFunctionType(ExprFunction *expr) {
 	if (hash == 0) hash = 1;
 
 	u32 slot = hash & (typeTableCapacity - 1);
+	u32 dist = (hash >> 8) & (typeTableCapacity - 1);
 
 	for (TypeTableEntry entry = typeTableEntries[slot]; entry.hash; entry = typeTableEntries[slot]) {
 		if (entry.hash == hash && entry.value->flavor == TypeFlavor::FUNCTION) {
@@ -622,7 +630,8 @@ TypeFunction *getFunctionType(ExprFunction *expr) {
 		}
 
 		cont:
-		if (++slot == typeTableCapacity) slot = 0;
+		slot += dist++;
+		slot &= typeTableCapacity - 1;
 	}
 
 	auto result = TYPE_NEW(TypeFunction);
@@ -685,20 +694,6 @@ void setupTypeTable() {
 
 	addStruct(&TYPE_CONTEXT);
 
-	auto u64Type = TYPE_NEW(ExprLiteral);
-	u64Type->flavor = ExprFlavor::TYPE_LITERAL;
-	u64Type->start = {};
-	u64Type->end = {};
-	u64Type->type = &TYPE_TYPE;
-	u64Type->typeValue = &TYPE_U64;
-
-	unsignedLiteralType = TYPE_NEW(ExprLiteral);
-	unsignedLiteralType->flavor = ExprFlavor::TYPE_LITERAL;
-	unsignedLiteralType->start = {};
-	unsignedLiteralType->end = {};
-	unsignedLiteralType->type = &TYPE_TYPE;
-	unsignedLiteralType->typeValue = &TYPE_UNSIGNED_INT_LITERAL;
-
 	auto u64Zero = TYPE_NEW(ExprLiteral);
 	u64Zero->flavor = ExprFlavor::INT_LITERAL;
 	u64Zero->start = {};
@@ -710,19 +705,19 @@ void setupTypeTable() {
 	countDeclaration->start = {};
 	countDeclaration->end = {};
 	countDeclaration->name = identCount;
-	countDeclaration->type = u64Type;
+	countDeclaration->type_ = &TYPE_U64;
 	countDeclaration->initialValue = u64Zero;
 	countDeclaration->physicalStorage = 8;
-	countDeclaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
+	countDeclaration->flags |= DECLARATION_VALUE_IS_READY;
 
 	capacityDeclaration = TYPE_NEW(Declaration);
 	capacityDeclaration->start = {};
 	capacityDeclaration->end = {};
 	capacityDeclaration->name = identCapacity;
-	capacityDeclaration->type = u64Type;
+	capacityDeclaration->type_ = &TYPE_U64;
 	capacityDeclaration->initialValue = u64Zero;
 	capacityDeclaration->physicalStorage = 16;
-	capacityDeclaration->flags |= DECLARATION_TYPE_IS_READY | DECLARATION_VALUE_IS_READY;
+	capacityDeclaration->flags |= DECLARATION_VALUE_IS_READY;
 
 	addDeclarationToBlockUnchecked(&TYPE_STRING.members, createDataDeclaration(&TYPE_U8), nullptr, 0, nullptr);
 	addDeclarationToBlockUnchecked(&TYPE_STRING.members, countDeclaration, nullptr, 0, nullptr);

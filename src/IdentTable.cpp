@@ -84,9 +84,11 @@ static void rehash() {
 			continue;
 
 		u64 slot = ident->hash & newMask;
+		u64 slotIncrement = (ident->hash >> 32) & newMask;
 
 		while (newTable[slot]) {
-			++slot;
+			slot += slotIncrement;
+			slotIncrement++;
 			slot &= newMask;
 		}
 
@@ -129,6 +131,7 @@ Identifier *getIdentifier(String name) {
 		};
 
 		u64 slot = hash & identTableMask;
+		u64 slotIncrement = (hash >> 32) & identTableMask;
 
 		while (identTable[slot]) {
 			// Maybe duplicate hash and name inline in the hashtable to avoid extra indirection?
@@ -136,7 +139,8 @@ Identifier *getIdentifier(String name) {
 				Identifier *identifier = identTable[slot];
 				return identifier;
 			}
-			++slot;
+			slot += slotIncrement;
+			slotIncrement++;
 			slot &= identTableMask;
 		}
 	}
@@ -166,6 +170,7 @@ Identifier *getIdentifier(String name) {
 	// use the previously found slot as it may have been stolen or we 
 	// may have rehashed
 	u64 slot = hash & identTableMask;
+	u64 slotIncrement = (hash >> 32) & identTableMask;
 	
 	while (identTable[slot]) {
 		// Another thread may have inserted this identifier between releasing the read lock
@@ -173,7 +178,8 @@ Identifier *getIdentifier(String name) {
 		if (identTable[slot]->hash == hash && identTable[slot]->name == name) {
 			return identTable[slot];
 		}
-		++slot;
+		slot += slotIncrement;
+		slotIncrement++;
 		slot &= identTableMask;
 	}
 

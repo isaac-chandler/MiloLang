@@ -1,0 +1,7 @@
+#import "Standard"
+
+#if TARGET_WINDOWS {
+    #load "windows.milo"
+} else {
+    #load "linux.milo"
+}

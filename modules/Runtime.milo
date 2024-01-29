@@ -114,8 +114,8 @@ __remove :: (array: *[]u8, value: *u8, size: u64) -> *u8 #c_call {
     end := array.data + array.count * size
     
     if value != end
-        for i: 0 .. size
-            value[i] = end[i]
+        for size
+            value[it] = end[it]
             
     return value - size
 }
@@ -151,10 +151,10 @@ Stack_Trace :: struct {
 
 // The code within __program_start _should_ be safe to modify
 __program_start :: () -> s32 #c_call {
-    initial_context: Context
+    #if #entry_point {
+        initial_context: Context
     
-    push_context initial_context {
-        #if #entry_point {
+        push_context initial_context {
             #entry_point()    
         }
     }

@@ -9,28 +9,41 @@ void insert(Block *block, Declaration *entry) {
 	PROFILE_FUNC();
 	u64 slot = entry->name->hash & (block->tableCapacity - 1);
 
-	u64 dist = 1;
+	if (block->table[slot]) {
+		u64 dist = (entry->name->hash >> 32) & (block->tableCapacity - 1);
 
-	while (block->table[slot]) {
-		slot += dist++;
-		slot &= block->tableCapacity - 1;
+		do {
+			slot += dist++;
+			slot &= block->tableCapacity - 1;
+		} while (block->table[slot]);
 	}
+
+
 
 	block->table[slot] = entry;
 }
 
 Declaration **findInBlock(Block *block, Identifier *name) {
-	u64 hash = name->hash;
-	u64 slot = hash & (block->tableCapacity - 1);
+	u64 slot = name->hash & (block->tableCapacity - 1);
 
-	u64 dist = 1;
-
-	while (block->table[slot]) {
+	if (block->table[slot]) {
 		if (block->table[slot]->name == name) {
 			return &block->table[slot];
 		}
-		slot += dist++;
-		slot &= block->tableCapacity - 1;
+		u64 dist = (name->hash >> 32) & (block->tableCapacity - 1);
+
+		while (true) {
+			slot += dist++;
+			slot &= block->tableCapacity - 1;
+
+			if (!block->table[slot]) {
+				break;
+			}
+
+			if (block->table[slot]->name == name) {
+				return &block->table[slot];
+			}
+		}
 	}
 
 	return &block->table[slot];

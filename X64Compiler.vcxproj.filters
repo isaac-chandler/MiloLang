@@ -50,7 +50,4 @@
   <ItemGroup>
     <Natvis Include="NatvisFile.natvis" />
   </ItemGroup>
-  <ItemGroup>
-    <Library Include="C:\Users\Isaac\Downloads\dyncall-1.4 (1)\dyncall-1.4\dyncall\Release\dyncall_s.lib" />
-  </ItemGroup>
 </Project>

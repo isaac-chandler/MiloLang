@@ -2,85 +2,109 @@
 #import "Standard"
 
 Thread :: struct {
-	handle: HANDLE
-	id: u32
-	user_proc: (*Thread) -> void
-	initial_context: Context
-	allocator: Allocator
-	user_data: *void
+    handle: HANDLE
+    id: u32
+    user_proc: (*Thread) -> void
+    initial_context: Context
+    allocator: Allocator
+    user_data: *void
 }
 
 
 
 create_thread :: (procedure: (*Thread) -> void, data := null, initial_context := Context.{}) -> #must *Thread {
-	thread := new(Thread, initialized = false)
-	thread.allocator = context.allocator_info
-	thread.user_proc = procedure
-	thread.initial_context = initial_context
-	thread.user_data = data
+    thread := new(Thread, initialized = false)
+    thread.allocator = context.allocator_info
+    thread.user_proc = procedure
+    thread.initial_context = initial_context
+    thread.user_data = data
 
-	// Create the thread suspended so that there won't be a data race if the thread wants to access its own handle
-	thread.handle = CreateThread(null, 0, thread_proc, thread, .CREATE_SUSPENDED, *thread.id)
+    // Create the thread suspended so that there won't be a data race if the thread wants to access its own handle
+    thread.handle = CreateThread(null, 0, thread_proc, thread, .CREATE_SUSPENDED, *thread.id)
 
-	if !thread.handle {
-		free(thread)
-		return null
-	}
+    if !thread.handle {
+        free(thread)
+        return null
+    }
 
-	if ResumeThread(thread.handle) == -1 {
-		free(thread)
-		return null
-	}
-	
-	return thread
+    if ResumeThread(thread.handle) == -1 {
+        free(thread)
+        return null
+    }
+    
+    return thread
 }
 
 wait_for_thread :: (thread: *Thread) {
-	WaitForSingleObject(thread.handle)
+    WaitForSingleObject(thread.handle)
 }
 
 close_thread :: (using thread: *Thread) {
-	CloseHandle(thread.handle)
+    CloseHandle(thread.handle)
 
-	new_context := context
-	new_context.allocator_info = thread.allocator
+    new_context := context
+    new_context.allocator_info = thread.allocator
 
-	push_context new_context {
-		free(thread)
-	}
+    push_context new_context {
+        free(thread)
+    }
 }
 
 Semaphore :: struct {
-	handle: HANDLE
+    handle: HANDLE
 }
 
 create_semaphore :: (initial_count: s32 = 0) -> Semaphore {
-	return .{ CreateSemaphoreA(lInitialCount = initial_count) }
+    return .{ CreateSemaphoreA(lInitialCount = initial_count) }
 }
 
 wait_semaphore :: (using semaphore: Semaphore) {
-	WaitForSingleObject(handle)
+    WaitForSingleObject(handle)
 }
 
 wait_semaphore :: (using semaphore: Semaphore, timeout_millis: u32) -> bool {
-	return WaitForSingleObject(handle, timeout_millis) == WAIT_OBJECT_0
+    return WaitForSingleObject(handle, timeout_millis) == WAIT_OBJECT_0
 }
 
 notify_semaphore :: (using semaphore: Semaphore) {
-	ReleaseSemaphore(handle)
+    ReleaseSemaphore(handle)
 }
 
 free_semaphore :: (using semaphore: Semaphore) {
-	CloseHandle(handle)
+    CloseHandle(handle)
+}
+
+Mutex :: struct {
+    critical_section: *CRITICAL_SECTION
+}
+
+create_mutex :: (spin_count: u32 = 4096) -> Mutex {
+    critical_section := new(CRITICAL_SECTION)
+    
+    InitializeCriticalSectionAndSpinCount(critical_section, spin_count)
+    return .{critical_section}
+}
+
+lock_mutex :: (mutex: Mutex) {
+    EnterCriticalSection(mutex.critical_section)
+}
+
+unlock_mutex :: (mutex: Mutex) {
+    LeaveCriticalSection(mutex.critical_section)
+}
+
+free_mutex :: (mutex: Mutex) {
+    DeleteCriticalSection(mutex.critical_section)
+    free(mutex.critical_section)
 }
 
 #scope_module
 
 thread_proc :: (data: *void) -> u32 #c_call {
-	thread: *Thread = data
+    thread: *Thread = data
 
-	push_context thread.initial_context {
-		thread.user_proc(thread)
-		return 0
-	}
+    push_context thread.initial_context {
+        thread.user_proc(thread)
+        return 0
+    }
 }

@@ -197,7 +197,10 @@ enum class ExprFlavor : u8 {
 	CONTEXT, 
 	PUSH_CONTEXT, 
 	ENTRY_POINT,
-	ADD_CONTEXT
+	ADD_CONTEXT,
+
+	INFER_SET_DECLARATION_TYPE,
+	INIT_IMPERATIVE_DECLARATION,
 };
 
 struct Declaration;
@@ -267,10 +270,6 @@ struct ExprDefer : Expr {
 // Set when identifier resolving passes out of a struct or out of a function, this stops a variable from outside the function being referenced
 // since we don't support captures
 #define EXPR_IDENTIFIER_RESOLVING_ONLY_CONSTANTS 0x20
-
-// This is an initializer assignment that was inserted by a variable 
-// intitialization in a runtime scope
-#define EXPR_ASSIGN_IS_IMPLICIT_INITIALIZER 0x80
 
 #define EXPR_FUNCTION_IS_C_CALL 0x100
 
@@ -528,7 +527,7 @@ inline Type *getTypeForExpr(Expr *expr) {
 	else if (type == &TYPE_UNSIGNED_INT_LITERAL) {
 		assert(expr->flavor == ExprFlavor::INT_LITERAL);
 
-		if (static_cast<ExprLiteral *>(expr)->unsignedValue < static_cast<u64>(INT64_MAX)) {
+		if (static_cast<ExprLiteral *>(expr)->unsignedValue <= static_cast<u64>(INT64_MAX)) {
 			return &TYPE_S64;
 		}
 		else {
@@ -575,9 +574,7 @@ inline bool isLiteral(Expr *expr) {
 }
 
 inline Type *getDeclarationType(Declaration *declaration) {
-	assert(declaration->flags & DECLARATION_TYPE_IS_READY);
-	assert(declaration->type);
-	assert(declaration->type->flavor == ExprFlavor::TYPE_LITERAL);
+	assert(declaration->type_);
 
-	return static_cast<ExprLiteral *>(declaration->type)->typeValue;
+	return declaration->type_;
 }

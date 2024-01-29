@@ -15,9 +15,6 @@
 // Set when the initial value of a declaration is completely inferred
 #define DECLARATION_VALUE_IS_READY      0x0'0010
 
-// Set when the type of a declaration is completely inferred
-#define DECLARATION_TYPE_IS_READY       0x0'0020
-
 #define DECLARATION_IS_ARGUMENT         0x0'0040
 
 // Set when a declaration has been allocated space in the output executable
@@ -63,11 +60,12 @@ struct Declaration {
 	u32 flags = 0;
 	Identifier *name;
 	union {
-		struct Expr *type;
+		struct Expr *typeExpr;
 		Declaration *import;
 	};
 
 	struct Expr *initialValue;
+	struct Type *type_ = nullptr;
 
 	struct Block *enclosingScope;
 	u32 serial;

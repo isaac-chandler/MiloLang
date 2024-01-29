@@ -1,0 +1,108 @@
+Node :: struct {
+    parse_data: *void
+    enclosing_block: *Block
+    
+    using location: Location
+    
+    Tag :: enum u8 {
+        INVALID
+        INFER_GOTO
+        INFER_DONE
+        
+        DECLARATION
+        STRUCT
+        ENUM
+        TYPE
+        INT_LITERAL
+        BOOL_LITERAL
+        IDENTIFIER
+        ENTRY_POINT
+        CONTEXT
+        STRING_LITERAL
+        
+        STRUCT_ACCESS
+        ARRAY_LITERAL
+        STRUCT_LITERAL
+        
+        BINARY
+        UNARY
+        INDEX
+        SLICE
+        
+        ASSIGNMENT
+        
+        FUNCTION
+        CALL
+        SPREAD
+        
+        BLOCK
+        IF
+        FOR
+        RETURN
+        PUSH_CONTEXT
+        
+        STATIC_IF
+        ADD_CONTEXT
+        IMPORT
+        LOAD
+    }
+    
+    
+    tag: Tag   
+}
+
+Node_Index :: u32
+
+Node_Reference :: struct {
+    unit:  *Unit
+    index: Node_Index
+}
+
+get_node :: (using reference: Node_Reference) -> *Node {
+    assert(exists(reference))
+    return *unit.nodes[index - 1]
+}
+
+get_node :: (unit: *Unit, index: Node_Index) -> *Node {
+    assert(index > 0)
+    return *unit.nodes[index - 1]
+}
+
+get_node_tag :: (using reference: Node_Reference) -> Node.Tag {
+    assert(exists(reference))
+    return unit.nodes[index - 1].tag
+}
+
+get_node_tag :: (unit: *Unit, index: Node_Index) -> Node.Tag {
+    assert(index > 0)
+    return unit.nodes[index - 1].tag
+}
+
+get_type :: (using reference: Node_Reference) -> **Type {
+    assert(exists(reference))
+    return *unit.types[index - 1]
+}
+
+get_type :: (unit: *Unit, index: Node_Index) -> **Type {
+    assert(index > 0)
+    return *unit.types[index - 1]
+}
+
+node_data :: (reference: Node_Reference, $Type: type) -> *Type {
+    return cast() get_node(reference).parse_data
+}
+
+exists :: (reference: Node_Reference) -> bool {
+    return reference.unit != null
+}
+
+root_node_reference :: (unit: *Unit) -> Node_Reference {
+    return .{unit, unit.root}
+}
+
+Unit :: struct {
+    nodes:  [..]Node
+    types:  [..]*Type
+    root:   Node_Index
+    parent: *Unit
+}

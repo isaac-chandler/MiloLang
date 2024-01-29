@@ -10,6 +10,7 @@ char *exePath();
 char *fullPath(const char *filename);
 void setThreadName(std::thread &thread, const char *name);
 char *findLibrary(char *path, const char *name);
+void user_library_path(const char *path);
 void *open_library(const char *name);
 void *library_find(void *library, const char *symbol);
 void set_working_directory(char *directory);

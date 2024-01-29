@@ -448,12 +448,14 @@ Expr *copyExpr(Expr *srcExpr) {
 
 		return dest;
 	}
+	case ExprFlavor::INIT_IMPERATIVE_DECLARATION:
 	case ExprFlavor::CONTEXT: {
 		c(Expr);
 
 		return dest;
 	}
 	default:
+	case ExprFlavor::INFER_SET_DECLARATION_TYPE: // Should only ever exist in a flattened array
 	case ExprFlavor::ADD_CONTEXT:  // This should only ever exist at the top level
 	case ExprFlavor::OVERLOAD_SET: // This should never exist in something that is yet to be inferred
 		assert(false);
@@ -466,15 +468,15 @@ Expr *copyExpr(Expr *srcExpr) {
 void copyDeclaration(Declaration *dest, Declaration *src) {	
 	copy_location();
 	copy(name);
-	copy_expr(type);
-	copy_flags(~(DECLARATION_HAS_STORAGE | DECLARATION_OVERLOADS_LOCKED | DECLARATION_VALUE_IS_READY | DECLARATION_TYPE_IS_READY));
+	copy(type_);
+	copy_flags(~(DECLARATION_HAS_STORAGE | DECLARATION_OVERLOADS_LOCKED | DECLARATION_VALUE_IS_READY));
 
 	if ((src->flags & DECLARATION_IS_CONSTANT) && (src->flags & DECLARATION_VALUE_POLYMORPHIC)) {
-		copy_expr(type);
+		copy_expr(typeExpr);
 		copy(initialValue);
 	}
 	else if ((src->flags & DECLARATION_IS_CONSTANT) && (src->flags & DECLARATION_TYPE_POLYMORPHIC)) {
-		copy(type);
+		copy(typeExpr);
 
 		auto srcLiteral = static_cast<ExprLiteral *>(src->initialValue);
 		auto destLiteral = POLYMORPH_NEW(ExprLiteral);
@@ -483,7 +485,7 @@ void copyDeclaration(Declaration *dest, Declaration *src) {
 		dest->initialValue = destLiteral;
 	}
 	else {
-		copy_expr(type);
+		copy_expr(typeExpr);
 		copy_expr(initialValue);
 	}
 }
@@ -567,7 +569,7 @@ TypeStruct *polymorphStruct(TypeStruct *struct_, Arguments *arguments) {
 
 	for (u32 i = 0; i < dest->constants.declarations.count; i++) {
 		dest->constants.declarations[i]->initialValue = arguments->values[i];
-		dest->constants.declarations[i]->flags |= DECLARATION_VALUE_IS_READY | DECLARATION_TYPE_IS_READY;
+		dest->constants.declarations[i]->flags |= DECLARATION_VALUE_IS_READY;
 
 		addDeclarationToBlockUnchecked(&dest->members, dest->constants.declarations[i], nullptr, dest->constants.declarations[i]->serial, nullptr);
 	}

@@ -164,6 +164,7 @@ Module *getModule(String name) {
 	if (name.length) {		
 		loadNewFile("", module);
 		compilerDirectories.add(msprintf("%s/%.*s", modulePath, STRING_PRINTF(name)));
+		user_library_path(mprintf("%s/%.*s", modulePath, STRING_PRINTF(name)));
 	}
 	else {
 		compilerDirectories.add(initialFilePath);
@@ -337,6 +338,7 @@ int main(int argc, char *argv[]) {
 
 		chopFinalDir(initialFilePath);
 		set_working_directory(initialFilePath);
+		user_library_path(initialFilePath);
 
 		char *lastDot = strrchr(input, '.');
 
@@ -398,10 +400,10 @@ int main(int argc, char *argv[]) {
 		if (printDiagnostics) {
 			u64 totalQueued = totalDeclarations + totalFunctions + totalSizes + totalImporters + totalRuns;
 			reportInfo("Total queued: %llu", totalQueued);
-			reportInfo("  %-5llu declarations (%-5llu skipped,       %-5llu type infers, %-5llu value infers)", 
-				totalDeclarations, totalDeclarations - totalInferredDeclarations, totalInferDeclarationTypes, totalInferDeclarationValues);
+			reportInfo("  %-5llu declarations (%-5llu skipped,       %-5llu value infers, %-5llu imperative inits)", 
+				totalDeclarations, totalDeclarations - totalInferredDeclarations, totalInferDeclarationValues, totalInitImperativeDeclarations);
 			reportInfo("  %-5llu functions    (%-5llu header infers, %-5llu body infers)", totalFunctions, totalInferFunctionHeaders, totalInferFunctionBodies);
-			reportInfo("  %-5llu types        (%-5llu struct sizes,  %-5llu enum sizes,  %-5llu array sizes)", totalSizes, totalInferStructSizes, totalInferEnumSizes, totalInferArraySizes);
+			reportInfo("  %-5llu types        (%-5llu struct sizes,  %-5llu enum sizes,   %-5llu array sizes)", totalSizes, totalInferStructSizes, totalInferEnumSizes, totalInferArraySizes);
 			reportInfo("  %-5llu importers    (%-5llu infers)", totalImporters, totalInferImporters);
 			reportInfo("  %-5llu runs         (%-5llu infers)", totalRuns, totalInferRuns);
 			reportInfo("Total infers: %llu, %.1f infers/queued, %.1f iterations/infer", totalFlattenedInfers, static_cast<float>(totalFlattenedInfers) / totalQueued, static_cast<float>(totalInferIterations) / totalFlattenedInfers);
@@ -696,16 +698,28 @@ int main(int argc, char *argv[]) {
 				for (auto lib : libraries) {
 					char *oldLibBuffer = libBuffer;
 
-#if BUILD_WINDOWS
 					if (lib.name == "c") {
 						hadLibC = true;
 						libBuffer = mprintf("%s %s", oldLibBuffer, getLibC());
 					}
-					else
-#endif
+					else {
 						libBuffer = mprintf("%s %.*s.lib", oldLibBuffer, STRING_PRINTF(lib.name));
+					}
 
 					free(oldLibBuffer);
+				}
+			}
+
+			char *libPathBuffer = mprintf("");
+			{
+				for (auto module : modules) {
+					if (module->name) {
+						char *oldLibPathBuffer = libPathBuffer;
+
+						libPathBuffer = mprintf("%s -libpath:%s\\%.*s", oldLibPathBuffer, modulePath, STRING_PRINTF(module->name));
+
+						free(oldLibPathBuffer);
+					}
 				}
 			}
 
@@ -746,11 +760,12 @@ int main(int argc, char *argv[]) {
 				}
 			}
 
-			linkerCommand = mprintf("\"%s\" %s -nodefaultlib -out:%.*s /debug %s %s\\%s \"-libpath:%s\"  \"-libpath:%s\" \"-libpath:%s\" -incremental:no -nologo -natvis:%s\\milo.natvis -SUBSYSTEM:%s%s",
+			linkerCommand = mprintf("\"%s\" %s -nodefaultlib -out:%.*s /debug %s %s %s\\%s \"-libpath:%s\"  \"-libpath:%s\" \"-libpath:%s\" -incremental:no -nologo -natvis:%s\\milo.natvis -SUBSYSTEM:%s%s",
 				linkerPath, 
 				objectFileName, 
 				STRING_PRINTF(outputFileName), 
 				libBuffer, 
+				libPathBuffer,
 				installPath,
 				linkLibC ? "__milo_cmain.obj" :  "__milo_chkstk.obj -entry:__program_start", 
 				windowsLibPath, 

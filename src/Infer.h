@@ -5,7 +5,7 @@
 
 inline u64 totalInferImporters;
 inline u64 totalInferRuns;
-inline u64 totalInferDeclarationTypes;
+inline u64 totalInitImperativeDeclarations;
 inline u64 totalInferDeclarationValues;
 inline u64 totalInferFunctionHeaders;
 inline u64 totalInferFunctionBodies;

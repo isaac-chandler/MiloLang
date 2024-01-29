@@ -1,0 +1,844 @@
+Token :: struct {
+    using location: Location
+    tag: Tag
+    
+    using data: union {
+        string_value:  string
+        identifier: *Identifier = --
+        integer_value: u64 = --
+        float_value:   f64 = --
+    }
+    
+    Tag :: enum u16 {
+        INVALID :: 0
+        
+        // Single ASCII characters represent their own tokens
+        END_OF_FILE :: 128
+        
+        IDENTIFIER
+        
+        INT_LITERAL
+        FLOAT_LITERAL
+        STRING_LITERAL
+        
+        LOGIC_AND
+        LOGIC_OR
+        SHIFT_LEFT
+        SHIFT_RIGHT
+        
+        EQUAL
+        NOT_EQUAL
+        LESS_EQUAL
+        GREATER_EQUAL
+        
+        PLUS_EQUAL
+        MINUS_EQUAL
+        TIMES_EQUAL
+        DIVIDE_EQUAL
+        MOD_EQUAL
+        BIT_AND_EQUAL
+        BIT_OR_EQUAL
+        XOR_EQUAL
+        SHIFT_LEFT_EQUAL
+        SHIFT_RIGHT_EQUAL
+        LOGIC_AND_EQUAL
+        LOGIC_OR_EQUAL
+        
+        DOUBLE_DOT
+        UNINITIALIZED
+        
+        ARROW
+        
+        VOID
+        S8
+        S16
+        S32
+        S64
+        U8
+        U16
+        U32
+        U64
+        F32
+        F64
+        BOOL
+        STRING
+        TYPE
+        STRUCT
+        UNION
+        ENUM
+        ENUM_FLAGS
+        CONTEXT_TYPE
+        
+        DEFER 
+        IF
+        ELSE
+        CASE
+        FOR
+        WHILE
+        OR
+        BREAK
+        CONTINUE
+        REMOVE
+        RETURN
+        PUSH_CONTEXT
+        
+        USING
+        CAST
+        SIZE_OF
+        TYPE_OF
+        TYPE_INFO
+        IS_CONSTANT
+        
+        CONTEXT
+        TRUE
+        FALSE
+        NULL
+        
+        IMPORT
+        LOAD
+        RUN
+        MUST
+        THROUGH
+        ADD_CONTEXT
+        EXTERNAL
+        C_CALL
+        COMPILER
+        INTRINSIC
+        PACK
+        COMPLETE
+        SCOPE_MODULE
+        SCOPE_EXPORT
+        SCOPE_FILE
+        STATIC_IF
+        ENTRY_POINT
+        
+        ARRAY_OF
+        DYNAMIC_ARRAY_OF
+    }
+}
+
+Lexer :: struct {
+    file_id:   s32
+    text:      string
+    remaining: string
+}
+
+init_keywords :: () {
+    get_or_add_identifier("void",       .VOID) 
+    get_or_add_identifier("s8",         .S8) 
+    get_or_add_identifier("s16",        .S16) 
+    get_or_add_identifier("s32",        .S32) 
+    get_or_add_identifier("s64",        .S64) 
+    get_or_add_identifier("u8",         .U8) 
+    get_or_add_identifier("u16",        .U16) 
+    get_or_add_identifier("u32",        .U32) 
+    get_or_add_identifier("u64",        .U64)
+    get_or_add_identifier("f32",        .F32) 
+    get_or_add_identifier("f64",        .F64)
+    get_or_add_identifier("bool",       .BOOL) 
+    get_or_add_identifier("string",     .STRING) 
+    get_or_add_identifier("type",       .TYPE) 
+    get_or_add_identifier("struct",     .STRUCT) 
+    get_or_add_identifier("union",      .UNION) 
+    get_or_add_identifier("enum",       .ENUM) 
+    get_or_add_identifier("enum_flags", .ENUM_FLAGS) 
+    get_or_add_identifier("Context",    .CONTEXT_TYPE) 
+    
+    get_or_add_identifier("defer",        .DEFER) 
+    get_or_add_identifier("if",           .IF) 
+    get_or_add_identifier("else",         .ELSE) 
+    get_or_add_identifier("case",         .CASE) 
+    get_or_add_identifier("for",          .FOR) 
+    get_or_add_identifier("while",        .WHILE) 
+    get_or_add_identifier("or",           .OR) 
+    get_or_add_identifier("break",        .BREAK) 
+    get_or_add_identifier("continue",     .CONTINUE) 
+    get_or_add_identifier("remove",       .REMOVE) 
+    get_or_add_identifier("return",       .RETURN)
+    get_or_add_identifier("push_context", .PUSH_CONTEXT) 
+     
+    get_or_add_identifier("using",       .USING) 
+    get_or_add_identifier("cast",        .CAST) 
+    get_or_add_identifier("size_of",     .SIZE_OF) 
+    get_or_add_identifier("type_of",     .TYPE_OF) 
+    get_or_add_identifier("type_info",   .TYPE_INFO) 
+    get_or_add_identifier("is_constant", .IS_CONSTANT) 
+    
+    get_or_add_identifier("context", .CONTEXT) 
+    get_or_add_identifier("true",    .TRUE)
+    get_or_add_identifier("false",   .FALSE) 
+    get_or_add_identifier("null",    .NULL) 
+    
+    get_or_add_identifier("#import",       .IMPORT) 
+    get_or_add_identifier("#load",         .LOAD) 
+    get_or_add_identifier("#run",          .RUN) 
+    get_or_add_identifier("#must",         .MUST) 
+    get_or_add_identifier("#through",      .THROUGH) 
+    get_or_add_identifier("#add_context",  .ADD_CONTEXT) 
+    get_or_add_identifier("#external",     .EXTERNAL) 
+    get_or_add_identifier("#c_call",       .C_CALL) 
+    get_or_add_identifier("#compiler",     .COMPILER) 
+    get_or_add_identifier("#intrinsic",    .INTRINSIC) 
+    get_or_add_identifier("#pack",         .PACK) 
+    get_or_add_identifier("#complete",     .COMPLETE) 
+    get_or_add_identifier("#scope_module", .SCOPE_MODULE) 
+    get_or_add_identifier("#scope_file",   .SCOPE_FILE)
+    get_or_add_identifier("#scope_export", .SCOPE_EXPORT) 
+    get_or_add_identifier("#if",           .STATIC_IF) 
+    get_or_add_identifier("#entry_point",  .ENTRY_POINT)
+}
+
+LEXER_END_OF_FILE_PADDING :: 4
+
+lex_string :: (file_id_: s32, s: string) -> (#must success: bool, #must tokens: [..]Token) {
+    using lexer := Lexer.{file_id = file_id_, text = s, remaining = s}
+    
+    tokens: [..]Token
+    
+    remaining = remove_hashbang(s)
+    
+    while true {
+        success: bool
+        token: Token
+        
+        success, token = lex_single_token(*lexer)
+        
+        if !success {
+            array_free(tokens)
+            return false, .{}
+        }
+        
+        array_add(*tokens, token)
+        
+        if token.tag == .END_OF_FILE {
+            // Allow a bit of look ahead without needing to bounds check 
+            for LEXER_END_OF_FILE_PADDING - 1 {
+                array_add(*tokens, token)
+            }
+            break;
+        }
+     
+    }
+    
+    return true, tokens
+}
+
+lexer_string_buffer: [..]u8
+
+lex_single_token :: (using lexer: *Lexer) -> (#must success: bool, #must token: Token) {
+    
+    remaining = remove_whitespace_and_comments(remaining)
+    
+    token: Token
+    token.file_id = file_id
+    token.start_offset = get_offset(<<lexer)
+    
+    if !remaining {
+        token.end_offset = token.start_offset
+        token.tag = .END_OF_FILE
+        return true, token
+    }
+    
+    maybe_equals_token :: (using lexer: *Lexer, no_equals: Token.Tag, equals: Token.Tag) -> Token.Tag {
+        remaining = remaining[1..]
+        if remaining && remaining[0] == '=' {
+            remaining = remaining[1..]
+            return equals
+        } else {
+            return no_equals
+        }
+    }
+    
+    maybe_equals_double_token :: (using lexer: *Lexer, no_equals: Token.Tag, equals: Token.Tag, double: Token.Tag, double_equals: Token.Tag) -> Token.Tag {
+        if remaining.count >= 2 && remaining[1] == remaining[0] {
+            remaining = remaining[1..]
+            return maybe_equals_token(lexer, double, double_equals)
+        } else {
+            return maybe_equals_token(lexer, no_equals, equals)
+        }
+    }
+    
+    read_number :: (using lexer: *Lexer, token: *Token, $base: u64) -> bool {
+        token.integer_value = 0
+        token.tag = .INT_LITERAL
+        
+        while remaining {
+            if remaining[0] == '_' {
+                remaining = remaining[1..]
+                continue;
+            }
+            
+            digit, valid := get_digit(remaining[0], base)
+            
+            if !valid
+                break;
+            
+            // @Incomplete overflow
+            // We may want to use a bignum here to support float literals witht the integer part greater than u64_max
+            // Might not be necessary to support that though because those floats aren't actually exactly representable
+            // so should probably be scientific notatition anyway
+            token.integer_value *= base
+            token.integer_value += digit
+            
+            remaining = remaining[1..]
+        } or {
+            return true
+        }
+        
+        is_float := false
+        
+        #if base == 10 {
+            if remaining[0] == '.'{
+                if remaining.count >= 2 && remaining[1] == '.'
+                    return true
+                
+                is_float = true
+                remaining = remaining[1..]
+            }
+            
+            while remaining {
+                if remaining[0] == '_' {
+                    remaining = remaining[1..]
+                    continue;
+                }
+                
+                digit, valid := get_digit(remaining[0], 10)
+                
+                if !valid
+                    break;
+
+                remaining = remaining[1..]
+            }
+            
+            if remaining && remaining[0] == 'e' {
+                is_float := true
+                
+                remaining = remaining[1..]
+                
+                if remaining && (remaining[0] == '+' || remaining[0] == '-') {
+                    remaining = remaining[1..]
+                }
+                
+                if !remaining {
+                    token.end_offset = get_offset(<<lexer)
+                    report_error(token, "Found the end of file in the middle of a float exponent")
+                    return false
+                } else if remaining[0] == '\r' || remaining[0] == '\n' {
+                    token.end_offset = get_offset(<<lexer)
+                    report_error(token, "Found a newline in the middle of a float exponent")
+                    return false
+                }
+            }
+            
+            
+            while remaining {
+                if remaining[0] == '_' {
+                    remaining = remaining[1..]
+                    continue;
+                }
+                
+                digit, valid := get_digit(remaining[0], 10)
+                
+                if !valid
+                    break;
+
+                remaining = remaining[1..]
+            }
+        }
+        
+        if is_float {
+            lexer_string_buffer.count = 0
+            
+            token.end_offset = get_offset(<<lexer)
+            
+            for text[token.start_offset..token.end_offset] if it != '_' array_add(*lexer_string_buffer, it)
+            array_add(*lexer_string_buffer, 0)
+            
+            strtod :: (str: *u8, endptr: **u8 = null) -> f64 #external "c"
+            
+            token.tag = .FLOAT_LITERAL
+            token.float_value = strtod(lexer_string_buffer.data)
+        }
+        
+        return true
+    }
+    
+    ensure_token_continues :: (using lexer: *Lexer, start_offset: s32, description: string) -> bool {
+        if !remaining {
+            location := Location.{file_id = file_id, start_offset = start_offset, end_offset = get_offset(<<lexer)}
+            report_error(location, "Found the end of file in the middle of %", description)
+            return false
+        }
+        
+        if remaining[0] == '\r' || remaining[0] == '\n' {
+            location := Location.{file_id = file_id, start_offset = start_offset, end_offset = get_offset(<<lexer)}
+            report_error(location, "Found newline in the middle of %", description)
+            return false    
+        }
+        
+        return true
+    }
+    
+    escape_sequence :: (using lexer: *Lexer, literal_start_offset: s32) -> (value: u32, unicode: bool, success: bool) {
+        if !ensure_token_continues(lexer, literal_start_offset, "an escape sequence") {
+            return 0, false, false
+        }
+        
+        if remaining[0] == {
+            case 'r'
+                remaining = remaining[1..]
+                return '\r', unicode = false, success = true
+            case 'n'
+                remaining = remaining[1..]
+                return '\n', unicode = false, success = true
+            case 't'
+                remaining = remaining[1..]
+                return '\t', unicode = false, success = true
+            case 'e'
+                remaining = remaining[1..]
+                return '\e', unicode = false, success = true
+            case '\\'
+                remaining = remaining[1..]
+                return '\\', unicode = false, success = true
+            case '\''
+                remaining = remaining[1..]
+                return '\'', unicode = false, success = true
+            case '"'
+                remaining = remaining[1..]
+                return '"', unicode = false, success = true
+            case '0'
+                remaining = remaining[1..]
+                return 0, unicode = false, success = true
+            case 'u'
+                remaining = remaining[1..]
+                
+                if remaining.count < 6 {
+                    location := Location.{file_id = file_id, start_offset = literal_start_offset, end_offset = cast() text.count}
+                    report_error(location, "Expected 6 hex digits in \\u escape")
+                    return 0, false, false
+                }
+            
+                result: u64 = 0
+                        
+                for 6 {
+                    digit, success := get_digit(remaining[0], 16)
+                    result *= 16
+                    result += digit
+                
+                    if !success {
+                        location := Location.{file_id = file_id, start_offset = get_offset(<<lexer)}
+                        location.end_offset = location.start_offset + 1
+                        report_error(location, "Expected 6 hex digits in \\u escape")
+                        return 0, false, false
+                    }
+                
+                    remaining = remaining[1..]
+                }
+                                
+                return cast() result, unicode = true, success = true 
+            case 'x'
+                remaining = remaining[1..]
+                
+                if remaining.count < 2 {
+                    location := Location.{file_id = file_id, start_offset = literal_start_offset, end_offset = cast() text.count}
+                    report_error(location, "Expected 2 hex digits in \\x escape")
+                    return 0, false, false
+                }
+            
+                result: u64 = 0
+                        
+                for 2 {
+                    digit, success := get_digit(remaining[0], 16)
+                    result *= 16
+                    result += digit
+                
+                    if !success {
+                        location := Location.{file_id = file_id, start_offset = get_offset(<<lexer)}
+                        location.end_offset = location.start_offset + 1
+                        report_error(location, "Expected 2 hex digits in \\x escape")
+                        return 0, false, false
+                    }
+                
+                    remaining = remaining[1..]
+                }
+                                
+                return cast() result, unicode = false, success = true
+            else
+                location := Location.{file_id = file_id, start_offset = get_offset(<<lexer)}
+                location.end_offset = location.start_offset + 1
+                report_error(location, "Invalid escape character")
+                return 0, false, false
+        }
+    }
+    
+    if remaining[0] == {
+        case '$' #through
+        case '(' #through
+        case ')' #through
+        case ',' #through
+        case ':' #through
+        case ';' #through
+        case '[' #through
+        case ']' #through
+        case '{' #through
+        case '}' #through
+        case '~'
+            token.tag = cast() remaining[0]
+            remaining = remaining[1..]
+        case '!'
+            token.tag = maybe_equals_token(lexer, cast() '!', .NOT_EQUAL)
+        case '%'
+            token.tag = maybe_equals_token(lexer, cast() '%', .MOD_EQUAL)
+        case '*'
+            token.tag = maybe_equals_token(lexer, cast() '*', .TIMES_EQUAL)
+        case '+'
+            token.tag = maybe_equals_token(lexer, cast() '+', .PLUS_EQUAL)
+        case '/'
+            token.tag = maybe_equals_token(lexer, cast() '/', .DIVIDE_EQUAL)
+        case '='
+            token.tag = maybe_equals_token(lexer, cast() '=', .EQUAL)
+        case '^'
+            token.tag = maybe_equals_token(lexer, cast() '^', .XOR_EQUAL)
+        case '&'
+            token.tag = maybe_equals_double_token(lexer, cast() '&', .BIT_AND_EQUAL, .LOGIC_AND,   .LOGIC_AND_EQUAL)
+        case '|'
+            token.tag = maybe_equals_double_token(lexer, cast() '|', .BIT_OR_EQUAL,  .LOGIC_OR,    .LOGIC_OR_EQUAL)
+        case '<'
+            token.tag = maybe_equals_double_token(lexer, cast() '<', .LESS_EQUAL,     .SHIFT_LEFT,  .SHIFT_LEFT_EQUAL)
+        case '>'
+            token.tag = maybe_equals_double_token(lexer, cast() '>', .GREATER_EQUAL,  .SHIFT_RIGHT, .SHIFT_RIGHT_EQUAL)
+        case '.'
+            if remaining.count >= 2 {
+                if remaining[1] == '.' {
+                    remaining = remaining[2..]
+                    token.tag = .DOUBLE_DOT
+                } else if '0' <= remaining[1] && remaining[1] <= '9' {
+                    if !read_number(lexer, *token, 10)
+                        return false, .{}
+                } else {
+                    remaining = remaining[1..]
+                    token.tag = cast() '.'
+                }
+            } else {
+                remaining = remaining[1..]
+                token.tag = cast() '.'
+            }
+        case '-'
+            remaining = remaining[1..]
+            if remaining {
+                if remaining[0] == {
+                    case '-'
+                        remaining = remaining[1..]
+                        token.tag = .UNINITIALIZED
+                    case '>'
+                        remaining = remaining[1..]
+                        token.tag = .ARROW
+                    case '='
+                        remaining = remaining[1..]
+                        token.tag = .MINUS_EQUAL
+                    else
+                        token.tag = cast() '-'
+                }
+            } else {
+                token.tag = cast() '-'
+            }
+        case '"'
+            remaining = remaining[1..]
+            
+            lexer_string_buffer.count = 0
+            
+            while true {
+                if !ensure_token_continues(lexer, token.start_offset, "a string literal")
+                    return false, .{}
+                
+                if remaining[0] == {
+                    case '\\'
+                        remaining = remaining[1..]                        
+                        value, unicode, success := escape_sequence(lexer, token.start_offset)
+                        
+                        if !success
+                            return false, .{}
+                            
+                        if unicode {
+                            append(*lexer_string_buffer, value)
+                        } else {
+                            array_add(*lexer_string_buffer, cast() value)
+                        }
+                    case '"'
+                        remaining = remaining[1..]
+                        // @Improvement allow direct cast of [..]u8 to string
+                        token.string_value = copy_string(cast() cast([]u8) lexer_string_buffer)
+                        token.tag = .STRING_LITERAL
+                        break
+                    else
+                        array_add(*lexer_string_buffer, remaining[0])
+                        remaining = remaining[1..]
+                        
+                }
+            }
+        case '\''
+            token.tag = .INT_LITERAL
+            remaining = remaining[1..]
+            
+            if !ensure_token_continues(lexer, token.start_offset, "a character literal")
+                return false, .{}
+            
+            
+            
+            if remaining[0] == {
+                case '\\'
+                    remaining = remaining[1..]
+                    value, unicode, success := escape_sequence(lexer, token.start_offset)
+                    
+                    if !success
+                        return false, .{}
+                     
+                    token.integer_value = value
+                case '\''
+                    remaining = remaining[1..]
+                    token.end_offset = get_offset(<<lexer)
+                    
+                    report_error(token, "Cannot have an empty character literal")
+                    return false, .{}
+                else
+                    token.integer_value = remaining[0]
+                    remaining = remaining[1..]
+                    
+            }
+            
+            if !ensure_token_continues(lexer, token.start_offset, "a character literal")
+                return false, .{}
+            
+            if remaining[0] != '\'' {
+                token.end_offset = get_offset(<<lexer)
+                report_error(token, "Expected a \' after character in character literal")
+                return false, .{}
+            
+            }
+            
+            remaining = remaining[1..]
+        case '0'
+            if remaining.count >= 2 {
+                if remaining[1] == 'x' {
+                    remaining = remaining[2..]
+                    
+                    while remaining && remaining[0] == '_'
+                        remaining = remaining[1..]
+                    
+                    if !ensure_token_continues(lexer, token.start_offset, "a hexadecimal value")
+                        return false, .{}
+                    
+                    
+                    digit, valid := get_digit(remaining[0], 16)
+                    
+                    if !valid {
+                        token.end_offset = get_offset(<<lexer)
+                        report_error(token, "Expected a hexadecimal digit here")
+                        return false, .{}
+                    }
+                    
+                    read_number(lexer, *token, 16)
+                } else if remaining[1] == 'b' {
+                    remaining = remaining[2..]
+                    
+                    while remaining && remaining[0] == '_'
+                        remaining = remaining[1..]
+                    
+                    if !ensure_token_continues(lexer, token.start_offset, "a binary value")
+                        return false, .{}
+                        
+                     
+                   digit, valid := get_digit(remaining[0], 2)
+                   
+                   if !valid {
+                       token.end_offset = get_offset(<<lexer)
+                       report_error(token, "Expected a binary digit here")
+                       return false, .{}
+                   }
+                   
+                   read_number(lexer, *token, 2)
+                } else {
+                    read_number(lexer, *token, 10)
+                }
+            } else {
+                read_number(lexer, *token, 10)
+            }
+        case '1' #through
+        case '2' #through
+        case '3' #through
+        case '4' #through
+        case '5' #through
+        case '6' #through
+        case '7' #through
+        case '8' #through
+        case '9'
+            if !read_number(lexer, *token, 10)
+                return false, .{}
+        case '#' #through
+        case '_' #through
+        case 'A' #through 
+        case 'B' #through
+        case 'C' #through
+        case 'D' #through
+        case 'E' #through
+        case 'F' #through
+        case 'G' #through
+        case 'H' #through
+        case 'I' #through
+        case 'J' #through
+        case 'K' #through
+        case 'L' #through
+        case 'M' #through
+        case 'N' #through
+        case 'O' #through
+        case 'P' #through
+        case 'Q' #through
+        case 'R' #through
+        case 'S' #through
+        case 'T' #through
+        case 'U' #through
+        case 'V' #through
+        case 'W' #through
+        case 'X' #through
+        case 'Y' #through
+        case 'Z' #through
+        case 'a' #through
+        case 'b' #through
+        case 'c' #through
+        case 'd' #through
+        case 'e' #through
+        case 'f' #through
+        case 'g' #through
+        case 'h' #through
+        case 'i' #through
+        case 'j' #through
+        case 'k' #through
+        case 'l' #through
+        case 'm' #through
+        case 'n' #through
+        case 'o' #through
+        case 'p' #through
+        case 'q' #through
+        case 'r' #through
+        case 's' #through
+        case 't' #through
+        case 'u' #through
+        case 'v' #through
+        case 'w' #through
+        case 'x' #through
+        case 'y' #through
+        case 'z'
+            token.tag = .IDENTIFIER
+            
+            remaining = remaining[1..]
+        
+            while remaining &&
+                (remaining[0] == '#' || remaining[0] == '_' || 
+                ('0' <= remaining[0] && remaining[0] <= '9') || 
+                ('A' <= (remaining[0] & cast() ~0x20) && (remaining[0] & cast() ~0x20) <= 'Z')) {
+                    remaining = remaining[1..]
+            }
+            
+            token.end_offset = get_offset(<<lexer)
+            
+            name := text[token.start_offset..token.end_offset]
+            token.identifier = get_or_add_identifier(name)
+            
+            if token.identifier.keyword != .INVALID {
+                token.tag = token.identifier.keyword
+            } else {
+                if name[0] == '#' {
+                    report_error(token, "Unknown directive '%'", name)
+                    return false, .{}
+                }
+            }
+        else
+            token.end_offset = token.start_offset + 1
+            report_error(token, "Unkown character (%)", remaining[0])
+            return false, .{}
+    }
+    
+    token.end_offset = get_offset(<<lexer)
+    
+    return true, token
+}
+
+get_offset :: (using lexer: Lexer) -> s32 {
+    if remaining {
+        return cast() (remaining.data - text.data)
+    } else {
+        return cast() text.count
+    }
+}
+
+remove_hashbang :: (s: string) -> string {
+    if !begins_with(s, "#!")
+        return s
+    
+    return s[2..]
+}
+
+remove_whitespace_and_comments :: (s: string) -> string {
+    remaining := s
+    
+    while remaining {
+        if remaining[0] == {
+            case '\t' #through
+            case '\r' #through
+            case '\n' #through
+            case ' ' 
+                remaining = remaining[1..]
+            case '/'
+                if remaining.count < 2
+                    break
+                    
+                if remaining[1] == '/' {
+                    remaining = remove_line(remaining[2..])
+                } else if remaining[1] == '*' {
+                    remaining = remaining[2..]
+                    
+                    block_comment_count := 1
+                    
+                    while remaining {
+                        if begins_with(remaining, "/*") {
+                            block_comment_count += 1
+                            remaining = remaining[2..]
+                        } else if begins_with(remaining, "*/") {
+                            block_comment_count -= 1
+                            remaining = remaining[2..]
+                            if !block_comment_count
+                                break
+                        } else {
+                            remaining = remaining[1..]
+                        }
+                    }
+                } else {
+                    break
+                }
+            else 
+                break
+        }
+    }
+    
+    return remaining
+}
+
+remove_line :: (s: string) -> string {
+    remaining := s
+    
+    while remaining {
+        if remaining[0] == '\r' {
+            remaining = remaining[1..]
+            if remaining && remaining[0] == '\n'
+                remaining = remaining[1..]
+            break
+        } else if remaining[0] == '\n' {
+            remaining = remaining[1..]
+            break
+        } else {
+            remaining = remaining[1..]
+        }
+    }
+    
+    return remaining
+}

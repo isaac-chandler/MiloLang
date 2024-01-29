@@ -1355,6 +1355,16 @@ llvm::Value *generateLlvmArrayLiteral(State *state, ExprArrayLiteral *array) {
 llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 	PROFILE_FUNC();
 	switch (expr->flavor) {
+	case ExprFlavor::INIT_IMPERATIVE_DECLARATION: {
+		auto declaration = expr->valueOfDeclaration;
+		if (declaration->flags & DECLARATION_IS_UNINITIALIZED) {
+			return nullptr;
+		}
+
+		state->builder.CreateStore(generateIrAndLoadIfStoredByPointer(state, declaration->initialValue), declaration->llvmStorage);
+
+		return nullptr;
+	}
 	case ExprFlavor::BINARY_OPERATOR: {
 
 		auto binary = static_cast<ExprBinaryOperator *>(expr);
@@ -1507,8 +1517,28 @@ llvm::Value *generateLlvmIr(State *state, Expr *expr) {
 					return array;
 				}
 			}
-			case TypeFlavor::STRING: {
-				return generateLlvmIr(state, right);
+			case TypeFlavor::STRING: { // []u8 -> string
+				assert(right->type->flavor == TypeFlavor::ARRAY);
+				assert(static_cast<TypeArray *>(right->type)->arrayOf == &TYPE_U8);
+
+				auto rightValue = generateLlvmIr(state, right);
+
+				if (right->type->flags & TYPE_ARRAY_IS_FIXED) {
+
+
+					auto string = allocateType(state, castTo);
+
+					state->builder.CreateStore(state->builder.CreatePointerCast(rightValue, llvm::IntegerType::getInt8Ty(state->context)),
+						state->builder.CreateStructGEP(string, 0));
+
+					state->builder.CreateStore(llvm::ConstantInt::get(llvm::Type::getInt64Ty(state->context), static_cast<TypeArray *>(right->type)->count),
+						state->builder.CreateStructGEP(string, 1));
+
+
+					return string;
+				} else {
+					return rightValue;
+				}
 			}
 			case TypeFlavor::POINTER:
 			case TypeFlavor::FUNCTION: {
