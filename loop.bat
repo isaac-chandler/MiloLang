@@ -1,0 +1,2 @@
+:repeat
+%* && goto  :repeat

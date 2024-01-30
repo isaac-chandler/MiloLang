@@ -171,7 +171,8 @@ window_proc :: (hwnd: HWND, uMsg: MSG.Message, wParam: u64, lParam: s64) -> s64 
         return modifiers
     }
 
-    push_context .{} {
+    temp_context: Context
+    push_context temp_context {
         using window := cast(*Window) GetWindowLongPtrW(hwnd, GWLP_USERDATA)
         
         x := cast(s16) lParam
@@ -282,15 +283,20 @@ window_proc :: (hwnd: HWND, uMsg: MSG.Message, wParam: u64, lParam: s64) -> s64 
                     array_add(*events, .{.CHAR, .{ char = .{ cast() wParam, get_modifiers(window) } }})
 
             case WM_MOUSEWHEEL
+                p := POINT.{x, y}
+                ScreenToClient(hwnd, *p)
+                
                 delta := cast(s16) (wParam >> 16)
 
-                array_add(*events, .{.SCROLL, .{ scroll = .{ 0, delta, x, y, get_modifiers(window) } }})
+                array_add(*events, .{.SCROLL, .{ scroll = .{ 0, delta, cast() p.x, cast() p.y, get_modifiers(window) } }})
 
 
             case WM_MOUSEHWHEEL
+                p := POINT.{x, y}
+                ScreenToClient(hwnd, *p)
                 delta := cast(s16) (wParam >> 16)
 
-                array_add(*events, .{.SCROLL, .{ scroll = .{ delta, 0, x, y, get_modifiers(window) } }})
+                array_add(*events, .{.SCROLL, .{ scroll = .{ delta, 0, cast() p.x, cast() p.y, get_modifiers(window) } }})
 
 
             case WM_SYSKEYDOWN #through

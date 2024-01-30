@@ -15,41 +15,6 @@
 
 #define NUM_PARSE_THREADS 4
 
-#if BUILD_PROFILE
-
-void NTAPI tls_callback(PVOID DllHandle, DWORD dwReason, PVOID) {
-	if (dwReason == DLL_THREAD_ATTACH) {
-		s32 thread = perThreadIndex.fetch_add(1, std::memory_order_relaxed);
-
-		profileIndex = profiles[thread];
-	}
-}
-
-#ifdef _WIN64
-#pragma comment (linker, "/INCLUDE:_tls_used")  // See p. 1 below
-#pragma comment (linker, "/INCLUDE:tls_callback_func")  // See p. 3 below
-#else
-#pragma comment (linker, "/INCLUDE:__tls_used")  // See p. 1 below
-#pragma comment (linker, "/INCLUDE:_tls_callback_func")  // See p. 3 below
-#endif
-
-// Explained in p. 3 below
-#ifdef _WIN64
-#pragma const_seg(".CRT$XLF")
-EXTERN_C const
-#else
-#pragma data_seg(".CRT$XLF")
-EXTERN_C
-#endif
-PIMAGE_TLS_CALLBACK tls_callback_func = tls_callback;
-#ifdef _WIN64
-#pragma const_seg()
-#else
-#pragma data_seg()
-#endif //_WIN64
-
-#endif
-
 
 std::mutex filesMutex;
 
@@ -217,21 +182,13 @@ static const char *getLibC() {
 
 #if 1
 int main(int argc, char *argv[]) {
+	profiler_init(16, 1024 * 1024);
+	profiler_register_this_thread();
+	
 	setlocale(LC_ALL, "");
 	initPrinter();
 
 	using namespace std::chrono;
-
-#if BUILD_PROFILE
-	for (u32 i = 0; i < PROFILER_THREADS; i++) {
-		profiles[i] = static_cast<Profile *>(VirtualAlloc(nullptr, sizeof(Profile) * 1 << 23, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
-	}
-
-	tls_callback(nullptr, DLL_THREAD_ATTACH, nullptr);
-	u64 startTsc = __rdtsc();
-
-	u64 startTime = performance_time();
-#endif
 
 
 	char *input = nullptr;
@@ -829,67 +786,8 @@ int main(int argc, char *argv[]) {
 			high_resolution_clock::now() - start)).count() / 1000.0);
 	}
 
-#if BUILD_PROFILE
-	{
-		std::ofstream out("profile.json", std::ios::out | std::ios::trunc);
-
-		u64 pcf = performance_frequency();
-
-		u64 endTsc = __rdtsc();
-
-		u64 endTime = performance_time();
-
-		double tscFactor = 1.0e9 * (double) (endTime - startTime) / (double) (endTsc - startTsc) / (double) pcf;
-
-		out << '[';
-		bool first = true;
-
-		for (u32 j = 0; j < PROFILER_THREADS; j++) {
-
-			if (!profiles[j])
-				continue;
-
-			for (Profile *i = profiles[j]; i->time; i++) {
-				if (!first) {
-					out << ",\n";
-				}
-				first = false;
-			
-				Profile p = *i;
-
-				out << "{\"cat\":\"function\",\"pid\":0,\"tid\":" << j << ",\"ts\":" << ((p.time - startTsc) * tscFactor);
-
-				if (p.name) {
-					out << ",\"ph\":\"B\",\"name\":\"";
-
-					for (const char *name = p.name; *name; name++) {
-						if (*name == '\\')
-							out << "\\\\";
-						else if (*name == '\"')
-							out << "\\";
-						else
-							out << *name;
-						
-					}
-
-					if (p.color) {
-						out << "\",\"cname\":\"" << p.color;
-					}
-
-					out << "\"}";
-				}
-				else {
-					out << ",\"ph\":\"E\"}";
-				}
-			}
-		}
-
-		out << ']';
-	}
-
-#endif
-
-
+	profiler_write_tracing_json("profile.json");
+	profiler_write_binary("profile.mprof");
 
 #if BUILD_DEBUG && BUILD_WINDOWS
 	if (IsDebuggerPresent()) {

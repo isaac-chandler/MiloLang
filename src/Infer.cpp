@@ -4515,6 +4515,11 @@ bool inferFlattened(SubJob *job) {
 				return yield;
 			}
 
+			if (!isAddressable(pushContext->left)) {
+				reportError(pushContext->left, "Error: The context passed to push_context must not be a temporary value");
+				return false;
+			}
+
 			break;
 		}
 		case ExprFlavor::IDENTIFIER: {

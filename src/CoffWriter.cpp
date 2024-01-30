@@ -3719,11 +3719,9 @@ void runCoffWriter() {
 		} while (false)
 		
 		const auto writeAllocator = [&](FILE *out, BucketedArenaAllocator allocator) {
-			for (auto bucket = allocator.first; bucket; bucket = bucket->next) {
-				u32 count = (bucket->size - bucket->remaining);
-
-				doWrite(bucket->memory - count, count);
-			}
+			allocator.writeToFile(out);
+			bytesWritten += allocator.totalSize;
+			assert(ftell(out) == (s64) bytesWritten);
 		};
 
 #if BUILD_WINDOWS

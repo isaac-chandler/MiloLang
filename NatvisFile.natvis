@@ -32,6 +32,10 @@
     <DisplayString>{characters.storage,[characters.count]sb}</DisplayString>
   </Type>
 
+  <Type Name ="Identifier">
+    <DisplayString>{name}</DisplayString>
+  </Type>
+
   <Type Name="Type">
     <DisplayString>{name}</DisplayString>
   </Type>

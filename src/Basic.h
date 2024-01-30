@@ -70,27 +70,9 @@ namespace llvm {
 #include <stdarg.h>
 #include <immintrin.h>
 
-// Magic color names for chrome://tracing
-#define PROFILE_BLUE "vsync_highlight_color"
-#define PROFILE_BLACK "black"
-#define PROFILE_LIGHT_BLUE "thread_state_runnable"
-#define PROFILE_OLIVE "olive"
-#define PROFILE_YELLOW "yellow"
-#define PROFILE_WHITE "white"
-#define PROFILE_ORANGE "bad"
-#define PROFILE_LIGHT_GREEN "thread_state_running"
-#define PROFILE_DARK_RED "terrible"
-
 #define CONCAT2(x, y) x##y
 #define CONCAT(x, y) CONCAT2(x, y)
 
-#if BUILD_PROFILE
-#define PROFILE_FUNC(...)       Timer CONCAT(timer,__LINE__)(__FUNCTION__, __VA_ARGS__)
-#define PROFILE_ZONE(name, ...) Timer CONCAT(timer,__LINE__)(name, __VA_ARGS__)
-#else
-#define PROFILE_FUNC(...)
-#define PROFILE_ZONE(...)
-#endif
 
 #define ARRAY_COUNT(arr) (sizeof(arr) / (sizeof(arr[0])))
 
@@ -182,52 +164,4 @@ struct ScopeLock {
 	~ScopeLock() { lock.unlock(); }
 };
 
-#if BUILD_PROFILE
-#include "OS.h"
-
-struct Profile {
-	const char *name;
-	const char *color;
-	u64 time;
-};
-
-#define PROFILER_THREADS 16
-
-
-inline Profile *volatile profiles[PROFILER_THREADS];
-inline std::atomic_int32_t perThreadIndex(0);
-inline thread_local Profile *profileIndex;
-
-struct Timer {
-	__forceinline Timer(const char *name) {
-
-		Profile *write = profileIndex++;
-
-		write->name = name;
-
-		read_write_barrier();
-		write->time = __rdtsc();
-		read_write_barrier();
-	}
-
-	__forceinline Timer(const char *name, const char *color) {
-		Profile *write = profileIndex++;
-
-		write->name = name;
-		write->color = color;
-
-		read_write_barrier();
-		write->time = __rdtsc();
-		read_write_barrier();
-	}
-
-	__forceinline ~Timer() {
-		Profile *write = profileIndex++;
-
-		read_write_barrier();
-		write->time = __rdtsc();
-		read_write_barrier();
-	}
-};
-
-#endif
+#include "Profiler.h"

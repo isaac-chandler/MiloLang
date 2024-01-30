@@ -24,3 +24,4 @@ profile.json
 build/
 build_debug/
 build_release/
+*.mprof
