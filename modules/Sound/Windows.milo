@@ -28,18 +28,15 @@ initialize_sound_os :: (hwnd: HWND) -> #must bool {
     
     if FAILED(direct_sound.CreateSoundBuffer(direct_sound, *secondary_buffer_description, *secondary_buffer, null)) return false
     
-    
-    if !fill_samples_os(0, size_of(Sample) * latency_sample_count) return false
-    
-    if FAILED(secondary_buffer.Play(secondary_buffer, 0, 0, DSBPLAY_LOOPING)) return false
-    
     return true
 }
 
 sample_index: u64
 
 fill_samples_os :: (write_pointer: u64, write_bytes: u64) -> bool {
-    
+    sample_buffer.count = write_bytes / size_of(Sample)
+    fill_samples(sample_buffer, sample_index)
+        
     region1: *void
     region1_size: u32
     region2: *void
@@ -47,11 +44,6 @@ fill_samples_os :: (write_pointer: u64, write_bytes: u64) -> bool {
 
     if FAILED(secondary_buffer.Lock(secondary_buffer, cast() write_pointer, cast() write_bytes, *region1, *region1_size, *region2, *region2_size, 0)) return false
     
-    sample_buffer.count = write_bytes / size_of(Sample)
-    
-    fill_samples(sample_buffer, sample_index)
-    
-    sample_index += sample_buffer.count
     
     memory_copy(region1, sample_buffer.data, region1_size)
     memory_copy(region2, cast(*void) sample_buffer.data + region1_size, region2_size)
@@ -82,7 +74,36 @@ fill_sound :: () -> bool {
     
     fill_samples_os(write_pointer, write_bytes)
     
+    sample_index += sample_buffer.count
     return true
+}
+
+fill_sound :: (fill_amount: f32) -> bool {
+    play_cursor: u32
+    write_cursor: u32
+    
+    if FAILED(secondary_buffer.GetCurrentPosition(secondary_buffer, *play_cursor, *write_cursor)) return false
+    
+    // Will become incorrect if fill_sound is ever not called within a full loop of the buffer, 
+    // (but in this case there would have been an audio glitch anyway)
+    if write_cursor >= previous_write_cursor {
+        sample_index += (write_cursor - previous_write_cursor) / size_of(Sample)
+    } else {
+        bytes_moved := secondary_buffer_size - previous_write_cursor + write_cursor
+        sample_index += bytes_moved / size_of(Sample)
+    }
+
+    write_bytes := cast(u64) (fill_amount * SAMPLE_RATE * size_of(Sample))
+    
+    fill_samples_os(write_cursor, write_bytes)
+    
+    previous_write_cursor = write_cursor
+    
+    return true
+}
+
+start_sound :: () -> bool {
+    return !FAILED(secondary_buffer.Play(secondary_buffer, 0, 0, DSBPLAY_LOOPING))
 }
 
 // cleanup_sound doesn't need to be called unless the program continues to run after sound system is done
@@ -107,6 +128,8 @@ cleanup_sound :: () {
 
 // To allow use of the DirectSound API directly remove the #scope_module
 #scope_module
+
+previous_write_cursor: u32
 
 direct_sound: *IDirectSound
 primary_buffer: *IDirectSoundBuffer

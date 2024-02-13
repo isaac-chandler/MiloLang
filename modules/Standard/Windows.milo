@@ -26,11 +26,16 @@ exit :: (code: u32 = 0) {
     ExitProcess(code)
 }
 
-// @Unicode
 print_buffer :: (buffer: []u8) {
     init_std_out()
     bytes_written: u32
     WriteFile(std_out, buffer.data, cast() buffer.count, *bytes_written)
+}
+
+error_print_buffer :: (buffer: []u8) {
+    init_std_error()
+    bytes_written: u32
+    WriteFile(std_error, buffer.data, cast() buffer.count, *bytes_written)
 }
 
 print_buffer :: (c: *Concatenator) {
@@ -38,10 +43,19 @@ print_buffer :: (c: *Concatenator) {
     bucket := c.current_bucket
     
     while bucket {
-        bytes_written: u32
-        WriteFile(std_out, bucket.data.data, cast() bucket.offset, *bytes_written)
-        
+        print_buffer([]u8.{data = bucket.data.data, count = bucket.offset})
         bucket = bucket.next
+    }
+}
+
+error_print_buffer :: (c: *Concatenator) {
+    init_std_error()
+    bucket := c.current_bucket
+    
+    while bucket {
+        error_print_buffer([]u8.{data = bucket.data.data, count = bucket.offset})
+        bucket = bucket.next
+
     }
 }
 
@@ -186,11 +200,19 @@ input_buffer: [..]u8
 
 std_in: HANDLE
 std_out: HANDLE
+std_error: HANDLE
 process_heap: HANDLE
 
 init_std_out :: () {
     if !std_out {
         std_out = GetStdHandle(STD_OUTPUT_HANDLE)
+        SetConsoleOutputCP(CP_UTF8)
+    }
+}
+
+init_std_error :: () {
+    if !std_error {
+        std_error = GetStdHandle(STD_ERROR_HANDLE)
         SetConsoleOutputCP(CP_UTF8)
     }
 }

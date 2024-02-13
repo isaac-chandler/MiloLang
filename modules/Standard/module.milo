@@ -586,6 +586,15 @@ print :: (format: string, vals: any..) {
     print_buffer(*std_out_concatenator)
 }
 
+error_print :: (format: string, vals: any..) {
+    reset(*std_out_concatenator)
+
+    print_to_buffer(*std_out_concatenator, format, ..vals)
+    
+    error_print_buffer(*std_out_concatenator)
+}
+
+
 sprint :: (format: string, vals: any..) -> string {
     reset(*std_out_concatenator)
     

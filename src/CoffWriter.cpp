@@ -1953,6 +1953,7 @@ void runCoffWriter() {
 				} break;
 				case IrOp::DIVIDE_BY_CONSTANT: {
 					assert(ir.opSize == 8);
+					assert(ir.flags & IR_SIGNED_OP);
 					loadImmediateIntoIntRegister64(RCX, ir.immediate);
 
 					loadIntoIntRegister(function, 8, RAX, ir.a);
@@ -1962,7 +1963,7 @@ void runCoffWriter() {
 
 					writeIntegerPrefix(8);
 					sizedIntInstruction(ir.opSize, UNARY_INT_OP_BASE_MODRM_X);
-					writeModRM(MODRM_MOD_DIRECT, UNARY_INT_OP_MODRM_DIV_MEM, RCX);
+					writeModRM(MODRM_MOD_DIRECT, UNARY_INT_OP_MODRM_IDIV_MEM, RCX);
 
 					storeFromIntRegister(function, ir.opSize, ir.dest, RAX);
 				} break;
